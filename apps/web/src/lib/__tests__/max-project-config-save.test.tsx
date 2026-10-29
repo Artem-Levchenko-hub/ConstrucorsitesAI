@@ -32,6 +32,32 @@ const record: MaxProjectConfig = {
 
 afterEach(() => { vi.resetAllMocks(); sessionStorage.clear(); });
 
+it("captures the full-config baseline on first edit and keeps it after background refresh and conflict", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  mocks.get.mockResolvedValue(record);
+  mocks.save.mockRejectedValue(new ApiError(409, { code: "conflict", message: "Данные изменились" }));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<QueryClientProvider client={client}><MaxProjectSetupDialog projectId="qa" /></QueryClientProvider>));
+    await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+    await act(async () => { await vi.waitFor(() => expect(document.querySelector("#max-config-name")).not.toBeNull()); });
+    await act(async () => {
+      const name = document.querySelector<HTMLInputElement>("#max-config-name")!;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "Мой черновик");
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { client.setQueryData(["max-config", "qa"], { ...record, config_version: 2, config: { ...record.config, app_name: "Другая вкладка" } }); });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Сохранить и проверить")!.click());
+      await act(async () => { await vi.waitFor(() => expect(mocks.save).toHaveBeenCalledTimes(attempt + 1)); });
+      expect(mocks.save.mock.calls[attempt]).toEqual(["qa", { ...record.config, app_name: "Мой черновик" }, 1]);
+      expect(document.querySelector<HTMLInputElement>("#max-config-name")!.value).toBe("Мой черновик");
+    }
+    expect(mocks.send).not.toHaveBeenCalled();
+  } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
+});
+
 it("allows an explicit new attempt after terminal failure and persists it before dispatch", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   mocks.get.mockResolvedValue(record);
@@ -253,7 +279,7 @@ it.each([false, true])("saves/retries the owner tab and refreshes preview withou
       [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes("Сохранить и проверить"))!.click();
     });
     await wait(() => expect(mocks.success).toHaveBeenCalled());
-    expect(mocks.save).toHaveBeenCalledWith("qa", updated.config);
+    expect(mocks.save).toHaveBeenCalledWith("qa", updated.config, 1);
     expect(mocks.success.mock.calls[0][1].description).toContain("Конфигурация, поддержка и документы обновлены");
     expect(mocks.send).not.toHaveBeenCalled();
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["max-preview-session", "qa"] });

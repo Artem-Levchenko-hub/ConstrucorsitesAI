@@ -55,6 +55,7 @@ from yleum_orchestrator.routers.runtime import (
     _sandbox_name_is_secret,
     _workspace_revision,
 )
+from yleum_orchestrator.schemas.cell_publication import WorkspaceBusinessConfigStatusRequest
 from yleum_orchestrator.schemas.workspace import (
     WorkspaceAgentBootstrapRequest,
     WorkspaceAgentBootstrapResponse,
@@ -1522,12 +1523,16 @@ async def apply_workspace_owner_business_config(
 ) -> dict[str, object]:
     verify_internal_token(x_internal_token)
     manager = _require_docker_resource_manager(_workspace_provider(workspace_id))
-    if len(json.dumps(request.config).encode()) > 1024 * 1024:
+    from yleum_orchestrator.services.app_business_config import app_config_envelope
+
+    try:
+        app_config_envelope(request.config, request.version)
+    except ValueError:
         raise OrchestratorError(
             code="conflict",
             message="MAX configuration too large",
             status_code=413,
-        )
+        ) from None
     async with manager.operation_lock.hold(workspace_id):
         state, _ = await _workspace_volume_identity(manager, workspace_id)
         if state.project_id != request.project_id or state.owner_id != request.owner_id:
@@ -1536,6 +1541,21 @@ async def apply_workspace_owner_business_config(
                 message="workspace owner identity mismatch",
                 status_code=409,
             )
+        if request.generation_run_id is not None and request.fencing_epoch is not None:
+            if state.phase != "completed":
+                raise OrchestratorError(
+                    code="conflict", message="workspace operation is still active", status_code=409,
+                )
+            _require_generation_lease_match(
+                state, generation_run_id=request.generation_run_id,
+                fencing_epoch=request.fencing_epoch,
+            )
+            # This trusted MAX-only handoff precedes the first manifest/model turn.
+            # It grants metadata persistence, never source, leases or runtime startup.
+            _require_portable_runtime(manager).seed_owner_business_config(
+                state, version=request.version, config=request.config,
+            )
+            return {"workspace_id": str(workspace_id), "version": request.version, "applied": False}
         if state.phase != "completed" or state.active_generation_run_id is not None:
             raise OrchestratorError(
                 code="conflict",
@@ -1556,6 +1576,43 @@ async def apply_workspace_owner_business_config(
         if applied:
             await _publish_draft_preview(manager, workspace_id)
         return {"workspace_id": str(workspace_id), "version": request.version, "applied": applied}
+
+
+@router.post("/workspaces/{workspace_id}/owner-business-config/status")
+async def workspace_owner_business_config_status(
+    workspace_id: UUID, request: WorkspaceBusinessConfigStatusRequest,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> dict[str, Any]:
+    verify_internal_token(x_internal_token)
+    from yleum_orchestrator.services.app_business_config import status_projection
+
+    manager = _require_docker_resource_manager(_workspace_provider(workspace_id))
+    acquired = False
+    try:
+        async with asyncio.timeout(5):
+            async with manager.operation_lock.hold(workspace_id):
+                acquired = True
+                state = manager.state_store.load(workspace_id)
+                if (state is None or state.project_id != request.project_id
+                        or state.owner_id != request.owner_id):
+                    raise CellIdentityConflict("workspace owner identity mismatch")
+                if state.phase != "completed" or state.active_generation_run_id is not None:
+                    return status_projection(
+                        "unknown", request.desired_config_version, reason="busy",
+                    )
+                return await asyncio.to_thread(
+                    _require_portable_runtime(manager).owner_business_config_status,
+                    state, request.desired_config_version, request.desired_config_digest,
+                )
+    except CellIdentityConflict:
+        raise OrchestratorError(
+            code="conflict", message="workspace owner identity mismatch", status_code=409,
+        ) from None
+    except Exception:
+        return status_projection(
+            "unknown", request.desired_config_version,
+            reason="readback_unavailable" if acquired else "busy",
+        )
 
 
 async def _resource_response(

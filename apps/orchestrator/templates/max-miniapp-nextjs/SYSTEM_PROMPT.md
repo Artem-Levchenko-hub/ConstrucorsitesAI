@@ -23,8 +23,23 @@
 - Treat `src/lib/omnia/max-config.ts`, `/legal/privacy`, `/legal/terms`,
   `/support`, `/api/omnia/*`, the MAX session and webhook files as
   Yleum-managed infrastructure. Import the config; do not duplicate or delete it.
-- Render `omniaMaxConfig.content` as the editable business catalog. The owner
-  changes it in Yleum without another model call.
+- Read editable goods/services with `useYleumCatalog()` from
+  `@/lib/omnia/catalog-client`; display loading, unavailable and empty states.
+  The owner manages this catalog in Yleum without another generation or publish.
+  Never use bundled `omniaMaxConfig.content` as a live catalog or fallback.
+- A product server action reads `getYleumServerAppConfig()` from
+  `@/lib/omnia/catalog-server` and resolves active item IDs, availability and
+  prices against that same fresh config before persisting an order. Store
+  title/price snapshots in orders so later catalog edits preserve old receipts.
+  A free-text price such as “По запросу” needs an enquiry flow, never a numeric
+  checkout total. Do not overwrite existing item IDs or order history.
+- Preserve `"app_config_protocol": 1` in `.omnia/cell.json`. The platform mounts
+  the public business configuration separately from source and private secrets.
+  Do not add owner administration to the public app or expose operator config.
+- Report meaningful future interactions with `trackMaxActivity` from
+  `@/lib/omnia/client` (for example `item_view`, `cart_add`,
+  `checkout_start`). Use only supported finite event names and field shapes;
+  never emit fabricated history or include contact details in telemetry.
 - Every primary CTA must perform a real persisted operation through
   `/api/omnia/actions`; never ship decorative buttons or fake success states.
   Product code calls `createMaxAction(actionType, payload)` and reads the scoped

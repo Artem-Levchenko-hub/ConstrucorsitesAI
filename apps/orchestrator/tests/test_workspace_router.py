@@ -2072,6 +2072,41 @@ async def test_owner_business_config_has_no_generation_write_authority(
     assert manager.state_store.load(workspace_id) == before
 
 
+@pytest.mark.parametrize("failure", [None, "run", "fence", "owner", "project"])
+async def test_generation_config_seed_requires_exact_current_lease_without_runtime_effects(
+    monkeypatch, tmp_path, failure,
+):
+    from unittest.mock import Mock
+
+    workspace_id = uuid4()
+    provider, manager, _, run_id = await _ready_provider(tmp_path, workspace_id)
+    before = manager.state_store.load(workspace_id)
+    seed = Mock()
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _: provider)
+    monkeypatch.setattr(workspace, "_require_portable_runtime", lambda _: SimpleNamespace(
+        seed_owner_business_config=seed,
+    ))
+    async with _client() as client:
+        response = await client.put(
+            f"/internal/workspaces/{workspace_id}/owner-business-config",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json={
+                "project_id": str(uuid4() if failure == "project" else before.project_id),
+                "owner_id": str(uuid4() if failure == "owner" else before.owner_id),
+                "generation_run_id": str(uuid4() if failure == "run" else run_id),
+                "fencing_epoch": (
+                    99 if failure == "fence" else before.active_generation_fencing_epoch
+                ),
+                "version": 0, "config": {"app_name": "QA", "content": []},
+            },
+        )
+    assert response.status_code == (200 if failure is None else 409)
+    assert seed.call_count == (1 if failure is None else 0)
+    if failure is None:
+        assert response.json()["applied"] is False
+    assert manager.state_store.load(workspace_id) == before
+
+
 def test_bounded_redacted_text_redacts_signature_and_token_query_values() -> None:
     text = (
         "bootstrap=https://cell.preview.example/api/omnia/preview-session"

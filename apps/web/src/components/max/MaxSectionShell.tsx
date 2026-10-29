@@ -6,17 +6,18 @@ import "@/components/max/max-studio.css";
 import "@/components/max/max-project-workspace.css";
 
 const helpHref: Record<MaxProjectNavKey, string> = {
-  editor: "/max/guide#builder", app: "/max/guide#settings",
+  editor: "/max/guide#builder", app: "/max/guide#settings", catalog: "/max/guide#settings",
   integrations: "/max/guide#integrations", bot: "/max/guide#max-bot",
   publish: "/max/guide#publish", dashboard: "/max/guide#operations",
 };
 
-export function MaxSectionShell({ projectId, projectName, active, eyebrow, title, lead, children }: {
+export function MaxSectionShell({ projectId, projectName, active, eyebrow, title, lead, children, className = "" }: {
   projectId: string; projectName: string; active: MaxProjectNavKey;
   eyebrow: string; title: string; lead: string; children: React.ReactNode;
+  className?: string;
 }) {
   return (
-    <div data-product-shell data-max-studio className="max-project-workspace">
+    <div data-product-shell data-max-studio className={`max-project-workspace ${className}`}>
       <header className="max-project-header">
         <div className="max-project-header-identity">
           <Link href="/max" aria-label="Все проекты" className="max-project-back"><ArrowLeft className="size-4" /></Link>

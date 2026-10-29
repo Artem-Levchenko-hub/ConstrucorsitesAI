@@ -65,12 +65,17 @@ export function MaxProjectSetupDialog({
   const open = controlledOpen ?? localOpen;
   const setOpen = (next: boolean) => { setLocalOpen(next); onOpenChange?.(next); };
   const [draft, setDraft] = useState<MaxProjectConfigPayload | null>(null);
+  const draftVersion = useRef<number | undefined>(undefined);
   const [applyConfig, setApplyConfig] = useState<MaxProjectConfig | null>(null);
   const applyAfterSave = useRef(false);
   const [section, setSection] = useState<SetupSection>(initialSection);
-  const [entry, setEntry] = useState({ open, initialSection });
-  if (entry.open !== open || entry.initialSection !== initialSection) {
-    setEntry({ open, initialSection });
+  const [entry, setEntry] = useState({ open, initialSection, projectId });
+  if (entry.open !== open || entry.initialSection !== initialSection || entry.projectId !== projectId) {
+    setEntry({ open, initialSection, projectId });
+    if (entry.projectId !== projectId) {
+      setDraft(null);
+      setApplyConfig(null);
+    }
     if (open) {
       setSection(initialSection);
       setApplyConfig(null);
@@ -89,12 +94,13 @@ export function MaxProjectSetupDialog({
 
   const save = useMutation({
     mutationFn: (payload: MaxProjectConfigPayload) =>
-      saveMaxProjectConfig(projectId, payload),
+      saveMaxProjectConfig(projectId, payload, draft ? draftVersion.current : config.data?.config_version),
     onSuccess: (data) => {
       qc.setQueryData(["max-config", projectId], data);
       void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
       void qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
       void qc.invalidateQueries({ queryKey: ["max-preview-session", projectId] });
+      void qc.invalidateQueries({ queryKey: ["max-content", projectId] });
       toast.success("Данные сохранены", {
         id: `max-config-save-${projectId}`,
         description: data.application_mode === "runtime"
@@ -270,7 +276,11 @@ export function MaxProjectSetupDialog({
                 aria-labelledby={`${tabsId}-${section}`}
                 data-testid="max-settings-scroll-region"
               >
-                <MaxProjectSetupSections key={section} section={section} projectId={projectId} current={current} onChange={setDraft} />
+                <MaxProjectSetupSections key={section} section={section} projectId={projectId} current={current} onChange={next => {
+                  // Capture only on first edit: a background GET cannot rebase a dirty draft.
+                  if (!draft) draftVersion.current = config.data?.config_version;
+                  setDraft(next);
+                }} />
               </div>
 
               <div

@@ -50,15 +50,17 @@ export function MaxContentCardPreview({ item }: { item: MaxContentItem }) {
 }
 
 /** Одна позиция каталога: поля слева, живое превью карточки справа. */
-export function MaxContentItemFields({ projectId, index, item, onPatch }: {
+export function MaxContentItemFields({ projectId, index, item, onPatch, onUploadingChange }: {
   projectId: string;
   index: number;
   item: MaxContentItem;
   onPatch: (patch: Partial<MaxContentItem>) => void;
+  onUploadingChange?: (uploading: boolean) => void;
 }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [optionsDraft, setOptionsDraft] = useState<{ value: string; options: string[] } | null>(null);
   const fieldId = `max-content-${index}`;
 
   async function upload(file: File) {
@@ -72,6 +74,7 @@ export function MaxContentItemFields({ projectId, index, item, onPatch }: {
       return;
     }
     setUploading(true);
+    onUploadingChange?.(true);
     try {
       const { url } = await uploadMaxContentImage(projectId, file);
       onPatch({ image_url: url });
@@ -79,6 +82,7 @@ export function MaxContentItemFields({ projectId, index, item, onPatch }: {
       setUploadError(error instanceof ApiError ? error.message : "Не удалось загрузить фото");
     } finally {
       setUploading(false);
+      onUploadingChange?.(false);
       if (fileInput.current) fileInput.current.value = "";
     }
   }
@@ -88,7 +92,7 @@ export function MaxContentItemFields({ projectId, index, item, onPatch }: {
       <div className="max-setup-grid">
         <div className="max-setup-field max-setup-wide">
           <Label htmlFor={`${fieldId}-title`}>Название</Label>
-          <Input id={`${fieldId}-title`} aria-label={`Название элемента ${index + 1}`} value={item.title}
+          <Input id={`${fieldId}-title`} aria-label={`Название элемента ${index + 1}`} value={item.title} maxLength={120}
             placeholder="Например, Худи оверсайз" onChange={event => onPatch({ title: event.target.value })} />
         </div>
 
@@ -111,7 +115,7 @@ export function MaxContentItemFields({ projectId, index, item, onPatch }: {
             {uploadError ?? "JPG, PNG, WebP или GIF до 8 МБ."}
           </p>
           <Label htmlFor={`${fieldId}-image`}>Или ссылка на фото</Label>
-          <Input id={`${fieldId}-image`} aria-label={`Ссылка на фото элемента ${index + 1}`} value={item.image_url}
+          <Input id={`${fieldId}-image`} aria-label={`Ссылка на фото элемента ${index + 1}`} value={item.image_url} maxLength={500}
             inputMode="url" placeholder="https://..." onChange={event => onPatch({ image_url: event.target.value })} />
         </div>
 
@@ -140,16 +144,21 @@ export function MaxContentItemFields({ projectId, index, item, onPatch }: {
 
         <div className="max-setup-field max-setup-wide">
           <Label htmlFor={`${fieldId}-options`}>Варианты выбора</Label>
-          <Input id={`${fieldId}-options`} aria-label={`Варианты элемента ${index + 1}`} value={item.options.join(", ")}
+          <Input id={`${fieldId}-options`} aria-label={`Варианты элемента ${index + 1}`} value={optionsDraft?.options === item.options ? optionsDraft.value : item.options.join(", ")}
             placeholder="S, M, L, XL"
-            onChange={event => onPatch({ options: event.target.value.split(",").map(option => option.trim()).filter(Boolean).slice(0, 24) })} />
+            onChange={event => {
+              const value = event.target.value;
+              const options = value.split(",").map(option => option.trim()).filter(Boolean).slice(0, 24);
+              setOptionsDraft({ value, options });
+              onPatch({ options });
+            }} />
           <p className="max-setup-hint">Размеры, объёмы или длительности через запятую. Пользователь выберет вариант перед заказом.</p>
         </div>
 
         <div className="max-setup-field max-setup-wide">
           <Label htmlFor={`${fieldId}-description`}>Описание</Label>
           <Textarea id={`${fieldId}-description`} aria-label={`Описание элемента ${index + 1}`} className="max-setup-short-textarea"
-            value={item.description} placeholder="Что важно знать об этой позиции?"
+            value={item.description} maxLength={600} placeholder="Что важно знать об этой позиции?"
             onChange={event => onPatch({ description: event.target.value })} />
         </div>
 

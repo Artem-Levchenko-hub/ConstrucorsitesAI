@@ -153,6 +153,7 @@
   .max-editor-header-actions .max-editor-data-button { width: 36px; padding: 8px; }
   .max-editor-header-actions > button { width: 36px; }
   .max-editor-header-actions .max-editor-integrations { width: auto; padding-inline: 10px; font-size: 12px; }
+  .max-editor-header-actions .max-editor-catalog-link { padding-inline: 10px; font-size: 12px; }
   .max-editor-header-actions .max-editor-publish { width: auto; padding-inline: 10px; font-size: 12px; }
   .max-editor-publish svg { display: none; }
   .max-editor-section-heading { padding: 20px 16px 12px; }

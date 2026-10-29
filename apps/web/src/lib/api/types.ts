@@ -700,6 +700,25 @@ export type MaxContentItem = {
 
 export type MaxContentAvailability = "in_stock" | "on_request" | "out_of_stock";
 
+export type MaxContentDelivery<State extends string = "applied" | "pending" | "unknown" | "not_published" | "blocked" | "deferred" | "not_created"> = {
+  state: State;
+  desired_config_version: number;
+  controller_config_version: number | null;
+  confirmed_config_version: number | null;
+  checked_at: IsoDateTime | null;
+  reason: string | null;
+};
+
+/** Persisted delivery evidence, reconstructed by GET after refresh. */
+export type MaxProjectContent = {
+  project_id: Uuid;
+  config_version: number;
+  content: MaxContentItem[];
+  saved: { state: "saved"; config_version: number };
+  public: MaxContentDelivery<"applied" | "pending" | "unknown" | "not_published" | "blocked">;
+  preview: MaxContentDelivery<"applied" | "pending" | "deferred" | "unknown" | "not_created">;
+};
+
 export type MaxProjectConfigPayload = {
   app_name: string;
   app_type: "loyalty" | "catalog" | "booking" | "event" | "education" | "custom";

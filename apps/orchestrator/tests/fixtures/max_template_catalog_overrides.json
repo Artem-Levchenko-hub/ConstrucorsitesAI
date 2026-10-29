@@ -1,0 +1,18 @@
+{
+  "src/lib/omnia/catalog-server.ts": {
+    "sha256": "2902c5ae998446c0a3265c7a02572fc334fd9047100659e7cd63248af60005ac",
+    "mode": "100644"
+  },
+  "src/lib/omnia/catalog-actions.ts": {
+    "sha256": "cac6af46698f7f322175409f46f00fa1c45ce32e5526858a80de12f41a611345",
+    "mode": "100644"
+  },
+  "src/lib/omnia/catalog-client.ts": {
+    "sha256": "bd30f8af55907b12d2f36a37fee1f245ec0cfc6f6ae0bedd864e5d41297a626f",
+    "mode": "100644"
+  },
+  "tests/catalog-config.test.mjs": {
+    "sha256": "f3a79b0a95d66775bb9e35826154902de9b114180971ef993c1ce3d5b27e8759",
+    "mode": "100644"
+  }
+}

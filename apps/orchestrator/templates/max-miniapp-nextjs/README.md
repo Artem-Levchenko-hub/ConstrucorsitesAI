@@ -12,12 +12,24 @@ profile. Real user data is accepted only after the server validates MAX
 
 Yleum-managed production foundation:
 
-- structured business profile and no-code catalog in `src/lib/omnia/max-config.ts`;
+- a saved business brief in `src/lib/omnia/max-config.ts` and a live owner catalog;
 - privacy, terms and support pages with owner details;
 - verified MAX session and user-scoped actions, consent and analytics APIs;
 - idempotent webhook with `/start`, help and open-app bot flows;
 - MAX Bridge wrappers for navigation, share, storage, contacts and haptics;
 - durable tables for operations, consents, events, notification outbox and audit.
+
+Owner goods/services live in Yleum's Catalog. A normal generation opts the
+portable manifest into `app_config_protocol: 1`; old published apps keep their
+existing runtime until that source update. The controller projects only public
+business config through a read-only directory at `YLEUM_APP_CONFIG_PATH`.
+`useYleumCatalog` from `@/lib/omnia/catalog-client` refreshes active items on
+mount/focus via a server action. Custom order server actions must read
+`getYleumServerAppConfig` from `@/lib/omnia/catalog-server`, resolve live item IDs
+and prices, and preserve title/price snapshots in old orders. The same file backs
+both reads; missing or invalid config fails closed without a bundled fallback.
+Free-text prices need an enquiry instead of a fabricated numeric total. Ordinary
+catalog saves do not call a model, change source, or require republishing.
 
 First-party owner analytics counts received authenticated MAX events. A verified
 `POST /api/max/session` records one open per distinct signed launch; retries of

@@ -23,6 +23,8 @@ from uuid import UUID
 from yleum_orchestrator.core.cell_resources import CellIdentityConflict, CellResourceError
 from yleum_orchestrator.core.project_machine import MachineManifest
 from yleum_orchestrator.schemas.cell_publication import CellDeployRequest
+from yleum_orchestrator.services.app_business_config import config_digest
+from yleum_orchestrator.services.k8s_config_observer import observe_in_subprocess
 from yleum_orchestrator.services.k8s_publication import (
     PROJECT_POSTGRES_DATA,
     KubernetesClusterApi,
@@ -259,6 +261,32 @@ class KubernetesPlacement:
 
     # --------------------------------------------------------------- spec
 
+    def observe_config(
+        self, release: dict[str, Any], request: CellDeployRequest
+    ) -> dict[str, bool]:
+        """Read actual serving files without rebuilding a credential-bearing placement spec."""
+        manifest = MachineManifest.model_validate(release["manifest"])
+        if manifest.app_config_protocol != 1:
+            return {"core_matches": False, "app_matches": False}
+        if self._runtime is None:
+            # Lazy DynamicClient discovery and kubeconfig auth plugins must also
+            # stay inside the hard-bounded observer process on a cold controller.
+            return observe_in_subprocess(
+                kubeconfig_path=self.settings.k8s_kubeconfig_path,
+                context=self.settings.k8s_context or None,
+                namespace=self.namespace(request.project_id),
+                release_id=release["release_id"],
+                expected_digest=config_digest(dict(request.business_config)),
+                config_version=request.business_config_version,
+            )
+        return self.runtime.observe_config(
+            request.project_id,
+            release["release_id"],
+            manifest,
+            dict(request.business_config),
+            request.business_config_version,
+        )
+
     def build_spec(
         self,
         request: CellDeployRequest,
@@ -296,6 +324,7 @@ class KubernetesPlacement:
             boundary_server_source=boundary_source(),
             runtime_env=dict(request.runtime_env),
             business_config=dict(request.business_config),
+            business_config_version=request.business_config_version,
             project_postgres_password=project_postgres_password,
             core_postgres_password=core_postgres_password,
             core_runtime_password=core_runtime_password,

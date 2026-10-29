@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -59,6 +60,15 @@ from yleum_api.services.project_cells import (
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def business_config_rpc(monkeypatch):
+    seed = AsyncMock(return_value=False)
+    monkeypatch.setattr(project_cell_executor, "project_cell_apply_business_config", seed)
+    return seed
+
+
 SET_UPDATED_AT_FN = """
 CREATE OR REPLACE FUNCTION set_updated_at() RETURNS TRIGGER AS $$
 BEGIN NEW.updated_at = NOW(); RETURN NEW; END;
@@ -640,14 +650,26 @@ async def _prepare_executor(
             response=response,
         )
 
+    source_bootstrapped = False
+
     async def fake_bootstrap(
         workspace_id: UUID,
         *,
         generation_run_id: UUID | None,
         fencing_epoch: int,
     ) -> ProjectCellAgentWorkspaceSnapshot:
+        nonlocal source_bootstrapped
         assert generation_run_id == expected_run_id
         assert fencing_epoch == expected_bootstrap_fence
+        # Canonical metadata must exist before bootstrap can start source SSR.
+        if not source_bootstrapped:
+            seed = business_seed.await_args_list[0]
+            assert seed.args == (workspace_id,)
+            assert seed.kwargs["project_id"] == expected_project_id
+            assert seed.kwargs["owner_id"] == owner.id
+            assert seed.kwargs["generation_run_id"] == expected_run_id
+            assert seed.kwargs["fencing_epoch"] == expected_bootstrap_fence
+            source_bootstrapped = True
         return ProjectCellAgentWorkspaceSnapshot(
             files=dict(cell_files),
             seeded_from_project=not bool(cell_files),
@@ -900,6 +922,8 @@ async def _prepare_executor(
         "project_cell_agent_bootstrap",
         fake_bootstrap,
     )
+    business_seed = AsyncMock(return_value=False)
+    monkeypatch.setattr(project_cell_executor, "project_cell_apply_business_config", business_seed)
     monkeypatch.setattr(project_cell_executor, "project_cell_agent_snapshot", fake_bootstrap)
     monkeypatch.setattr(
         project_cell_executor,

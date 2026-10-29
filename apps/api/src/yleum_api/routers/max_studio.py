@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Awaitable
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
 import structlog
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Header, Request, Response, status
 from sqlalchemy import case, func, literal, select, text
 
 from yleum_api.core.deps import CurrentUserDep, SessionDep
@@ -24,6 +25,12 @@ from yleum_api.models.usage import Usage
 from yleum_api.schemas.billing import UsageCostBreakdownPublic
 from yleum_api.schemas.max_studio import (
     MaxContentImagePublic,
+    MaxContentItem,
+    MaxContentPatch,
+    MaxContentPreviewDelivery,
+    MaxContentPublic,
+    MaxContentPublicDelivery,
+    MaxContentSaved,
     MaxPreviewSessionPublic,
     MaxProjectConfigPayload,
     MaxProjectConfigPublic,
@@ -38,6 +45,11 @@ from yleum_api.services import max_content_images, orchestrator_client, project_
 from yleum_api.services import repo as repo_svc
 from yleum_api.services.deploy_attestation import ensure_current_release_proof
 from yleum_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
+from yleum_api.services.max_content_delivery import (
+    config_digest,
+    public_business_config,
+    validate_delivery_size,
+)
 from yleum_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
     render_max_managed_files,
@@ -264,12 +276,21 @@ async def put_max_config(
     payload: MaxProjectConfigPayload,
     session: SessionDep,
     current_user: CurrentUserDep,
+    x_max_config_version: int | None = Header(default=None, alias="X-Max-Config-Version", ge=0),
 ) -> MaxProjectConfigPublic:
     # Same project serialization as generation, without waiting behind a cold
     # preview start until the request/DB timeout turns a busy state into a 500.
     await _owned_max_project(session, project_id, current_user.id)
     await project_cell_runtime._try_preview_project_lock(session, project_id)
     project = await _owned_max_project(session, project_id, current_user.id, lock=True)
+    record = await session.get(MaxProjectConfig, project_id)
+    current_payload = _public(project, record).config
+    _check_content_version(
+        current_payload.content, payload.content,
+        current_version=record.config_version if record else 0,
+        expected_version=x_max_config_version if isinstance(x_max_config_version, int) else None,
+    )
+    validate_delivery_size(payload, (record.config_version if record else 0) + 1)
     cell_selection = await project_cell_runtime.resolve_project_cell_public_selection(
         session,
         project,
@@ -396,22 +417,7 @@ async def _save_cell_business_config(
     if await project_cell_runtime._active_generation(session, project.id) is not None:
         raise ApiError("conflict", "Дождитесь завершения сборки и сохраните данные ещё раз", 409)
     config_data = payload.model_dump(mode="json")
-    record = await session.get(MaxProjectConfig, project.id)
-    if record is not None and record.owner_id != current_user.id:
-        raise ApiError("conflict", "MAX configuration ownership mismatch", 409)
-    if record is None:
-        record = MaxProjectConfig(
-            project_id=project.id,
-            owner_id=current_user.id,
-            config=config_data,
-            config_version=1,
-            managed_kit_version=MAX_MANAGED_KIT_VERSION,
-        )
-        session.add(record)
-    elif record.config != config_data:
-        record.config = config_data
-        record.config_version += 1
-        record.synced_snapshot_id = None
+    record = await _persist_business_config(project, payload, session)
     version = record.config_version
     record.synced_snapshot_id = None
     # A preview outage cannot erase entered data. An unconfirmed application
@@ -466,6 +472,219 @@ async def _save_cell_business_config(
     result = _public(project, record)
     result.application_mode = "runtime"
     return result
+
+
+def _check_content_version(
+    current: list[MaxContentItem], desired: list[MaxContentItem], *,
+    current_version: int, expected_version: int | None,
+) -> None:
+    if current == desired:
+        return
+    if expected_version != current_version:
+        raise ApiError(
+            "conflict",
+            "Данные изменились. Обновите каталог и повторите изменения", 409,
+            details={"reason": "config_version_conflict"},
+        )
+
+
+async def _persist_business_config(
+    project: Project, payload: MaxProjectConfigPayload, session: SessionDep,
+    *, content_only: bool = False,
+) -> MaxProjectConfig:
+    record = await session.get(MaxProjectConfig, project.id)
+    if record is not None and record.owner_id != project.owner_id:
+        raise ApiError("conflict", "MAX configuration ownership mismatch", 409)
+    if content_only and record is not None and (
+        MaxProjectConfigPayload.model_validate(record.config).content == payload.content
+    ):
+        return record
+    config_data = payload.model_dump(mode="json")
+    if content_only and record is not None:
+        config_data = {
+            **record.config,
+            "content": [item.model_dump(mode="json") for item in payload.content],
+        }
+    next_version = (record.config_version if record else 0) + 1
+    validate_delivery_size(payload, next_version)
+    if record is None:
+        record = MaxProjectConfig(
+            project_id=project.id, owner_id=project.owner_id, config=config_data,
+            config_version=1, managed_kit_version=MAX_MANAGED_KIT_VERSION,
+        )
+        session.add(record)
+    elif record.config != config_data:
+        record.config = config_data
+        record.config_version += 1
+        record.synced_snapshot_id = None
+    return record
+
+
+async def _sync_content_environments(
+    project: Project, record: MaxProjectConfig,
+    selection: project_cell_runtime.ProjectCellPublicSelection,
+) -> None:
+    # Independent effects after the confirmed commit. An outage cannot undo saved data
+    # or stop the other environment from accepting its own durable configuration.
+    config = public_business_config(MaxProjectConfigPayload.model_validate(record.config))
+    effects: list[Awaitable[object]] = [orchestrator_client.configure_published_cell(project.id, {
+        "owner_id": str(project.owner_id), "business_config": config,
+        "business_config_version": record.config_version,
+    })]
+    if selection.workspace is not None:
+        effects.append(orchestrator_client.project_cell_apply_business_config(
+            selection.workspace.id, project_id=project.id, owner_id=project.owner_id,
+            version=record.config_version, config=config,
+        ))
+    results = await asyncio.gather(
+        *(asyncio.wait_for(effect, timeout=6) for effect in effects), return_exceptions=True,
+    )
+    for result in results:
+        if isinstance(result, BaseException):
+            log.warning("max_content_delivery_pending", error_type=type(result).__name__)
+
+
+async def _content_response(
+    project: Project, record: MaxProjectConfig | None,
+    selection: project_cell_runtime.ProjectCellPublicSelection,
+    session: SessionDep,
+) -> MaxContentPublic:
+    if record is not None and record.owner_id != project.owner_id:
+        raise ApiError("conflict", "MAX configuration ownership mismatch", 409)
+    config = (
+        MaxProjectConfigPayload.model_validate(record.config)
+        if record else _default_config(project)
+    )
+    version = record.config_version if record else 0
+    desired = {
+        "owner_id": str(project.owner_id), "desired_config_version": version,
+        "desired_config_digest": config_digest(public_business_config(config)),
+    }
+    reads = [orchestrator_client.published_cell_config_status(project.id, desired)]
+    if selection.workspace is not None:
+        reads.append(orchestrator_client.project_cell_business_config_status(
+            selection.workspace.id, {**desired, "project_id": str(project.id)},
+        ))
+    results = await asyncio.gather(
+        *(asyncio.wait_for(read, timeout=6) for read in reads), return_exceptions=True,
+    )
+    fallback = {"state": "unknown", "desired_config_version": version,
+                "reason": "controller_unavailable"}
+    try:
+        public = MaxContentPublicDelivery.model_validate(results[0])
+        if public.desired_config_version != version:
+            raise ValueError("invalid configuration status version")
+    except Exception:
+        public = MaxContentPublicDelivery.model_validate(fallback)
+    preview = MaxContentPreviewDelivery(
+        state="not_created", desired_config_version=version,
+    )
+    if selection.workspace is not None:
+        try:
+            preview = MaxContentPreviewDelivery.model_validate(results[1])
+            if preview.desired_config_version != version:
+                raise ValueError("invalid configuration status version")
+        except Exception:
+            preview = MaxContentPreviewDelivery.model_validate(fallback)
+    # Runtime observation takes time. Do not confirm an old platform version if a
+    # second owner tab committed newer data during that readback.
+    reason = None
+    try:
+        fresh = await session.get(MaxProjectConfig, project.id, populate_existing=True)
+        if fresh is not None and fresh.owner_id != project.owner_id:
+            raise ApiError("conflict", "MAX configuration ownership mismatch", 409)
+        fresh_version = fresh.config_version if fresh else 0
+        fresh_config = (
+            MaxProjectConfigPayload.model_validate(fresh.config)
+            if fresh else _default_config(project)
+        )
+        fresh_digest = config_digest(public_business_config(fresh_config))
+        if (fresh_version != version
+                or fresh_digest != desired["desired_config_digest"]):
+            version, config = fresh_version, fresh_config
+            reason = "configuration_changed"
+    except ApiError:
+        raise
+    except Exception:
+        reason = "platform_readback_unavailable"
+    if reason:
+        public = public.model_copy(update={
+            "state": "unknown", "desired_config_version": version,
+            "confirmed_config_version": None, "reason": reason,
+        })
+        preview = preview.model_copy(update={
+            "state": "unknown", "desired_config_version": version,
+            "confirmed_config_version": None, "reason": reason,
+        })
+    return MaxContentPublic(
+        project_id=project.id, config_version=version, content=config.content,
+        saved=MaxContentSaved(config_version=version), public=public, preview=preview,
+    )
+
+
+async def _content_selection(
+    project: Project, session: SessionDep, current_user: CurrentUserDep,
+) -> project_cell_runtime.ProjectCellPublicSelection:
+    selection = await project_cell_runtime.resolve_project_cell_public_selection(
+        session, project, owner=current_user, populate_existing=True,
+    )
+    workspace = selection.workspace
+    if workspace is not None and (
+        workspace.project_id != project.id or workspace.owner_id != current_user.id
+        or workspace.owner_id != project.owner_id
+    ):
+        raise ApiError("conflict", "Project Cell workspace identity mismatch", 409)
+    return selection
+
+
+@router.get("/{project_id}/max/content", response_model=MaxContentPublic)
+async def get_max_content(
+    project_id: UUID, response: Response, session: SessionDep, current_user: CurrentUserDep,
+) -> MaxContentPublic:
+    if current_user.is_anon:
+        raise ApiError("forbidden", "Войдите в аккаунт владельца проекта", 403)
+    project = await _owned_max_project(session, project_id, current_user.id)
+    selection = await _content_selection(project, session, current_user)
+    record = await session.get(MaxProjectConfig, project.id, populate_existing=True)
+    response.headers["Cache-Control"] = "no-store"
+    return await _content_response(project, record, selection, session)
+
+
+@router.patch("/{project_id}/max/content", response_model=MaxContentPublic)
+async def patch_max_content(
+    project_id: UUID, payload: MaxContentPatch, response: Response,
+    session: SessionDep, current_user: CurrentUserDep,
+) -> MaxContentPublic:
+    if current_user.is_anon:
+        raise ApiError("forbidden", "Войдите в аккаунт владельца проекта", 403)
+    await _owned_max_project(session, project_id, current_user.id)
+    await project_cell_runtime._try_preview_project_lock(session, project_id)
+    project = await _owned_max_project(session, project_id, current_user.id, lock=True)
+    selection = await _content_selection(project, session, current_user)
+    if await project_cell_runtime._active_generation(session, project.id) is not None:
+        raise ApiError("conflict", "Дождитесь завершения сборки и сохраните каталог ещё раз", 409)
+    try:
+        deployment = await orchestrator_client.get_deploy(project.id)
+    except Exception:
+        deployment = {}
+    if deployment.get("phase") in {"building", "pushing", "swapping", "cancelling"}:
+        raise ApiError("conflict", "Дождитесь завершения публикации", 409)
+    record = await session.get(MaxProjectConfig, project.id)
+    current = _public(project, record)
+    _check_content_version(
+        current.config.content, payload.content, current_version=current.config_version,
+        expected_version=payload.expected_config_version,
+    )
+    desired = current.config.model_copy(update={"content": payload.content})
+    if record is None and current.config.content == payload.content:
+        await session.commit()
+        response.headers["Cache-Control"] = "no-store"
+        return await _content_response(project, None, selection, session)
+    record = await _persist_business_config(project, desired, session, content_only=True)
+    await session.commit()
+    await _sync_content_environments(project, record, selection)
+    response.headers["Cache-Control"] = "no-store"
+    return await _content_response(project, record, selection, session)
 
 
 @router.post("/{project_id}/max/sync-kit", response_model=MaxProjectConfigPublic)

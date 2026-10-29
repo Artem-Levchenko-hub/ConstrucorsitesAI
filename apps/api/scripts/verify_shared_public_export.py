@@ -67,6 +67,11 @@ _CONSENT_OVERRIDE_PATHS = {
     "src/lib/omnia/consent.ts",
 }
 
+_CATALOG_OVERRIDE_PATHS = {
+    "src/lib/omnia/catalog-server.ts", "src/lib/omnia/catalog-actions.ts",
+    "src/lib/omnia/catalog-client.ts", "tests/catalog-config.test.mjs",
+}
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -79,6 +84,7 @@ def main() -> None:
     parser.add_argument("analytics_overrides", type=Path)
     parser.add_argument("consent_overrides", type=Path)
     parser.add_argument("--compliance-overrides", type=Path)
+    parser.add_argument("--catalog-overrides", type=Path)
     args = parser.parse_args()
     golden = json.loads(args.golden.read_text(encoding="utf-8"))["templates"]
     overrides = json.loads(args.readme_overrides.read_text(encoding="utf-8"))
@@ -115,6 +121,12 @@ def main() -> None:
         assert set(compliance_overrides) == {"src/components/YleumCompliance.tsx"}, (
             "unexpected MAX compliance override paths"
         )
+    catalog_overrides = {}
+    if args.catalog_overrides is not None:
+        catalog_overrides = json.loads(args.catalog_overrides.read_text(encoding="utf-8"))
+        assert set(catalog_overrides) == _CATALOG_OVERRIDE_PATHS, (
+            "unexpected MAX catalog override paths"
+        )
     for name, complete_tree in golden.items():
         if name == "max-miniapp-nextjs":
             complete_tree = (
@@ -123,6 +135,7 @@ def main() -> None:
                 | preview_renewal_overrides
                 | analytics_overrides
                 | consent_overrides
+                | catalog_overrides
             )
         omissions = _EXPORT_OMISSIONS[name]
         assert omissions <= complete_tree.keys(), f"unknown frozen export omissions: {name}"
@@ -138,6 +151,7 @@ def main() -> None:
                 entry = analytics_overrides.get(relative, entry)
                 entry = consent_overrides.get(relative, entry)
                 entry = compliance_overrides.get(relative, entry)
+                entry = catalog_overrides.get(relative, entry)
             content = exported[relative]
             data = content.encode("utf-8") if isinstance(content, str) else content
             assert hashlib.sha256(data).hexdigest() == entry["sha256"], f"{name}/{relative}"

@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
@@ -9,6 +10,10 @@ from yleum_api.services.max_project_kit import _template_file
 
 SDK_PATH = "src/lib/omnia/integration-client.ts"
 LEGACY_CLIENT_PATH = "src/lib/omnia/client.ts"
+ACTIVITY_PATH = "src/lib/omnia/activity.ts"
+CATALOG_SERVER_PATH = "src/lib/omnia/catalog-server.ts"
+CATALOG_ACTIONS_PATH = "src/lib/omnia/catalog-actions.ts"
+CATALOG_CLIENT_PATH = "src/lib/omnia/catalog-client.ts"
 PROVIDER_PATH = "src/components/MaxAppProvider.tsx"
 RENEWAL_PATH = "src/lib/max/owner-preview-renewal.ts"
 FOOTER_PATH = "src/components/YleumCompliance.tsx"
@@ -66,7 +71,9 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
     canonical = {
         path: _template_file(path)
         for path in (
-            SDK_PATH, LEGACY_CLIENT_PATH, PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH
+            SDK_PATH, LEGACY_CLIENT_PATH, ACTIVITY_PATH,
+            CATALOG_SERVER_PATH, CATALOG_ACTIONS_PATH, CATALOG_CLIENT_PATH,
+            PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH
         )
     }
     assert writes == [(canonical, ())]
@@ -81,7 +88,9 @@ async def test_generation_retires_encrypted_crud_files_from_existing_projects():
     canonical = {
         path: _template_file(path)
         for path in (
-            SDK_PATH, LEGACY_CLIENT_PATH, PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH
+            SDK_PATH, LEGACY_CLIENT_PATH, ACTIVITY_PATH,
+            CATALOG_SERVER_PATH, CATALOG_ACTIONS_PATH, CATALOG_CLIENT_PATH,
+            PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH
         )
     }
     tree = {
@@ -113,6 +122,40 @@ async def test_generation_retires_encrypted_crud_files_from_existing_projects():
     assert not MAX_RETIRED_MANAGED_FILES & set(tree)
     assert tree["src/lib/secure-data-notes.ts"] == "product file with a similar name"
     assert tree["src/app/page.tsx"] == "existing product"
+
+
+@pytest.mark.parametrize("protocol", [None, 1, 2, True])
+async def test_catalog_manifest_upgrade_is_explicit_atomic_and_preserves_product(protocol):
+    import json
+
+    from yleum_api.services.max_managed_generation import refresh_integration_sdk
+
+    marker = {"version": 1, "services": [{"name": "app", "port": 3000}],
+              "routes": [{"path": "/", "service": "app"}], "custom": "preserved"}
+    if protocol is not None:
+        marker["app_config_protocol"] = protocol
+    original = json.dumps(marker)
+    tree = {".omnia/cell.json": original, "src/app/page.tsx": "owner product"}
+    writes = []
+    async def stage(files, deletes):
+        writes.append((files, deletes))
+        tree.update(files)
+    handle = SimpleNamespace(snapshot_files=AsyncMock(side_effect=lambda: dict(tree)),
+                             stage_patch=stage)
+    if protocol == 2 or protocol is True:
+        with pytest.raises(ValueError, match="Unsupported"):
+            await refresh_integration_sdk(handle, catalog_runtime=True)
+        assert writes == [] and tree[".omnia/cell.json"] == original
+        return
+    await refresh_integration_sdk(handle, catalog_runtime=True)
+    await refresh_integration_sdk(handle, catalog_runtime=True)
+    assert len(writes) == 1
+    upgraded = json.loads(tree[".omnia/cell.json"])
+    assert type(upgraded.pop("app_config_protocol")) is int
+    assert upgraded == {key: value for key, value in marker.items() if key != "app_config_protocol"}
+    assert tree["src/app/page.tsx"] == "owner product"
+    if protocol == 1:
+        assert tree[".omnia/cell.json"] == original
 
 
 async def test_sdk_delivery_uses_current_generation_revision_and_is_exported(
@@ -147,7 +190,9 @@ async def test_sdk_delivery_uses_current_generation_revision_and_is_exported(
     canonical = {
         path: _template_file(path)
         for path in (
-            SDK_PATH, LEGACY_CLIENT_PATH, PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH
+            SDK_PATH, LEGACY_CLIENT_PATH, ACTIVITY_PATH,
+            CATALOG_SERVER_PATH, CATALOG_ACTIONS_PATH, CATALOG_CLIENT_PATH,
+            PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH
         )
     }
     canonical[CONFIG_PATH] = saved_source
@@ -170,3 +215,42 @@ async def test_sdk_delivery_uses_current_generation_revision_and_is_exported(
     )
     await handle.sync_preview()
     assert harness.hot_reload_calls[0] == canonical
+
+
+@pytest.mark.parametrize("manifest", [
+    '{"version":1,"services":[],"routes":[]}',
+    '{"version":1,"services":[],"routes":[],"app_config_protocol":true}',
+    "not json",
+])
+async def test_catalog_policy_survives_new_handle_without_stack_preparation(
+    monkeypatch, db_session, test_engine, manifest,
+):
+    from sqlalchemy import select
+
+    from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.services import project_cell_executor
+
+    harness = await _prepare_executor(monkeypatch, db_session, test_engine,
+        snapshot_files={".omnia/cell.json": manifest})
+    handle = harness.handle
+    await handle.seed_business_config(0, {"content": []})
+    db_session.expire_all()
+    run = await db_session.scalar(select(GenerationRun).where(GenerationRun.id == harness.run_id))
+    assert run.agent_state["max_catalog_runtime_protocol"] == 1
+    # A cached entry bypasses prepare_stack_prompt. A new worker must still
+    # restore policy from platform state, even with damaged agent source.
+    user_id = run.user_id
+    await db_session.rollback()
+    resumed = await project_cell_executor.maybe_create_project_cell_executor(
+        project_id=harness.project_id, project_slug=harness.project_slug,
+        project_template="max_miniapp", user_id=user_id, generation_run_id=harness.run_id,
+        docs_media_execute=AsyncMock(),
+    )
+    assert resumed is not None
+    with pytest.raises(
+        project_cell_executor.ProjectCellExecutorUnavailable, match="app_config_protocol",
+    ):
+        await resumed.run_role(
+            project_cell_executor.ProjectCellCommandRole.FULL_BUILD, uuid4(),
+        )
+    assert harness.exec_calls == []

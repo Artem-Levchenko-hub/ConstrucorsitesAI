@@ -6,6 +6,18 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
+class BusinessConfigStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    owner_id: UUID
+    desired_config_version: int = Field(ge=0, strict=True)
+    desired_config_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class WorkspaceBusinessConfigStatusRequest(BusinessConfigStatusRequest):
+    project_id: UUID
+
+
 class CellDeployRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -27,7 +39,7 @@ class CellDeployRequest(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=128)
     runtime_env: dict[str, str] = Field(default_factory=dict, repr=False)
     business_config: dict[str, Any] = Field(default_factory=dict, repr=False)
-    business_config_version: int = Field(default=1, gt=0)
+    business_config_version: int = Field(default=1, ge=0)
 
     @model_validator(mode="after")
     def exact_evidence_kind(self) -> Self:

@@ -964,13 +964,16 @@ class CellPublicationService:
             raise CellIdentityConflict("restoration publication activation changed")
 
     def _backend(
-        self, manager: Any, state: Any, release: dict[str, Any] | None
+        self, manager: Any, state: Any, release: dict[str, Any] | None, *, readonly: bool = False,
     ) -> PublishedMachineBackend:
         if state is None:
             raise CellResourceError("production resource identity missing")
         if release is not None and release.get("resource_profile") != asdict(manager.profile):
             raise CellResourceError("production resource profile changed; readmission required")
-        _, template = manager.machine_runtime.parts(state)
+        _, template = (
+            manager.machine_runtime.parts(state, readonly=True) if readonly
+            else manager.machine_runtime.parts(state)
+        )
         kwargs = {item.name: getattr(template, item.name) for item in fields(DockerMachineBackend)}
         if release is None:
             # An interrupted first seed may own helpers before a release is
@@ -998,6 +1001,13 @@ class CellPublicationService:
         await ensure_managed_infrastructure(manager, state)
         backend = self._backend(manager, state, release)
         manifest = MachineManifest.model_validate(release["manifest"])
+        if manifest.app_config_protocol == 1:
+            from yleum_orchestrator.services.app_business_config import write_app_config
+
+            await asyncio.to_thread(
+                write_app_config, backend.app_config_directory,
+                request.business_config, request.business_config_version,
+            )
         method = backend.switch_code if switch else backend.ensure_published
         await machine_effect(method, manifest, release["image_id"], release["epoch"])
         if release.get("needs_password_rotation"):
@@ -1029,6 +1039,7 @@ class CellPublicationService:
             public_mode=True,
             runtime_env=env,
             business_config_override=request.business_config,
+            business_config_version=request.business_config_version,
             **({"observer": trace} if trace is not None else {}),
         )
         return backend
@@ -1270,7 +1281,8 @@ class CellPublicationService:
         update = {}
         if "runtime_env" in value:
             update["runtime_env"] = value["runtime_env"]
-        if value.get("business_config_version", 0) >= request.business_config_version:
+        if ("business_config" in value and "business_config_version" in value
+                and value["business_config_version"] >= request.business_config_version):
             update.update(
                 business_config=value["business_config"],
                 business_config_version=value["business_config_version"],
@@ -1286,6 +1298,10 @@ class CellPublicationService:
         business_config: dict[str, Any] | None = None,
         business_config_version: int | None = None,
     ) -> dict[str, bool]:
+        if business_config is not None:
+            from yleum_orchestrator.services.app_business_config import app_config_envelope
+
+            app_config_envelope(business_config, business_config_version or 0)
         async with self._submission_lock.hold(project_id):
             self._require_no_migration(project_id)
             applied = self._configure_locked(
@@ -1300,6 +1316,89 @@ class CellPublicationService:
                 self._stamp_active_release(project_id)
                 return {"applied": True}
             return {"applied": False}
+
+    async def business_config_status(
+        self, project_id: UUID, owner_id: UUID, desired_version: int, desired_digest: str,
+    ) -> dict[str, Any]:
+        from yleum_orchestrator.services.app_business_config import status_projection
+
+        acquired = False
+        try:
+            async with asyncio.timeout(5):
+                async with self._submission_lock.hold(project_id):
+                    acquired = True
+                    return await self._business_config_status_locked(
+                        project_id, owner_id, desired_version, desired_digest,
+                    )
+        except CellIdentityConflict:
+            raise
+        except Exception:
+            return status_projection(
+                "unknown", desired_version, reason="readback_unavailable" if acquired else "busy",
+            )
+
+    async def _business_config_status_locked(
+        self, project_id: UUID, owner_id: UUID, desired_version: int, desired_digest: str,
+    ) -> dict[str, Any]:
+        from yleum_orchestrator.services.app_business_config import (
+            config_digest,
+            observe_docker_config,
+            status_projection,
+        )
+
+        saved = self._read(project_id)
+        if saved.get("owner_id") not in {None, str(owner_id)}:
+            raise CellIdentityConflict("publication owner mismatch")
+        release = saved.get("active_release")
+        if not release or saved.get("disabled"):
+            return status_projection("not_published", desired_version)
+        path = self.root / str(project_id) / "requests" / f"{release['release_id']}.json"
+        if path.is_symlink():
+            raise CellIdentityConflict("unsafe public request")
+        request = self._effective_request(CellDeployRequest.model_validate_json(
+            path.read_text(encoding="utf-8"),
+        ))
+        if request.owner_id != owner_id or request.project_id != project_id:
+            raise CellIdentityConflict("publication configuration identity mismatch")
+        version = request.business_config_version
+        manifest = MachineManifest.model_validate(release["manifest"])
+        if manifest.app_config_protocol != 1:
+            return status_projection(
+                "blocked", desired_version, controller=version,
+                reason="catalog_integration_required",
+            )
+        if version != desired_version or config_digest(request.business_config) != desired_digest:
+            return status_projection(
+                "pending", desired_version, controller=version, reason="controller_pending",
+            )
+        if saved.get("recovery_required") or saved.get("activation_pending"):
+            return status_projection("unknown", desired_version, controller=version, reason="busy")
+        identity = json.dumps(release, sort_keys=True)
+        if KubernetesPlacement.placed(release):
+            observation = await asyncio.to_thread(
+                self._kubernetes().observe_config, release, request,
+            )
+        else:
+            manager = self._production_manager(UUID(saved["source_workspace_id"]))
+            production_id = UUID(saved["production_workspace_id"])
+            async with manager.operation_lock.hold(production_id):
+                state = manager.state_store.load(production_id)
+                if state.project_id != project_id or state.owner_id != owner_id:
+                    raise CellIdentityConflict("public runtime identity mismatch")
+                backend = self._backend(manager, state, release, readonly=True)
+                observation = await asyncio.to_thread(
+                    observe_docker_config, backend, request.business_config, version,
+                    release_id=release["release_id"],
+                )
+        if json.dumps(self._read(project_id).get("active_release"), sort_keys=True) != identity:
+            return status_projection("unknown", desired_version, controller=version, reason="busy")
+        if observation.get("core_matches") and observation.get("app_matches"):
+            return status_projection(
+                "applied", desired_version, controller=version, confirmed=version,
+            )
+        return status_projection(
+            "pending", desired_version, controller=version, reason="runtime_not_confirmed",
+        )
 
     def _stamp_active_release(self, project_id: UUID) -> None:
         """The configuration just applied is part of the serving identity (P04):
@@ -1349,13 +1448,13 @@ class CellPublicationService:
         if business_config is not None:
             if (
                 business_config_version is None
-                or business_config_version < 1
+                or business_config_version < 0
                 or business_config_version < value.get("business_config_version", 0)
             ):
                 raise CellIdentityConflict("public configuration version is stale")
-            if business_config_version == value.get(
-                "business_config_version"
-            ) and business_config != value.get("business_config"):
+            if ("business_config_version" in value
+                    and business_config_version == value["business_config_version"]
+                    and business_config != value.get("business_config")):
                 raise CellIdentityConflict("public configuration version conflicts")
             value.update(
                 business_config=business_config, business_config_version=business_config_version
@@ -1402,6 +1501,7 @@ class CellPublicationService:
                         "OMNIA_PUBLIC_APP_ORIGIN": release["prod_url"],
                     },
                     business_config_override=request.business_config,
+                    business_config_version=request.business_config_version,
                 )
                 gateway = backend._lookup(
                     backend.client.containers, backend.stem + "-gateway", "max-gateway"

@@ -51,6 +51,53 @@ class MaxContentItem(BaseModel):
         return clean
 
 
+def _unique_content_ids(value: list[MaxContentItem]) -> list[MaxContentItem]:
+    if len({item.id for item in value}) != len(value):
+        raise ValueError("duplicate content item id")
+    return value
+
+
+class MaxContentPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_config_version: int = Field(ge=0, strict=True)
+    content: list[MaxContentItem] = Field(max_length=100)
+
+    _unique_ids = field_validator("content")(_unique_content_ids)
+
+
+class MaxContentSaved(BaseModel):
+    state: Literal["saved"] = "saved"
+    config_version: int
+
+
+class MaxContentPublicDelivery(BaseModel):
+    state: Literal["applied", "pending", "unknown", "not_published", "blocked"]
+    desired_config_version: int
+    controller_config_version: int | None = None
+    confirmed_config_version: int | None = None
+    checked_at: datetime | None = None
+    reason: str | None = None
+
+
+class MaxContentPreviewDelivery(BaseModel):
+    state: Literal["applied", "pending", "deferred", "unknown", "not_created"]
+    desired_config_version: int
+    controller_config_version: int | None = None
+    confirmed_config_version: int | None = None
+    checked_at: datetime | None = None
+    reason: str | None = None
+
+
+class MaxContentPublic(BaseModel):
+    project_id: UUID
+    config_version: int
+    content: list[MaxContentItem]
+    saved: MaxContentSaved
+    public: MaxContentPublicDelivery
+    preview: MaxContentPreviewDelivery
+
+
 class MaxOperator(BaseModel):
     # Only a display name for the app's own documents: a generated policy or
     # terms page has to say who runs the app. Never requisites — ИНН, ОГРН,
@@ -102,6 +149,8 @@ class MaxProjectConfigPayload(BaseModel):
     support: MaxSupport = Field(default_factory=MaxSupport)
     legal: MaxLegal = Field(default_factory=MaxLegal)
     max_url_attached: bool = False
+
+    _unique_ids = field_validator("content")(_unique_content_ids)
 
     @classmethod
     def default_for(cls, app_name: str) -> "MaxProjectConfigPayload":

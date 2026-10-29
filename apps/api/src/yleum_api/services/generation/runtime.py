@@ -101,13 +101,17 @@ async def _build_agent_seed_parts(
     *,
     refresh_managed_sdk: bool = False,
     max_config_source: str | None = None,
+    catalog_runtime: bool = False,
 ) -> list[str]:
     if refresh_managed_sdk:
         from yleum_api.services.max_managed_generation import refresh_integration_sdk
 
         # Required delivery precedes fail-soft context reads and all model work.
         # Keep this outside the try: a failed lease/write must abort generation.
-        await refresh_integration_sdk(project_cell_handle, max_config_source=max_config_source)
+        await refresh_integration_sdk(
+            project_cell_handle, max_config_source=max_config_source,
+            catalog_runtime=catalog_runtime,
+        )
     seed_parts: list[str] = []
     try:
         ents = await _project_cell_list_dir(project_cell_handle, "entities")

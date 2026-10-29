@@ -1172,6 +1172,7 @@ class MachineAdapter:
         self, state: Any, manifest: MachineManifest, backend: DockerMachineBackend, epoch: int,
         *, public_mode: bool = False, runtime_env: dict[str, str] | None = None,
         business_config_override: dict[str, Any] | None = None, observer: Any = None,
+        business_config_version: int | None = None,
     ) -> None:
         from yleum_orchestrator.services.adaptation_recovery_barrier import (
             require_candidate_writers_allowed,
@@ -1183,6 +1184,7 @@ class MachineAdapter:
                 state, manifest, backend, epoch, public_mode=public_mode,
                 runtime_env=runtime_env, business_config_override=business_config_override,
                 observer=observer, transition=transition,
+                business_config_version=business_config_version,
             )
         except BaseException:
             # Until gateway replacement begins, the original serving core and
@@ -1205,6 +1207,7 @@ class MachineAdapter:
         *, public_mode: bool, runtime_env: dict[str, str] | None,
         business_config_override: dict[str, Any] | None, observer: Any,
         transition: dict[str, Any],
+        business_config_version: int | None = None,
     ) -> None:
         # P13: the publication trace sees each readiness step of the trusted
         # boundary (core, configuration readback, auth probes, gateway) instead
@@ -1344,12 +1347,20 @@ class MachineAdapter:
             business_config = {
                 "project_id": str(state.project_id), "owner_id": str(state.owner_id),
                 "config": business_config_override,
+                "version": business_config_version,
             }
         if business_config is not None:
             if (business_config["project_id"] != str(state.project_id)
                     or business_config["owner_id"] != str(state.owner_id)):
                 raise CellResourceError("MAX configuration ownership mismatch")
             apply_core_config(core, core_ip, business_config["config"])
+            if manifest.app_config_protocol == 1:
+                from yleum_orchestrator.services.app_business_config import write_app_config
+
+                write_app_config(
+                    backend.app_config_directory, business_config["config"],
+                    business_config.get("version", 0),
+                )
         if public_mode:
             stage("verify_auth")
             # A health/legal page does not compile Next's lazy auth/API modules.
@@ -1766,17 +1777,12 @@ class MachineAdapter:
         require_candidate_writers_allowed(self.manager.state_store.root, state.workspace_id)
         machine, backend = self.parts(state)
         path = machine.path.parent / "business-config.json"
-        previous = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
-        if previous is not None and (
-            previous["project_id"] != str(state.project_id)
-            or previous["owner_id"] != str(state.owner_id)
-        ):
-            raise CellResourceError("MAX configuration ownership mismatch")
-        if previous is not None and (
-            previous["version"] > version
-            or (previous["version"] == version and previous["config"] != config)
-        ):
-            raise CellResourceError("stale MAX configuration version")
+        previous = self._persist_owner_business_config(state, path, version, config)
+        manifest = MachineManifest.model_validate(machine.state()["manifest"])
+        if manifest.app_config_protocol == 1:
+            from yleum_orchestrator.services.app_business_config import write_app_config
+
+            write_app_config(backend.app_config_directory, config, version)
         preview = self.preview(state)
         if (previous is not None and previous["config"] == config
                 and previous.get("applied") is True and preview and preview[0] == "running"):
@@ -1784,13 +1790,6 @@ class MachineAdapter:
             if previous["version"] != version:
                 write_controller_json(path, {**previous, "version": version})
             return True
-        manifest = MachineManifest.model_validate(machine.state()["manifest"])
-        # Persist desired metadata before any runtime effect. Retrying or waking
-        # replays the same data. No project source, DB or environment restore.
-        write_controller_json(path, {
-            "project_id": str(state.project_id), "owner_id": str(state.owner_id),
-            "version": version, "config": config,
-        })
         # Metadata must not allocate a sleeping project's CPU/memory envelope.
         # The normal preview/generation wake replays this controller-owned file.
         if preview is None or preview[0] != "running":
@@ -1803,6 +1802,98 @@ class MachineAdapter:
             "version": version, "config": config, "applied": True,
         })
         return True
+
+    def seed_owner_business_config(
+        self, state: Any, *, version: int, config: dict[str, Any],
+    ) -> None:
+        """A validated generation lease seeds metadata before a manifest exists."""
+        from yleum_orchestrator.services.adaptation_recovery_barrier import (
+            require_candidate_writers_allowed,
+        )
+        require_candidate_writers_allowed(self.manager.state_store.root, state.workspace_id)
+        self._persist_owner_business_config(
+            state, self.root / str(state.workspace_id) / "business-config.json", version, config,
+        )
+
+    @staticmethod
+    def _persist_owner_business_config(
+        state: Any, path: Path, version: int, config: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        from yleum_orchestrator.services.app_business_config import app_config_envelope
+
+        app_config_envelope(config, version)
+        if path.is_symlink():
+            raise CellIdentityConflict("unsafe owner configuration")
+        previous = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+        if previous is not None and (
+            previous["project_id"] != str(state.project_id)
+            or previous["owner_id"] != str(state.owner_id)
+        ):
+            raise CellResourceError("MAX configuration ownership mismatch")
+        if previous is not None and (
+            previous["version"] > version
+            or (previous["version"] == version and previous["config"] != config)
+        ):
+            raise CellResourceError("stale MAX configuration version")
+        if previous is None or previous["version"] != version or previous["config"] != config:
+            # Durable desired metadata precedes all runtime effects and survives sleeping.
+            write_controller_json(path, {
+                "project_id": str(state.project_id), "owner_id": str(state.owner_id),
+                "version": version, "config": config,
+            })
+        return cast(dict[str, Any] | None, previous)
+
+    def owner_business_config_status(
+        self, state: Any, desired_version: int, desired_digest: str,
+    ) -> dict[str, Any]:
+        from yleum_orchestrator.services.app_business_config import (
+            config_digest,
+            observe_docker_config,
+            status_projection,
+        )
+
+        if not self.exists(state.workspace_id):
+            return status_projection("not_created", desired_version)
+        machine, backend = self.parts(state, readonly=True)
+        path = machine.path.parent / "business-config.json"
+        if path.is_symlink():
+            raise CellIdentityConflict("unsafe owner configuration")
+        previous = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+        if previous is not None and (
+            previous.get("project_id") != str(state.project_id)
+            or previous.get("owner_id") != str(state.owner_id)
+        ):
+            raise CellIdentityConflict("owner configuration identity mismatch")
+        version = previous.get("version") if previous else None
+        app = backend._container()
+        if app is None:
+            return status_projection(
+                "deferred", desired_version, controller=version, reason="preview_sleeping",
+            )
+        app.reload()
+        if app.status != "running":
+            return status_projection(
+                "deferred", desired_version, controller=version, reason="preview_sleeping",
+            )
+        manifest = MachineManifest.model_validate(machine.state()["manifest"])
+        if manifest.app_config_protocol != 1:
+            return status_projection(
+                "pending", desired_version, controller=version,
+                reason="catalog_integration_required",
+            )
+        if (previous is None or version != desired_version
+                or config_digest(previous["config"]) != desired_digest):
+            return status_projection(
+                "pending", desired_version, controller=version, reason="controller_pending",
+            )
+        observation = observe_docker_config(backend, previous["config"], version)
+        if observation["core_matches"] and observation["app_matches"]:
+            return status_projection(
+                "applied", desired_version, controller=version, confirmed=version,
+            )
+        return status_projection(
+            "pending", desired_version, controller=version, reason="runtime_not_confirmed",
+        )
 
     async def resume_preview(self, state: Any, *, epoch: int | None = None) -> None:
         from yleum_orchestrator.services.adaptation_recovery_barrier import (

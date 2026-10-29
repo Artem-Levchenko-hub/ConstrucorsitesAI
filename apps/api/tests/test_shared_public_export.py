@@ -46,6 +46,13 @@ CONSENT_OVERRIDES = json.loads(
     ).read_text(encoding="utf-8")
 )
 
+CATALOG_OVERRIDES = json.loads(
+    (
+        Path(__file__).resolve().parents[2]
+        / "orchestrator/tests/fixtures/max_template_catalog_overrides.json"
+    ).read_text(encoding="utf-8")
+)
+
 SOURCE_MAPPING = json.loads(
     (
         Path(__file__).resolve().parents[2]
@@ -104,6 +111,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             expected.update(PREVIEW_RENEWAL_OVERRIDES)
             expected.update(ANALYTICS_OVERRIDES)
             expected.update(CONSENT_OVERRIDES)
+            expected.update(CATALOG_OVERRIDES)
         for relative in expected:
             shared_public = relative in {
                 "public/omnia-inspector.js",
@@ -141,6 +149,8 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             str(fixtures / "max_template_preview_renewal_overrides.json"),
             str(fixtures / "max_template_analytics_overrides.json"),
             str(fixtures / "max_template_consent_overrides.json"),
+            "--catalog-overrides",
+            str(fixtures / "max_template_catalog_overrides.json"),
             "--compliance-overrides",
             str(fixtures / "max_template_compliance_overrides.json"),
         ],
@@ -170,6 +180,8 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
         str(fixtures / "max_template_preview_renewal_overrides.json"),
         str(fixtures / "max_template_analytics_overrides.json"),
         str(fixtures / "max_template_consent_overrides.json"),
+        "--catalog-overrides",
+        str(fixtures / "max_template_catalog_overrides.json"),
         "--compliance-overrides",
         str(fixtures / "max_template_compliance_overrides.json"),
     ]
@@ -275,6 +287,32 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
 
     valid_args = args.copy()
     valid_args[4] = str(fixtures / "max_template_dependency_overrides.json")
+    catalog_index = valid_args.index("--catalog-overrides")
+    catalog_path = "src/lib/omnia/catalog-server.ts"
+    for mutation in ("extra", "missing", "hash", "omitted"):
+        bad_catalog = dict(CATALOG_OVERRIDES)
+        if mutation == "extra":
+            bad_catalog["src/lib/omnia/unreviewed.ts"] = {"sha256": "0" * 64}
+        elif mutation == "missing":
+            bad_catalog.pop(catalog_path)
+        elif mutation == "hash":
+            bad_catalog[catalog_path] = {"sha256": "0" * 64, "mode": "100644"}
+        invalid_catalog = tmp_path / "untrusted-catalog.json"
+        invalid_catalog.write_text(json.dumps(bad_catalog), encoding="utf-8")
+        invalid_args = valid_args.copy()
+        invalid_args[catalog_index + 1] = str(invalid_catalog)
+        if mutation == "omitted":
+            del invalid_args[catalog_index:catalog_index + 2]
+        rejected = subprocess.run(
+            invalid_args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
+        )
+        assert rejected.returncode != 0
+        expected_error = (
+            "unexpected MAX catalog override paths" if mutation in ("extra", "missing")
+            else "incomplete standalone export" if mutation == "omitted"
+            else f"max-miniapp-nextjs/{catalog_path}"
+        )
+        assert expected_error in rejected.stderr
     # The footer exception is exactly one reviewed path, never a source bypass.
     compliance_path = "src/components/YleumCompliance.tsx"
     compliance = json.loads(

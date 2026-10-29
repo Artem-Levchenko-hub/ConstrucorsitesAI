@@ -254,6 +254,7 @@ def test_build_spec_takes_the_ingress_tls_mode_from_settings(tmp_path: Path) -> 
         build_ref="build",
         verification_ref="verify",
         idempotency_key="publish-kanareika-1",
+        business_config_version=9,
     )
     release = {
         "release_id": "11111111-1111-4111-8111-111111111111",
@@ -286,12 +287,47 @@ def test_build_spec_takes_the_ingress_tls_mode_from_settings(tmp_path: Path) -> 
     assert spec_for("cert-manager").tls_mode == "cert-manager"
     wildcard = spec_for("wildcard")
     assert wildcard.tls_mode == "wildcard"
+    assert wildcard.business_config_version == 9
     assert wildcard.public_host == "kanareika-c31c55.apps.yleum.ru"
     assert "annotations" not in _ingress(kp.build_objects(wildcard))["metadata"]
 
 
 def _ingress(objects: list[dict[str, Any]]) -> dict[str, Any]:
     return next(o for o in objects if o["kind"] == "Ingress")
+
+
+def test_config_observation_keeps_cold_cluster_initialization_inside_child(tmp_path, monkeypatch):
+    from yleum_orchestrator.services import k8s_placement
+
+    placement = KubernetesPlacement(
+        _settings(
+            tmp_path,
+            k8s_kubeconfig_path="/controller/kubeconfig",
+            k8s_context="production",
+        ),
+        root=tmp_path,
+    )
+    request = _request(business_config_version=9)
+    release = {
+        "release_id": "release-1",
+        "manifest": _manifest().model_copy(update={"app_config_protocol": 1}).model_dump(),
+    }
+    monkeypatch.setattr(
+        k8s_placement,
+        "KubernetesClusterApi",
+        lambda *args, **kwargs: pytest.fail("unbounded initialization outside child"),
+    )
+
+    def observe(**kwargs):
+        assert kwargs["kubeconfig_path"] == "/controller/kubeconfig"
+        assert kwargs["context"] == "production"
+        assert kwargs["namespace"] == f"app-{PROJECT}"
+        assert kwargs["config_version"] == 9
+        return {"core_matches": True, "app_matches": True}
+
+    monkeypatch.setattr(k8s_placement, "observe_in_subprocess", observe)
+    assert placement.observe_config(release, request) == {"core_matches": True, "app_matches": True}
+    assert placement._runtime is None
 
 
 # -------------------------------------------------------------------- secrets

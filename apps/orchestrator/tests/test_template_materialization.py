@@ -90,6 +90,16 @@ assert set(CONSENT_OVERRIDES) == {
     "src/lib/omnia/client.ts",
     "src/lib/omnia/consent.ts",
 }
+CATALOG_OVERRIDES = json.loads(
+    (Path(__file__).parent / "fixtures/max_template_catalog_overrides.json").read_text(
+        encoding="utf-8"
+    )
+)
+assert set(CATALOG_OVERRIDES) == {
+    "src/lib/omnia/catalog-server.ts", "src/lib/omnia/catalog-actions.ts",
+    "src/lib/omnia/catalog-client.ts", "tests/catalog-config.test.mjs",
+}
+
 # The frozen Git tree remains the baseline; deliberate MAX integration changes
 # are pinned as explicit overrides instead of rewriting historical hashes.
 assert set(README_OVERRIDES) == {
@@ -116,6 +126,7 @@ def assert_golden(name: str, root: Path) -> None:
         expected.update(PREVIEW_RENEWAL_OVERRIDES)
         expected.update(ANALYTICS_OVERRIDES)
         expected.update(CONSENT_OVERRIDES)
+        expected.update(CATALOG_OVERRIDES)
     actual = {
         p.relative_to(root).as_posix(): p
         for p in root.rglob("*")
@@ -130,6 +141,7 @@ def assert_golden(name: str, root: Path) -> None:
             entry = COMPLIANCE_OVERRIDES.get(relative, entry)
             entry = ANALYTICS_OVERRIDES.get(relative, entry)
             entry = CONSENT_OVERRIDES.get(relative, entry)
+            entry = CATALOG_OVERRIDES.get(relative, entry)
         data = actual[relative].read_bytes()
         if os.name == "nt":
             data = data.replace(b"\r\n", b"\n")  # Git autocrlf; Linux gate checks raw bytes.

@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Self
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from yleum_orchestrator.core.workspace_provider import ProjectCellLeaseObservation
 
@@ -219,8 +226,20 @@ class WorkspaceDraftPreviewSessionResponse(BaseModel):
 
 
 class WorkspaceOwnerBusinessConfigRequest(WorkspaceOwnerPreviewSessionRequest):
-    version: int = Field(gt=0)
+    version: int = Field(ge=0, strict=True)
     config: dict[str, object]
+    generation_run_id: UUID | None = None
+    fencing_epoch: int | None = Field(default=None, gt=0, strict=True)
+
+    @model_validator(mode="after")
+    def generation_seed_authority(self) -> Self:
+        if (self.generation_run_id is None) != (self.fencing_epoch is None):
+            raise ValueError("generation seed requires a complete active lease")
+        if self.generation_run_id is None and self.version == 0:
+            raise ValueError("owner configuration version must be positive")
+        if self.version == 0 and self.config.get("content", []) != []:
+            raise ValueError("default generation configuration must have empty content")
+        return self
 
 
 class WorkspaceAgentExecRequest(BaseModel):

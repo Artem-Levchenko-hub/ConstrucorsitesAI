@@ -2624,7 +2624,15 @@ async def project_cell_apply_business_config(
     owner_id: UUID,
     version: int,
     config: dict[str, Any],
+    generation_run_id: UUID | None = None,
+    fencing_epoch: int | None = None,
 ) -> bool:
+    if (generation_run_id is None) != (fencing_epoch is None):
+        raise ValueError("configuration seed requires complete generation authority")
+    generation_authority = (
+        {"generation_run_id": str(generation_run_id), "fencing_epoch": fencing_epoch}
+        if generation_run_id is not None else {}
+    )
     payload = await _request(
         "PUT",
         f"/internal/workspaces/{workspace_id}/owner-business-config",
@@ -2633,6 +2641,7 @@ async def project_cell_apply_business_config(
             "owner_id": str(owner_id),
             "version": version,
             "config": config,
+            **generation_authority,
         },
         timeout=300.0,
     )
@@ -2672,6 +2681,24 @@ async def configure_published_cell(project_id: UUID, payload: dict[str, Any]) ->
         f"/internal/projects/{project_id}/cell-deploy/config",
         json=payload,
         timeout=120.0,
+    )
+
+
+async def published_cell_config_status(
+    project_id: UUID, payload: dict[str, Any],
+) -> dict[str, Any]:
+    return await _request(
+        "POST", f"/internal/projects/{project_id}/cell-deploy/config/status",
+        json=payload, timeout=6.0,
+    )
+
+
+async def project_cell_business_config_status(
+    workspace_id: UUID, payload: dict[str, Any],
+) -> dict[str, Any]:
+    return await _request(
+        "POST", f"/internal/workspaces/{workspace_id}/owner-business-config/status",
+        json=payload, timeout=6.0,
     )
 
 

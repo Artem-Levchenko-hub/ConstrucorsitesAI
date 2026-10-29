@@ -314,8 +314,26 @@ def _normalize_compliance(files):
     return files | {path: legacy["source"]}
 
 
+def _normalize_catalog(files):
+    fixtures = Path(__file__).parents[2] / "orchestrator/tests/fixtures"
+    reviewed = json.loads(
+        (fixtures / "max_template_catalog_overrides.json").read_text(encoding="utf-8")
+    )
+    added = {
+        "src/lib/omnia/catalog-server.ts", "src/lib/omnia/catalog-actions.ts",
+        "src/lib/omnia/catalog-client.ts",
+    }
+    assert set(reviewed) == added | {"tests/catalog-config.test.mjs"}
+    normalized = dict(files)
+    for path in added:
+        assert hashlib.sha256(files[path].encode()).hexdigest() == reviewed[path]["sha256"], path
+        normalized.pop(path)
+    return normalized
+
+
 def _assert_render_golden(files, expected, *, portable=False):
     """Check reviewed changed files, then the unchanged original full SDK golden."""
+    files = _normalize_catalog(files)
     fixture_root = Path(__file__).parent / "fixtures"
     legacy = json.loads(
         (fixture_root / "max_config_render_legacy_dependencies.json").read_text(encoding="utf-8")
@@ -459,9 +477,10 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
                 if target and fault == "read":
                     raise RuntimeError("baseline-read-failure")
                 if target and fault == "validation":
-                    return SimpleNamespace(config={"app_name": []})
+                    return SimpleNamespace(owner_id=uid, config_version=7, config={"app_name": []})
                 if stored:
                     return SimpleNamespace(
+                        owner_id=uid, config_version=7,
                         config=MaxProjectConfigPayload(
                             app_name="Changed after agent"
                             if state["model_ran"]
@@ -536,6 +555,7 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
     # Ячейка есть у КАЖДОГО проекта — запасного контейнера больше нет, и
     # «не переносимая» ячейка отличается от переносимой только возможностями.
     handle = SimpleNamespace(
+        seed_business_config=AsyncMock(),
         capabilities={"portable_machine": portable},
         is_portable=lambda: portable,
         snapshot_files=AsyncMock(side_effect=lambda: dict(workspace_files)),

@@ -37,6 +37,13 @@ import structlog
 
 from yleum_orchestrator.core.errors import OrchestratorError
 from yleum_orchestrator.core.project_machine import MachineManifest
+from yleum_orchestrator.services.app_business_config import (
+    APP_CONFIG_DIRECTORY,
+    APP_CONFIG_PATH,
+    app_config_envelope,
+    config_digest,
+)
+from yleum_orchestrator.services.k8s_config_observer import observe_in_subprocess
 from yleum_orchestrator.services.project_database_credentials import ProjectDatabaseCredentials
 from yleum_orchestrator.services.project_database_roles import (
     PROJECT_RUNTIME_ROLE,
@@ -112,6 +119,7 @@ class PublicationSpec:
     core_postgres_password: str
     core_runtime_password: str
     project_credentials: ProjectDatabaseCredentials
+    business_config_version: int = 1
     seed_volumes: tuple[SeedVolume, ...] = ()
     app_env: dict[str, str] = field(default_factory=dict)
     app_cpu_cores: float = 0.5
@@ -764,6 +772,29 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
         {"name": "tmp", "mountPath": "/tmp"},
     ]
     app_init: list[dict[str, Any]] = []
+    if manifest.app_config_protocol == 1:
+        objects.append(
+            {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": "app-business-config",
+                    "namespace": ns,
+                    "labels": _labels(spec, "app"),
+                },
+                "data": {
+                    "business.json": app_config_envelope(
+                        spec.business_config, spec.business_config_version
+                    ).decode("ascii"),
+                },
+            }
+        )
+        app_volumes.append(
+            {"name": "app-business-config", "configMap": {"name": "app-business-config"}}
+        )
+        app_mounts.append(
+            {"name": "app-business-config", "mountPath": APP_CONFIG_DIRECTORY, "readOnly": True}
+        )
     for index, seed in enumerate(v for v in seeds if v.mount_path != PROJECT_POSTGRES_DATA):
         name = _volume_name(spec, seed)
         objects.append(_claim(spec, name, seed))
@@ -795,6 +826,8 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
         "PGUSER": PROJECT_RUNTIME_ROLE,
         "PGDATABASE": "postgres",
     }
+    if manifest.app_config_protocol == 1:
+        app_env["YLEUM_APP_CONFIG_PATH"] = APP_CONFIG_PATH
     readiness = (
         {
             "httpGet": {"path": app_readiness.path, "port": app_readiness.port},
@@ -1319,6 +1352,9 @@ class KubernetesApi(Protocol):
         timeout_seconds: float = 60,
     ) -> tuple[int, str]: ...
     def pod_name(self, namespace: str, selector: dict[str, str]) -> str | None: ...
+    def observe_config(
+        self, namespace: str, release_id: str, expected_digest: str, config_version: int
+    ) -> dict[str, bool]: ...
     def proxy_get(
         self, namespace: str, service: str, port: int, path: str, *, timeout_seconds: float = 20
     ) -> tuple[int, bytes]: ...
@@ -1341,6 +1377,8 @@ class KubernetesClusterApi:
         )
         self._dynamic = dynamic.DynamicClient(self._api_client)
         self._core = client.CoreV1Api(self._api_client)
+        self._kubeconfig_path = kubeconfig_path
+        self._context = context
 
     def _resource(self, api_version: str, kind: str) -> Any:
         return self._dynamic.resources.get(api_version=api_version, kind=kind)
@@ -1462,6 +1500,15 @@ class KubernetesClusterApi:
         rc = client.returncode
         client.close()
         return (rc if rc is not None else 1), "".join(output)
+
+    def observe_config(
+        self, namespace: str, release_id: str, expected_digest: str, config_version: int
+    ) -> dict[str, bool]:
+        return observe_in_subprocess(
+            kubeconfig_path=self._kubeconfig_path, context=self._context,
+            namespace=namespace, release_id=release_id,
+            expected_digest=expected_digest, config_version=config_version,
+        )
 
     def proxy_get(
         self, namespace: str, service: str, port: int, path: str, *, timeout_seconds: float = 20
@@ -1661,6 +1708,22 @@ class KubernetesPublishedRuntime:
         log.info("k8s_publication.published", namespace=ns, host=spec.public_host, epoch=spec.epoch)
         return PlacementResult(ns, spec.public_host, spec.epoch)
 
+    def observe_config(
+        self,
+        project_id: UUID,
+        release_id: str,
+        manifest: MachineManifest,
+        business_config: dict[str, Any],
+        business_config_version: int,
+    ) -> dict[str, bool]:
+        """Confirmation only: never apply, wake, restart or trust a ConfigMap in place of files."""
+        result = {"core_matches": False, "app_matches": False}
+        if manifest.app_config_protocol != 1:
+            return result
+        return self.api.observe_config(
+            f"app-{project_id}", release_id, config_digest(business_config), business_config_version
+        )
+
     def _require_wildcard_certificate(self, spec: PublicationSpec) -> None:
         """Wildcard mode publishes an Ingress without a certificate of its own, so
         the cluster must already hold the edge wildcard Traefik serves by default;
@@ -1752,6 +1815,7 @@ class KubernetesPublishedRuntime:
             ("v1", "Secret", "core-runtime"),
             ("v1", "ConfigMap", "boundary-server"),
             ("v1", "ConfigMap", "app-manifest"),
+            ("v1", "ConfigMap", "app-business-config"),
         ):
             self.api.delete(api_version, kind, name, ns)
         namespace = self.api.get("v1", "Namespace", ns, None)

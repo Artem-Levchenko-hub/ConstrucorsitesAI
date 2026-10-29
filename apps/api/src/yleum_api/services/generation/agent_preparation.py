@@ -100,6 +100,35 @@ async def classify_agent_turn(
     return AgentTurnClassification(prompt_text, _is_continue, _is_edit, _max_has_generated_snapshot)
 
 
+async def _seed_saved_max_config(
+    factory: async_sessionmaker[AsyncSession],
+    ids: GenerationIds,
+    project_info: ProjectGenerationFacts,
+    runtime: GenerationRuntime,
+    *,
+    catalog_runtime: bool,
+) -> str | None:
+    """Deliver authoritative public metadata before any model/runtime work."""
+    from yleum_api.core.errors import ApiError
+    from yleum_api.services.max_managed_generation import load_saved_business_config
+    from yleum_api.services.max_project_kit import render_max_managed_files
+
+    config, version = await load_saved_business_config(
+        factory, project_id=ids.project_id, owner_id=ids.user_id,
+        default_name=project_info.name if catalog_runtime else None,
+    )
+    if config is None:
+        return None
+    if catalog_runtime:
+        seed = getattr(runtime.handle, "seed_business_config", None)
+        if seed is None:
+            raise ApiError(
+                "orchestrator_unavailable", "Не удалось подготовить каталог приложения", 503,
+            )
+        await seed(version, config.model_dump(mode="json", exclude={"max_url_attached"}))
+    return render_max_managed_files(config, ids.project_id)["src/lib/omnia/max-config.ts"]
+
+
 async def prepare_stack_prompt(
     *,
     _design_contract: Any,
@@ -110,23 +139,17 @@ async def prepare_stack_prompt(
     prompt_text: str,
     runtime: GenerationRuntime,
 ) -> StackPrompt:
-    _saved_max_config_source = None
-    from yleum_api.models.max_project_config import MaxProjectConfig
-    from yleum_api.schemas.max_studio import MaxProjectConfigPayload
-    from yleum_api.services.max_project_kit import render_max_managed_files
-
-    async with factory() as _config_session:
-        _saved_max_record = await _config_session.get(MaxProjectConfig, ids.project_id)
-    if _saved_max_record is not None:
-        _saved_max_config_source = render_max_managed_files(
-            MaxProjectConfigPayload.model_validate(_saved_max_record.config),
-            ids.project_id,
-        )["src/lib/omnia/max-config.ts"]
+    _orch_name = orchestrator_template(project_info.template)
+    _catalog_runtime = _orch_name == "max-miniapp-nextjs"
+    _saved_max_config_source = await _seed_saved_max_config(
+        factory, ids, project_info, runtime, catalog_runtime=_catalog_runtime,
+    )
     _seed_parts = (
         await _build_agent_seed_parts(
             runtime.handle,
             refresh_managed_sdk=True,
             max_config_source=_saved_max_config_source,
+            catalog_runtime=_catalog_runtime,
         )
         if runtime.handle is not None
         else []
@@ -165,7 +188,6 @@ async def prepare_stack_prompt(
     # OTHER container stack (realtime, …) gets the shared LOOP_PROTOCOL + its
     # own SYSTEM_PROMPT.md, so the agent builds it with the right primitives
     # (e.g. the realtime hub + members ACL) instead of the entity guide.
-    _orch_name = orchestrator_template(project_info.template)
     # Bare / no-stack experiment: the agent picks its OWN framework, so the
     # Next-specific `build` typecheck (require_green_before_done) does not
     # apply — completion is proven by runtime_check/probe instead.

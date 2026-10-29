@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode } from "react";
-import { Check, PackageOpen, Plus, Trash2 } from "lucide-react";
+import { Check, PackageOpen, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import type { MaxContentItem, MaxProjectConfigPayload } from "@/lib/api/types";
 import { MAX_BRIEF_LENGTH, MAX_FEATURES, MAX_FEATURE_INFO } from "@/lib/max-brief";
 import { MaxContentItemFields } from "./MaxContentItemEditor";
+import { newMaxContentItem } from "@/lib/max-catalog";
 
 export type SetupSection = "details" | "content" | "owner" | "policies";
 
@@ -28,22 +29,6 @@ function Group({ title, children, description }: { title: string; children: Reac
 
 function Intro({ title, children, publication = false }: { title: string; children: ReactNode; publication?: boolean }) {
   return <div className="max-setup-intro"><span className="max-setup-purpose" data-publication={publication}>{publication ? "Есть обязательные пункты для публикации" : "Можно заполнить позже"}</span><h3>{title}</h3><p>{children}</p></div>;
-}
-
-/** Новая позиция: только название-заглушка, остальное владелец дозаполняет. */
-function blankContentItem(): MaxContentItem {
-  return {
-    id: `item-${Date.now()}`,
-    title: "",
-    category: "",
-    description: "",
-    price: "",
-    availability: "in_stock",
-    options: [],
-    image_url: "",
-    action_label: "Открыть",
-    active: true,
-  };
 }
 
 export function MaxProjectSetupSections({ section, projectId, current, onChange }: {
@@ -149,7 +134,7 @@ export function MaxProjectSetupSections({ section, projectId, current, onChange 
     return <section className="max-setup-section">
       <div className="max-setup-content-heading">
         <Intro title="Каталог и контент">Товары, услуги, сеансы или уроки — то, что пользователь увидит списком и сможет открыть. Заполнять необязательно: без каталога приложение тоже работает.</Intro>
-        <Button size="sm" className="max-setup-add" onClick={() => onChange({ ...current, content: [...current.content, blankContentItem()] })}>
+        <Button size="sm" className="max-setup-add" onClick={() => onChange({ ...current, content: [...current.content, newMaxContentItem()] })}>
           <Plus aria-hidden="true" className="h-4 w-4" />Добавить позицию
         </Button>
       </div>
@@ -176,10 +161,6 @@ export function MaxProjectSetupSections({ section, projectId, current, onChange 
               className="max-setup-visibility" onClick={() => updateContent(index, { active: !item.active })}>
               <span className="max-setup-switch-track" aria-hidden="true"><span /></span>
               {item.active ? "Показан в приложении" : "Скрыт из приложения"}
-            </button>
-            <button type="button" className="max-setup-delete" aria-label={`Удалить ${item.title || `позицию ${index + 1}`}`}
-              onClick={() => onChange({ ...current, content: current.content.filter((_, itemIndex) => itemIndex !== index) })}>
-              <Trash2 className="h-4 w-4" aria-hidden="true" /><span>Удалить</span>
             </button>
           </div>
           <MaxContentItemFields projectId={projectId} index={index} item={item}

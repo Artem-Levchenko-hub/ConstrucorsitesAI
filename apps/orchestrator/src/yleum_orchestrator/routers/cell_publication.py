@@ -13,7 +13,10 @@ from yleum_orchestrator.core.cell_resources import (
 )
 from yleum_orchestrator.core.errors import OrchestratorError
 from yleum_orchestrator.core.internal_auth import verify_internal_token
-from yleum_orchestrator.schemas.cell_publication import CellDeployRequest
+from yleum_orchestrator.schemas.cell_publication import (
+    BusinessConfigStatusRequest,
+    CellDeployRequest,
+)
 from yleum_orchestrator.schemas.runtime import DeployResponse
 from yleum_orchestrator.services.cell_publication import get_cell_publication_service
 
@@ -25,7 +28,7 @@ class PublicCellConfigRequest(BaseModel):
     owner_id: UUID
     runtime_env: dict[str, str] | None = Field(default=None, repr=False)
     business_config: dict[str, Any] | None = Field(default=None, repr=False)
-    business_config_version: int | None = Field(default=None, gt=0)
+    business_config_version: int | None = Field(default=None, ge=0)
 
     @field_validator("runtime_env")
     @classmethod
@@ -77,6 +80,15 @@ async def configure_cell(
         raise OrchestratorError(
             code="validation_failed", message="configuration version required", status_code=400
         )
+    if body.business_config is not None:
+        from yleum_orchestrator.services.app_business_config import app_config_envelope
+
+        try:
+            app_config_envelope(body.business_config, body.business_config_version or 0)
+        except ValueError:
+            raise OrchestratorError(
+                code="validation_failed", message="invalid public configuration", status_code=413,
+            ) from None
     try:
         return await get_cell_publication_service().configure(
             project_id,
@@ -84,6 +96,20 @@ async def configure_cell(
             runtime_env=body.runtime_env,
             business_config=body.business_config,
             business_config_version=body.business_config_version,
+        )
+    except CellResourceError as exc:
+        raise _safe_error(exc) from None
+
+
+@router.post("/{project_id}/cell-deploy/config/status")
+async def public_cell_config_status(
+    project_id: UUID, body: BusinessConfigStatusRequest,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> dict[str, Any]:
+    verify_internal_token(x_internal_token)
+    try:
+        return await get_cell_publication_service().business_config_status(
+            project_id, body.owner_id, body.desired_config_version, body.desired_config_digest,
         )
     except CellResourceError as exc:
         raise _safe_error(exc) from None

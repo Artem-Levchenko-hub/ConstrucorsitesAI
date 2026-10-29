@@ -343,6 +343,11 @@ class DockerMachineBackend:
                 volumes[name] = {"bind": mount.target, "mode": "rw"}
         return volumes
 
+    @property
+    def app_config_directory(self) -> Path:
+        # Outside named data/source volumes and sanitized environment artifacts.
+        return self.root / "app-business-config" / str(self.workspace_id)
+
     def environment_volume_names(self, manifest: MachineManifest) -> tuple[str, ...]:
         return (*self.volume_mapping(manifest), self.project_postgres_volume)
 
@@ -559,6 +564,28 @@ class DockerMachineBackend:
             raise ValueError("machine service resource request exceeds admitted bundle budget")
         metadata = self._metadata()
         proxy_ip = metadata.get("proxy_ip", "127.0.0.1")
+        app_mount: dict[str, dict[str, str]] = {}
+        app_env: dict[str, str] = {}
+        if manifest.app_config_protocol == 1:
+            from yleum_orchestrator.services.app_business_config import (
+                APP_CONFIG_DIRECTORY,
+                APP_CONFIG_PATH,
+                write_app_config,
+            )
+            if self.app_config_directory.is_symlink():
+                raise CellIdentityConflict("unsafe application configuration directory")
+            self.app_config_directory.mkdir(parents=True, exist_ok=True, mode=0o755)
+            desired = self.root / str(self.workspace_id) / "business-config.json"
+            if desired.is_symlink():
+                raise CellIdentityConflict("unsafe owner configuration")
+            if desired.exists():
+                saved = json.loads(desired.read_text(encoding="utf-8"))
+                if (saved.get("project_id") != str(self.project_id)
+                        or saved.get("owner_id") != str(self.owner_id)):
+                    raise CellIdentityConflict("owner configuration identity mismatch")
+                write_app_config(self.app_config_directory, saved["config"], saved["version"])
+            app_mount[str(self.app_config_directory)] = {"bind": APP_CONFIG_DIRECTORY, "mode": "ro"}
+            app_env["YLEUM_APP_CONFIG_PATH"] = APP_CONFIG_PATH
         return {
             "name": self.machine_name,
             "detach": True,
@@ -587,6 +614,7 @@ class DockerMachineBackend:
             "volumes": {
                 **self.volume_mapping(manifest),
                 self.stem + "-logs": {"bind": "/run/omnia-logs", "mode": "rw"},
+                **app_mount,
             },
             "tmpfs": {"/run": "rw,nosuid,nodev,size=32m", "/tmp": "rw,nosuid,nodev,size=128m"},
             "environment": {
@@ -622,6 +650,7 @@ class DockerMachineBackend:
                 "NO_PROXY": "127.0.0.1,localhost",
                 "no_proxy": "127.0.0.1,localhost",
                 **self.project_database_env(),
+                **app_env,
             },
             "log_config": docker.types.LogConfig(
                 type="json-file", config={"max-size": "1m", "max-file": "2"}
@@ -1831,7 +1860,7 @@ class DockerMachineBackend:
             raise CellResourceError("mutable machine cannot be snapshotted")
         # Docker commit merges empty arrays with inherited runtime configuration.
         # Export/import rootfs instead, with *only* trusted ownership labels.
-        # Named volumes/tmpfs (including logs) are absent from Docker rootfs export.
+        # Named volumes, tmpfs and public config bind mounts are absent from rootfs export.
         with tempfile.TemporaryFile(dir=self.root) as rootfs:
             size = 0
             for chunk in machine.export():

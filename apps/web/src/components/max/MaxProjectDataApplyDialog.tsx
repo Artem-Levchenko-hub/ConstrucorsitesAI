@@ -16,10 +16,11 @@ import { sendPrompt } from "@/lib/api/messages";
 import { getMaxProjectConfig } from "@/lib/api/max-studio";
 import type { MaxProjectConfig } from "@/lib/api/types";
 
-export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus }: {
+export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus, catalogIntegration = false }: {
   config: MaxProjectConfig;
   onClose: () => void;
   onReturnFocus?: () => void;
+  catalogIntegration?: boolean;
 }) {
   const router = useRouter();
   const quota = useOwnerChatQuota();
@@ -28,7 +29,7 @@ export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus }: {
   const [terminalFailure, setTerminalFailure] = useState(false);
   // A lost response, double click or reload must replay this application of the
   // saved version, rather than charging for a second identical generation.
-  const baseKey = `max-config-apply-${config.project_id}-${config.config_version}`;
+  const baseKey = `max-config-apply-${config.project_id}-${config.config_version}${catalogIntegration ? "-catalog-v1" : ""}`;
   const storageKey = `omnia:${baseKey}`;
   const [attemptKey, setAttemptKey] = useState(() => {
     try { return sessionStorage.getItem(storageKey) || baseKey; }
@@ -38,7 +39,7 @@ export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus }: {
     try { return Boolean(sessionStorage.getItem(storageKey)); } catch { return false; }
   });
   const quotaBlocksNewAttempt = quota.exhausted && (!attemptDispatched || terminalFailure);
-  const prompt = `Примени сохранённые данные приложения, версия ${config.config_version}, к его экранам и поведению. Прочти актуальную конфигурацию в src/lib/omnia/max-config.ts. Используй название, описание, главное действие, аудиторию, возможности и оформление из раздела «Основное». Покажи активные элементы раздела «Контент» в подходящем каталоге, сохрани их id, названия, описания, цены и подписи действий. У позиции есть раздел (category), фотография (image_url), наличие (availability) и варианты выбора (options): группируй каталог по непустым разделам, показывай фото когда оно задано и нейтральную заглушку когда нет, честно отмечай наличие (позицию out_of_stock нельзя заказать), а при непустых options требуй выбрать вариант перед главным действием. Не придумывай фотографии, цены и размеры, которых владелец не вводил. Для данных, редактируемых владельцем, используй getYleumAppConfig из @/lib/omnia/integration-client: загружай их при открытии экрана и обновляй при возвращении в приложение; не копируй каталог в константы. Сохрани существующие пользовательские данные и работающие функции. Данные владельца и политики используй через управляемые страницы поддержки, конфиденциальности и условий; не переписывай защищённые файлы. Учти выбранные требования к согласиям в пользовательских сценариях. Галочка оплаты не означает подключённую платёжную систему: не имитируй оплату, рассылки или другие внешние операции без подключённого сервиса. Проверь сборку и сообщи, что изменилось и что требует подключения интеграции.`;
+  const prompt = `Примени сохранённые данные приложения, версия ${config.config_version}, к его экранам и поведению. Прочти актуальную конфигурацию в src/lib/omnia/max-config.ts. Используй название, описание, главное действие, аудиторию, возможности и оформление из раздела «Основное». Покажи активные элементы раздела «Контент» в подходящем каталоге, сохрани их id, названия, описания, цены и подписи действий. У позиции есть раздел (category), фотография (image_url), наличие (availability) и варианты выбора (options): группируй каталог по непустым разделам, показывай фото когда оно задано и нейтральную заглушку когда нет, честно отмечай наличие (позицию out_of_stock нельзя заказать), а при непустых options требуй выбрать вариант перед главным действием. Не придумывай фотографии, цены и размеры, которых владелец не вводил. Для каталога используй useYleumCatalog() из @/lib/omnia/catalog-client: обрабатывай loading/error и повторный refresh, не копируй позиции в константы. Для серверной проверки id, active, availability, вариантов и текущей цены используй getYleumServerAppConfig() из @/lib/omnia/catalog-server: он читает тот же серверный файл, что клиентский каталог. Не подменяй каталог прямым getYleumAppConfig или встроенным max-config. Цена — свободный текст: неподдерживаемые форматы и «по запросу» не превращай в числовую сумму. Сохрани id существующих позиций и исторические названия/цены в заказах, не пересчитывай старые заказы по новому каталогу; сохрани способ получения и комментарий. Отмечай фактические действия через trackMaxActivity из @/lib/omnia/client. Событие order_created отправляй только после успешного ответа сервера, как kind event; не выдавай клиентское сообщение за подтвержденное kind action. Сохрани существующие пользовательские данные и работающие функции. Данные владельца и политики используй через управляемые страницы поддержки, конфиденциальности и условий; не переписывай защищённые файлы. Учти выбранные требования к согласиям в пользовательских сценариях. Галочка оплаты не означает подключённую платёжную систему: не имитируй оплату, рассылки или другие внешние операции без подключённого сервиса. Проверь сборку и сообщи, что изменилось и что требует подключения интеграции.`;
   const start = useMutation({
     mutationFn: async (retryTerminal: boolean) => {
       if (quota.exhausted && (!attemptDispatched || retryTerminal)) throw new Error(FREE_CHAT_UPGRADE_MESSAGE);
@@ -92,9 +93,9 @@ export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus }: {
       if (onReturnFocus) { event.preventDefault(); onReturnFocus(); }
     }}>
       <DialogHeader>
-        <DialogTitle>Применить данные к приложению</DialogTitle>
+        <DialogTitle>{catalogIntegration ? "Подключить каталог к приложению" : "Применить данные к приложению"}</DialogTitle>
         <DialogDescription>
-          Данные сохранены. ИИ доработает экраны: название, содержание, оформление и пользовательские сценарии.
+          {catalogIntegration ? "ИИ подключит чтение каталога и проверку заказов. После доработки проверьте результат и опубликуйте приложение." : "Данные сохранены. ИИ доработает экраны: название, содержание, оформление и пользовательские сценарии."}
         </DialogDescription>
       </DialogHeader>
       <p className="text-sm text-fg-secondary">Доработка расходует баланс владельца. Результат появится в редакторе; для опубликованного приложения затем потребуется публикация.</p>

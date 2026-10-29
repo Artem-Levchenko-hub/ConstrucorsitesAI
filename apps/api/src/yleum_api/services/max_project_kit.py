@@ -15,7 +15,8 @@ from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 31
+MAX_MANAGED_KIT_VERSION = 32
+# v32 adds the owner catalog's shared server/client configuration file contract.
 # v30: keep legal footer links and keyboard focus clear of fixed bottom navigation.
 # v29 adds authenticated exact lead receipt lookup for safe legacy adoption.
 # Kit v18 shipped encrypted owner-scoped CRUD. v19 retires exactly those
@@ -173,6 +174,9 @@ def render_max_managed_files(
         "src/app/api/omnia/events/route.ts": _template_file("src/app/api/omnia/events/route.ts"),
         "src/app/api/omnia/telemetry/route.ts": _template_file("src/app/api/omnia/telemetry/route.ts"),
         "src/lib/omnia/activity.ts": _template_file("src/lib/omnia/activity.ts"),
+        "src/lib/omnia/catalog-server.ts": _template_file("src/lib/omnia/catalog-server.ts"),
+        "src/lib/omnia/catalog-actions.ts": _template_file("src/lib/omnia/catalog-actions.ts"),
+        "src/lib/omnia/catalog-client.ts": _template_file("src/lib/omnia/catalog-client.ts"),
         "src/lib/omnia/consent.ts": _template_file("src/lib/omnia/consent.ts"),
         "src/lib/omnia/analytics.ts": _template_file("src/lib/omnia/analytics.ts").replace(
             'process.env.OMNIA_PROJECT_ID || ""', project_literal, 1
@@ -309,6 +313,9 @@ def render_max_managed_kit_update(
 
 MAX_SECURITY_LOCKED_FILES = frozenset(
     {
+        "src/lib/omnia/catalog-server.ts",
+        "src/lib/omnia/catalog-actions.ts",
+        "src/lib/omnia/catalog-client.ts",
         "src/components/MaxAppProvider.tsx",
         "src/components/YleumCompliance.tsx",
         "src/app/layout.tsx",
@@ -386,12 +393,14 @@ rewrite platform-owned files.
     + MAX_UI_GUIDANCE
     + "\n\n"
     + """
-The owner edits business data in Studio's Main, Content, Owner and Policies tabs.
-Read `src/lib/omnia/max-config.ts` to understand that saved brief. In product
-screens load owner-editable names, descriptions, actions and catalogs with
-`getYleumAppConfig()` from `@/lib/omnia/integration-client`, on mount and when the
-app regains focus. Render only active content items, keep their stable ids and
-handle loading, empty and failed reads honestly. A content item carries
+The owner edits business data in Yleum's Catalog and project settings.
+Read `src/lib/omnia/max-config.ts` to understand the saved brief. Product catalog
+screens MUST use `useYleumCatalog()` from `@/lib/omnia/catalog-client`, which
+refreshes on mount/focus from the same mounted public business file as the server.
+Never render a live catalog from bundled config, constants or the legacy core
+catalog endpoint; a missing/unavailable file must show an honest error.
+Render only active content items, keep their stable ids and handle loading,
+empty and failed reads honestly. A content item carries
 `category`, `image_url`, `price`, `availability` and `options`: group the catalog
 by the non-empty categories, show the photo when `image_url` is set and a neutral
 placeholder when it is not, label availability honestly (`out_of_stock` must not
@@ -401,6 +410,17 @@ did not enter. Do not copy this mutable data
 into constants or invent catalog entries. Keep runtime business configuration
 separate from user-owned actions. Saved feature/style/policy choices are a brief
 to implement, not proof that a payment, consent or marketing flow exists.
+Product server actions MUST call `getYleumServerAppConfig()` from
+`@/lib/omnia/catalog-server` and resolve active IDs, availability, options and
+current prices before persisting an order; never trust a submitted price/title.
+Submit the viewed configVersion; if it changed, refresh and ask the user to
+confirm the current total before accepting the order.
+Save title/price snapshots in the order, preserving existing IDs and old history.
+Prices are free text: “По запросу” and other non-numeric prices require an enquiry,
+never a silently parsed checkout total. Missing config fails closed, with no
+static fallback. Preserve `"app_config_protocol": 1` in `.omnia/cell.json`.
+Catalog saves in Yleum need neither generation nor source republish. The public
+app must not expose owner administration or the complete operator configuration.
 
 On a FULL BUILD, there is deliberately no product home page or visual template.
 Create src/app/page.tsx, the product styling, domain screens, components and API
@@ -455,6 +475,32 @@ edit, preserve working behaviour and change only the relevant product files.
 )
 
 
+def enable_catalog_runtime_manifest(content: str) -> str:
+    """Opt a valid portable MAX source into public config without altering services.
+
+    Broken/incomplete drafts remain for the normal manifest validator/agent to
+    repair. Unknown newer protocols are never silently downgraded.
+    """
+    try:
+        manifest = json.loads(content)
+    except (TypeError, ValueError):
+        return content
+    if (
+        not isinstance(manifest, dict)
+        or type(manifest.get("version")) is not int
+        or manifest.get("version") != 1
+        or not isinstance(manifest.get("services"), list)
+        or not isinstance(manifest.get("routes"), list)
+    ):
+        return content
+    protocol = manifest.get("app_config_protocol")
+    if type(protocol) is int and protocol == 1:
+        return content
+    if protocol is not None:
+        raise ValueError("Unsupported application configuration protocol")
+    return json.dumps({**manifest, "app_config_protocol": 1}, ensure_ascii=False, indent=2) + "\n"
+
+
 def include_portable_manifest(
     starter_files: Mapping[str, str],
     workspace_files: Mapping[str, str],
@@ -462,7 +508,9 @@ def include_portable_manifest(
     """Preserve platform runtime metadata without adopting pre-existing product code."""
     files = dict(starter_files)
     if ".omnia/cell.json" in workspace_files:
-        files[".omnia/cell.json"] = workspace_files[".omnia/cell.json"]
+        files[".omnia/cell.json"] = enable_catalog_runtime_manifest(
+            workspace_files[".omnia/cell.json"]
+        )
     return files
 
 

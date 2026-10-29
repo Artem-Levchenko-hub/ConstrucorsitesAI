@@ -6,6 +6,7 @@ import {
   ChartNoAxesCombined,
   Check,
   FileCheck2,
+  PackageOpen,
   Rocket,
   Smartphone,
 } from "lucide-react";
@@ -18,6 +19,7 @@ import { cn } from "@/lib/utils";
 export type MaxProjectNavKey =
   | "editor"
   | "app"
+  | "catalog"
   | "integrations"
   | "bot"
   | "publish"
@@ -40,6 +42,9 @@ const navigation: Array<{
     label: "Данные приложения",
     suffix: "?data=details",
     icon: FileCheck2,
+  },
+  {
+    key: "catalog", keys: ["catalog"], label: "Каталог", suffix: "/catalog", icon: PackageOpen,
   },
   {
     key: "bot",

@@ -118,6 +118,7 @@ export function MaxStudioProjectCard({ project }: { project: Project }) {
         <DropdownMenu>
           <DropdownMenuTrigger asChild><Button type="button" variant="ghost" size="icon" aria-label={`Действия с проектом ${project.name}`} className="size-11 shrink-0"><MoreVertical className="size-4" /></Button></DropdownMenuTrigger>
           <DropdownMenuContent data-max-studio align="end">
+            <DropdownMenuItem asChild><Link href={`/max/${project.id}/catalog`}>Товары и услуги</Link></DropdownMenuItem>
             <DropdownMenuItem className="text-danger focus:text-danger" onSelect={() => setDeleteOpen(true)}><Trash2 className="size-4" />Удалить проект</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

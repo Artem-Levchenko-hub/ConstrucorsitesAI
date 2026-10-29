@@ -5,9 +5,17 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import PurePosixPath
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 Name = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_-]{0,62}$")]
 MANIFEST_PATH = ".omnia/cell.json"
@@ -160,10 +168,25 @@ class MachineDataStore(_StrictModel):
 
 class MachineManifest(_StrictModel):
     version: Literal[1]
+    app_config_protocol: Literal[1] | None = None
     tasks: list[MachineTask] = Field(default_factory=list)
     services: list[MachineService] = Field(min_length=1)
     routes: list[MachineRoute] = Field(min_length=1)
     data_stores: list[MachineDataStore] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def serialize_manifest(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        value: dict[str, Any] = handler(self)
+        if self.app_config_protocol is None:
+            value.pop("app_config_protocol", None)
+        return value
+
+    @field_validator("app_config_protocol", mode="before")
+    @classmethod
+    def exact_app_config_protocol(cls, value: Any) -> Any:
+        if value is not None and (type(value) is not int or value != 1):
+            raise ValueError("unsupported application configuration protocol")
+        return value
 
     @model_validator(mode="after")
     def validate_graph(self) -> Self:

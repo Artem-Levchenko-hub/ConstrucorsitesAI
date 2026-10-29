@@ -47,6 +47,7 @@ from yleum_api.services.orchestrator_client import (
     project_cell_agent_operation_status,
     project_cell_agent_snapshot,
     project_cell_agent_write_files,
+    project_cell_apply_business_config,
     project_cell_apply_draft,
     project_cell_create_preview_session,
     project_cell_prepare_restoration_adaptation,
@@ -487,6 +488,7 @@ class ProjectCellExecutorHandle:
         Callable[[ProofIdentity, str, int], Awaitable[RestorationAdaptationProof]] | None
     ) = None
     release_for_completion: Callable[[], Awaitable[None]] | None = None
+    seed_business_config: Callable[[int, dict[str, Any]], Awaitable[None]] | None = None
 
 
 # Оркестратор отвечает этой фразой из трёх мест (routers/workspace.py), с кодом
@@ -761,6 +763,11 @@ async def maybe_create_project_cell_executor(
         # Read the durable server-verified marker again on every worker attempt.
         # A browser flag or instruction in prompt prose never grants this path.
         restoration_adaptation = "restoration_adaptation" in (run.agent_state or {})
+        saved_catalog_protocol = (run.agent_state or {}).get("max_catalog_runtime_protocol")
+        if saved_catalog_protocol is not None and (
+            type(saved_catalog_protocol) is not int or saved_catalog_protocol != 1
+        ):
+            raise ProjectCellExecutorUnavailable("Unsupported saved MAX catalog protocol")
         if not project_slug:
             if restoration_adaptation:
                 raise ProjectCellExecutorUnavailable("Адаптация требует среду Project Cell.")
@@ -993,7 +1000,26 @@ async def maybe_create_project_cell_executor(
             if cleanup_error is not None:
                 raise cleanup_error
 
+    control_fencing_epoch = response.fencing_epoch
     try:
+        from yleum_api.schemas.project import orchestrator_template
+        from yleum_api.services.max_managed_generation import load_saved_business_config
+
+        if orchestrator_template(project.template) == "max-miniapp-nextjs":
+            config, version = await load_saved_business_config(
+                session_factory, project_id=project_id, owner_id=user_id,
+                default_name=project.name,
+            )
+            assert config is not None
+            # Bootstrap may start SSR/readiness before a handle exists. Seed
+            # under the real admitted lease before it can read the new file.
+            await project_cell_apply_business_config(
+                workspace_id, project_id=project_id, owner_id=user_id,
+                version=version,
+                config=config.model_dump(mode="json", exclude={"max_url_attached"}),
+                generation_run_id=generation_run_id,
+                fencing_epoch=response.fencing_epoch,
+            )
         source_snapshot = await project_cell_agent_bootstrap(
             workspace_id,
             generation_run_id=generation_run_id,
@@ -1075,6 +1101,7 @@ async def maybe_create_project_cell_executor(
     dirty = False
     runtime_log_tail = ""
     preview_synced = False
+    catalog_runtime_required = saved_catalog_protocol == 1
     capabilities = dict(
         adaptation_workspace.capabilities
         if adaptation_workspace is not None
@@ -1226,6 +1253,7 @@ async def maybe_create_project_cell_executor(
         operation_id: UUID,
         *, activity_owned: bool = True,
     ) -> ProjectCellCommandObservation:
+        _require_catalog_contract()
         timeout = {
             ProjectCellCommandRole.BOOTSTRAP: 900,
             ProjectCellCommandRole.FAST_CHECK: 480,
@@ -1245,6 +1273,7 @@ async def maybe_create_project_cell_executor(
         role: ProjectCellCommandRole,
         result: ProjectCellAgentExecResponse,
     ) -> ProjectCellCommandObservation:
+        _require_catalog_contract()
         nonlocal dirty, last_identity, preview_synced, synced_files, workspace_revision
         observation = _command_observation(result, role)
         workspace_revision = result.workspace_revision
@@ -1693,6 +1722,7 @@ async def maybe_create_project_cell_executor(
                     "content_change": _content_change_receipt(path, current, new_content),
                 }
             if action.name == "build":
+                _require_catalog_contract()
                 # Сборка применяет миграции к ЖИВОЙ базе ячейки, поэтому договор
                 # миграций проверяется здесь, до отправки команды, а не после
                 # работы агента. Иначе недопустимая миграция успевает примениться,
@@ -1916,6 +1946,50 @@ async def maybe_create_project_cell_executor(
         finally:
             active_write_action = None
 
+    async def _seed_business_config(version: int, config: dict[str, Any]) -> None:
+        nonlocal catalog_runtime_required
+        # The already-admitted generation lease is the authority. The payload
+        # comes from the platform DB, not an agent tool or generated source.
+        await project_cell_apply_business_config(
+            agent_workspace_id,
+            project_id=project_id,
+            owner_id=user_id,
+            version=version,
+            config=config,
+            generation_run_id=leased_run_id,
+            fencing_epoch=fencing_epoch,
+        )
+        await _mark_catalog_runtime_required(
+            session_factory=session_factory, workspace_id=workspace_id,
+            generation_run_id=leased_run_id, project_id=project_id, user_id=user_id,
+            fencing_epoch=control_fencing_epoch,
+        )
+        catalog_runtime_required = True
+
+    def _require_catalog_contract() -> None:
+        if not catalog_runtime_required:
+            return
+        try:
+            manifest = json.loads(workspace_files.get(".omnia/cell.json", ""))
+        except (TypeError, ValueError):
+            manifest = None
+        protocol = manifest.get("app_config_protocol") if isinstance(manifest, dict) else None
+        if type(protocol) is not int or protocol != 1:
+            raise ProjectCellExecutorUnavailable(
+                'Owner catalog requires "app_config_protocol": 1 in .omnia/cell.json'
+            )
+
+    if catalog_runtime_required:
+        # A saved prepared_entry skips StackPrompt on cold continuation. Restore
+        # current metadata and the durable guard before any recovered role runs.
+        config, version = await load_saved_business_config(
+            session_factory, project_id=project_id, owner_id=user_id, default_name=project.name,
+        )
+        assert config is not None
+        await _seed_business_config(
+            version, config.model_dump(mode="json", exclude={"max_url_attached"}),
+        )
+
     return ProjectCellExecutorHandle(
         execute=_execute,
         sync_preview=_sync_preview,
@@ -1928,6 +2002,7 @@ async def maybe_create_project_cell_executor(
         workspace_id=agent_workspace_id,
         create_preview_session=_create_preview_session,
         release=_release,
+        seed_business_config=_seed_business_config,
         release_for_completion=(
             (lambda: _release(completion_ready=True)) if not restoration_adaptation else None
         ),
@@ -1945,6 +2020,27 @@ async def maybe_create_project_cell_executor(
             _prove_restoration_adaptation if adaptation_workspace is not None else None
         ),
     )
+
+
+async def _mark_catalog_runtime_required(
+    *, session_factory: async_sessionmaker[AsyncSession], workspace_id: UUID,
+    generation_run_id: UUID, project_id: UUID, user_id: UUID, fencing_epoch: int,
+) -> None:
+    """Persist server-owned generation policy independently of cached prompts/source."""
+    async with session_factory() as session:
+        workspace = await session.get(ProjectCellWorkspace, workspace_id, with_for_update=True)
+        run = await session.get(GenerationRun, generation_run_id, with_for_update=True)
+        if (
+            workspace is None or run is None
+            or workspace.project_id != project_id or workspace.owner_id != user_id
+            or workspace.generation_run_id != generation_run_id
+            or workspace.fencing_epoch != fencing_epoch
+            or run.project_id != project_id or run.user_id != user_id
+            or run.status not in {"pending", "queued_for_capacity", "running"}
+        ):
+            raise ProjectCellExecutorUnavailable("MAX catalog generation lease changed")
+        run.agent_state = {**(run.agent_state or {}), "max_catalog_runtime_protocol": 1}
+        await session.commit()
 
 
 async def _mark_workspace_ready(
