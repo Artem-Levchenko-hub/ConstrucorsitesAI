@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff, ImagePlus, Loader2, PackageOpen, Pencil, Plus, RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -27,7 +27,11 @@ function DeliveryStatus({ label, status }: { label: string; status: MaxContentDe
   return <div className="max-catalog-delivery" data-state={status.state}><span>{label}</span><strong>{deliveryCopy[status.state]}</strong></div>;
 }
 
-export function MaxOwnerCatalog({ projectId, projectName }: { projectId: string; projectName: string }) {
+function CatalogShell({ embedded, children, ...props }: ComponentProps<typeof MaxSectionShell> & { embedded?: boolean }) {
+  return embedded ? <>{children}</> : <MaxSectionShell {...props}>{children}</MaxSectionShell>;
+}
+
+export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDirtyChange }: { projectId: string; projectName: string; embedded?: boolean; onDirtyChange?: (dirty: boolean) => void }) {
   const qc = useQueryClient();
   const [draft, setDraft] = useState<MaxCatalogDraft | null>(null);
   const [editor, setEditor] = useState<{ id: string; initial: MaxContentItem; baseline: MaxCatalogDraft } | null>(null);
@@ -39,6 +43,7 @@ export function MaxOwnerCatalog({ projectId, projectName }: { projectId: string;
   const [connectError, setConnectError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [reviewed, setReviewed] = useState(false);
+  useEffect(() => { onDirtyChange?.(Boolean(draft) || Boolean(editor) || uploading); return () => onDirtyChange?.(false); }, [onDirtyChange, draft, editor, uploading]);
   const saving = useRef(false);
   const connectTrigger = useRef<HTMLButtonElement>(null);
   const save = useMutation({
@@ -126,7 +131,7 @@ export function MaxOwnerCatalog({ projectId, projectName }: { projectId: string;
     finally { setConnecting(false); }
   }
 
-  return <MaxSectionShell projectId={projectId} projectName={projectName} active="catalog" className="max-catalog-workspace" eyebrow="Каталог" title="Товары и услуги" lead="Меняйте позиции, цены и наличие. Обычное сохранение не расходует баланс ИИ.">
+  return <CatalogShell embedded={embedded} projectId={projectId} projectName={projectName} active="catalog" className="max-catalog-workspace" eyebrow="Каталог" title="Товары и услуги" lead="Меняйте позиции, цены и наличие. Обычное сохранение не расходует баланс ИИ.">
     <section className="max-owner-catalog" aria-label="Каталог приложения">
       {content.data && <div className="max-catalog-status" role="status">
         <div className="max-catalog-delivery" data-state="saved"><span>Данные в Yleum</span><strong>{draft ? "Есть несохранённые правки" : "Сохранены"}</strong></div>
@@ -141,6 +146,7 @@ export function MaxOwnerCatalog({ projectId, projectName }: { projectId: string;
       {connectError && <p role="alert" className="max-catalog-error">{connectError}</p>}
       {content.isError && <div role="alert" className="max-catalog-notice"><p>{content.data ? "Не удалось проверить актуальный каталог. Показаны последние полученные данные." : "Не удалось загрузить каталог."}</p><Button variant="outline" onClick={() => void content.refetch()}>Повторить</Button></div>}
       {content.isPending ? <p className="max-catalog-empty" role="status"><Loader2 className="size-5 animate-spin" />Загружаем каталог…</p> : content.data && <>
+        <p className="text-xs text-fg-secondary">{items.length} из 100 позиций, включая скрытые</p>
         <div className="max-catalog-toolbar">
           <label className="max-catalog-search"><Search className="size-4" aria-hidden="true" /><Input aria-label="Поиск по каталогу" placeholder="Найти товар или услугу" value={query} onChange={event => setQuery(event.target.value)} /></label>
           <select aria-label="Видимость позиций" value={visibility} onChange={event => setVisibility(event.target.value)}><option value="all">Все позиции</option><option value="visible">Видимые</option><option value="hidden">Скрытые</option></select>
@@ -170,5 +176,5 @@ export function MaxOwnerCatalog({ projectId, projectName }: { projectId: string;
       </DialogContent>
     </Dialog>
     {applyConfig && <MaxProjectDataApplyDialog config={applyConfig} catalogIntegration onClose={() => setApplyConfig(null)} onReturnFocus={() => connectTrigger.current?.focus()} />}
-  </MaxSectionShell>;
+  </CatalogShell>;
 }

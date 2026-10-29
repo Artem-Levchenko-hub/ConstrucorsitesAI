@@ -719,7 +719,10 @@ export type MaxProjectContent = {
   preview: MaxContentDelivery<"applied" | "pending" | "deferred" | "unknown" | "not_created">;
 };
 
+export type ManagementModule = "catalog" | "orders" | "leads" | "bookings";
+
 export type MaxProjectConfigPayload = {
+  management_modules?: ManagementModule[] | null;
   app_name: string;
   app_type: "loyalty" | "catalog" | "booking" | "event" | "education" | "custom";
   summary: string;

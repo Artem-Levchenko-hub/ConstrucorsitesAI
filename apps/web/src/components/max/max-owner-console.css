@@ -1,0 +1,31 @@
+.max-owner-console { display: grid; gap: 24px; }
+.max-owner-tabs, .max-owner-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.max-owner-tabs { border-bottom: 1px solid var(--color-border-default); padding-bottom: 20px; }
+.max-owner-notice { border: 1px solid var(--color-border-default); background: var(--color-surface); border-radius: 12px; padding: 18px; }
+.max-owner-notice p + button { margin-top: 12px; }
+.max-owner-section-heading { margin-bottom: 20px; }
+.max-owner-section-heading h2 { font-size: 20px; font-weight: 600; margin-bottom: 6px; }
+.max-owner-section-heading p, .max-owner-hint { color: var(--color-fg-secondary); font-size: 13px; line-height: 1.6; }
+.max-owner-filters { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 12px; margin-bottom: 22px; }
+.max-owner-console label { display: grid; gap: 8px; font-size: 13px; }
+.max-owner-console select, .max-owner-console textarea { width: 100%; border: 1px solid var(--color-border-default); border-radius: 8px; padding: 10px 12px; background: var(--color-surface); color: var(--color-fg-primary); font: inherit; }
+.max-owner-console textarea { resize: vertical; min-height: 100px; }
+.max-owner-record-layout { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(300px, 1.1fr); gap: 24px; align-items: start; }
+.max-owner-record-list { display: grid; gap: 12px; margin-bottom: 18px; }
+.max-owner-record-row { display: grid; gap: 8px; padding: 16px; border: 1px solid var(--color-border-default); border-radius: 12px; background: var(--color-surface); font-size: 13px; overflow-wrap: anywhere; }
+.max-owner-record-row[data-selected="true"] { border-color: var(--color-accent); }
+.max-owner-record-row > button { justify-content: start; white-space: normal; text-align: left; height: auto; padding: 0; font-size: 15px; }
+.max-owner-record-row time { color: var(--color-fg-secondary); }
+.max-owner-record-card { min-width: 0; padding: 24px; border: 1px solid var(--color-border-default); border-radius: 12px; background: var(--color-surface); overflow-wrap: anywhere; }
+.max-owner-record-card h3 { font-size: 20px; font-weight: 600; }
+.max-owner-record-card dl { display: grid; gap: 16px; margin: 22px 0; }
+.max-owner-record-card dt { font-size: 12px; color: var(--color-fg-secondary); margin-bottom: 4px; }
+.max-owner-record-card dd { white-space: pre-wrap; font-size: 14px; }
+.max-owner-record-card ul { display: grid; gap: 12px; margin: 12px 0 22px; }
+.max-owner-record-card li { display: grid; gap: 4px; font-size: 13px; }
+.max-owner-record-card form, .max-owner-settings form, .max-owner-settings fieldset { display: grid; gap: 16px; }
+.max-owner-settings form { max-width: 680px; }
+.max-owner-error { color: var(--color-danger-fg, #ba3742); font-size: 13px; line-height: 1.6; }
+.max-owner-error button { margin-top: 10px; }
+@media (max-width: 1000px) { .max-owner-filters { grid-template-columns: 1fr 1fr; } .max-owner-record-layout { grid-template-columns: 1fr; } }
+@media (max-width: 560px) { .max-owner-filters { grid-template-columns: 1fr; } .max-owner-record-card { padding: 16px; } .max-owner-actions > button { flex: 1 1 auto; } }

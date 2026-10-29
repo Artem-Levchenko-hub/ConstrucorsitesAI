@@ -46,28 +46,28 @@ it("даёт статистике постоянное место рядом с 
   // понимал, где искать адрес приложения и куда вставлять токен бота.
   const links = await render("p2", "editor", ["build", "legal"]);
   expect(links.map(link => link.textContent?.trim())).toEqual([
-    "Сборка", "Данные приложения", "Каталог", "Бот и подключения", "Запуск и адрес", "Статистика",
+    "Управление", "Сборка", "Данные приложения", "Каталог", "Бот и подключения", "Запуск и адрес", "Статистика",
   ]);
   expect(links.map(link => link.getAttribute("href"))).toEqual([
-    "/max/p2", "/max/p2?data=details", "/max/p2/catalog", "/max/p2?panel=max", "/max/p2?panel=publish", "/max/p2/dashboard",
+    "/max/p2/manage", "/max/p2", "/max/p2?data=details", "/max/p2/catalog", "/max/p2?panel=max", "/max/p2?panel=publish", "/max/p2/dashboard",
   ]);
 });
 
 it.each(["sidebar", "mobile"] as const)("не подменяет запуск статистикой после публикации: %s", async variant => {
   const links = await render("p3", "dashboard", ["build", "legal", "bot", "publish", "max_url"], variant);
-  expect(links[4].getAttribute("href")).toBe("/max/p3?panel=publish");
-  expect(links[4].hasAttribute("aria-current")).toBe(false);
-  expect(links[5].getAttribute("href")).toBe("/max/p3/dashboard");
-  expect(links[5].getAttribute("aria-current")).toBe("page");
+  const publish = links.find(link => link.getAttribute("href") === "/max/p3?panel=publish")!;
+  const dashboard = links.find(link => link.getAttribute("href") === "/max/p3/dashboard")!;
+  expect(publish).toBeTruthy(); expect(publish.hasAttribute("aria-current")).toBe(false);
+  expect(dashboard).toBeTruthy(); expect(dashboard.getAttribute("aria-current")).toBe("page");
 });
 
 it("старые разделы продолжают подсвечивать свой пункт", async () => {
   // Страницы /integrations и /publish никуда не делись: их ключи прежние,
   // и ссылки на них из писем и закладок продолжают работать.
   const services = await render("p4", "integrations", ["build"]);
-  expect(services[3].getAttribute("aria-current")).toBe("page");
+  expect(services.find(link => link.getAttribute("href") === "/max/p4?panel=max")?.getAttribute("aria-current")).toBe("page");
   await act(async () => root.unmount());
   root = createRoot(container);
   const publish = await render("p4", "publish", ["build"]);
-  expect(publish[4].getAttribute("aria-current")).toBe("page");
+  expect(publish.find(link => link.getAttribute("href") === "/max/p4?panel=publish")?.getAttribute("aria-current")).toBe("page");
 });
