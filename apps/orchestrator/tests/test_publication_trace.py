@@ -357,6 +357,7 @@ async def test_start_hands_the_trace_to_the_boundary_as_observer(tmp_path, monke
     manager = SimpleNamespace(machine_runtime=SimpleNamespace(_start_boundary=boundary))
     monkeypatch.setattr(module, "ensure_managed_infrastructure", AsyncMock())
     release = {
+        "release_id": str(UUID(int=40)),
         "manifest": payload(),
         "schema_digest": "live-schema",
         "epoch": 2,
@@ -375,6 +376,12 @@ async def test_start_hands_the_trace_to_the_boundary_as_observer(tmp_path, monke
     ]
     await service._start(manager, object(), release, value, switch=True)
     assert "observer" not in seen[-1]
+    assert backend.owner_management_env == {
+        "YLEUM_OWNER_PROJECT_ID": str(value.project_id),
+        "YLEUM_OWNER_ID": str(value.owner_id),
+        "YLEUM_OWNER_PUBLICATION_ID": release["release_id"],
+        "OMNIA_PUBLIC_APP_ORIGIN": release["prod_url"],
+    }
 
 
 def test_gateway_starts_with_a_full_core_and_settles_at_the_steady_quota():

@@ -149,6 +149,7 @@ async def test_restored_release_starts_on_plain_database_ignoring_old_policy_fie
     )
     monkeypatch.setattr(module, "ensure_managed_infrastructure", AsyncMock())
     release = {
+        "release_id": str(UUID(int=40)),
         "manifest": payload(),
         "schema_digest": "live-schema",
         "epoch": 2,
@@ -172,6 +173,12 @@ async def test_restored_release_starts_on_plain_database_ignoring_old_policy_fie
         assert calls[0] == "ensure"
         assert calls[-1] == "boundary"
         assert "service" in calls
+    assert backend.owner_management_env == {
+        "YLEUM_OWNER_PROJECT_ID": str(value.project_id),
+        "YLEUM_OWNER_ID": str(value.owner_id),
+        "YLEUM_OWNER_PUBLICATION_ID": release["release_id"],
+        "OMNIA_PUBLIC_APP_ORIGIN": release["prod_url"],
+    }
 
 
 def request(**overrides):
