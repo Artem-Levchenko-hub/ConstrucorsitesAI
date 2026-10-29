@@ -5,8 +5,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { AccountBalance } from "@/components/account/AccountBalance";
 import type { GenerationCredits } from "@/lib/api/account";
 
-const api = vi.hoisted(() => ({ credits: vi.fn(), wallet: vi.fn() }));
-vi.mock("@/lib/api/account", () => ({ getGenerationCredits: api.credits }));
+const api = vi.hoisted(() => ({ credits: vi.fn(), usage: vi.fn(), wallet: vi.fn() }));
+vi.mock("@/lib/api/account", () => ({ getGenerationCredits: api.credits, getBillingUsage: api.usage }));
 vi.mock("@/lib/api/wallet", () => ({ getWallet: api.wallet }));
 const credits: GenerationCredits = {
   edit_only_units: 5, flexible_units: 15, available_units: 20, reserved_units: 7,
@@ -16,9 +16,10 @@ const credits: GenerationCredits = {
 };
 let cleanup: (() => Promise<void>) | undefined;
 afterEach(async () => { await cleanup?.(); vi.resetAllMocks(); });
-async function mount(value: GenerationCredits | Promise<GenerationCredits> | Error) {
+async function mount(value: GenerationCredits | Promise<GenerationCredits> | Error, unlimited?: boolean) {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   api.credits.mockImplementation(() => value instanceof Error ? Promise.reject(value) : Promise.resolve(value));
+  api.usage.mockResolvedValue({ free_generations: unlimited === undefined ? {} : { unlimited } });
   api.wallet.mockResolvedValue({ balance_rub: "65.042", recent_charges: [] });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const container = document.createElement("div"); document.body.append(container);
@@ -39,9 +40,9 @@ it("shows separate available generations and edits without counting held units t
   expect(container.querySelector('a[href="#billing-packages"]')).not.toBeNull();
 });
 
-it("does not use edits-only packages for a new generation and shows the empty state", async () => {
+it.each([undefined, false])("keeps edits-only packages finite when unlimited is %s", async unlimited => {
   const container = await mount({ ...credits, flexible_units: 0, available_units: 5,
-    included_generations_remaining: 0, included_edits_remaining: 0 });
+    included_generations_remaining: 0, included_edits_remaining: 0 }, unlimited);
   await wait(() => expect(container.querySelector('[aria-label="Доступно генераций"]')?.textContent).toBe("0"));
   expect(container.querySelector('[aria-label="Доступно правок"]')?.textContent).toBe("5");
   expect(container.textContent).toContain("Доступны правки");
@@ -55,13 +56,38 @@ it("uses API unit costs and floors incomplete packages", async () => {
   expect(container.querySelector('[aria-label="Доступно правок"]')?.textContent).toBe("34");
 });
 
-it("renders exhausted zero limits without an invalid progress value", async () => {
+it.each([undefined, false])("renders exhausted zero limits when unlimited is %s", async unlimited => {
   const container = await mount({ ...credits, flexible_units: 0, available_units: 0,
     edit_only_units: 0, included_generations_remaining: 0, included_edits_remaining: 0,
-    included_generations_limit: 0, included_edits_limit: 0 });
+    included_generations_limit: 0, included_edits_limit: 0 }, unlimited);
   await wait(() => expect(container.textContent).toContain("Лимиты исчерпаны"));
   expect(container.innerHTML).not.toMatch(/NaN|Infinity/);
   expect(container.querySelectorAll('[role="meter"]')).toHaveLength(0);
+});
+
+it("shows confirmed unlimited generations and edits despite zero finite inventory", async () => {
+  const container = await mount({ ...credits, flexible_units: 0, available_units: 0,
+    edit_only_units: 0, reserved_units: 0, included_generations_remaining: 0,
+    included_edits_remaining: 0, included_generations_limit: 0,
+    included_edits_limit: 0, period_end: null }, true);
+  await wait(() => expect(container.querySelector('[aria-label="Доступно генераций"]')?.textContent).toBe("∞"));
+  expect(container.querySelector('[aria-label="Доступно правок"]')?.textContent).toBe("∞");
+  expect(container.querySelector(".balance-state")?.textContent).toBe("Без ограничений");
+  expect(container.textContent).not.toContain("Лимиты исчерпаны");
+  expect(container.querySelectorAll(".balance-plan, [role=\"meter\"]")).toHaveLength(0);
+  expect(container.textContent).not.toContain("По тарифу");
+  expect(container.innerHTML).not.toMatch(/NaN|Infinity/);
+  expect(container.querySelector(".balance-package-empty")?.textContent).toContain("В пакетах пока нет правок");
+});
+
+it("keeps finite package and reserve details under an unlimited allowance", async () => {
+  const container = await mount(credits, true);
+  await wait(() => expect(container.querySelector('[aria-label="Доступно генераций"]')?.textContent).toBe("∞"));
+  expect(container.querySelector('[aria-label="Доступно правок"]')?.textContent).toBe("∞");
+  expect([...container.querySelectorAll('[aria-label="Лимиты из пакетов"] dd')].map(item => item.textContent)).toEqual(["3", "20"]);
+  expect(container.querySelector(".balance-reserve")?.textContent).toContain("Учтено в остатке");
+  expect(container.querySelector("time")?.getAttribute("datetime")).toBe(credits.period_end);
+  expect(container.querySelectorAll(".balance-plan, [role=\"meter\"]")).toHaveLength(0);
 });
 
 it("keeps unknown loading and failed credits distinct from zero", async () => {

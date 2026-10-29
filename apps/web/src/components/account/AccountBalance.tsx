@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUpRight, BadgeCheck, Boxes, CalendarDays, ChevronDown, Clock3, Equal, PencilLine, WalletCards } from "lucide-react";
 import Link from "next/link";
-import { getGenerationCredits, type GenerationCredits } from "@/lib/api/account";
+import { getBillingUsage, getGenerationCredits, type GenerationCredits } from "@/lib/api/account";
 import { allowanceCount } from "@/lib/billing-allowances";
 import { date, QueryError } from "./account-presentation";
 import "./account-balance.css";
@@ -54,6 +54,8 @@ function CreditDetails({ data, generations, edits }: { data: GenerationCredits; 
 /** Availability in the product's two units: initial generations and edits. */
 export function AccountBalance() {
   const credits = useQuery({ queryKey: ["billing-credits"], queryFn: getGenerationCredits });
+  const usage = useQuery({ queryKey: ["billing-usage"], queryFn: () => getBillingUsage() });
+  const unlimited = usage.data?.free_generations?.unlimited === true;
   const data = credits.data;
   // Inventory has already excluded held units. Flexible units are shared between
   // new builds and edits; an edits-only package must never increase new builds.
@@ -61,24 +63,25 @@ export function AccountBalance() {
   const packageEdits = data && data.edit_units > 0 ? Math.floor(data.available_units / data.edit_units) : 0;
   const builds = data ? data.included_generations_remaining + packageBuilds : undefined;
   const edits = data ? data.included_edits_remaining + packageEdits : undefined;
-  const exhausted = builds === 0 && edits === 0;
+  const exhausted = !unlimited && builds === 0 && edits === 0;
+  const displayCount = (remaining: number | undefined) => unlimited ? "∞" : remaining?.toLocaleString("ru-RU") ?? "—";
 
   return <section className="account-wallet balance-card" aria-label="Доступно для работы" aria-busy={credits.isPending}>
     <header className="balance-heading">
       <span className="balance-icon"><WalletCards size={19} aria-hidden="true" /></span>
       <h2>Доступно для работы</h2>
-      {data && <span className={`balance-state${exhausted ? " is-empty" : ""}`}><span />{exhausted ? "Лимиты исчерпаны" : builds === 0 ? "Доступны правки" : "Можно создавать"}</span>}
+      {data && <span className={`balance-state${exhausted ? " is-empty" : ""}`}><span />{unlimited ? "Без ограничений" : exhausted ? "Лимиты исчерпаны" : builds === 0 ? "Доступны правки" : "Можно создавать"}</span>}
     </header>
     <div className="balance-metrics" role="group" aria-label="Остатки генераций и правок">
       <div className="balance-metric">
         <span className="balance-label"><Boxes size={16} aria-hidden="true" />Генерации</span>
-        <strong className="balance-number" aria-label="Доступно генераций">{builds?.toLocaleString("ru-RU") ?? "—"}</strong>
-        {data && <PlanRemainder remaining={data.included_generations_remaining} limit={data.included_generations_limit} label="Осталось генераций по тарифу" />}
+        <strong className="balance-number" aria-label="Доступно генераций">{displayCount(builds)}</strong>
+        {data && !unlimited && <PlanRemainder remaining={data.included_generations_remaining} limit={data.included_generations_limit} label="Осталось генераций по тарифу" />}
       </div>
       <div className="balance-metric">
         <span className="balance-label"><PencilLine size={16} aria-hidden="true" />Правки</span>
-        <strong className="balance-number" aria-label="Доступно правок">{edits?.toLocaleString("ru-RU") ?? "—"}</strong>
-        {data && <PlanRemainder remaining={data.included_edits_remaining} limit={data.included_edits_limit} label="Осталось правок по тарифу" />}
+        <strong className="balance-number" aria-label="Доступно правок">{displayCount(edits)}</strong>
+        {data && !unlimited && <PlanRemainder remaining={data.included_edits_remaining} limit={data.included_edits_limit} label="Осталось правок по тарифу" />}
       </div>
     </div>
     {credits.isPending && <p className="balance-loading" role="status">Загружаем остатки…</p>}
