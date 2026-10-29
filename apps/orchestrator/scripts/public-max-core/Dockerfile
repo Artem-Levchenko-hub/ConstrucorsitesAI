@@ -67,6 +67,9 @@ COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
 COPY --from=build --chown=node:node /app/scripts ./scripts
 COPY --from=build --chown=node:node /app/drizzle ./drizzle
+COPY --from=build --chown=node:node /app/select-core-migrations.mjs ./select-core-migrations.mjs
+# COPY merges directories: remove migrations inherited from the runtime ancestor too.
+RUN node select-core-migrations.mjs drizzle
 USER node
 EXPOSE 3000
 CMD ["node", "server.js"]

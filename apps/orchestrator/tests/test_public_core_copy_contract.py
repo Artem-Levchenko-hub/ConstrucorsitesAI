@@ -38,3 +38,16 @@ def test_core_build_and_privilege_harness_select_the_same_migration_inventory():
     )
     assert 'node scripts/public-max-core/core-migrations.mjs "$test_root/drizzle"' in workflow
     assert "node --test scripts/public-max-core/core-migrations.test.mjs" in workflow
+
+
+def test_final_core_runtime_selects_after_every_copy():
+    root = Path(__file__).resolve().parents[1]
+    dockerfile = (root / "scripts/public-max-core/Dockerfile").read_text()
+    runtime = dockerfile.split("FROM ${RUNTIME_BASE_IMAGE} AS runtime", 1)[1]
+    selection = runtime.index("RUN node select-core-migrations.mjs drizzle")
+    assert selection > runtime.rindex("COPY ")
+    assert selection < runtime.index("USER node")
+    assert (
+        "COPY --from=build --chown=node:node /app/select-core-migrations.mjs "
+        "./select-core-migrations.mjs" in runtime
+    )

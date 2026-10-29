@@ -55,3 +55,30 @@ test('required core migration must be a regular file', () => {
     assert.ok(readdirSync(root).includes('0003_owner_management.sql'));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('assembled runtime prunes inherited migrations after clean build COPY merges', () => {
+  const build = fixture();
+  const runtime = fixture();
+  try {
+    selectCoreMigrations(build);
+    writeFileSync(join(runtime, '9999_future_product.sql'), 'CREATE TABLE future_product(id int);');
+    // Docker directory COPY merges; absent build entries survive in the destination.
+    cpSync(build, runtime, { recursive: true });
+    assert.ok(readdirSync(runtime).includes('0003_owner_management.sql'));
+    assert.ok(readdirSync(runtime).includes('9999_future_product.sql'));
+    const dockerfile = readFileSync(new URL('./Dockerfile', import.meta.url), 'utf8');
+    const finalStage = dockerfile.split('FROM ${RUNTIME_BASE_IMAGE} AS runtime')[1];
+    const command = finalStage.match(/^RUN node select-core-migrations\.mjs drizzle$/m);
+    assert.ok(command, 'final runtime must select its assembled migration directory');
+    const result = spawnSync(process.execPath, [selector, runtime], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(readdirSync(runtime).sort(), expected);
+    for (const name of expected) {
+      assert.deepEqual(readFileSync(join(runtime, name)), readFileSync(join(template, name)));
+    }
+    assert.ok(readdirSync(template).includes('0003_owner_management.sql'));
+  } finally {
+    rmSync(build, { recursive: true, force: true });
+    rmSync(runtime, { recursive: true, force: true });
+  }
+});
