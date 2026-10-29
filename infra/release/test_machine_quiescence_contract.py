@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -69,7 +70,12 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
         self.owner = json.loads(
             (Path(__file__).parent / "fixtures/owner-management-quiescence-sources.json").read_text()
         )
-        self.reviewed = (self.old, self.new, self.snapshot, self.catalog, self.owner)
+        self.legacy_catalog = json.loads(
+            (Path(__file__).parent / "fixtures/legacy-catalog-quiescence-sources.json").read_text()
+        )
+        self.reviewed = (
+            self.old, self.new, self.snapshot, self.catalog, self.legacy_catalog, self.owner,
+        )
 
     def test_live_and_reviewed_successor_are_complete_supported_bundles(self):
         self.assertEqual(len(self.old), 9)
@@ -99,6 +105,69 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
         self.assertEqual(self.catalog, before)
         self.assertEqual(len(self.catalog), 10)
         self.assertNotEqual(self.checker._digest(self.catalog), self.checker._digest(self.snapshot))
+
+    def test_collector_binds_present_legacy_helpers_and_rejects_missing_tampered_or_mixed(self):
+        # Pinned independently from e5adb011fd4e9a78629ef8c7caff60d582bc9b06.
+        # CI has a shallow checkout: exercise real filesystem/spec discovery,
+        # substituting only the digest boundary, not the collector or authority.
+        self.assertEqual(len(self.legacy_catalog), 13)
+        self.assertEqual(
+            {name: self.legacy_catalog[name] for name in self.catalog}, self.catalog,
+        )
+        real_sha256 = hashlib.sha256
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            digests = {}
+            paths = {}
+            for name, digest in self.legacy_catalog.items():
+                path = root.joinpath(*name.split(".")).with_suffix(".py")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                content = f"# immutable e5 module fixture: {name}\n".encode()
+                path.write_bytes(content)
+                paths[name] = path
+                digests[content] = digest
+
+            def find_spec(name):
+                relative = name.removeprefix("yleum_orchestrator.").split(".")
+                parent = root.joinpath(*relative[:-1])
+                return importlib.machinery.PathFinder.find_spec(name, [str(parent)])
+
+            def digest_bytes(content):
+                if content not in digests:
+                    return real_sha256(content)
+                return SimpleNamespace(hexdigest=lambda: digests[content])
+
+            with (
+                patch.object(importlib.util, "find_spec", side_effect=find_spec),
+                patch.object(hashlib, "sha256", side_effect=digest_bytes),
+            ):
+                self.assertEqual(self.checker._portable_quiescence_sources(), self.legacy_catalog)
+                for name, path in paths.items():
+                    content = path.read_bytes()
+                    path.unlink()
+                    with self.subTest(missing=name), self.assertRaisesRegex(
+                        self.checker.PhysicalDrainError, "quiescence_unsupported_source",
+                    ):
+                        self.checker._portable_quiescence_sources()
+                    path.write_bytes(content + b"# unknown edit\n")
+                    with self.subTest(tampered=name), self.assertRaisesRegex(
+                        self.checker.PhysicalDrainError, "quiescence_unsupported_source",
+                    ):
+                        self.checker._portable_quiescence_sources()
+                    path.write_bytes(content)
+                    if self.owner[name] != self.legacy_catalog[name]:
+                        digests[content] = self.owner[name]
+                        with self.subTest(mixed=name), self.assertRaisesRegex(
+                            self.checker.PhysicalDrainError, "quiescence_unsupported_source",
+                        ):
+                            self.checker._portable_quiescence_sources()
+                        digests[content] = self.legacy_catalog[name]
+                extra = root / "services/owner_management_identity.py"
+                extra.write_bytes(b"# unexpected owner identity helper\n")
+                with self.assertRaisesRegex(
+                    self.checker.PhysicalDrainError, "quiescence_unsupported_source",
+                ):
+                    self.checker._portable_quiescence_sources()
 
     def test_owner_bundle_preserves_historical_trust_and_exact_dependency_closure(self):
         self.assertEqual(len(self.owner), 14)

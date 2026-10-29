@@ -102,6 +102,17 @@ _PORTABLE_QUIESCENCE_CATALOG_SOURCES = {
     "routers.workspace": "a32fedaf6bb0bca42950a8f1f777937314154ef6d93436b4a0d7610423dc769a",
     "services.app_business_config": "2e6a05f2b43773fbb8ae5b0fcdf9effdb1ace86782592fa74d2dba363cd85601",
 }
+# e5adb011fd4e9a78629ef8c7caff60d582bc9b06 runtime observed by the expanded
+# collector: the catalog producer is unchanged, but these pre-existing helpers
+# are present too. Egress/origin helpers do not create Docker work; the adapter
+# uses the published backend only for its schema inspector under machine_effect.
+# Preserve the historical catalog10 and admit only this complete legacy13 set.
+_PORTABLE_QUIESCENCE_LEGACY_CATALOG_SOURCES = {
+    **_PORTABLE_QUIESCENCE_CATALOG_SOURCES,
+    "services.machine_egress": "52004eefcde30d95978d02d8cf977820cce60c789adf6e6f634fc62f28d531af",
+    "services.published_machine_backend": "ed0cfb033757f04f48a4d87e154ad2f05d49e5cd40809f64df9677565ce633be",
+    "services.studio_origins": "2f6a5f03ede22d8e72f453f5ebde2c7a0e28f7b31a5037565d88beab38cb3a45",
+}
 # Owner-management successor: public config remains atomic; published recovery
 # quiesces/recreates only accepted compute and retains volumes. The stateless
 # receipt proxy runs controller bytes, keeps its enforced internal address on
@@ -121,7 +132,11 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
         **dict(zip(_PORTABLE_QUIESCENCE_PAIRED_SOURCES, pair, strict=True)),
     }
     for pair in _PORTABLE_QUIESCENCE_SOURCE_PAIRS
-) + (_PORTABLE_QUIESCENCE_CATALOG_SOURCES, _PORTABLE_QUIESCENCE_OWNER_SOURCES,)
+) + (
+    _PORTABLE_QUIESCENCE_CATALOG_SOURCES,
+    _PORTABLE_QUIESCENCE_LEGACY_CATALOG_SOURCES,
+    _PORTABLE_QUIESCENCE_OWNER_SOURCES,
+)
 _PORTABLE_QUIESCENCE_SOURCE_NAMES = tuple(
     sorted({name for bundle in _PORTABLE_QUIESCENCE_SOURCE_BUNDLES for name in bundle})
 )
