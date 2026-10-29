@@ -1,0 +1,298 @@
+{
+  "protocol": 1,
+  "modules": [
+    "catalog",
+    "orders",
+    "leads",
+    "bookings"
+  ],
+  "resources": [
+    {
+      "id": "orders",
+      "label": "Заказы",
+      "singular_label": "Заказ",
+      "action_type": "order_created",
+      "fields": [
+        {
+          "key": "created_at",
+          "label": "Создана",
+          "kind": "date",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "status",
+          "label": "Статус",
+          "kind": "status",
+          "readonly": false,
+          "editable": true,
+          "owner_only": false
+        },
+        {
+          "key": "customer_name",
+          "label": "Клиент",
+          "kind": "text",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "contact_phone",
+          "label": "Телефон",
+          "kind": "text",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "contact_email",
+          "label": "Email",
+          "kind": "text",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "items",
+          "label": "Состав заказа",
+          "kind": "items",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "total_kopecks",
+          "label": "Сумма",
+          "kind": "money",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "comment",
+          "label": "Комментарий клиента",
+          "kind": "text",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "note",
+          "label": "Заметка владельца",
+          "kind": "note",
+          "readonly": false,
+          "editable": true,
+          "owner_only": true
+        }
+      ],
+      "status_labels": {
+        "new": "Новый",
+        "in_progress": "В работе",
+        "completed": "Выполнен",
+        "cancelled": "Отменён"
+      },
+      "transitions": {
+        "new": [
+          "in_progress",
+          "cancelled"
+        ],
+        "in_progress": [
+          "completed",
+          "cancelled"
+        ],
+        "completed": [],
+        "cancelled": []
+      }
+    },
+    {
+      "id": "leads",
+      "label": "Заявки",
+      "singular_label": "Заявка",
+      "action_type": "lead_created",
+      "fields": [
+        {
+          "key": "created_at",
+          "label": "Создана",
+          "kind": "date",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "status",
+          "label": "Статус",
+          "kind": "status",
+          "readonly": false,
+          "editable": true,
+          "owner_only": false
+        },
+        {
+          "key": "customer_name",
+          "label": "Клиент",
+          "kind": "text",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "contact_phone",
+          "label": "Телефон",
+          "kind": "text",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "contact_email",
+          "label": "Email",
+          "kind": "text",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "comment",
+          "label": "Комментарий клиента",
+          "kind": "text",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "note",
+          "label": "Заметка владельца",
+          "kind": "note",
+          "readonly": false,
+          "editable": true,
+          "owner_only": true
+        }
+      ],
+      "status_labels": {
+        "new": "Новая",
+        "in_progress": "В работе",
+        "completed": "Завершена",
+        "cancelled": "Отменена"
+      },
+      "transitions": {
+        "new": [
+          "in_progress",
+          "cancelled"
+        ],
+        "in_progress": [
+          "completed",
+          "cancelled"
+        ],
+        "completed": [],
+        "cancelled": []
+      }
+    },
+    {
+      "id": "bookings",
+      "label": "Записи",
+      "singular_label": "Запись",
+      "action_type": "booking_created",
+      "fields": [
+        {
+          "key": "created_at",
+          "label": "Создана",
+          "kind": "date",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "status",
+          "label": "Статус",
+          "kind": "status",
+          "readonly": false,
+          "editable": true,
+          "owner_only": false
+        },
+        {
+          "key": "customer_name",
+          "label": "Клиент",
+          "kind": "text",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "contact_phone",
+          "label": "Телефон",
+          "kind": "text",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "contact_email",
+          "label": "Email",
+          "kind": "text",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "requested_for",
+          "label": "Желаемая дата",
+          "kind": "date",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "service_title",
+          "label": "Услуга",
+          "kind": "text",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "service_price_label",
+          "label": "Стоимость услуги",
+          "kind": "text",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "comment",
+          "label": "Комментарий клиента",
+          "kind": "text",
+          "readonly": true,
+          "editable": false,
+          "owner_only": false
+        },
+        {
+          "key": "note",
+          "label": "Заметка владельца",
+          "kind": "note",
+          "readonly": false,
+          "editable": true,
+          "owner_only": true
+        }
+      ],
+      "status_labels": {
+        "new": "Новая",
+        "in_progress": "Подтверждена",
+        "completed": "Завершена",
+        "cancelled": "Отменена"
+      },
+      "transitions": {
+        "new": [
+          "in_progress",
+          "cancelled"
+        ],
+        "in_progress": [
+          "completed",
+          "cancelled"
+        ],
+        "completed": [],
+        "cancelled": []
+      }
+    }
+  ],
+  "contract_hash": "e7f6f3b59fb139f4143292f10557e3e197d6ed98a9f241d4e717486781fee9b1"
+}
