@@ -628,6 +628,14 @@ async def _prepare_executor(
     )
 
     async def fake_execute_cell_operation(session_factory, operation_id, _client):
+        async with session_factory() as session:
+            existing = await session.get(ProjectCellOperation, operation_id)
+            if existing is not None and existing.status == "completed":
+                assert existing.kind == "ensure" and existing.workspace_id is not None
+                return SimpleNamespace(
+                    operation_id=operation_id, kind=existing.kind, status="completed",
+                    response=ProjectCellResourceResponse.from_json(existing.result_payload),
+                )
         claimed = await claim_cell_operation_committed(session_factory, operation_id)
         response = ProjectCellResourceResponse(
             workspace_id=claimed.workspace_id,

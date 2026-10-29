@@ -87,17 +87,24 @@ def _default_config(project: Project) -> MaxProjectConfigPayload:
     return MaxProjectConfigPayload.default_for(project.name)
 
 
+def _config_payload(project: Project, record: MaxProjectConfig | None) -> MaxProjectConfigPayload:
+    """Business comparisons do not need response metadata or expired ORM dates."""
+    if record is None:
+        return _default_config(project)
+    return MaxProjectConfigPayload.model_validate(record.config)
+
+
 def _public(project: Project, record: MaxProjectConfig | None) -> MaxProjectConfigPublic:
     if record is None:
         return MaxProjectConfigPublic(
             project_id=project.id,
             config_version=0,
-            config=_default_config(project),
+            config=_config_payload(project, record),
         )
     return MaxProjectConfigPublic(
         project_id=project.id,
         config_version=record.config_version,
-        config=MaxProjectConfigPayload.model_validate(record.config),
+        config=_config_payload(project, record),
         synced_snapshot_id=record.synced_snapshot_id,
         updated_at=record.updated_at,
     )
@@ -284,7 +291,7 @@ async def put_max_config(
     await project_cell_runtime._try_preview_project_lock(session, project_id)
     project = await _owned_max_project(session, project_id, current_user.id, lock=True)
     record = await session.get(MaxProjectConfig, project_id)
-    current_payload = _public(project, record).config
+    current_payload = _config_payload(project, record)
     _check_content_version(
         current_payload.content, payload.content,
         current_version=record.config_version if record else 0,
@@ -551,10 +558,7 @@ async def _content_response(
 ) -> MaxContentPublic:
     if record is not None and record.owner_id != project.owner_id:
         raise ApiError("conflict", "MAX configuration ownership mismatch", 409)
-    config = (
-        MaxProjectConfigPayload.model_validate(record.config)
-        if record else _default_config(project)
-    )
+    config = _config_payload(project, record)
     version = record.config_version if record else 0
     desired = {
         "owner_id": str(project.owner_id), "desired_config_version": version,
@@ -594,10 +598,7 @@ async def _content_response(
         if fresh is not None and fresh.owner_id != project.owner_id:
             raise ApiError("conflict", "MAX configuration ownership mismatch", 409)
         fresh_version = fresh.config_version if fresh else 0
-        fresh_config = (
-            MaxProjectConfigPayload.model_validate(fresh.config)
-            if fresh else _default_config(project)
-        )
+        fresh_config = _config_payload(project, fresh)
         fresh_digest = config_digest(public_business_config(fresh_config))
         if (fresh_version != version
                 or fresh_digest != desired["desired_config_digest"]):
@@ -670,13 +671,14 @@ async def patch_max_content(
     if deployment.get("phase") in {"building", "pushing", "swapping", "cancelling"}:
         raise ApiError("conflict", "Дождитесь завершения публикации", 409)
     record = await session.get(MaxProjectConfig, project.id)
-    current = _public(project, record)
+    current_payload = _config_payload(project, record)
+    current_version = record.config_version if record else 0
     _check_content_version(
-        current.config.content, payload.content, current_version=current.config_version,
+        current_payload.content, payload.content, current_version=current_version,
         expected_version=payload.expected_config_version,
     )
-    desired = current.config.model_copy(update={"content": payload.content})
-    if record is None and current.config.content == payload.content:
+    desired = current_payload.model_copy(update={"content": payload.content})
+    if record is None and current_payload.content == payload.content:
         await session.commit()
         response.headers["Cache-Control"] = "no-store"
         return await _content_response(project, None, selection, session)

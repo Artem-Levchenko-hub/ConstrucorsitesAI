@@ -279,6 +279,11 @@ async def test_real_max_failure_or_cancel_waits_for_executor_cleanup(
     class Runtime:
         """Existing cell boundary: fail/stop during mandatory SDK refresh."""
 
+        async def seed_business_config(self, version, config):
+            assert version == 0 and config["app_name"] == "Calculation"
+            assert config["content"] == [] and "max_url_attached" not in config
+            flow.trace.append("seed_business_config")
+
         def is_portable(self):
             return False
 
@@ -341,6 +346,7 @@ async def test_real_max_failure_or_cancel_waits_for_executor_cleanup(
     assert any(requirement.required and requirement.check_kind == "manual"
                and requirement.text == "Implement calculation" for requirement in requirements)
     assert releases == ["started", "finished"]
+    assert flow.trace.index("seed_business_config") < flow.trace.index("snapshot_files")
     assert project.current_snapshot_id == flow.parent_id and message.snapshot_id is None
     assert owner.free_generations_used == 3 and len(snapshots) == 1
     assert run.status == ("cancelled" if cancel else "failed")

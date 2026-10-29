@@ -15,7 +15,7 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4, uuid5
+from uuid import UUID, uuid4, uuid5
 
 import pytest
 from sqlalchemy import select, text
@@ -27,12 +27,14 @@ from yleum_api.core import db as core_db
 from yleum_api.core.config import get_settings
 from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
 from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.max_project_config import MaxProjectConfig
 from yleum_api.models.project import Project
 from yleum_api.models.project_cell import (
     ProjectCellActivityLease,
     ProjectCellOperation,
     ProjectCellWorkspace,
 )
+from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.services import orchestrator_client as client
 from yleum_api.services import project_cell_executor as executor
 from yleum_api.services.generation import (
@@ -182,6 +184,38 @@ class Controller:
         self.deleted = True
 
     async def wire(self, method, path, *, json, **_kwargs):
+        parts = path.split("/")
+        if method == "PUT" and len(parts) == 5 and parts[:3] == ["", "internal", "workspaces"]:
+            assert parts[-1] == "owner-business-config", "unexpected external transport"
+            workspace_id = UUID(parts[3])
+            assert set(json) == {
+                "project_id", "owner_id", "generation_run_id", "fencing_epoch", "version", "config",
+            }
+            async with self.factory() as session:
+                workspace = await session.get(ProjectCellWorkspace, workspace_id)
+                run = await session.get(GenerationRun, self.run.id)
+                project = await session.get(Project, self.run.project_id)
+                record = await session.get(MaxProjectConfig, self.run.project_id)
+                assert workspace is not None and workspace_id != self.candidate
+                assert workspace.project_id == run.project_id == self.run.project_id
+                assert workspace.owner_id == run.user_id == self.run.user_id
+                assert workspace.generation_run_id == run.id
+                assert run.status in {"pending", "queued_for_capacity", "running"}
+                assert json["project_id"] == str(run.project_id)
+                assert json["owner_id"] == str(run.user_id)
+                assert json["generation_run_id"] == str(run.id)
+                assert type(json["fencing_epoch"]) is int
+                assert json["fencing_epoch"] == workspace.fencing_epoch
+                config = (MaxProjectConfigPayload.model_validate(record.config) if record
+                          else MaxProjectConfigPayload.default_for(project.name))
+                assert record is None or record.owner_id == run.user_id
+                assert json["version"] == (record.config_version if record else 0)
+                assert json["config"] == config.model_dump(
+                    mode="json", exclude={"max_url_attached"},
+                )
+            self.calls.append(("business_config", workspace_id, json["fencing_epoch"]))
+            # No opted-in app consumer exists in this synthetic recovery boundary.
+            return {"workspace_id": str(workspace_id), "version": json["version"], "applied": False}
         assert method == "POST" and "/recovery/" in path, "unexpected external transport"
         action = path.rsplit("/", 1)[1]
         types = {"hold": client.RestorationAdaptationRecoveryHold,

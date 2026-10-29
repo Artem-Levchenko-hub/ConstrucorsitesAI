@@ -68,7 +68,7 @@ _PORTABLE_QUIESCENCE_SOURCES = {
     "services.generation_reader_inventory": "119a83b06d26c2936d1fdf6140c824cb53fee761d7f0d4fe5b8465f34ed04a6e",
     "services.docker_cell_resources": "6a7f931d4a17bc4517137de069186eb6bb4434e65ce32429de3ac46b3ff52710",
 }
-# The initial reviewed producer contract remains valid on live b781. The only
+# The initial reviewed producer contract remains valid on live b781. The
 # reviewed successor (6e5fa4f7) adds a pre-effect missing-draft rejection and its
 # typed route response. The 641c6eed successor adds only a fenced read-only
 # source snapshot route, with no new producer or lock semantics.
@@ -89,24 +89,51 @@ _PORTABLE_QUIESCENCE_SOURCE_PAIRS = (
         "25a841e7d4b4f9535c0fe2f415bac0172874ad2bf1fce83b82b7c28792db5213",
     ),
 )
+# d30c7bae9e21e7b783bc439ee7a2c313de6ebd04: the catalog file projection and
+# generation seed retain the existing operation lock, fencing, reader_dispatch,
+# and cancellation-drained machine_effect boundaries. Status only reads Docker
+# archives/HTTP; app_business_config writes public data atomically, never starts
+# containers, execs, or processes. Pin that new transitive dependency as part of
+# this complete bundle, not as an independently interchangeable helper hash.
+_PORTABLE_QUIESCENCE_CATALOG_SOURCES = {
+    **_PORTABLE_QUIESCENCE_SOURCES,
+    "services.docker_machine_backend": "f97cc42908ac85602ffbd006d3aaad6845b4dbd1a74cf23c13b55fdb282a6a4e",
+    "services.machine_adapter": "80b8a8033be6c314ffcd0bba93c027cce6b50b68a7197ed93078d115254cb661",
+    "routers.workspace": "a32fedaf6bb0bca42950a8f1f777937314154ef6d93436b4a0d7610423dc769a",
+    "services.app_business_config": "2e6a05f2b43773fbb8ae5b0fcdf9effdb1ace86782592fa74d2dba363cd85601",
+}
+_PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
+    {
+        **_PORTABLE_QUIESCENCE_SOURCES,
+        **dict(zip(_PORTABLE_QUIESCENCE_PAIRED_SOURCES, pair, strict=True)),
+    }
+    for pair in _PORTABLE_QUIESCENCE_SOURCE_PAIRS
+) + (_PORTABLE_QUIESCENCE_CATALOG_SOURCES,)
+_PORTABLE_QUIESCENCE_SOURCE_NAMES = tuple(
+    sorted({name for bundle in _PORTABLE_QUIESCENCE_SOURCE_BUNDLES for name in bundle})
+)
 
 
 def _require_reviewed_portable_sources(sources: dict[str, str]) -> None:
     """Accept complete reviewed bundles, never hash-by-hash cross-products."""
     _kernel_need(
-        type(sources) is dict and sources.keys() == _PORTABLE_QUIESCENCE_SOURCES.keys(),
+        type(sources) is dict
+        and any(sources == bundle for bundle in _PORTABLE_QUIESCENCE_SOURCE_BUNDLES),
         "quiescence_unsupported_source",
     )
-    _kernel_need(
-        all(
-            sources[name] == supported
-            for name, supported in _PORTABLE_QUIESCENCE_SOURCES.items()
-            if name not in _PORTABLE_QUIESCENCE_PAIRED_SOURCES
-        )
-        and tuple(sources[name] for name in _PORTABLE_QUIESCENCE_PAIRED_SOURCES)
-        in _PORTABLE_QUIESCENCE_SOURCE_PAIRS,
-        "quiescence_unsupported_source",
-    )
+
+
+def _portable_quiescence_sources() -> dict[str, str]:
+    """Bind every present dependency; absence is valid only in an exact old bundle."""
+    sources = {}
+    for name in _PORTABLE_QUIESCENCE_SOURCE_NAMES:
+        spec = importlib.util.find_spec("yleum_orchestrator." + name)
+        if spec is None:
+            continue
+        _kernel_need(spec.origin is not None, "quiescence_source")
+        sources[name] = hashlib.sha256(Path(spec.origin).read_bytes()).hexdigest()
+    _require_reviewed_portable_sources(sources)
+    return sources
 
 
 def _digest(value) -> str:
@@ -285,12 +312,7 @@ def _quiescence_binding(state_parent: Path, workspace_id: str, uid: int, client)
         ),
         "quiescence_retirement_fence",
     )
-    sources = {}
-    for name in _PORTABLE_QUIESCENCE_SOURCES:
-        spec = importlib.util.find_spec("yleum_orchestrator." + name)
-        _kernel_need(spec is not None and spec.origin is not None, "quiescence_source")
-        sources[name] = hashlib.sha256(Path(spec.origin).read_bytes()).hexdigest()
-    _require_reviewed_portable_sources(sources)
+    sources = _portable_quiescence_sources()
     binding = {
         "protocol": "portable-child-command-quiescence",
         "version": 1,

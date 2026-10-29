@@ -671,6 +671,8 @@ async def test_actual_adaptation_hold_with_distinct_control_and_candidate_is_qui
     from yleum_api.services.generation import recovery_adaptation
 
     run, project, factory, controller, handle = await _setup(monkeypatch, db_session, test_engine)
+    kinds = [call[0] for call in controller.calls]
+    assert kinds.index("business_config") < kinds.index("snapshot") < kinds.index("prepare")
     async with _session_owner(test_engine, run.id):
         await _save_wait(run, project, factory, handle)
         await handle.release()

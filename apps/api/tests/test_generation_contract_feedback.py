@@ -191,6 +191,7 @@ async def test_prepare_stack_keeps_ready_contract_after_portable_replacement(mon
         handle=SimpleNamespace(
             capabilities={"portable_machine": True},
             snapshot_files=AsyncMock(return_value={".omnia/cell.json": "{}"}),
+            seed_business_config=AsyncMock(),
         )
     )
     stack = await agent_preparation.prepare_stack_prompt(
@@ -199,7 +200,7 @@ async def test_prepare_stack_keeps_ready_contract_after_portable_replacement(mon
         ids=GenerationIds(*(uuid4() for _ in range(5))),
         orchestrate=True,
         project_info=SimpleNamespace(
-            template="max_miniapp", memory_context="", restoration_context=""
+            template="max_miniapp", name="Contract", memory_context="", restoration_context=""
         ),
         prompt_text="UNTRUSTED_USER_INSTRUCTION",
         runtime=runtime,
