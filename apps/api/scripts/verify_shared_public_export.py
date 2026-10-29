@@ -74,6 +74,7 @@ _CATALOG_OVERRIDE_PATHS = {
 
 
 _OWNER_MANAGEMENT_OVERRIDE_PATHS = {
+    'compat/legacy-orders-owner-mirror.sql.template',
     'src/lib/omnia/management-config.ts',
     'src/lib/omnia/management-auth.ts',
     'src/lib/omnia/management-store.ts',
