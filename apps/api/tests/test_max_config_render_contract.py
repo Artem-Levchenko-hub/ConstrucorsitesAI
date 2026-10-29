@@ -341,6 +341,7 @@ def _owner_overrides():
         (fixtures / "max_template_owner_management_overrides.json").read_text(encoding="utf-8")
     )
     assert set(reviewed) == {
+    'compat/legacy-orders-owner-mirror.sql.template',
     'src/lib/omnia/management-config.ts',
     'src/lib/omnia/management-auth.ts',
     'src/lib/omnia/management-store.ts',
@@ -362,6 +363,13 @@ def _normalize_owner_management(files):
     reviewed = _owner_overrides()
     normalized = dict(files)
     for path, entry in reviewed.items():
+        if path == "compat/legacy-orders-owner-mirror.sql.template":
+            # The packaged recipe is not an automatically rendered migration.
+            assert path not in files
+            assert hashlib.sha256(
+                max_project_kit._template_file(path).encode()
+            ).hexdigest() == entry["sha256"], path
+            continue
         if path == "src/lib/omnia/analytics.ts":
             continue  # Has a project literal; checked by _normalize_analytics.
         if path == "drizzle/0003_owner_management.sql" and path not in files:
