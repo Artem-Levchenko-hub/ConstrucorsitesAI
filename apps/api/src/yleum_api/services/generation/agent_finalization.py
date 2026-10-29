@@ -79,16 +79,55 @@ def _is_edit_source_path(path: str) -> bool:
     )
 
 
+def _is_managed_catalog_protocol_upgrade(before: str, after: str) -> bool:
+    """Recognize only the canonical legacy-to-catalog preparation migration."""
+    from yleum_api.services.max_project_kit import enable_catalog_runtime_manifest
+
+    try:
+        previous = json.loads(before)
+        current = json.loads(after)
+        if (
+            not isinstance(previous, dict)
+            or previous.get("app_config_protocol") is not None
+            or not isinstance(current, dict)
+            or type(current.get("app_config_protocol")) is not int
+            or current["app_config_protocol"] != 1
+        ):
+            return False
+        upgraded = enable_catalog_runtime_manifest(before)
+        if upgraded == before:
+            return False
+        # JSON encoding preserves true/1 and 1/1.0 distinctions in every field.
+        return json.dumps(json.loads(upgraded), sort_keys=True, allow_nan=False) == json.dumps(
+            current, sort_keys=True, allow_nan=False,
+        )
+    except (TypeError, ValueError, RecursionError):
+        return False
+
+
+def _edit_source_trees(
+    baseline_files: Mapping[str, str], candidate_files: Mapping[str, str], *, catalog_runtime: bool,
+) -> tuple[dict[str, str], dict[str, str]]:
+    before = {p: value for p, value in baseline_files.items() if _is_edit_source_path(p)}
+    after = {p: value for p, value in candidate_files.items() if _is_edit_source_path(p)}
+    manifest_path = ".omnia/cell.json"
+    if (
+        catalog_runtime
+        and manifest_path in before
+        and manifest_path in after
+        and _is_managed_catalog_protocol_upgrade(before[manifest_path], after[manifest_path])
+    ):
+        after[manifest_path] = before[manifest_path]
+    return before, after
+
+
 def unchanged_candidate_before_finalization(
     *, baseline_files: Mapping[str, str], workspace_files: Mapping[str, str],
-    requires_source_change: bool, message: str,
+    requires_source_change: bool, message: str, catalog_runtime: bool = False,
 ) -> EditSourceChangeVerdict | None:
-    product_before = {
-        p: value for p, value in baseline_files.items() if _is_edit_source_path(p)
-    }
-    product_after = {
-        p: value for p, value in workspace_files.items() if _is_edit_source_path(p)
-    }
+    product_before, product_after = _edit_source_trees(
+        baseline_files, workspace_files, catalog_runtime=catalog_runtime,
+    )
     if product_after != product_before:
         return None
     return EditSourceChangeVerdict(
@@ -104,18 +143,20 @@ def validate_edit_source_change(
     candidate_files: Mapping[str, str],
     exact_tree: bool,
     message: str,
+    catalog_runtime: bool = False,
 ) -> EditSourceChangeVerdict:
-    """Reject a nonempty edit candidate that is byte-identical to its baseline.
+    """Reject a nonempty edit candidate without an attributable product delta.
 
     An empty candidate is the established explicit no-op contract. A nonempty
-    candidate claims that source was written, so it must produce a semantic Git
-    tree change before the run can create a version or report success.
+    candidate claims that source was written, so managed preparation alone
+    cannot authorize a new version or a successful edit.
     """
     files = dict(candidate_files)
     if not requires_source_change or not files:
         return EditSourceChangeVerdict(files, message, None)
-    product_before = {p: value for p, value in baseline_files.items() if _is_edit_source_path(p)}
-    product_after = {p: value for p, value in files.items() if _is_edit_source_path(p)}
+    product_before, product_after = _edit_source_trees(
+        baseline_files, files, catalog_runtime=catalog_runtime,
+    )
     if exact_tree:
         changed = product_after != product_before
     else:
@@ -272,6 +313,7 @@ async def finalize_max_candidate(
     runtime: GenerationRuntime,
     plan: AgentPromptPlan,
     operations: AgentOperations,
+    catalog_runtime: bool = False,
 ) -> FinalizedAgentSource:
     _max_finalization_proof: ProofBundle | None = None
     if runtime.coordinator is not None and files:
@@ -290,6 +332,7 @@ async def finalize_max_candidate(
                 workspace_files=await runtime.handle.snapshot_files(),
                 requires_source_change=source_change_required(prompt_text),
                 message=accumulated,
+                catalog_runtime=catalog_runtime,
             )
             if unchanged is not None:
                 if unchanged.failure:

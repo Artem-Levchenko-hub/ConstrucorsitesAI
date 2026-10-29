@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from yleum_api.core.config import get_settings
+from yleum_api.schemas.project import orchestrator_template
 from yleum_api.services import agent_builder
 from yleum_api.services.generation.contracts import (
     AgentOperations,
@@ -274,13 +275,13 @@ def _primary_provider_failure(result: agent_builder.AgentResult) -> str | None:
 async def _observe_source_changes(
     handle: Any, baseline: SourceBaseline,
     execute: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]],
+    *, catalog_runtime: bool = False,
 ) -> tuple[Callable[[agent_builder.Action], Awaitable[dict[str, Any]]], Callable[[], bool]]:
     """Observe the real tree, including restored drafts, before granting proof."""
     from yleum_api.services.generation.agent_finalization import (
         unchanged_candidate_before_finalization,
         validate_edit_source_change,
     )
-    from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
 
     patch = await handle.export_files()
     snapshotter = getattr(handle, 'snapshot_files', None)
@@ -291,14 +292,13 @@ async def _observe_source_changes(
             return unchanged_candidate_before_finalization(
                 baseline_files=baseline.files, workspace_files=snapshot,
                 requires_source_change=True, message='',
+                catalog_runtime=catalog_runtime,
             ) is None
-        product_patch = {path: content for path, content in patch.items()
-                         if path not in MAX_SECURITY_LOCKED_FILES}
         verdict = validate_edit_source_change(
             requires_source_change=True, baseline_files=baseline.files,
-            candidate_files=product_patch, exact_tree=False, message='',
+            candidate_files=patch, exact_tree=False, message='', catalog_runtime=catalog_runtime,
         )
-        return bool(product_patch) and verdict.failure is None
+        return bool(verdict.files) and verdict.failure is None
 
     async def observed(action: agent_builder.Action) -> dict[str, Any]:
         nonlocal patch, snapshot
@@ -365,6 +365,9 @@ async def execute_agent_turn(
                 and source_change_required(prompt_text)):
             observed_execute, edit_source_changed = await _observe_source_changes(
                 runtime.handle, baseline, operations.execute,
+                catalog_runtime=(
+                    orchestrator_template(project_info.template) == "max-miniapp-nextjs"
+                ),
             )
     if _agent_res is None and get_settings().use_native_agent:
         # Native tool-use path (owner «как Claude Code, только на сервере»): one

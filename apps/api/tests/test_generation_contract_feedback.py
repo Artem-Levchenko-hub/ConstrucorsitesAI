@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -8,6 +9,103 @@ from yleum_api.services import agent_native
 from yleum_api.services.generation.contracts import GenerationIds, GenerationRuntime
 from yleum_api.services.integration_generation import generation_context
 from yleum_api.services.max_data_evolution import build_max_agent_guide
+from yleum_api.services.max_project_kit import enable_catalog_runtime_manifest
+
+
+def _catalog_source_state(*, has_snapshot=True):
+    manifest = json.dumps({"version": 1, "services": [], "routes": []})
+    baseline = {
+        ".omnia/cell.json": manifest,
+        "src/app/page.tsx": "same product",
+        "src/lib/omnia/client.ts": "old managed SDK",
+    }
+    snapshot = {
+        **baseline,
+        ".omnia/cell.json": enable_catalog_runtime_manifest(manifest),
+        "src/lib/omnia/client.ts": "new managed SDK",
+    }
+    handle = SimpleNamespace(export_files=AsyncMock(side_effect=lambda: {
+        path: content for path, content in snapshot.items() if baseline.get(path) != content
+    }))
+    if has_snapshot:
+        handle.snapshot_files = AsyncMock(side_effect=lambda: dict(snapshot))
+    return baseline, snapshot, handle
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_snapshot", [False, True])
+@pytest.mark.parametrize("catalog_runtime", [False, True])
+async def test_source_observer_requires_product_edit_after_catalog_preparation(
+    has_snapshot, catalog_runtime,
+):
+    from yleum_api.services.generation.agent_generation import _observe_source_changes
+
+    baseline, snapshot, handle = _catalog_source_state(has_snapshot=has_snapshot)
+
+    async def execute(action):
+        if action.name == "write_file":
+            snapshot["src/app/page.tsx"] = "requested product edit"
+        return {"ok": True}
+
+    observed, changed = await _observe_source_changes(
+        handle, SimpleNamespace(files=baseline), execute, catalog_runtime=catalog_runtime,
+    )
+    assert changed() is (not catalog_runtime)
+    assert await observed(SimpleNamespace(name="read_file")) == {"ok": True}
+    assert changed() is (not catalog_runtime)
+    await observed(SimpleNamespace(name="write_file"))
+    assert changed() is True
+    snapshot["src/app/page.tsx"] = baseline["src/app/page.tsx"]
+    await observed(SimpleNamespace(name="read_file"))
+    assert changed() is (not catalog_runtime)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("template", ["max_miniapp", "code"])
+@pytest.mark.parametrize("product_edit", [False, True])
+async def test_native_completion_uses_trusted_template_for_catalog_noop_guard(
+    monkeypatch, template, product_edit,
+):
+    from yleum_api.services.agent_builder import AgentResult
+    from yleum_api.services.generation import agent_generation
+
+    baseline, snapshot, handle = _catalog_source_state()
+    handle.is_portable = lambda: True
+    monkeypatch.setattr(
+        agent_generation, "get_settings", lambda: SimpleNamespace(use_native_agent=True),
+    )
+
+    async def execute(action):
+        if action.name == "write_file":
+            snapshot["src/app/page.tsx"] = "requested product edit"
+        return {"ok": True}
+
+    async def native(**kwargs):
+        gap = kwargs["completion_check"]({}, {})
+        assert bool(gap) is (template == "max_miniapp")
+        if product_edit:
+            await kwargs["execute"](SimpleNamespace(name="write_file"))
+            assert kwargs["completion_check"]({}, {}) is None
+        return AgentResult(done=True, summary="done", files={}, steps=1, stop_reason="done")
+
+    monkeypatch.setattr(agent_native, "run_native_build", native)
+    candidate = agent_generation.execute_agent_turn(
+        _agent_res=None, _is_edit=True, _max_has_generated_snapshot=True,
+        _max_seed_files={}, _max_shell_enabled=True,
+        baseline=SimpleNamespace(files=baseline, sha="accepted"),
+        ids=GenerationIds(*(uuid4() for _ in range(5))), is_free=False,
+        project_info=SimpleNamespace(template=template), prompt_text="Change the button",
+        runtime=GenerationRuntime(handle=handle),
+        plan=SimpleNamespace(model="unit", stack_guide="", skills=None, user="Change", steps=2),
+        operations=SimpleNamespace(execute=execute, emit=AsyncMock()),
+    )
+    if template == "max_miniapp" and not product_edit:
+        with pytest.raises(RuntimeError, match="edit produced no source changes"):
+            await candidate
+    else:
+        result, failure = await candidate
+        assert result.done is True and failure is None
+        assert result.files == await handle.export_files()
 
 
 @pytest.mark.asyncio

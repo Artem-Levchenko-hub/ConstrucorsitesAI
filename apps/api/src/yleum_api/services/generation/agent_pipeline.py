@@ -904,6 +904,7 @@ async def run_agent_generation(
         operations=_operations,
     ))
 
+    _catalog_runtime = _stack.orchestrator_template == "max-miniapp-nextjs"
     (
         _max_finalization_proof,
         files,
@@ -921,6 +922,7 @@ async def run_agent_generation(
         runtime=runtime,
         plan=_prompt_plan,
         operations=_operations,
+        catalog_runtime=_catalog_runtime,
     )
     from yleum_api.services.restorations import adaptation_activation_consumed
 
@@ -933,6 +935,7 @@ async def run_agent_generation(
         candidate_files=files,
         exact_tree=_max_finalization_proof is not None,
         message=accumulated,
+        catalog_runtime=_catalog_runtime,
     )
     files = _source_change.files
     accumulated = _source_change.message

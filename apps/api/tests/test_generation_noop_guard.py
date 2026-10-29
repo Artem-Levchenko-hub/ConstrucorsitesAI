@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -11,6 +12,7 @@ from yleum_api.services.generation.agent_finalization import (
     unchanged_candidate_before_finalization,
     validate_edit_source_change,
 )
+from yleum_api.services.max_project_kit import enable_catalog_runtime_manifest
 
 
 @pytest.mark.parametrize("prompt,expected", [
@@ -52,10 +54,14 @@ def test_contextual_edit_intent_preserves_readonly_and_quoted_instructions(promp
 
 
 @pytest.mark.asyncio
-async def test_noop_never_invokes_production_build_or_migrations():
+@pytest.mark.parametrize("catalog_bootstrap", [False, True])
+@pytest.mark.parametrize("readonly", [False, True])
+async def test_noop_never_invokes_production_build_or_migrations(catalog_bootstrap, readonly):
     from yleum_api.services.generation.agent_finalization import finalize_max_candidate
 
-    files = {"src/app/page.tsx": "same product"}
+    baseline, files = _catalog_source_files() if catalog_bootstrap else (
+        {"src/app/page.tsx": "same product"}, {"src/app/page.tsx": "same product"},
+    )
     finalize = AsyncMock()
     runtime = SimpleNamespace(
         coordinator=SimpleNamespace(finalize_with_repair=finalize),
@@ -63,14 +69,22 @@ async def test_noop_never_invokes_production_build_or_migrations():
             prove_restoration_adaptation=None, snapshot_files=AsyncMock(return_value=files),
         ),
     )
-    with pytest.raises(RuntimeError, match="no source changes"):
-        await finalize_max_candidate(
-            _is_edit=True, _max_has_generated_snapshot=True, _max_shell_enabled=True,
-            accumulated="done", baseline=SimpleNamespace(files=files), files=files,
-            ids=SimpleNamespace(), is_free=False, prompt_text="Change the button",
-            runtime=runtime, plan=SimpleNamespace(), operations=SimpleNamespace(),
-        )
+    candidate = finalize_max_candidate(
+        _is_edit=True, _max_has_generated_snapshot=True, _max_shell_enabled=True,
+        accumulated="inspection", baseline=SimpleNamespace(files=baseline), files=files,
+        ids=SimpleNamespace(), is_free=False,
+        prompt_text="Explain the code" if readonly else "Change the button",
+        runtime=runtime, plan=SimpleNamespace(), operations=SimpleNamespace(),
+        catalog_runtime=catalog_bootstrap,
+    )
+    if readonly:
+        result = await candidate
+        assert result.files == {} and result.message == "inspection"
+    else:
+        with pytest.raises(RuntimeError, match="no source changes"):
+            await candidate
     finalize.assert_not_awaited()
+    runtime.handle.snapshot_files.assert_awaited_once()
 
 
 def test_readonly_exception_does_not_swallow_a_requested_change():
@@ -86,6 +100,140 @@ def test_managed_sdk_refresh_does_not_count_as_requested_product_edit():
         message="done",
     )
     assert verdict is not None and verdict.failure
+
+
+def _catalog_source_files(*, explicit_null=False):
+    manifest_data = {
+        "version": 1,
+        "services": [{"name": "app", "command": "npm start", "port": 3000}],
+        "routes": [{"path": "/", "service": "app"}],
+    }
+    if explicit_null:
+        manifest_data["app_config_protocol"] = None
+    manifest = json.dumps(manifest_data)
+    baseline = {
+        ".omnia/cell.json": manifest,
+        "src/app/page.tsx": "same product",
+        "src/lib/omnia/client.ts": "old managed SDK",
+    }
+    prepared = {
+        **baseline,
+        ".omnia/cell.json": enable_catalog_runtime_manifest(manifest),
+        "src/lib/omnia/client.ts": "new managed SDK",
+        "src/lib/omnia/catalog-server.ts": "new managed catalog SDK",
+    }
+    return baseline, prepared
+
+
+def _source_change_verdict(boundary, baseline, prepared, *, catalog_runtime=True):
+    options = {} if catalog_runtime is None else {"catalog_runtime": catalog_runtime}
+    if boundary == "precheck":
+        return unchanged_candidate_before_finalization(
+            baseline_files=baseline, workspace_files=prepared,
+            requires_source_change=True, message="done", **options,
+        )
+    candidate = prepared if boundary == "exact" else {
+        **{path: content for path, content in prepared.items() if baseline.get(path) != content},
+        **{path: "" for path in baseline.keys() - prepared.keys()},
+    }
+    return validate_edit_source_change(
+        requires_source_change=True, baseline_files=baseline,
+        candidate_files=candidate, exact_tree=boundary == "exact", message="done", **options,
+    )
+
+
+@pytest.mark.parametrize("boundary", ["precheck", "exact", "patch"])
+@pytest.mark.parametrize("explicit_null", [False, True])
+def test_catalog_bootstrap_is_not_a_requested_product_edit(boundary, explicit_null):
+    baseline, prepared = _catalog_source_files(explicit_null=explicit_null)
+    original_baseline, original_prepared = dict(baseline), dict(prepared)
+    verdict = _source_change_verdict(boundary, baseline, prepared)
+    assert verdict is not None and verdict.failure == "edit produced no source changes"
+    assert baseline == original_baseline and prepared == original_prepared
+
+
+@pytest.mark.parametrize("boundary", ["precheck", "exact", "patch"])
+@pytest.mark.parametrize("catalog_runtime", [False, None])
+def test_catalog_upgrade_remains_a_change_outside_explicit_max_scope(boundary, catalog_runtime):
+    baseline, prepared = _catalog_source_files()
+    verdict = _source_change_verdict(boundary, baseline, prepared, catalog_runtime=catalog_runtime)
+    assert verdict is None or verdict.failure is None
+
+
+@pytest.mark.parametrize("boundary", ["precheck", "exact", "patch"])
+@pytest.mark.parametrize("change", ["app", "service", "route", "remove_manifest", "add_manifest"])
+def test_catalog_upgrade_preserves_real_product_and_manifest_changes(boundary, change):
+    baseline, prepared = _catalog_source_files()
+    if change == "app":
+        prepared["src/app/page.tsx"] = "requested product edit"
+    elif change == "remove_manifest":
+        prepared.pop(".omnia/cell.json")
+    elif change == "add_manifest":
+        baseline.pop(".omnia/cell.json")
+    else:
+        manifest = json.loads(prepared[".omnia/cell.json"])
+        if change == "service":
+            manifest["services"][0]["command"] = "node new-server.js"
+        else:
+            manifest["routes"][0]["path"] = "/catalog"
+        prepared[".omnia/cell.json"] = json.dumps(manifest)
+    verdict = _source_change_verdict(boundary, baseline, prepared)
+    assert verdict is None or verdict.failure is None
+
+
+@pytest.mark.parametrize("boundary", ["precheck", "exact", "patch"])
+@pytest.mark.parametrize("side,protocol", [
+    ("before", True), ("before", False), ("before", 0), ("before", 1),
+    ("before", 1.0), ("before", "1"), ("after", True), ("after", False),
+    ("after", 1.0), ("after", "1"), ("after", None),
+])
+def test_only_absent_or_null_to_integer_one_protocol_migration_is_ignored(boundary, side, protocol):
+    baseline, prepared = _catalog_source_files()
+    selected = baseline if side == "before" else prepared
+    manifest = json.loads(selected[".omnia/cell.json"])
+    manifest["app_config_protocol"] = protocol
+    selected[".omnia/cell.json"] = json.dumps(manifest)
+    verdict = _source_change_verdict(boundary, baseline, prepared)
+    assert verdict is None or verdict.failure is None
+
+
+@pytest.mark.parametrize("boundary", ["precheck", "exact", "patch"])
+@pytest.mark.parametrize("before_value,after_value", [(True, 1), (3000, 3000.0)])
+def test_protocol_upgrade_does_not_erase_other_manifest_field_types(
+    boundary, before_value, after_value,
+):
+    baseline, prepared = _catalog_source_files()
+    for files, value in [(baseline, before_value), (prepared, after_value)]:
+        manifest = json.loads(files[".omnia/cell.json"])
+        manifest["services"][0]["port"] = value
+        files[".omnia/cell.json"] = json.dumps(manifest)
+    verdict = _source_change_verdict(boundary, baseline, prepared)
+    assert verdict is None or verdict.failure is None
+
+
+@pytest.mark.parametrize("boundary", ["precheck", "exact", "patch"])
+@pytest.mark.parametrize("before_content,after_content", [
+    ("{", None), (None, "{"), ("[]", None),
+    *[
+        (json.dumps(manifest), json.dumps({**manifest, "app_config_protocol": 1}))
+        for manifest in [
+            {"version": True, "services": [], "routes": []},
+            {"version": 1.0, "services": [], "routes": []},
+            {"version": 1, "services": None, "routes": []},
+            {"version": 1, "services": []},
+        ]
+    ],
+])
+def test_malformed_manifest_delta_is_never_hidden_as_catalog_preparation(
+    boundary, before_content, after_content,
+):
+    baseline, prepared = _catalog_source_files()
+    if before_content is not None:
+        baseline[".omnia/cell.json"] = before_content
+    if after_content is not None:
+        prepared[".omnia/cell.json"] = after_content
+    verdict = _source_change_verdict(boundary, baseline, prepared)
+    assert verdict is None or verdict.failure is None
 
 
 def test_file_deletion_is_a_real_change():
