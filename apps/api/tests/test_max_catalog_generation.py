@@ -90,7 +90,7 @@ async def test_canonical_runtime_seed_precedes_source_and_failed_seed_stops_deli
         return {"src/lib/omnia/max-config.ts": "canonical config"}
     from yleum_api.services import max_project_kit
     monkeypatch.setattr(max_project_kit, "render_max_managed_files", render)
-    handle = SimpleNamespace(seed_business_config=seed)
+    handle = SimpleNamespace(seed_business_config=seed, snapshot_files=AsyncMock(return_value={}))
     runtime = SimpleNamespace(handle=handle)
     assert await _seed_saved_max_config(factory, ids, SimpleNamespace(name="Brief"), runtime,
                                        catalog_runtime=True) == "canonical config"

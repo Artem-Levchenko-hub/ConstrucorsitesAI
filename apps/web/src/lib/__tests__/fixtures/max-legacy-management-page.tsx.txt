@@ -1,0 +1,762 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Coffee, Minus, Plus, ShoppingBag, Trash2, ClipboardList, User, Loader2, Check } from "lucide-react";
+import "./sever.css";
+import { useYleumCatalog, useYleumCatalogSelection } from "@/lib/omnia/catalog-client";
+import { useYleumAppProfile } from "@/lib/omnia/app-profile-client";
+import { createManagedOrder, createManagedLead, getManagedRecords, loadPendingManagedIntent, ManagedBusinessError, type ManagedQuote } from "@/lib/omnia/business-client";
+import type { ManagedRecord } from "@/lib/omnia/management-resources";
+import type { ManagedOrderInput, ManagedLeadInput } from "@/lib/omnia/business-server";
+import type { YleumMaxContentItem } from "@/lib/omnia/max-config";
+import { trackMaxActivity } from "@/lib/omnia/client";
+import { parseRubPrice } from "@/lib/sever/catalog-order";
+
+type Drink = {
+  id: string; name: string; desc: string; price: number | null; priceLabel: string;
+  category: string; color: string; foam: string; availability: string;
+  image: string; options: string[];
+};
+type CartDrink = Omit<Drink, "price"> & { price: number; unitPriceKopecks: number; option?: string };
+const ART: Record<string, { color: string; foam: string }> = {
+  filter: { color: "#5B3A24", foam: "#5B3A24" },
+  cappuccino: { color: "#8A5A3A", foam: "#F3E8D4" },
+  latte: { color: "#B8895F", foam: "#F7EFE0" },
+  cocoa: { color: "#6B3E2E", foam: "#E9D6C3" },
+};
+function toDrink(item: YleumMaxContentItem): Drink {
+  return { id: item.id, name: item.title, desc: item.description,
+    price: parseRubPrice(item.price), priceLabel: item.price,
+    category: item.category, availability: item.availability,
+    image: item.image_url, options: item.options,
+    ...(ART[item.id] ?? { color: "#5B3A24", foam: "#F3E8D4" }) };
+}
+function safeTrack(type: Parameters<typeof trackMaxActivity>[0], eventId?: string) {
+  try { void trackMaxActivity(type, eventId ? { eventId } : undefined).catch(() => undefined); } catch { /* Telemetry never blocks ordering. */ }
+}
+
+type OrderItem = { id: string; name: string; price: number; qty: number; option?: string };
+type Order = {
+  id: string;
+  customerName: string;
+  items: OrderItem[];
+  total: number;
+  status: string;
+  createdAt: string;
+  pickupOption?: string | null;
+  pickupAt?: string | null;
+  baristaComment?: string | null;
+};
+const STATUS_LABELS: Record<string, string> = {
+  new: "Новый", in_progress: "В работе", completed: "Выполнен", cancelled: "Отменён",
+};
+const statusLabel = (status: string) => STATUS_LABELS[status] ?? status;
+function sumOrderRub(records: readonly ManagedRecord[]): number {
+  let total = 0;
+  for (const record of records) total += (record.total_kopecks ?? 0) / 100;
+  return total;
+}
+function mapManagedRecord(record: ManagedRecord): Order {
+  if (record.resource !== "orders" || record.total_kopecks == null || record.currency !== "RUB") throw new Error("Invalid order receipt");
+  const items: OrderItem[] = [];
+  for (const item of record.items) items.push({ id: item.catalog_id, name: item.title,
+    price: item.unit_price_kopecks / 100, qty: item.quantity, option: item.option });
+  const pickup = record.fulfillment;
+  const pickupIds: Record<number, string> = { 0: "asap", 15: "m15", 30: "m30", 60: "h1" };
+  return { id: record.id, customerName: record.customer_name,
+    items,
+    total: record.total_kopecks / 100, status: record.status, createdAt: record.created_at,
+    pickupOption: pickup ? pickupIds[pickup.delay_minutes] ?? null : null,
+    pickupAt: pickup?.scheduled_for ?? null, baristaComment: record.comment ?? null };
+}
+function businessError(error: unknown, fallback: string): string {
+  if (error instanceof ManagedBusinessError && (error.status === 401 || error.status === 403)) return "Нет доступа. Откройте приложение из MAX.";
+  return fallback;
+}
+type Tab = "menu" | "cart" | "orders" | "profile";
+type Load = "idle" | "loading" | "success" | "error";
+
+type PickupOption = "asap" | "m15" | "m30" | "h1";
+const PICKUP_OPTIONS: { id: PickupOption; label: string; minutes: number }[] = [
+  { id: "asap", label: "Как можно скорее", minutes: 0 },
+  { id: "m15", label: "Через 15 минут", minutes: 15 },
+  { id: "m30", label: "Через 30 минут", minutes: 30 },
+  { id: "h1", label: "Через час", minutes: 60 },
+];
+const COMMENT_MAX = 280;
+const fmtTime = (d: Date) => d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+const optionLabel = (id: string | null | undefined) => PICKUP_OPTIONS.find((p) => p.id === id)?.label ?? null;
+const leftText = (ms: number) => {
+  const m = Math.max(0, Math.ceil(ms / 60000));
+  if (m < 1) return "меньше минуты";
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  const r = m % 60;
+  return r ? `${h} ч ${r} мин` : `${h} ч`;
+};
+
+const pickupSummary = (o: { pickupAt?: string | null; pickupOption?: string | null }, now: number) => {
+  if (!o.pickupAt) return "Обычный самовывоз";
+  const at = new Date(o.pickupAt);
+  if (Number.isNaN(at.getTime())) return "Обычный самовывоз";
+  const diff = at.getTime() - now;
+  const base = `Забрать к ${fmtTime(at)}`;
+  return diff > 0 ? `${base} · осталось ${leftText(diff)}` : `${base} · время получения наступило`;
+};
+
+const rub = (n: number) => `${n.toLocaleString("ru-RU")} ₽`;
+const fmtDate = (iso: string) =>
+  new Date(iso).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+
+function Cup({ color, foam }: { color: string; foam: string }) {
+  return (
+    <svg width="48" height="48" viewBox="0 0 48 48" role="img" aria-label="Чашка напитка">
+      <ellipse cx="24" cy="41" rx="17" ry="3" fill="#D8CFB8" />
+      <path d="M9 14h26v14a11 11 0 0 1-11 11h-4A11 11 0 0 1 9 28z" fill="#FFFFFF" stroke="#4A2A1F" strokeWidth="2" strokeLinejoin="round" />
+      <path d="M35 18h3a4 4 0 0 1 0 8h-3" fill="none" stroke="#4A2A1F" strokeWidth="2" />
+      <ellipse cx="22" cy="14" rx="13" ry="3.2" fill={color} stroke="#4A2A1F" strokeWidth="2" />
+      <ellipse cx="22" cy="14" rx="7" ry="1.6" fill={foam} />
+    </svg>
+  );
+}
+
+export default function Page() {
+  const [tab, setTab] = useState<Tab>("menu");
+  const catalog = useYleumCatalog();
+  const selection = useYleumCatalogSelection(catalog.items);
+  const appProfile = useYleumAppProfile();
+  const MENU = catalog.items.map(toDrink);
+  const categories = [...new Set(MENU.map(item => item.category).filter(Boolean))];
+  const cartSnapshots = useRef<Record<string, CartDrink>>({});
+  const cartVersion = useRef(0);
+  const [quoteTick, setQuoteTick] = useState(0);
+  const [needsConfirmation, setNeedsConfirmation] = useState(false);
+  const [cart, setCart] = useState<Record<string, number>>({});
+  const [name, setName] = useState("");
+  const [orders, setOrders] = useState<ManagedRecord[]>([]);
+  const [ordersState, setOrdersState] = useState<Load>("idle");
+  const [ordersError, setOrdersError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const [lastOrder, setLastOrder] = useState<Order | null>(null);
+  const loadingRef = useRef(false);
+  const opKeyRef = useRef<string>("");
+  const orderAttempt = useRef<Readonly<ManagedOrderInput> | null>(null);
+  const [orderUnknown, setOrderUnknown] = useState(false);
+  const ordersSequence = useRef(0);
+  const [leads, setLeads] = useState<ManagedRecord[]>([]);
+  const [leadsState, setLeadsState] = useState<Load>("idle");
+  const [leadsError, setLeadsError] = useState("");
+  const [leadName, setLeadName] = useState("");
+  const [leadComment, setLeadComment] = useState("");
+  const [leadPending, setLeadPending] = useState(false);
+  const [leadUnknown, setLeadUnknown] = useState(false);
+  const [leadSaved, setLeadSaved] = useState(false);
+  const [leadError, setLeadError] = useState("");
+  const leadAttempt = useRef<Readonly<ManagedLeadInput> | null>(null);
+  const leadSaving = useRef(false);
+  const leadLoading = useRef(false);
+  const leadsSequence = useRef(0);
+  const [recoveryState, setRecoveryState] = useState<Load>("loading");
+  const [recoveryError, setRecoveryError] = useState("");
+  const recoverySequence = useRef(0);
+  const recoveryReady = recoveryState === "success";
+  const restorePending = useCallback(async () => {
+    const sequence = ++recoverySequence.current;
+    setRecoveryState("loading"); setRecoveryError("");
+    try {
+      const [pendingOrder, pendingLead] = await Promise.all([
+        loadPendingManagedIntent("orders"), loadPendingManagedIntent("leads"),
+      ]);
+      if (sequence !== recoverySequence.current) return;
+      const hadOrder = orderAttempt.current !== null;
+      const hadLead = leadAttempt.current !== null;
+      orderAttempt.current = pendingOrder; leadAttempt.current = pendingLead;
+      setOrderUnknown(Boolean(pendingOrder)); setLeadUnknown(Boolean(pendingLead));
+      if (pendingOrder) {
+        opKeyRef.current = pendingOrder.operationKey; cartVersion.current = pendingOrder.configVersion;
+        setName(pendingOrder.customerName); setBaristaComment(pendingOrder.comment ?? "");
+        setPickupOption(PICKUP_OPTIONS.find(value => value.minutes === pendingOrder.fulfillment?.delayMinutes)?.id ?? "asap");
+        setTab("cart");
+      } else if (hadOrder) {
+        opKeyRef.current = ""; cartVersion.current = 0; cartSnapshots.current = {};
+        setCart({}); setName(""); setBaristaComment("");
+      }
+      if (pendingLead) {
+        setLeadName(pendingLead.customerName); setLeadComment(pendingLead.comment ?? "");
+        if (!pendingOrder) setTab("profile");
+      } else if (hadLead) { setLeadName(""); setLeadComment(""); }
+      setRecoveryState("success");
+    } catch (error) {
+      if (sequence !== recoverySequence.current) return;
+      setRecoveryError(businessError(error, "Не удалось проверить прошлые отправки. Повторите проверку; новая отправка пока заблокирована."));
+      setRecoveryState("error");
+    }
+  }, []);
+  useEffect(() => {
+    void restorePending();
+    return () => { ++recoverySequence.current; };
+  }, [restorePending]);
+
+  const loadOrders = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    const sequence = ++ordersSequence.current;
+    setOrdersState("loading"); setOrdersError("");
+    try {
+      const response = await getManagedRecords("orders", { limit: 100 });
+      if (sequence !== ordersSequence.current) return;
+      setOrders(response.records); setOrdersState("success");
+    } catch (error) {
+      if (sequence === ordersSequence.current) {
+        setOrdersError(businessError(error, "Не удалось загрузить заказы. Проверьте соединение и повторите."));
+        setOrdersState("error");
+      }
+    } finally { if (sequence === ordersSequence.current) loadingRef.current = false; }
+  }, []);
+  const loadLeads = useCallback(async () => {
+    if (leadLoading.current) return;
+    leadLoading.current = true;
+    const sequence = ++leadsSequence.current;
+    setLeadsState("loading"); setLeadsError("");
+    try {
+      const response = await getManagedRecords("leads", { limit: 100 });
+      if (sequence !== leadsSequence.current) return;
+      setLeads(response.records); setLeadsState("success");
+    } catch (error) {
+      if (sequence === leadsSequence.current) {
+        setLeadsError(businessError(error, "Не удалось загрузить заявки. Повторите попытку."));
+        setLeadsState("error");
+      }
+    } finally { if (sequence === leadsSequence.current) leadLoading.current = false; }
+  }, []);
+  useEffect(() => { if (ordersState === "idle") void loadOrders(); }, [ordersState, loadOrders]);
+  useEffect(() => { if (tab === "profile" && leadsState === "idle") void loadLeads(); }, [tab, leadsState, loadLeads]);
+
+  // Keep the viewed quote; a catalog refresh must not silently accept a price.
+  const lines = useMemo(
+    () => Object.entries(cart).flatMap(([id, qty]) =>
+      cartSnapshots.current[id] && qty > 0 ? [{ ...cartSnapshots.current[id], qty }] : []),
+    [cart, quoteTick],
+  );
+  const total = lines.reduce((s, l) => s + l.price * l.qty, 0);
+  const count = lines.reduce((s, l) => s + l.qty, 0);
+  const [pickupOption, setPickupOption] = useState<"asap" | "m15" | "m30" | "h1">("asap");
+  const [baristaComment, setBaristaComment] = useState("");
+  const commentTrimmed = baristaComment.trim();
+  const commentTooLong = commentTrimmed.length > 280;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 15000);
+    return () => clearInterval(t);
+  }, []);
+  const selectedPickup = PICKUP_OPTIONS.find((p) => p.id === pickupOption) ?? PICKUP_OPTIONS[0];
+  const pickupPreview = new Date(now + selectedPickup.minutes * 60000);
+
+  const setQty = (id: string, qty: number) => {
+    if (submitting || orderUnknown || !recoveryReady) return;
+    const previous = cart[id] ?? 0;
+    const nextQty = Math.max(0, Math.min(qty, 20));
+    if (nextQty > previous) {
+      const current = MENU.find(item => item.id === id);
+      if (!current || catalog.status !== "ready" || catalog.configVersion === null || current.price === null || !Number.isSafeInteger(current.price * 100) || current.availability !== "in_stock") {
+        setSubmitError("Эта позиция сейчас недоступна. Обновите меню."); return;
+      }
+      const option = selection.getOption(current);
+      if (current.options.length && option === undefined) {
+        setSubmitError("Выберите вариант напитка."); return;
+      }
+      if (previous === 0) {
+        if (count === 0) cartVersion.current = catalog.configVersion;
+        cartSnapshots.current[id] = { ...current, price: current.price, unitPriceKopecks: current.price * 100, option };
+      }
+      safeTrack("cart_add");
+    } else if (nextQty < previous) safeTrack("button_click");
+    if (nextQty === 0) delete cartSnapshots.current[id];
+    setCart(value => {
+      const next = { ...value };
+      if (nextQty === 0) delete next[id]; else next[id] = nextQty;
+      return next;
+    });
+    setSubmitError("");
+    if (count === previous && nextQty === 0) {
+      cartVersion.current = 0; setNeedsConfirmation(false);
+    }
+  };
+
+  function applyQuote(quote: ManagedQuote): boolean {
+    if (!Number.isSafeInteger(quote.configVersion) || quote.configVersion < 0 || quote.currency !== "RUB" ||
+        !Array.isArray(quote.items) || quote.items.length !== lines.length ||
+        new Set(quote.items.map(item => item.catalog_id)).size !== lines.length ||
+        !quote.items.every(item => cartSnapshots.current[item.catalog_id] &&
+          Number.isSafeInteger(item.unit_price_kopecks) && item.unit_price_kopecks >= 0 &&
+          item.quantity === cart[item.catalog_id])) return false;
+    for (const item of quote.items) cartSnapshots.current[item.catalog_id] = {
+      ...cartSnapshots.current[item.catalog_id], name: item.title,
+      price: item.unit_price_kopecks / 100, unitPriceKopecks: item.unit_price_kopecks, option: item.option,
+    };
+    cartVersion.current = quote.configVersion;
+    setQuoteTick(value => value + 1); setNeedsConfirmation(true);
+    return true;
+  }
+  function prepareOrder(): ManagedOrderInput | null {
+      const trimmed = name.trim();
+      if (!trimmed) { setSubmitError("Введите имя, чтобы мы подписали заказ."); return null; }
+      if (lines.length === 0) return null;
+      if (commentTooLong) { setSubmitError("Комментарий слишком длинный: максимум 280 символов."); return null; }
+      if (catalog.status !== "ready") { setSubmitError("Обновите меню перед отправкой заказа."); return null; }
+      for (const line of lines) {
+        const current = catalog.items.find(item => item.id === line.id);
+        if (!current || !current.active || current.availability !== "in_stock" ||
+            (current.options.length > 0 && selection.getOption(current) === undefined)) {
+          setSubmitError("Позиция или её вариант изменились. Удалите её и выберите заново в меню."); return null;
+        }
+      }
+      if (!opKeyRef.current) opKeyRef.current = crypto.randomUUID();
+      return {
+        operationKey: opKeyRef.current, customerName: trimmed, configVersion: cartVersion.current,
+        items: lines.map(line => ({ catalogId: line.id, quantity: line.qty,
+          unitPriceKopecks: line.unitPriceKopecks, option: selection.getOption(line) })),
+        comment: commentTrimmed, fulfillment: { type: "pickup", delayMinutes: selectedPickup.minutes },
+      };
+  }
+  const submit = async () => {
+    if (submitting || !recoveryReady) return;
+    if (!orderAttempt.current) orderAttempt.current = prepareOrder();
+    if (!orderAttempt.current) return;
+    setSubmitting(true); setSubmitError("");
+    safeTrack("checkout_start", orderAttempt.current.operationKey);
+    try {
+      const input: ManagedOrderInput = {
+        operationKey: orderAttempt.current.operationKey, customerName: orderAttempt.current.customerName,
+        configVersion: orderAttempt.current.configVersion, items: orderAttempt.current.items,
+        comment: orderAttempt.current.comment, fulfillment: orderAttempt.current.fulfillment,
+      };
+      const record = await createManagedOrder(input);
+      const created = mapManagedRecord(record);
+      // The managed server relay records order_created once after its commit.
+      orderAttempt.current = null; opKeyRef.current = ""; setOrderUnknown(false);
+      cartSnapshots.current = {}; cartVersion.current = 0; setNeedsConfirmation(false);
+      setLastOrder(created); setOrders(previous => [record, ...previous.filter(item => item.id !== record.id)]);
+      setOrdersState("success"); setCart({}); setName(""); setPickupOption("asap"); setBaristaComment("");
+      ++ordersSequence.current; loadingRef.current = false; void loadOrders();
+    } catch (error) {
+      if (error instanceof ManagedBusinessError && error.status === 409 && error.code === "quote_changed") {
+        const applied = error.quote && applyQuote(error.quote);
+        orderAttempt.current = null; setOrderUnknown(false);
+        setSubmitError(applied ? "Каталог изменился. Проверьте новую сумму и подтвердите заказ ещё раз."
+          : "Каталог изменился. Соберите корзину заново: прежняя отправка не была принята.");
+        void catalog.refresh();
+      } else if (error instanceof ManagedBusinessError && error.status === 400 && error.code === "invalid_request") {
+        try {
+          const pending = await loadPendingManagedIntent("orders");
+          if (pending) { orderAttempt.current = pending; setOrderUnknown(true); }
+          else { orderAttempt.current = null; opKeyRef.current = ""; setOrderUnknown(false); }
+        } catch { setOrderUnknown(true); }
+        setSubmitError("Запрос отклонён. Если исход неизвестен, сохранённую отправку можно только проверить повторно.");
+      } else {
+        setOrderUnknown(true);
+        setSubmitError(businessError(error, "Ответ не подтверждён. Проверьте эту же отправку — её ключ и состав сохранены."));
+        if (error instanceof ManagedBusinessError && error.code === "pending_intent") {
+          setRecoveryError("В браузере есть другая неподтверждённая отправка. Сначала восстановите её проверкой.");
+          setRecoveryState("error");
+        }
+      }
+    } finally { setSubmitting(false); }
+  };
+  const submitLead = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (leadSaving.current || !recoveryReady) return;
+    if (!leadAttempt.current) {
+      const customerName = leadName.trim(); const comment = leadComment.trim();
+      if (!customerName || customerName.length > 60 || !comment || comment.length > 2000) {
+        setLeadError("Укажите имя до 60 символов и сообщение до 2000 символов."); return;
+      }
+      leadAttempt.current = { operationKey: crypto.randomUUID(), customerName, comment };
+    }
+    leadSaving.current = true; setLeadPending(true); setLeadError(""); setLeadSaved(false);
+    try {
+      const input: ManagedLeadInput = { operationKey: leadAttempt.current.operationKey,
+        customerName: leadAttempt.current.customerName, comment: leadAttempt.current.comment };
+      const record = await createManagedLead(input);
+      // lead_created belongs to the canonical managed server relay.
+      leadAttempt.current = null; setLeadUnknown(false); setLeadName(""); setLeadComment(""); setLeadSaved(true);
+      setLeads(previous => [record, ...previous.filter(item => item.id !== record.id)]); setLeadsState("success");
+      ++leadsSequence.current; leadLoading.current = false; void loadLeads();
+    } catch (error) {
+      if (error instanceof ManagedBusinessError && error.status === 400 && error.code === "invalid_request") {
+        try {
+          const pending = await loadPendingManagedIntent("leads");
+          if (pending) { leadAttempt.current = pending; setLeadUnknown(true); }
+          else { leadAttempt.current = null; setLeadUnknown(false); }
+        } catch { setLeadUnknown(true); }
+        setLeadError("Запрос отклонён. Если исход неизвестен, сохранённую отправку можно только проверить повторно.");
+      } else {
+        setLeadUnknown(true);
+        setLeadError(businessError(error, "Ответ не подтверждён. Проверьте эту же отправку — ключ и сообщение сохранены."));
+        if (error instanceof ManagedBusinessError && error.code === "pending_intent") {
+          setRecoveryError("В браузере есть другая неподтверждённая отправка. Сначала восстановите её проверкой.");
+          setRecoveryState("error");
+        }
+      }
+    } finally { leadSaving.current = false; setLeadPending(false); }
+  };
+  const visible = MENU.filter(item => selection.category === null || item.category === selection.category);
+  const tabs: { id: Tab; label: string; icon: React.ReactNode; badge?: number }[] = [
+    { id: "menu", label: "Меню", icon: <Coffee size={22} strokeWidth={2} aria-hidden /> },
+    { id: "cart", label: "Корзина", icon: <ShoppingBag size={22} strokeWidth={2} aria-hidden />, badge: count },
+    { id: "orders", label: "История заказов", icon: <ClipboardList size={22} strokeWidth={2} aria-hidden /> },
+    { id: "profile", label: "Профиль", icon: <User size={22} strokeWidth={2} aria-hidden /> },
+  ];
+
+  const historyBlock =
+    ordersState === "loading" || ordersState === "idle" ? (
+      <div className="sever-empty" role="status">Загружаем историю…</div>
+    ) : ordersState === "error" ? (
+      <div className="sever-err" role="alert">
+        {ordersError}
+        <p style={{ margin: "10px 0 0" }}><button className="sever-btn" onClick={() => void loadOrders()}>Повторить</button></p>
+      </div>
+    ) : orders.length === 0 ? (
+      <div className="sever-empty">История пуста. Действия появятся после первого заказа.</div>
+    ) : (
+      <div className="sever-card">
+        <ul className="sever-tl">
+          {orders.map(record => { const o = mapManagedRecord(record); return (
+            <li key={o.id}>
+              <Check size={18} aria-hidden style={{ color: "#234F3B", flex: "0 0 auto", marginTop: 2 }} />
+              <span style={{ flex: 1 }}>
+                Оформлен заказ на {rub(o.total)} · {statusLabel(o.status)}
+                <br /><span className="sever-muted">{fmtDate(o.createdAt)}</span>
+                <br /><span data-testid="order-pickup">{pickupSummary(o, now)}</span>
+                {o.baristaComment ? (
+                  <>
+                    <br /><span className="sever-muted">Комментарий бариста: {o.baristaComment}</span>
+                  </>
+                ) : null}
+              </span>
+            </li>
+          ); })}
+        </ul>
+      </div>
+    );
+
+  return (
+    <main className="sever">
+      <div className="sever-wrap">
+        <div className="sever-head">
+          <h1 className="sever-title">{appProfile.profile?.app_name ?? (appProfile.status === "error" ? "Данные приложения недоступны" : "Загружаем приложение…")}</h1>
+          <span className="sever-badge">Кофе с собой каждый день</span>
+        </div>
+        <p className="sever-sub">{appProfile.profile?.summary}</p>
+        {appProfile.status === "error" && <div className="sever-err" role="alert">
+          Не удалось загрузить данные приложения. <button className="sever-btn" onClick={() => void appProfile.refresh()}>Повторить загрузку данных</button>
+        </div>}
+
+        {!recoveryReady && <div className="sever-note" role={recoveryState === "error" ? "alert" : "status"}>
+          {recoveryState === "error" ? recoveryError : "Проверяем отправки перед новым заказом или заявкой…"}
+          {recoveryState === "error" && <p><button className="sever-btn" onClick={() => void restorePending()}>Повторить проверку отправок</button></p>}
+        </div>}
+
+        {tab === "menu" && (
+          <section aria-label="Меню">
+            <h2 className="sever-h2">Меню напитков</h2>
+            <div className="sever-chips" role="group" aria-label="Фильтр меню">
+              {[[null, "Все"], ...categories.map(category => [category, category])].map(([k, l]) => (
+                <button key={k === null ? "all" : "category:" + k} className="sever-chip" aria-pressed={selection.category === k} onClick={() => selection.setCategory(k)}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            {catalog.status === "loading" && <div className="sever-empty" role="status">Загружаем меню…</div>}
+            {catalog.status === "error" && <div className="sever-err" role="alert">
+              Не удалось загрузить меню. <button className="sever-btn" onClick={() => void catalog.refresh()}>Повторить</button>
+            </div>}
+            {catalog.status === "ready" && visible.length === 0 && <div className="sever-empty">В этом разделе пока нет позиций.</div>}
+            <div className="sever-list">
+              {catalog.items.map(item => {
+                if (selection.category !== null && item.category !== selection.category) return null;
+                const d = toDrink(item);
+                const q = cart[d.id] ?? 0;
+                return (
+                  <div className="sever-item" key={d.id} onClick={() => safeTrack("item_view")}>
+                    <div className="sever-art">{d.image ? (
+                      // Owner catalog images may use arbitrary public hosts.
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={d.image} alt="" width={48} height={48} style={{ objectFit: "cover", borderRadius: 8 }} />
+                    ) : <Cup color={d.color} foam={d.foam} />}</div>
+                    <div className="sever-info">
+                      <h2 className="sever-name">{d.name}</h2>
+                      <p className="sever-desc">{d.desc}</p>
+                      <span className="sever-price">{d.price === null ? d.priceLabel : rub(d.price)}</span>
+                      {d.availability !== "in_stock" && <p className="sever-muted">{d.availability === "on_request" ? "Под заказ" : "Нет в наличии"}</p>}
+                      {d.price === null && <p className="sever-muted">Уточните цену в кофейне</p>}
+                      {d.options.length > 0 && <select className="sever-input" aria-label={`Вариант: ${d.name}`}
+                        disabled={q > 0 || submitting || orderUnknown || !recoveryReady} value={selection.getOption(d) ?? ""}
+                        onChange={event => selection.selectOption(d.id, event.target.value)}>
+                        <option value="">Выберите вариант</option>
+                        {d.options.map(option => <option key={option} value={option}>{option}</option>)}
+                      </select>}
+                    </div>
+                    {q === 0 ? (
+                      <button className="sever-btn sever-add" aria-label={`Добавить в корзину: ${d.name}`}
+                        disabled={submitting || orderUnknown || !recoveryReady || d.price === null || d.availability !== "in_stock" ||
+                          (d.options.length > 0 && selection.getOption(d) === undefined)}
+                        onClick={() => setQty(d.id, 1)}>
+                        <Plus size={20} aria-hidden />
+                      </button>
+                    ) : (
+                      <div className="sever-qty">
+                        <button aria-label={`Уменьшить количество: ${d.name}`} onClick={() => setQty(d.id, q - 1)}><Minus size={18} aria-hidden /></button>
+                        <output aria-label={`Количество ${d.name}`}>{q}</output>
+                        <button aria-label={`Увеличить количество: ${d.name}`} onClick={() => setQty(d.id, q + 1)}><Plus size={18} aria-hidden /></button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {count > 0 && (
+              <p style={{ marginTop: 16 }}>
+                <button className="sever-btn block" onClick={() => setTab("cart")}>
+                  Корзина: {count} · {rub(total)}
+                </button>
+              </p>
+            )}
+          </section>
+        )}
+
+        {tab === "cart" && (
+          <section aria-label="Корзина">
+            <h2 className="sever-h2">Корзина</h2>
+            {submitError && <div className="sever-err" role="alert">{submitError}</div>}
+            {lastOrder && lines.length === 0 && (
+              <div className="sever-ok" role="status">
+                <Check size={18} aria-hidden style={{ verticalAlign: "-3px" }} /> Заказ сохранён, {lastOrder.customerName}! Статус: {statusLabel(lastOrder.status)}. Сумма {rub(lastOrder.total)}. Заберите его в кофейне — оплата не нужна.
+                <br /><strong data-testid="confirm-pickup">{pickupSummary(lastOrder, now)}</strong>
+                {lastOrder.baristaComment ? (<><br /><span data-testid="confirm-comment">Комментарий бариста: {lastOrder.baristaComment}</span></>) : null}
+                <p style={{ margin: "10px 0 0" }}>
+                  <button className="sever-btn ghost" onClick={() => setTab("orders")}>Открыть «История заказов»</button>
+                </p>
+              </div>
+            )}
+            {orderUnknown && orderAttempt.current && <div className="sever-card" aria-label="Проверка отправки заказа">
+              <p className="sever-note" role="status">Есть неподтверждённая отправка заказа. Данные зафиксированы; проверка не создаёт дубликат.</p>
+              <p>Позиций: {orderAttempt.current.items.length} · Сумма отправки: {rub(orderAttempt.current.items.reduce((sum, item) => sum + item.unitPriceKopecks * item.quantity, 0) / 100)}</p>
+              <label className="sever-field" htmlFor="sever-name"><span>Имя в отправленном заказе</span>
+                <input id="sever-name" className="sever-input" value={name} disabled /></label>
+              <label className="sever-field" htmlFor="sever-comment"><span>Сохранённый комментарий бариста</span>
+                <textarea id="sever-comment" className="sever-input" value={baristaComment} rows={3} disabled /></label>
+              <p className="sever-muted">{orderAttempt.current.fulfillment
+                ? "Самовывоз: " + (orderAttempt.current.fulfillment.delayMinutes === 0 ? "как можно скорее" : "через " + orderAttempt.current.fulfillment.delayMinutes + " мин") + ". Время получения подтвердит сервер."
+                : "Обычный самовывоз. Время получения не указано."}</p>
+              <button className="sever-btn block" disabled={submitting || !recoveryReady} onClick={submit}>
+                {submitting ? "Проверяем…" : "Проверить отправку"}
+              </button>
+            </div>}
+            {lines.length === 0 && !orderUnknown && (
+              !lastOrder && (
+                <div className="sever-empty">
+                  Корзина пуста. Выберите напиток в меню.
+                  <p style={{ margin: "12px 0 0" }}>
+                    <button className="sever-btn" onClick={() => setTab("menu")}>Перейти в меню</button>
+                  </p>
+                </div>
+              )
+            )}
+            {lines.length > 0 && !orderUnknown && (
+              <>
+                <div className="sever-list">
+                  {lines.map((l) => (
+                    <div className="sever-item" key={l.id}>
+                      <div className="sever-info">
+                        <h3 className="sever-name" style={{ fontSize: 17 }}>{l.name}</h3>
+                        {l.option && <p className="sever-muted">{l.option}</p>}
+                        <span className="sever-muted">{rub(l.price)} × {l.qty} = </span>
+                        <span className="sever-price">{rub(l.price * l.qty)}</span>
+                      </div>
+                      <div className="sever-qty">
+                        <button aria-label={`Уменьшить количество: ${l.name}`} onClick={() => setQty(l.id, l.qty - 1)}><Minus size={18} aria-hidden /></button>
+                        <output aria-label={`Количество ${l.name}`}>{l.qty}</output>
+                        <button aria-label={`Увеличить количество: ${l.name}`} onClick={() => setQty(l.id, l.qty + 1)}><Plus size={18} aria-hidden /></button>
+                      </div>
+                      <button className="sever-del" aria-label={`Удалить из корзины: ${l.name}`} onClick={() => setQty(l.id, 0)}>
+                        <Trash2 size={20} aria-hidden />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="sever-total"><span>Итого</span><strong>{rub(total)}</strong></div>
+                <label className="sever-field" htmlFor="sever-name">
+                  <span>Ваше имя</span>
+                  <input
+                    id="sever-name"
+                    disabled={submitting || orderUnknown || !recoveryReady}
+                    className="sever-input"
+                    value={name}
+                    maxLength={60}
+                    autoComplete="given-name"
+                    placeholder="Например, Анна"
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </label>
+                <fieldset className="sever-field" style={{ border: 0, padding: 0, margin: "12px 0 0" }}>
+                  <legend style={{ fontWeight: 700, marginBottom: 8 }}>Время самовывоза</legend>
+                  <div role="radiogroup" aria-label="Время самовывоза" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    {PICKUP_OPTIONS.map((p) => {
+                      const active = p.id === pickupOption;
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={active}
+                          data-testid={`pickup-${p.id}`}
+                          className={active ? "sever-btn" : "sever-btn ghost"}
+                          style={{ minHeight: 44 }}
+                          disabled={submitting || orderUnknown || !recoveryReady}
+                          onClick={() => setPickupOption(p.id)}
+                        >
+                          {p.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </fieldset>
+                <div className="sever-note" data-testid="pickup-preview" role="status">
+                  <strong>Забрать к {fmtTime(pickupPreview)}</strong>
+                  <br />
+                  {selectedPickup.label} · {count} поз. на {rub(total)}
+                </div>
+                <label className="sever-field" htmlFor="sever-comment">
+                  <span>Комментарий бариста (необязательно)</span>
+                  <textarea
+                    id="sever-comment"
+                    disabled={submitting || orderUnknown || !recoveryReady}
+                    className="sever-input"
+                    rows={3}
+                    value={baristaComment}
+                    aria-invalid={commentTooLong}
+                    aria-describedby="sever-comment-count"
+                    placeholder="Например, без сахара"
+                    onChange={(e) => setBaristaComment(e.target.value)}
+                  />
+                  <span id="sever-comment-count" className="sever-muted" data-testid="comment-count">
+                    {commentTrimmed.length} / {COMMENT_MAX}
+                  </span>
+                </label>
+                {commentTooLong && (
+                  <div className="sever-err" role="alert">
+                    Комментарий длиннее {COMMENT_MAX} символов на {commentTrimmed.length - COMMENT_MAX}. Сократите текст — мы не обрезаем его молча.
+                  </div>
+                )}
+                <div className="sever-note">Тестовый заказ на самовывоз. Оплата не требуется, деньги не списываются.</div>
+                <button className="sever-btn block" disabled={submitting || !recoveryReady} onClick={submit}>
+                  {submitting ? <Loader2 size={20} className="sever-spin" aria-hidden /> : <Check size={20} aria-hidden />}
+                  {submitting ? "Оформляем…" : orderUnknown ? "Повторить отправку заказа" : needsConfirmation ? "Подтвердить новую сумму" : "Подтвердить заказ"}
+                </button>
+              </>
+            )}
+          </section>
+        )}
+
+        {tab === "orders" && (
+          <section aria-label="История заказов">
+            <h2 className="sever-h2">История заказов</h2>
+            {(ordersState === "loading" || ordersState === "idle") && (
+              <div className="sever-empty" role="status"><Loader2 size={22} className="sever-spin" aria-hidden /><br />Загружаем заказы…</div>
+            )}
+            {ordersState === "error" && <div className="sever-err" role="alert">
+              {ordersError}<p style={{ margin: "10px 0 0" }}><button className="sever-btn" onClick={() => void loadOrders()}>Повторить</button></p>
+            </div>}
+            {ordersState === "success" && orders.length === 0 && <div className="sever-empty">
+              Пока нет заказов. Оформите первый — он появится здесь.
+              <p style={{ margin: "12px 0 0" }}><button className="sever-btn" onClick={() => setTab("menu")}>Перейти в меню</button></p>
+            </div>}
+            {ordersState === "success" && orders.map(record => { const o = mapManagedRecord(record); return (
+                <article className="sever-card" key={o.id}>
+                  <div className="sever-row">
+                    <strong>{record.customer_name}</strong>
+                    <span className="sever-badge">{statusLabel(o.status)}</span>
+                  </div>
+                  <p className="sever-muted" style={{ margin: "4px 0 8px" }}>
+                    {fmtDate(o.createdAt)}
+                    <br /><span data-testid="orders-tab-pickup">{pickupSummary(o, now)}</span>
+                    {o.baristaComment ? (
+                      <>
+                        <br /><span data-testid="orders-tab-comment">Комментарий бариста: {o.baristaComment}</span>
+                      </>
+                    ) : null}
+                  </p>
+                  <ul className="sever-tl">
+                    {o.items.map((it) => (
+                      <li key={it.id}><span style={{ flex: 1 }}>{it.name}{it.option ? ` (${it.option})` : ""} × {it.qty}</span><span>{rub(it.price * it.qty)}</span></li>
+                    ))}
+                  </ul>
+                  <div className="sever-row" style={{ marginTop: 8 }}><span className="sever-muted">Итого, самовывоз</span><strong>{rub(o.total)}</strong></div>
+                </article>
+            ); })}
+          </section>
+        )}
+
+        {tab === "profile" && (
+          <section aria-label="Профиль">
+            <h2 className="sever-h2">Профиль</h2>
+            <div className="sever-card">
+              {appProfile.status === "loading" && <p role="status">Загружаем данные приложения…</p>}
+              {appProfile.profile && <>
+                <strong style={{ fontSize: 18 }}>{appProfile.profile.app_name}</strong>
+                <p className="sever-muted">{appProfile.profile.summary}</p>
+                {appProfile.profile.support.email && <p><a href={"mailto:" + appProfile.profile.support.email}>{appProfile.profile.support.email}</a></p>}
+                <p className="sever-muted">{appProfile.profile.support.response_time}</p>
+              </>}
+              <p className="sever-muted">Заказов: {orders.length} · Сумма заказов: {rub(sumOrderRub(orders))}</p>
+            </div>
+            <h2 className="sever-h2" style={{ marginTop: 20 }}>Заявка в кофейню</h2>
+            {leadUnknown && <p className="sever-note" role="status">Есть неподтверждённая отправка заявки. Сообщение зафиксировано; сначала проверьте результат.</p>}
+            <form className="sever-card" onSubmit={submitLead}>
+              <label className="sever-field" htmlFor="sever-lead-name"><span>Ваше имя для заявки</span>
+                <input id="sever-lead-name" className="sever-input" value={leadName} maxLength={60}
+                  disabled={leadPending || leadUnknown || !recoveryReady} autoComplete="given-name"
+                  onChange={event => setLeadName(event.target.value)} /></label>
+              <label className="sever-field" htmlFor="sever-lead-comment"><span>Сообщение</span>
+                <textarea id="sever-lead-comment" className="sever-input" rows={3} value={leadComment}
+                  disabled={leadPending || leadUnknown || !recoveryReady} aria-invalid={leadComment.trim().length > 2000}
+                  onChange={event => setLeadComment(event.target.value)} /></label>
+              <p className="sever-muted">{leadComment.trim().length} / 2000</p>
+              {leadError && <p className="sever-err" role="alert">{leadError}</p>}
+              {leadSaved && <p className="sever-ok" role="status">Заявка сохранена. Её статус появится в истории ниже.</p>}
+              <button className="sever-btn block" type="submit" disabled={leadPending || !recoveryReady}>
+                {leadPending ? "Отправляем…" : leadUnknown ? "Проверить отправку" : "Отправить заявку"}
+              </button>
+            </form>
+            <h2 className="sever-h2" style={{ marginTop: 20 }}>История заявок</h2>
+            {(leadsState === "idle" || leadsState === "loading") && <p className="sever-empty" role="status">Загружаем заявки…</p>}
+            {leadsState === "error" && <div className="sever-err" role="alert">{leadsError}
+              <p><button className="sever-btn" onClick={() => void loadLeads()}>Повторить загрузку заявок</button></p>
+            </div>}
+            {leadsState === "success" && leads.length === 0 && <p className="sever-empty">Заявок пока нет.</p>}
+            {leads.map(record => <article className="sever-card" key={record.id}>
+              <div className="sever-row"><strong>{record.customer_name}</strong><span className="sever-badge">{statusLabel(record.status)}</span></div>
+              <p className="sever-muted">{fmtDate(record.created_at)}</p><p>{record.comment}</p>
+            </article>)}
+            <h2 className="sever-h2" style={{ marginTop: 20 }}>История действий</h2>
+            {historyBlock}
+          </section>
+        )}
+      </div>
+
+      <nav className="sever-nav" aria-label="Основная навигация">
+        <div className="sever-nav-in">
+          {tabs.map((t) => (
+            <button key={t.id} className="sever-tab" aria-current={tab === t.id ? "page" : undefined} onClick={() => setTab(t.id)}>
+              {t.icon}
+              <span>{t.label}</span>
+              {t.badge ? <i aria-label={`Позиций: ${t.badge}`}>{t.badge}</i> : null}
+            </button>
+          ))}
+        </div>
+      </nav>
+    </main>
+  );
+}

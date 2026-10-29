@@ -73,9 +73,16 @@ async def refresh_integration_sdk(
     management_enabled = bool(
         raw_management and parse_management_contract(json.loads(raw_management)).resources
     )
+    files = managed_generation_files(max_config_source)
+    migration_path = "drizzle/0003_owner_management.sql"
+    if migration_path in current and current[migration_path] != files[migration_path]:
+        raise ApiError(
+            "conflict", "Управляемые миграции приложения изменены", 409,
+            details={"reason": "managed_migration_immutable"},
+        )
     patch = {
         path: canonical
-        for path, canonical in managed_generation_files(max_config_source).items()
+        for path, canonical in files.items()
         if path != "drizzle/0003_owner_management.sql" or management_enabled
         if current.get(path) != canonical
     }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildMaxProjectPrompt } from "@/lib/max-brief";
+import { buildMaxProjectPrompt, defaultManagementModules, newProjectManagementModules } from "@/lib/max-brief";
 
 describe("buildMaxProjectPrompt", () => {
   it("locks a guided project to the MAX mini-app platform", () => {
@@ -51,8 +51,21 @@ it("preserves the complete long brief including its final requirement", () => {
 
 it("includes explicit owner modules without exposing private diary data", () => {
   const prompt = buildMaxProjectPrompt({ ...longBrief, managementModules: ["catalog", "orders"] });
-  expect(prompt).toContain("Управление в Yleum: Каталог, Заказы");
-  expect(buildMaxProjectPrompt({ ...longBrief, managementModules: [] })).toContain("без общего реестра личных данных");
+  expect(prompt).toContain("Управление в Yleum: Каталог, Заказы, Заявки");
+  expect(buildMaxProjectPrompt({ ...longBrief, managementModules: [] })).toContain("Управление в Yleum: Каталог, Заявки");
+  expect(prompt).toContain("Личные данные пользователей не превращай в общий реестр владельца");
+});
+it.each(["event", "education", "custom"] as const)("always includes catalog and leads for a new %s app", appType => {
+  expect(defaultManagementModules(appType)).toEqual(["catalog", "leads"]);
+  expect(newProjectManagementModules(appType, [])).toEqual(["catalog", "leads"]);
+});
+it("keeps scenario defaults while respecting an explicit opt-out of orders or bookings", () => {
+  expect(defaultManagementModules("catalog")).toEqual(["catalog", "orders", "leads"]);
+  expect(defaultManagementModules("loyalty")).toEqual(["catalog", "orders", "leads"]);
+  expect(defaultManagementModules("booking")).toEqual(["catalog", "leads", "bookings"]);
+  expect(newProjectManagementModules("catalog", [])).toEqual(["catalog", "orders", "leads"]);
+  expect(newProjectManagementModules("catalog", ["catalog", "leads"])).toEqual(["catalog", "leads"]);
+  expect(newProjectManagementModules("booking", ["catalog", "leads"])).toEqual(["catalog", "leads"]);
 });
 it("rejects an oversized brief instead of sending a partial request", () => {
   expect(() => buildMaxProjectPrompt({ ...longBrief, idea: "я".repeat(20_001) })).toThrow();

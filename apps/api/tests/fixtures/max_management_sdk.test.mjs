@@ -22,7 +22,7 @@ const ids = [
   "22222222-2222-4222-8222-222222222222",
   "33333333-3333-4333-8333-333333333333",
 ];
-function runtime(overrides = {}, transport) {
+function runtime(overrides = {}, transport, browser) {
   const env = {
     YLEUM_OWNER_ASSERTION_KEY: "ab".repeat(32),
     YLEUM_OWNER_PROJECT_ID: ids[0],
@@ -77,6 +77,7 @@ function runtime(overrides = {}, transport) {
         AbortSignal,
         setTimeout,
         clearTimeout,
+        ...(browser ? { window: browser } : {}),
         crypto: webcrypto,
         process: { env, cwd: () => base },
         fetch: async (url, opts) => {
@@ -121,6 +122,266 @@ function sign(app, body, patch = {}) {
   return `1.${encoded}.${createHmac("sha256", Buffer.from(app.env.YLEUM_OWNER_ASSERTION_KEY, "hex")).update(`1.${encoded}`).digest("base64url")}`;
 }
 const lead = { operationKey: ids[0], customerName: "Анна", comment: "Запрос" };
+function memoryStorage() {
+  const values = new Map();
+  return { values, getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)), removeItem: key => values.delete(key) };
+}
+function intentBrowser(origin = "https://one.app.test", localStorage = memoryStorage(), sessionStorage = memoryStorage()) {
+  return { location: { origin }, localStorage, sessionStorage };
+}
+function leadReceipt(id = ids[2]) {
+  return { id, resource: "leads", created_at: "2026-10-29T09:00:00Z", revision: "a".repeat(64), status: "new", customer_name: "Анна", items: [] };
+}
+function verifiedTransport(post, actor = () => "42") {
+  return async (url, options) => url === "/api/max/session"
+    ? Response.json({ user: { id: actor() } }) : post(url, options);
+}
+test("durable browser intent replays committed lost response after remount with one record", async () => {
+  const browser = intentBrowser(), rows = new Map(), posted = [], rawBodies = []; let lost = true;
+  const transport = async (url, options) => {
+    if (url === "/api/max/session") return Response.json({ user: { id: "42" } });
+    const body = JSON.parse(options.body); posted.push(body); rawBodies.push(options.body);
+    if (!rows.has(body.operationKey)) rows.set(body.operationKey, leadReceipt());
+    if (lost) { lost = false; throw Error("response lost after commit"); }
+    return Response.json(rows.get(body.operationKey), { status: 201 });
+  };
+  await assert.rejects(runtime({}, transport, browser).load("lib/omnia/business-client.ts").createManagedLead(lead), e => e.code === "unavailable");
+  await runtime({}, transport, browser).load("lib/omnia/business-client.ts").createManagedLead({ ...lead, operationKey: ids[1] });
+  assert.equal(posted[1].operationKey, posted[0].operationKey);
+  assert.equal(rawBodies[1], rawBodies[0]);
+  assert.equal(rows.size, 1);
+  assert.equal(browser.localStorage.values.size, 0);
+  assert.equal(browser.sessionStorage.values.size, 0);
+});
+test("pending restoration verifies actor first and isolates actors and origins without discarding old keys", async () => {
+  const browser = intentBrowser(); let actor = "42", reads = 0, verified = false;
+  const original = browser.localStorage.getItem;
+  browser.localStorage.getItem = key => { assert.equal(verified, true); reads++; return original(key); };
+  const transport = async (url, options) => {
+    if (url === "/api/max/session") { verified = true; return Response.json({ user: { id: actor } }); }
+    assert.equal(options.headers["X-Max-Expected-Actor"], actor); throw Error("lost");
+  };
+  const client = () => runtime({}, transport, browser).load("lib/omnia/business-client.ts");
+  await assert.rejects(client().createManagedLead(lead));
+  const originalKeys = [...browser.localStorage.values.keys()];
+  actor = "43"; verified = false;
+  assert.equal(await client().loadPendingManagedIntent("leads"), null);
+  assert.deepEqual([...browser.localStorage.values.keys()], originalKeys);
+  actor = "42"; verified = false;
+  const pending = await client().loadPendingManagedIntent("leads");
+  assert.equal(pending.operationKey, lead.operationKey); assert.equal(Object.isFrozen(pending), true);
+  browser.location.origin = "https://two.app.test"; verified = false;
+  assert.equal(await client().loadPendingManagedIntent("leads"), null);
+  assert.deepEqual([...browser.localStorage.values.keys()], originalKeys);
+  assert.ok(reads > 0);
+  const noSession = runtime({}, () => Response.json({ error: "auth" }, { status: 401 }), browser);
+  const before = reads;
+  await assert.rejects(noSession.load("lib/omnia/business-client.ts").loadPendingManagedIntent("leads"), e => e.code === "unauthorized");
+  assert.equal(reads, before);
+});
+test("loaded and attempted intent provenance denies cross-actor recovery before touching the new actor storage", async () => {
+  for (const fromLoad of [false, true]) {
+    const browser = intentBrowser(), rows = new Map(), posted = [], reads = [];
+    for (const storage of [browser.localStorage, browser.sessionStorage]) {
+      const read = storage.getItem; storage.getItem = key => { reads.push(key); return read(key); };
+    }
+    let actor = "42", lost = true;
+    const transport = verifiedTransport((_, options) => {
+      const body = JSON.parse(options.body), key = `${actor}:${body.operationKey.toLowerCase()}`;
+      posted.push({ actor, key: body.operationKey });
+      if (!rows.has(key)) rows.set(key, leadReceipt(actor === "42" ? ids[1] : ids[2]));
+      if (lost) { lost = false; throw Error("response lost after commit"); }
+      return Response.json(rows.get(key));
+    }, () => actor);
+    const original = { ...lead, operationKey: "abcdefab-1234-4123-8123-abcdefabcdef" };
+    const producer = runtime({}, transport, browser).load("lib/omnia/business-client.ts");
+    await assert.rejects(producer.createManagedLead(original));
+    const client = fromLoad ? runtime({}, transport, browser).load("lib/omnia/business-client.ts") : producer;
+    const pending = fromLoad ? await client.loadPendingManagedIntent("leads") : original;
+    const preserved = [...browser.localStorage.values.entries()], before = reads.length;
+    actor = "43";
+    await assert.rejects(client.createManagedLead({ ...pending, operationKey: pending.operationKey.toUpperCase() }), e => e.code === "actor_changed" && e.status === 409);
+    assert.equal(reads.length, before); assert.equal(posted.length, 1); assert.deepEqual([...browser.localStorage.values.entries()], preserved);
+    assert.equal(rows.size, 1);
+    actor = "42";
+    assert.equal((await client.createManagedLead({ ...pending })).id, ids[1]);
+    assert.equal(rows.size, 1); assert.equal(posted[1].key.toLowerCase(), original.operationKey);
+    // A genuinely new B form has its own key and may create its own record.
+    actor = "43";
+    assert.equal((await client.createManagedLead({ ...lead, operationKey: ids[2], customerName: "New B form" })).id, ids[2]);
+    assert.equal(rows.size, 2); assert.deepEqual(posted.map(p => p.actor), ["42", "42", "43"]);
+  }
+});
+test("a loaded typed intent cannot be adopted by a different verified project origin", async () => {
+  const browser = intentBrowser(); let posts = 0, lost = true;
+  const transport = verifiedTransport(() => { posts++; if (lost) { lost = false; throw Error("lost"); } return Response.json(leadReceipt()); });
+  await assert.rejects(runtime({}, transport, browser).load("lib/omnia/business-client.ts").createManagedLead(lead));
+  const client = runtime({}, transport, browser).load("lib/omnia/business-client.ts"), pending = await client.loadPendingManagedIntent("leads");
+  const original = [...browser.localStorage.values.entries()]; browser.location.origin = "https://two.app.test";
+  await assert.rejects(client.createManagedLead({ ...pending }), e => e.code === "actor_changed");
+  assert.equal(posts, 1); assert.deepEqual([...browser.localStorage.values.entries()], original);
+  browser.location.origin = "https://one.app.test";
+  assert.equal((await client.createManagedLead({ ...pending })).id, ids[2]); assert.equal(posts, 2);
+});
+test("pending matching ignores a new key and property order but changed body cannot POST or overwrite", async () => {
+  const browser = intentBrowser(); let posts = 0;
+  const transport = verifiedTransport(() => { posts++; throw Error("lost"); });
+  const client = () => runtime({}, transport, browser).load("lib/omnia/business-client.ts");
+  await assert.rejects(client().createManagedLead(lead));
+  const original = [...browser.localStorage.values.values()];
+  await assert.rejects(client().createManagedLead({ ...lead, operationKey: ids[1], comment: "Different" }), e => e.code === "pending_intent");
+  assert.equal(posts, 1); assert.deepEqual([...browser.localStorage.values.values()], original);
+  await assert.rejects(client().createManagedLead({ comment: lead.comment, customerName: lead.customerName, operationKey: ids[1] }));
+  assert.equal(posts, 2); assert.deepEqual([...browser.localStorage.values.values()], original);
+});
+test("malformed unknown storage blocks, never expires or silently starts a new intent", async () => {
+  for (const corrupt of [() => "{", () => " ".repeat(65537), v => JSON.stringify({ ...v, version: 2 }),
+    v => JSON.stringify({ ...v, origin: "https://foreign.test" }), v => JSON.stringify({ ...v, actor: "other" }),
+    v => JSON.stringify({ ...v, input: { ...v.input, operationKey: "wrong" } }),
+    v => JSON.stringify({ ...v, input: { ...v.input, unexpected: true } })]) {
+    const browser = intentBrowser(); let posts = 0;
+    const transport = verifiedTransport(() => { posts++; throw Error("lost"); });
+    const first = runtime({}, transport, browser).load("lib/omnia/business-client.ts");
+    await assert.rejects(first.createManagedLead(lead));
+    const key = [...browser.localStorage.values.keys()][0], raw = corrupt(JSON.parse(browser.localStorage.values.get(key)));
+    browser.localStorage.setItem(key, raw);
+    const next = runtime({}, transport, browser).load("lib/omnia/business-client.ts");
+    await assert.rejects(next.loadPendingManagedIntent("leads"), e => e.code === "pending_intent");
+    await assert.rejects(next.createManagedLead({ ...lead, operationKey: ids[1] }), e => e.code === "pending_intent");
+    assert.equal(posts, 1); assert.equal(browser.localStorage.getItem(key), raw);
+  }
+});
+test("storage fallback is durable and both private stores unavailable fail before POST", async () => {
+  const denied = { getItem() { throw Error("private"); }, setItem() { throw Error("private"); }, removeItem() { throw Error("private"); } };
+  for (const local of [{ getItem: () => null, setItem() { throw Error("quota"); }, removeItem() {} }]) {
+    const browser = intentBrowser(undefined, local); let posted;
+    const transport = verifiedTransport((_, options) => { posted = JSON.parse(options.body); throw Error("lost"); });
+    await assert.rejects(runtime({}, transport, browser).load("lib/omnia/business-client.ts").createManagedLead(lead));
+    assert.equal(posted.operationKey, lead.operationKey);
+    const restored = await runtime({}, transport, browser).load("lib/omnia/business-client.ts").loadPendingManagedIntent("leads");
+    assert.equal(restored.operationKey, lead.operationKey);
+    browser.localStorage = denied;
+    assert.equal((await runtime({}, transport, browser).load("lib/omnia/business-client.ts").loadPendingManagedIntent("leads")).operationKey, lead.operationKey);
+  }
+  const browser = intentBrowser(undefined, denied, denied); let posts = 0;
+  await assert.rejects(runtime({}, verifiedTransport(() => { posts++; }), browser).load("lib/omnia/business-client.ts").createManagedLead(lead), e => e.code === "intent_storage_unavailable");
+  assert.equal(posts, 0);
+  const writeDenied = { getItem: () => null, setItem() { throw Error("quota"); }, removeItem() {} };
+  await assert.rejects(runtime({}, verifiedTransport(() => { posts++; }), intentBrowser(undefined, writeDenied, writeDenied)).load("lib/omnia/business-client.ts").createManagedLead(lead), e => e.code === "intent_storage_unavailable");
+  assert.equal(posts, 0);
+});
+test("inaccessible primary cannot strand a previously unknown key and create a new secondary intent", async () => {
+  const local = memoryStorage(), secondary = memoryStorage(), write = secondary.setItem;
+  secondary.setItem = () => { throw Error("quota"); };
+  const browser = intentBrowser(undefined, local, secondary); let posts = 0;
+  const transport = verifiedTransport(() => { posts++; throw Error("lost after commit"); });
+  await assert.rejects(runtime({}, transport, browser).load("lib/omnia/business-client.ts").createManagedLead(lead));
+  assert.equal(local.values.size, 1); assert.equal(secondary.values.size, 0);
+  secondary.setItem = write;
+  browser.localStorage = { getItem() { throw Error("blocked later"); } };
+  const next = runtime({}, transport, browser).load("lib/omnia/business-client.ts");
+  await assert.rejects(next.createManagedLead({ ...lead, operationKey: ids[1] }), e => e.code === "intent_storage_unavailable");
+  assert.equal(posts, 1); assert.equal(secondary.values.size, 0);
+});
+test("storage cleanup failure after a valid committed acknowledgement still returns the receipt", async () => {
+  const browser = intentBrowser(); let posts = 0;
+  browser.localStorage.removeItem = browser.sessionStorage.removeItem = () => { throw Error("cleanup denied"); };
+  const transport = verifiedTransport(() => { posts++; return Response.json(leadReceipt()); });
+  const client = runtime({}, transport, browser).load("lib/omnia/business-client.ts");
+  assert.equal((await client.createManagedLead(lead)).id, ids[2]);
+  await assert.rejects(client.loadPendingManagedIntent("leads"), e => e.code === "intent_storage_unavailable");
+  assert.equal(posts, 1);
+  const remount = runtime({}, transport, browser).load("lib/omnia/business-client.ts");
+  const recovered = await remount.loadPendingManagedIntent("leads");
+  assert.equal(recovered.operationKey, lead.operationKey); assert.equal(posts, 1);
+  assert.equal((await remount.createManagedLead(recovered)).id, ids[2]);
+  await assert.rejects(remount.createManagedLead({ ...lead, operationKey: ids[1] }), e => e.code === "intent_storage_unavailable");
+  assert.equal(posts, 2);
+});
+test("two deliberate identical intents never turn a known acknowledged cleanup failure into false second success", async () => {
+  for (const resource of ["leads", "orders"]) for (const cleanupFails of [false, true]) {
+    const browser = intentBrowser(), localRemove = browser.localStorage.removeItem, sessionRemove = browser.sessionStorage.removeItem;
+    if (cleanupFails) browser.localStorage.removeItem = browser.sessionStorage.removeItem = () => { throw Error("cleanup denied"); };
+    const rows = new Map(); let posts = 0;
+    const client = runtime({}, verifiedTransport((_, options) => {
+      posts++; const body = JSON.parse(options.body);
+      if (!rows.has(body.operationKey)) rows.set(body.operationKey, { ...leadReceipt(rows.size ? ids[2] : ids[1]), resource, ...(resource === "orders" ? { total_kopecks: 25000, currency: "RUB" } : {}) });
+      return Response.json(rows.get(body.operationKey));
+    }), browser).load("lib/omnia/business-client.ts");
+    const input = resource === "leads" ? lead : { ...lead, configVersion: 1, items: [{ catalogId: "coffee", quantity: 1, unitPriceKopecks: 25000 }] };
+    const create = resource === "leads" ? client.createManagedLead : client.createManagedOrder;
+    assert.equal((await create(input)).id, ids[1]);
+    if (cleanupFails) {
+      await assert.rejects(create({ ...input, operationKey: ids[1] }), e => e.code === "intent_storage_unavailable");
+      assert.equal(posts, 1); assert.equal(rows.size, 1);
+    }
+    browser.localStorage.removeItem = localRemove; browser.sessionStorage.removeItem = sessionRemove;
+    assert.equal((await create({ ...input, operationKey: ids[1] })).id, ids[2]);
+    assert.equal(posts, 2); assert.equal(rows.size, 2);
+  }
+});
+test("only first fresh validation and post-receipt quote rejection clear pending; unknown outcomes retain", async () => {
+  for (const [status, code] of [[500, "unavailable"], [409, "operation_conflict"], [401, "unauthorized"], [409, "actor_changed"], [409, "unsupported"], [400, "unknown_code"]]) {
+    const browser = intentBrowser(), transport = verifiedTransport(() => Response.json({ error: { code } }, { status }));
+    const client = runtime({}, transport, browser).load("lib/omnia/business-client.ts");
+    await assert.rejects(client.createManagedLead(lead));
+    assert.equal((await client.loadPendingManagedIntent("leads")).operationKey, lead.operationKey);
+  }
+  for (const code of ["invalid_request", "quote_changed"]) {
+    const browser = intentBrowser(); let reject = true;
+    const transport = verifiedTransport(() => reject ? Response.json({ error: { code } }, { status: code === "invalid_request" ? 400 : 409 }) : Response.json(leadReceipt()));
+    const client = runtime({}, transport, browser).load("lib/omnia/business-client.ts");
+    await assert.rejects(client.createManagedLead(lead));
+    assert.equal(await client.loadPendingManagedIntent("leads"), null);
+    reject = false;
+    assert.equal((await client.createManagedLead({ ...lead, operationKey: ids[1], comment: "Corrected" })).id, ids[2]);
+  }
+  const browser = intentBrowser(); let recovered = false;
+  const transport = verifiedTransport(() => { if (!recovered) throw Error("lost"); return Response.json({ error: { code: "invalid_request" } }, { status: 400 }); });
+  await assert.rejects(runtime({}, transport, browser).load("lib/omnia/business-client.ts").createManagedLead(lead));
+  recovered = true;
+  const client = runtime({}, transport, browser).load("lib/omnia/business-client.ts");
+  await assert.rejects(client.createManagedLead(lead));
+  assert.equal((await client.loadPendingManagedIntent("leads")).operationKey, lead.operationKey);
+});
+test("browser malformed receipts retain frozen order and booking bodies without automatic retries", async () => {
+  for (const resource of ["orders", "bookings"]) {
+    const browser = intentBrowser(); let posts = 0;
+    const input = resource === "orders" ? { ...lead, configVersion: 1, items: [{ catalogId: "coffee", quantity: 1, unitPriceKopecks: 25000 }], fulfillment: { type: "pickup", delayMinutes: 15 } }
+      : { ...lead, serviceId: "consult", requestedFor: "2030-06-10T08:00:00Z" };
+    const client = runtime({}, verifiedTransport(() => { posts++; return Response.json({}); }), browser).load("lib/omnia/business-client.ts");
+    await assert.rejects(client[resource === "orders" ? "createManagedOrder" : "createManagedBooking"](input), e => e.code === "unavailable");
+    const saved = await client.loadPendingManagedIntent(resource);
+    assert.equal(saved.operationKey, input.operationKey); assert.equal(Object.isFrozen(saved), true);
+    if (resource === "orders") { assert.equal(Object.isFrozen(saved.items), true); assert.equal(Object.isFrozen(saved.items[0]), true); assert.equal(Object.isFrozen(saved.fulfillment), true); }
+    assert.equal(posts, 1);
+  }
+});
+test("browser validates bounded strict intent bodies and history does not perform session lookups", async () => {
+  for (const input of [null, "text", { ...lead, operationKey: "bad" }, { ...lead, customerName: " " }, { ...lead, comment: "x".repeat(2001) },
+    { ...lead, private: true }, { ...lead, fulfillment: { type: "pickup", delayMinutes: 15 } }]) {
+    const browser = intentBrowser(); let posts = 0;
+    const client = runtime({}, verifiedTransport(() => { posts++; }), browser).load("lib/omnia/business-client.ts");
+    await assert.rejects(client.createManagedLead(input), e => e.code === "invalid_request");
+    assert.equal(posts, 0); assert.equal(browser.localStorage.values.size, 0);
+  }
+  const app = runtime({}, (url) => { assert.equal(url, "/api/omnia/business/leads"); return Response.json({ records: [], next_cursor: null }); }, intentBrowser());
+  await app.load("lib/omnia/business-client.ts").getManagedRecords("leads");
+  assert.equal(app.calls.length, 1);
+});
+test("customer actor pin rejects a session switch before body parsing or database access and preserves old clients", async () => {
+  const app = runtime(); let writes = 0;
+  app.dependencies.set("@/lib/max/session", { getMaxUser: async () => ({ id: "43" }) });
+  app.dependencies.set("@/lib/omnia/management-config", { getManagementContract: async () => fixture });
+  app.dependencies.set("@/lib/omnia/business-server", { createManagedBusinessRecord: async (actor) => { assert.equal(actor, "43"); writes++; return leadReceipt(); } });
+  const route = app.load("app/api/omnia/business/[resource]/route.ts"), ctx = { params: Promise.resolve({ resource: "leads" }) };
+  const rejected = await route.POST(new Request("https://one.app.test/api/omnia/business/leads", { method: "POST", headers: { "X-Max-Expected-Actor": "42" }, body: "not json" }), ctx);
+  assert.equal(rejected.status, 409); assert.equal((await rejected.json()).error.code, "actor_changed"); assert.equal(writes, 0);
+  for (const headers of [{}, { "X-Max-Expected-Actor": "43" }])
+    assert.equal((await route.POST(new Request("https://one.app.test/api/omnia/business/leads", { method: "POST", headers, body: JSON.stringify(lead) }), ctx)).status, 201);
+  assert.equal(writes, 2);
+});
 test("canonical fixture matches independent TS registry and rejects rehashed capabilities", () => {
   const m = runtime().load("lib/omnia/management-resources.ts");
   assert.equal(
@@ -884,4 +1145,257 @@ test("requested date filters are explicit, ordered and booking only", () => {
   assert.equal(m.parseRecordsQuery(q).requested_from,"2026-10-29T21:00:00.000Z");
   assert.throws(()=>m.parseRecordsQuery({...q,resource:"leads"}));
   assert.throws(()=>m.parseRecordsQuery({...q,requested_to:"2026-10-28T00:00:00Z"}));
+});
+
+test("order pickup is optional, validated and scheduled only by the injected server clock", () => {
+  const server = runtime().load("lib/omnia/business-server.ts");
+  const catalog = { configVersion: 1, config: { content: [
+    { id: "coffee", title: "Coffee", price: "250 RUB", active: true, availability: "in_stock", options: [] },
+  ] } };
+  const order = { ...lead, configVersion: 1, items: [
+    { catalogId: "coffee", quantity: 2, unitPriceKopecks: 25000 },
+  ] };
+  const instant = Date.parse("2030-06-10T08:00:00.000Z");
+  for (const delayMinutes of [0, 15, 30, 60, 1440]) {
+    let clockCalls = 0;
+    const snapshot = server.prepareManagedSnapshot("orders", {
+      ...order, fulfillment: { type: "pickup", delayMinutes },
+    }, catalog, () => { clockCalls++; return instant; });
+    assert.deepEqual(JSON.parse(JSON.stringify(snapshot.fulfillment)), {
+      type: "pickup", delay_minutes: delayMinutes,
+      scheduled_for: new Date(instant + delayMinutes * 60000).toISOString(),
+    });
+    assert.equal(clockCalls, 1);
+  }
+  const ordinary = server.prepareManagedSnapshot("orders", order, catalog, () => {
+    throw Error("ordinary order must not ask for a pickup clock");
+  });
+  assert.equal(Object.hasOwn(ordinary, "fulfillment"), false);
+  for (const fulfillment of [null, {}, { type: "delivery", delayMinutes: 15 },
+    ...[true, "15", -1, 1.5, 1441, Infinity].map(delayMinutes => ({ type: "pickup", delayMinutes })),
+    { type: "pickup", delayMinutes: 15, scheduled_for: "2030-01-01T00:00:00Z" },
+  ]) assert.throws(() => server.validateManagedInput("orders", { ...order, fulfillment }));
+  for (const resource of ["leads", "bookings"])
+    assert.throws(() => server.validateManagedInput(resource, {
+      ...lead, fulfillment: { type: "pickup", delayMinutes: 15 },
+    }));
+  for (const instant of [NaN, Infinity, 8.64e15])
+    assert.throws(() => server.prepareManagedSnapshot("orders", {
+      ...order, fulfillment: { type: "pickup", delayMinutes: 15 },
+    }, catalog, () => instant), error => error.code === "unavailable");
+  assert.throws(() => server.prepareManagedSnapshot("orders", {
+    ...order, configVersion: 0, fulfillment: { type: "pickup", delayMinutes: 15 },
+  }, catalog, () => { throw Error("clock must not run for a rejected quote"); }), error => error.code === "quote_changed");
+});
+
+test("pickup snapshot projection keeps fulfillment for customers and never exposes owner note", () => {
+  const resources = runtime().load("lib/omnia/management-resources.ts");
+  const fulfillment = { type: "pickup", delay_minutes: 30, scheduled_for: "2030-06-10T08:30:00.000Z" };
+  const row = { id: ids[0], resource: "orders", created_at: "2030-06-10T08:00:00Z",
+    revision: "a".repeat(64), status: "new", note: "private owner note",
+    payload: { management_protocol: 1, resource: "orders", customer_name: "Customer", items: [], fulfillment },
+  };
+  const customer = resources.projectManagedRecord(row, false);
+  assert.ok(customer.fulfillment, "customer history must preserve pickup snapshot metadata");
+  assert.deepEqual(JSON.parse(JSON.stringify(customer.fulfillment)), fulfillment);
+  assert.equal(Object.hasOwn(customer, "note"), false);
+  assert.equal(resources.projectManagedRecord(row, true).note, row.note);
+  for (const payload of [{ ...row.payload, fulfillment: { ...fulfillment, note: "private" } },
+    { ...row.payload, fulfillment: { ...fulfillment, delay_minutes: true } }])
+    assert.throws(() => resources.projectManagedRecord({ ...row, payload }, false), error => error.code === "unavailable");
+  assert.throws(() => resources.projectManagedRecord({ ...row, resource: "leads" }, false));
+});
+
+test("customer rejects malformed pickup receipts without discarding or retrying the operation key", async () => {
+  const valid = { type: "pickup", delay_minutes: 15, scheduled_for: "2030-06-10T08:15:00Z" };
+  const record = { id: ids[0], resource: "orders", created_at: "2030-06-10T08:00:00Z",
+    revision: "a".repeat(64), status: "new", customer_name: "Customer", items: [], total_kopecks: 0, currency: "RUB" };
+  const input = { ...lead, configVersion: 1, items: [], fulfillment: { type: "pickup", delayMinutes: 15 } };
+  for (const fulfillment of [null, {}, { ...valid, type: "delivery" },
+    ...[true, "15", -1, 1.5, 1441].map(delay_minutes => ({ ...valid, delay_minutes })),
+    { ...valid, scheduled_for: "2030-06-10T08:15:00" },
+    { ...valid, scheduled_for: "2030-02-31T08:15:00Z" }, { ...valid, note: "private" },
+  ]) {
+    let replay = false;
+    const app = runtime({}, () => Response.json({ ...record, fulfillment: replay ? valid : fulfillment }));
+    const client = app.load("lib/omnia/business-client.ts");
+    await assert.rejects(client.createManagedOrder(input), error => error.code === "unavailable");
+    assert.equal(app.calls.length, 1);
+    replay = true;
+    assert.equal((await client.createManagedOrder(input)).id, record.id);
+    assert.equal(app.calls[0].body, app.calls[1].body);
+    assert.equal(input.operationKey, lead.operationKey);
+  }
+  const app = runtime({}, () => Response.json({ ...record, resource: "leads", fulfillment: valid }));
+  await assert.rejects(app.load("lib/omnia/business-client.ts").createManagedLead(lead));
+  const leaked = runtime({}, () => Response.json({ ...record, fulfillment: valid, note: "private" }));
+  await assert.rejects(leaked.load("lib/omnia/business-client.ts").createManagedOrder(input));
+});
+
+function legacyMirrorSql() {
+  const source = readFileSync(resolve(base, "compat/legacy-orders-owner-mirror.sql.template"), "utf8");
+  // Only namespace substitution differs in the isolated PostgreSQL test schema.
+  return source.replaceAll("__PROJECT_ID__", ids[0]).replaceAll("__ORDERS_TABLE__", "sever_orders")
+    .replaceAll("public.", "managed_test.").replaceAll("'public'", "'managed_test'");
+}
+async function legacyManagementDatabase(t, count = 13) {
+  const db = await managementDatabase();
+  t.after(() => db.engine.close());
+  await db.engine.exec("CREATE ROLE managed_runtime; CREATE SCHEMA managed_test; SET search_path TO managed_test,public;");
+  await db.engine.exec(readFileSync(resolve(base, "drizzle/0003_owner_management.sql"), "utf8"));
+  await db.engine.exec(`CREATE TABLE sever_orders (
+    id text PRIMARY KEY, owner_id text NOT NULL, customer_name text NOT NULL, items jsonb NOT NULL,
+    total_rub integer NOT NULL, status text NOT NULL, operation_key text NOT NULL,
+    created_at timestamptz NOT NULL, pickup_option text, pickup_at timestamptz, barista_comment text,
+    UNIQUE(owner_id,operation_key));`);
+  const legacy = [];
+  for (let i = 1; i <= count; i++) {
+    const option = [null, "asap", "m15", "m30", "h1"][i % 5];
+    const delay = { asap: 0, m15: 15, m30: 30, h1: 60 }[option];
+    const created = new Date(Date.UTC(2026, 0, 1, 0, 0, i));
+    const row = { id: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+      actor: i <= 9 ? "42" : "99", created,
+      pickup: option ? new Date(created.getTime() + delay * 60000) : null,
+      option, itemOption: i % 3 === 0 ? undefined : i % 3 === 1 ? "oat" : "",
+      comment: i % 2 ? `Original customer comment ${i}` : null };
+    await db.engine.query("INSERT INTO sever_orders VALUES($1,$2,$3,$4,$5,'accepted',$6,$7,$8,$9,$10)",
+      [row.id, row.actor, `Customer ${i}`, JSON.stringify([{ id: "old_coffee", name: "Historical coffee", price: 270, qty: 2,
+        ...(row.itemOption !== undefined ? { option: row.itemOption } : {}) }]),
+        540, `old-operation-${i}`, created, option, row.pickup, row.comment]);
+    legacy.push(row);
+  }
+  await db.engine.exec("GRANT USAGE ON SCHEMA managed_test TO managed_runtime; GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA managed_test TO managed_runtime;");
+  return { ...db, legacy };
+}
+
+test("legacy order migration preserves all rows, mirrors atomically with RLS, and never overwrites owner workflow",
+  { skip: !pgliteModule && !nativePgUrl }, async t => {
+  const { engine, pool, legacy } = await legacyManagementDatabase(t);
+  const original = (await engine.query("SELECT to_jsonb(s) value FROM sever_orders s ORDER BY id")).rows;
+  await engine.exec(`BEGIN; ${legacyMirrorSql()} COMMIT;`);
+  assert.deepEqual((await engine.query("SELECT to_jsonb(s) value FROM sever_orders s ORDER BY id")).rows, original);
+  const snapshots = (await engine.query("SELECT id,max_user_id,created_at,updated_at,payload FROM max_business_actions ORDER BY id")).rows;
+  assert.equal(snapshots.length, 13);
+  for (let i = 0; i < legacy.length; i++) {
+    const old = legacy[i], snapshot = snapshots[i];
+    assert.equal(snapshot.id, old.id);
+    assert.equal(snapshot.max_user_id, old.actor);
+    assert.equal(new Date(snapshot.created_at).getTime(), old.created.getTime());
+    assert.equal(new Date(snapshot.updated_at).getTime(), old.created.getTime());
+    assert.equal(snapshot.payload.total_kopecks, 54000);
+    assert.equal(snapshot.payload.items[0].unit_price_kopecks, 27000);
+    assert.equal(snapshot.payload.items[0].option, old.itemOption);
+    assert.equal(Object.hasOwn(snapshot.payload.items[0], "option"), old.itemOption !== undefined);
+    assert.equal(snapshot.payload.comment, old.comment ?? undefined);
+    if (old.option) {
+      assert.equal(snapshot.payload.fulfillment.delay_minutes, { asap: 0, m15: 15, m30: 30, h1: 60 }[old.option]);
+      assert.equal(Date.parse(snapshot.payload.fulfillment.scheduled_for), old.pickup.getTime());
+    } else assert.equal(Object.hasOwn(snapshot.payload, "fulfillment"), false);
+  }
+  await engine.exec("SET ROLE managed_runtime;");
+  const app = runtime(); app.dependencies.set("@/lib/db", { pool });
+  const store = app.load("lib/omnia/management-store.ts");
+  const owner = { project_id: ids[0], owner_id: ids[1], publication_id: ids[2] };
+  const query = { resource: "orders", limit: 100, query: "" };
+  assert.equal((await store.listManagedRecords({ owner }, query)).records.length, 13);
+  const own = await store.listManagedRecords({ actor: "42" }, query);
+  assert.equal(own.records.length, 9);
+  const record = own.records.find(row => row.id === legacy[0].id);
+  const updated = await store.updateManagedRecord(owner, record.id, "orders", {
+    expected_revision: record.revision, operation_key: ids[0], status: "in_progress", note: "Private owner note",
+  });
+  assert.equal(updated.status, "in_progress");
+  assert.equal((await store.listManagedRecords({ actor: "42" }, query)).records.find(row => row.id === record.id).note, undefined);
+  await engine.query("SELECT max_legacy_orders_owner_mirror_v1($1)", [record.id]);
+  await engine.exec("RESET ROLE;");
+  await engine.exec(`BEGIN; ${legacyMirrorSql()} COMMIT;`);
+  const metadata = (await engine.query("SELECT status,note,revision FROM max_owner_records WHERE record_id=$1", [record.id])).rows[0];
+  assert.equal(metadata.status, "in_progress"); assert.equal(metadata.note, "Private owner note");
+  assert.equal(metadata.revision, updated.revision);
+  assert.deepEqual((await engine.query("SELECT to_jsonb(s) value FROM sever_orders s ORDER BY id")).rows, original);
+  await engine.exec("SET ROLE managed_runtime;");
+  const client = await pool.connect();
+  const added = "00000000-0000-4000-8000-000000000100";
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT set_config('app.max_user_id','99',true),set_config('app.management_project_id',$1,true),set_config('app.owner_project_id',$2,true),set_config('app.owner_id',$3,true)", [ids[1], ids[2], ids[1]]);
+    const settings = "SELECT current_setting('app.max_user_id',true) actor,current_setting('app.management_project_id',true) project,current_setting('app.owner_project_id',true) owner_project,current_setting('app.owner_id',true) owner";
+    const before = (await client.query(settings)).rows;
+    await client.query("INSERT INTO sever_orders SELECT $1,'42','New legacy customer',$2::jsonb,270,'accepted','new-legacy-operation',now(),NULL,NULL,NULL",
+      [added, JSON.stringify([{ id: "old_coffee", name: "Historical coffee", price: 270, qty: 1, option: "v".repeat(40) }])]);
+    assert.deepEqual((await client.query(settings)).rows, before);
+    const visible = (await client.query("SELECT DISTINCT max_user_id FROM max_business_actions")).rows;
+    assert.deepEqual(visible.map(row => row.max_user_id), ["99"]);
+    await client.query("COMMIT");
+  } finally { client.release(); }
+  assert.equal((await store.listManagedRecords({ owner }, query)).records.length, 14);
+  assert.equal((await store.listManagedRecords({ owner }, query)).records.find(row => row.id === added).items[0].option, "v".repeat(40));
+  assert.equal((await store.listManagedRecords({ actor: "42" }, query)).records.length, 10);
+  await assert.rejects(engine.query("INSERT INTO sever_orders SELECT '00000000-0000-4000-8000-000000000101','42','Invalid','[{\"id\":\"old_coffee\",\"name\":\"Old\",\"price\":270,\"qty\":1}]'::jsonb,1,'accepted','bad-total',now(),NULL,NULL,NULL"));
+  assert.equal((await engine.query("SELECT count(*)::integer count FROM sever_orders WHERE id='00000000-0000-4000-8000-000000000101'")).rows[0].count, 0);
+  await assert.rejects(engine.query("INSERT INTO sever_orders SELECT '00000000-0000-4000-8000-000000000102','42','Invalid pickup','[{\"id\":\"old_coffee\",\"name\":\"Old\",\"price\":270,\"qty\":1}]'::jsonb,270,'accepted','bad-pickup',now(),'m15',NULL,NULL"));
+  assert.equal((await engine.query("SELECT count(*)::integer count FROM sever_orders WHERE id='00000000-0000-4000-8000-000000000102'")).rows[0].count, 0);
+  await assert.rejects(engine.query("INSERT INTO sever_orders SELECT '00000000-0000-4000-8000-000000000103','42','Long comment','[{\"id\":\"old_coffee\",\"name\":\"Old\",\"price\":270,\"qty\":1}]'::jsonb,270,'accepted','long-comment',now(),NULL,NULL,repeat('x',2001)"));
+  assert.equal((await engine.query("SELECT count(*)::integer count FROM sever_orders WHERE id='00000000-0000-4000-8000-000000000103'")).rows[0].count, 0);
+  for (const [index, extra] of [null, 1, true, {}, "v".repeat(41)].map(option => ({ option }))
+    .concat([{ option: "valid", unexpected: true }]).entries()) {
+    const id = `00000000-0000-4000-8000-${String(200 + index).padStart(12, "0")}`;
+    const item = { id: "old_coffee", name: "Historical coffee", price: 270, qty: 1, ...extra };
+    await assert.rejects(engine.query("INSERT INTO sever_orders SELECT $1,'42','Invalid option',$2::jsonb,270,'accepted',$3,now(),NULL,NULL,NULL",
+      [id, JSON.stringify([item]), `invalid-option-${index}`]), error => error.code === "22023" && error.message.includes("legacy_order_item"));
+    assert.equal((await engine.query("SELECT count(*)::integer count FROM sever_orders WHERE id=$1", [id])).rows[0].count, 0);
+  }
+});
+
+test("legacy backfill collision aborts the whole migration and leaves every historical value intact",
+  { skip: !pgliteModule && !nativePgUrl }, async t => {
+  const { engine, legacy } = await legacyManagementDatabase(t, 2);
+  const original = (await engine.query("SELECT to_jsonb(s) value FROM sever_orders s ORDER BY id")).rows;
+  await engine.query("INSERT INTO max_business_actions(id,max_user_id,action_type,status,payload) VALUES($1,'42','order_created','new','{}')", [legacy[1].id]);
+  await assert.rejects(engine.exec(`BEGIN; ${legacyMirrorSql()} COMMIT;`), error => error.code === "55000" && error.message.includes("legacy_order_collision"));
+  await engine.exec("ROLLBACK;");
+  assert.equal((await engine.query("SELECT count(*)::integer count FROM max_business_actions")).rows[0].count, 1);
+  assert.equal((await engine.query("SELECT count(*)::integer count FROM max_owner_records")).rows[0].count, 0);
+  assert.deepEqual((await engine.query("SELECT to_jsonb(s) value FROM sever_orders s ORDER BY id")).rows, original);
+  assert.equal((await engine.query("SELECT count(*)::integer count FROM pg_trigger WHERE tgrelid='sever_orders'::regclass AND NOT tgisinternal")).rows[0].count, 0);
+});
+
+test("pickup replay returns the saved schedule before consulting catalog or server clock",
+  { skip: !pgliteModule && !nativePgUrl }, async t => {
+  const { engine, pool } = await legacyManagementDatabase(t, 0);
+  await engine.exec("SET ROLE managed_runtime;");
+  const app = runtime(); app.dependencies.set("@/lib/db", { pool });
+  let quoteCalls = 0, clockCalls = 0;
+  app.dependencies.set("@/lib/omnia/catalog-server", { getYleumServerAppConfig: async () => {
+    quoteCalls++; return { configVersion: 1, config: { content: [
+      { id: "coffee", title: "Coffee", price: "250 RUB", active: true, availability: "in_stock", options: [] },
+    ] } };
+  } });
+  app.dependencies.set("@/lib/omnia/analytics", { forwardMaxAnalytics: async () => undefined });
+  const server = app.load("lib/omnia/business-server.ts");
+  const input = { ...lead, configVersion: 1, items: [{ catalogId: "coffee", quantity: 1, unitPriceKopecks: 25000 }],
+    fulfillment: { type: "pickup", delayMinutes: 30 } };
+  const first = await server.createManagedBusinessRecord("42", "orders", input, () => {
+    clockCalls++; return Date.parse("2030-06-10T08:00:00Z");
+  });
+  app.dependencies.set("@/lib/omnia/catalog-server", { getYleumServerAppConfig: async () => { throw Error("catalog must not run on replay"); } });
+  const replay = await server.createManagedBusinessRecord("42", "orders", input, () => { throw Error("clock must not run on replay"); });
+  assert.equal(replay.id, first.id);
+  assert.equal(replay.fulfillment.scheduled_for, "2030-06-10T08:30:00.000Z");
+  assert.equal(quoteCalls, 1); assert.equal(clockCalls, 1);
+  // The actual store receipt survives losing the HTTP response and a fresh browser module.
+  const browser = intentBrowser(); let lost = true; const keys = [];
+  const transport = verifiedTransport(async (_, options) => {
+    const body = JSON.parse(options.body); keys.push(body.operationKey);
+    const receipt = await server.createManagedBusinessRecord("42", "leads", body);
+    if (lost) { lost = false; throw Error("response lost after real database commit"); }
+    return Response.json(receipt, { status: 201 });
+  });
+  const originalLead = { ...lead, operationKey: ids[1] };
+  await assert.rejects(runtime({}, transport, browser).load("lib/omnia/business-client.ts").createManagedLead(originalLead));
+  await runtime({}, transport, browser).load("lib/omnia/business-client.ts").createManagedLead({ ...originalLead, operationKey: ids[2] });
+  assert.deepEqual(keys, [ids[1], ids[1]]);
+  await engine.exec("RESET ROLE;");
+  assert.equal((await engine.query("SELECT count(*)::integer count FROM max_business_actions WHERE action_type='lead_created'")).rows[0].count, 1);
+  assert.equal((await engine.query("SELECT count(*)::integer count FROM max_owner_records WHERE resource='leads'")).rows[0].count, 1);
 });

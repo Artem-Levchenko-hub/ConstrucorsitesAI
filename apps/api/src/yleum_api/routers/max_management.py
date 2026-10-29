@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from yleum_api.core.deps import CurrentUserDep, SessionDep
 from yleum_api.core.errors import ApiError
 from yleum_api.schemas.max_management import (
+    EnableManagementPayload,
     ManagementOverviewPublic,
     OwnerRecordPublic,
     OwnerRecordsPagePublic,
@@ -18,7 +19,9 @@ from yleum_api.schemas.max_management import (
     OwnerRecordUpdate,
     ResourceId,
 )
+from yleum_api.schemas.max_studio import MaxProjectConfigPublic
 from yleum_api.services import max_management as service
+from yleum_api.services.max_management_contract import new_project_management_modules
 
 router = APIRouter(prefix="/api/projects", tags=["max-management"])
 
@@ -79,6 +82,44 @@ async def get_management(
 ) -> ManagementOverviewPublic:
     _account(current_user)
     return await service.get_overview(session, project_id, current_user.id)
+
+
+@router.post("/{project_id}/max/management/enable", response_model=MaxProjectConfigPublic)
+async def enable_management(
+    project_id: UUID,
+    payload: EnableManagementPayload,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> MaxProjectConfigPublic:
+    """Explicitly prepare an older app; source adoption and publishing stay separate."""
+    from yleum_api.routers.max_studio import (
+        _lock_owned_max_project,
+        _put_max_config,
+        get_max_config,
+    )
+    from yleum_api.services.max_legacy_order_management import read_legacy_order_table
+
+    _account(current_user)
+    await _lock_owned_max_project(session, project_id, current_user.id)
+    current = await get_max_config(project_id, session, current_user)
+    if current.config_version != payload.expected_config_version:
+        raise ApiError("conflict", "Данные изменились. Обновите страницу и повторите", 409)
+    modules = new_project_management_modules(
+        current.config.app_type, current.config.management_modules,
+    )
+    legacy_table = current.config.legacy_orders_table
+    if legacy_table is None and "orders" in modules:
+        legacy_table = await read_legacy_order_table(session, project_id, current_user.id)
+    desired = current.config.model_copy(update={
+        "management_modules": modules, "legacy_orders_table": legacy_table,
+    })
+    # Reuse the normal owner lock, CAS, content protection and delivery path.
+    # A concurrent save after the read is rejected by its second version check.
+    return await _put_max_config(
+        project_id, desired, session, current_user,
+        x_max_config_version=payload.expected_config_version,
+        legacy_orders_adoption=legacy_table,
+    )
 
 
 @router.get("/{project_id}/max/management/records", response_model=OwnerRecordsPagePublic)

@@ -70,7 +70,7 @@ async def _owned_max_project(
 ) -> Project:
     statement = select(Project).where(Project.id == project_id, Project.owner_id == owner_id)
     if lock:
-        statement = statement.with_for_update()
+        statement = statement.with_for_update().execution_options(populate_existing=True)
     project = (await session.execute(statement)).scalar_one_or_none()
     if project is None:
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
@@ -81,6 +81,15 @@ async def _owned_max_project(
             status.HTTP_409_CONFLICT,
         )
     return project
+
+
+async def _lock_owned_max_project(
+    session: SessionDep, project_id: UUID, owner_id: UUID,
+) -> Project:
+    """Use one lock order and refresh the accepted head before reading its source."""
+    await _owned_max_project(session, project_id, owner_id)
+    await project_cell_runtime._try_preview_project_lock(session, project_id)
+    return await _owned_max_project(session, project_id, owner_id, lock=True)
 
 
 def _default_config(project: Project) -> MaxProjectConfigPayload:
@@ -285,16 +294,30 @@ async def put_max_config(
     current_user: CurrentUserDep,
     x_max_config_version: int | None = Header(default=None, alias="X-Max-Config-Version", ge=0),
 ) -> MaxProjectConfigPublic:
+    return await _put_max_config(
+        project_id, payload, session, current_user,
+        x_max_config_version=x_max_config_version,
+    )
+
+
+async def _put_max_config(
+    project_id: UUID,
+    payload: MaxProjectConfigPayload,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+    *,
+    x_max_config_version: int | None,
+    legacy_orders_adoption: str | None = None,
+) -> MaxProjectConfigPublic:
     # Same project serialization as generation, without waiting behind a cold
     # preview start until the request/DB timeout turns a busy state into a 500.
-    await _owned_max_project(session, project_id, current_user.id)
-    await project_cell_runtime._try_preview_project_lock(session, project_id)
-    project = await _owned_max_project(session, project_id, current_user.id, lock=True)
+    project = await _lock_owned_max_project(session, project_id, current_user.id)
     record = await session.get(MaxProjectConfig, project_id)
     current_payload = _config_payload(project, record)
     payload = _prepare_config_change(
         current_payload, payload, current_version=record.config_version if record else 0,
         expected_version=x_max_config_version if isinstance(x_max_config_version, int) else None,
+        legacy_orders_adoption=legacy_orders_adoption,
     )
     _check_content_version(
         current_payload.content, payload.content,
@@ -486,11 +509,27 @@ async def _save_cell_business_config(
 def _prepare_config_change(
     current: MaxProjectConfigPayload, desired: MaxProjectConfigPayload, *,
     current_version: int, expected_version: int | None,
+    legacy_orders_adoption: str | None = None,
 ) -> MaxProjectConfigPayload:
     # Older settings clients do not know this private field. Omission is never
     # an instruction to disable previously selected business modules.
     if "management_modules" not in desired.model_fields_set:
         desired = desired.model_copy(update={"management_modules": current.management_modules})
+    if "legacy_orders_table" not in desired.model_fields_set:
+        desired = desired.model_copy(update={"legacy_orders_table": current.legacy_orders_table})
+    new_binding = (
+        current.legacy_orders_table is None
+        and legacy_orders_adoption is not None
+        and desired.legacy_orders_table == legacy_orders_adoption
+    )
+    if (desired.legacy_orders_table != current.legacy_orders_table and not new_binding) or (
+        current.legacy_orders_table is not None
+        and "orders" not in (desired.management_modules or [])
+    ):
+        raise ApiError(
+            "conflict", "Подключение старых заказов нельзя изменить в настройках", 409,
+            details={"reason": "legacy_orders_binding_immutable"},
+        )
     if current_version > 0 and current != desired and expected_version != current_version:
         raise ApiError(
             "conflict", "Данные изменились. Обновите настройки и повторите изменения", 409,

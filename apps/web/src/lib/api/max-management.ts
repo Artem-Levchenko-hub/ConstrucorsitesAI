@@ -1,5 +1,5 @@
 import { apiFetch, ApiError } from "./client";
-import type { ManagementModule } from "./types";
+import type { ManagementModule, MaxProjectConfig } from "./types";
 
 export type ResourceId = "orders" | "leads" | "bookings";
 export type OwnerStatus = "new" | "in_progress" | "completed" | "cancelled";
@@ -10,6 +10,7 @@ export type OwnerRecord = {
   comment?: string | null; requested_for?: string | null; service_title?: string | null;
   service_price_label?: string | null; items: OwnerRecordItem[]; total_kopecks?: number | null;
   currency?: "RUB" | null; note?: string | null;
+  fulfillment?: { type: "pickup"; delay_minutes: number; scheduled_for: string } | null;
 };
 export type ResourceDefinition = {
   id: ResourceId; label: string; singular_label: string;
@@ -32,6 +33,11 @@ const path = (projectId: string) => `/api/projects/${encodeURIComponent(projectI
 
 export function getMaxManagement(projectId: string, signal?: AbortSignal): Promise<ManagementOverview> {
   return apiFetch(path(projectId), { signal, timeoutMs: 15_000 });
+}
+export function enableMaxManagement(projectId: string, expectedConfigVersion: number): Promise<MaxProjectConfig> {
+  return apiFetch(`${path(projectId)}/enable`, {
+    method: "POST", json: { expected_config_version: expectedConfigVersion }, timeoutMs: 20_000,
+  });
 }
 export function getMaxOwnerRecords(projectId: string, query: OwnerRecordsQuery, signal?: AbortSignal): Promise<OwnerRecordsPage> {
   const params = new URLSearchParams({ resource: query.resource, limit: String(query.limit ?? 25) });

@@ -1,10 +1,10 @@
 """Structured Yleum contract. Saving this data never invokes an LLM."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from yleum_api.schemas.billing import UsageCostBreakdownPublic
 from yleum_api.schemas.max_management import ManagementModule, _validate_modules
@@ -154,6 +154,9 @@ class MaxProjectConfigPayload(BaseModel):
     # Capabilities are frozen in the published managed manifest, never in this
     # mutable config alone.
     management_modules: list[ManagementModule] | None = Field(default=None, strict=True)
+    # Bound only by explicit adoption of a reviewed, accepted legacy order route.
+    # This private immutable recipe parameter never enters public app config.
+    legacy_orders_table: str | None = Field(default=None, strict=True)
 
     _unique_ids = field_validator("content")(_unique_content_ids)
 
@@ -163,6 +166,21 @@ class MaxProjectConfigPayload(BaseModel):
         cls, value: list[ManagementModule] | None,
     ) -> list[ManagementModule] | None:
         return _validate_modules(value) if value is not None else None
+
+    @field_validator("legacy_orders_table", mode="before")
+    @classmethod
+    def valid_legacy_orders_table(cls, value: object) -> str | None:
+        from yleum_api.services.max_legacy_order_management import validate_legacy_order_table
+
+        return validate_legacy_order_table(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def legacy_orders_require_management(self) -> Self:
+        if self.legacy_orders_table is not None and (
+            ManagementModule.orders not in (self.management_modules or [])
+        ):
+            raise ValueError("legacy orders adoption requires orders management")
+        return self
 
     @classmethod
     def default_for(cls, app_name: str) -> "MaxProjectConfigPayload":

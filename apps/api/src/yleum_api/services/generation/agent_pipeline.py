@@ -37,6 +37,7 @@ from yleum_api.services.generation.agent_messages import (
     _agent_product_failure,
 )
 from yleum_api.services.generation.agent_preparation import (
+    _seed_saved_max_config,
     classify_agent_turn,
     prepare_stack_prompt,
 )
@@ -474,6 +475,10 @@ async def run_agent_generation(
         runtime, prompt_text, template=project_info.template, factory=factory, ids=ids,
     )
     if prepared_entry is not None:
+        # A cold worker must rebind optional trusted migration seeds to current
+        # server-owned configuration; mutable workspace/entry SQL is no authority.
+        if project_info.template == "max_miniapp":
+            await _seed_saved_max_config(factory, ids, project_info, runtime, catalog_runtime=True)
         _stack = prepared_entry.stack
     else:
         _stack = await run_bootstrap_stage(
@@ -532,6 +537,7 @@ async def run_agent_generation(
             runtime=runtime,
         ), handle=runtime.handle)
 
+    _max_seed_files = {**_max_seed_files, **(runtime.migration_baseline or {})}
     runtime.migration_baseline = {**baseline.files, **_max_seed_files}
     if resumed is not None and runtime.handle is not None:
         saved_source = resumed[0]

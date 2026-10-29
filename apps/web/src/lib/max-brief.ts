@@ -75,10 +75,22 @@ export const MAX_MANAGEMENT_MODULES: { id: ManagementModule; label: string; desc
   { id: "leads", label: "Заявки", description: "Обращения клиентов и заметки для работы с ними." },
   { id: "bookings", label: "Запросы на запись", description: "Выбранная услуга и дата; запись подтверждаете вы." },
 ];
+export const REQUIRED_MANAGEMENT_MODULES: readonly ManagementModule[] = ["catalog", "leads"];
+
+function withRequiredManagementModules(selected: readonly ManagementModule[]): ManagementModule[] {
+  const modules = new Set<ManagementModule>([...REQUIRED_MANAGEMENT_MODULES, ...selected]);
+  return MAX_MANAGEMENT_MODULES.filter(module => modules.has(module.id)).map(module => module.id);
+}
+
 export function defaultManagementModules(appType: MaxAppTypeId): ManagementModule[] {
-  if (appType === "catalog" || appType === "loyalty") return ["catalog", "orders"];
-  if (appType === "booking") return ["catalog", "bookings"];
-  return [];
+  if (appType === "catalog" || appType === "loyalty") return withRequiredManagementModules(["orders"]);
+  if (appType === "booking") return withRequiredManagementModules(["bookings"]);
+  return withRequiredManagementModules([]);
+}
+
+/** New-project defaults only; saved legacy configurations keep their own contract. */
+export function newProjectManagementModules(appType: MaxAppTypeId, selected?: readonly ManagementModule[]): ManagementModule[] {
+  return selected?.length ? withRequiredManagementModules(selected) : defaultManagementModules(appType);
 }
 
 export type MaxProjectBrief = {
@@ -112,6 +124,7 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
     brief.primaryAction.trim() || "определи главное действие пользователя";
   const colors =
     brief.brandColors.trim() || "подбери уместную палитру под продукт";
+  const managementModules = newProjectManagementModules(brief.appType, brief.managementModules);
 
   const prompt = [
     "Создай готовое мини-приложение именно для мессенджера MAX.",
@@ -123,9 +136,7 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
     `Целевая аудитория: ${audience}.`,
     `Главное действие пользователя: ${primaryAction}.`,
     `Нужные возможности: ${features}.`,
-    brief.managementModules?.length
-      ? `Управление в Yleum: ${MAX_MANAGEMENT_MODULES.filter(item => brief.managementModules!.includes(item.id)).map(item => item.label).join(", ")}. Подключи выбранные штатные бизнес-модули из .omnia/management.json; данные меняются обычными формами без генерации.`
-      : "Кабинет владельца: настройки и статистика, без общего реестра личных данных пользователей.",
+    `Управление в Yleum: ${MAX_MANAGEMENT_MODULES.filter(item => managementModules.includes(item.id)).map(item => item.label).join(", ")}. Подключи штатные бизнес-модули из .omnia/management.json; данные меняются обычными формами без генерации. Профиль, настройки и статистика доступны каждому приложению. Личные данные пользователей не превращай в общий реестр владельца.`,
     `Визуальное направление: ${optionLabel(MAX_STYLES, brief.style)}.`,
     `Цвета бренда: ${colors}.`,
     "",

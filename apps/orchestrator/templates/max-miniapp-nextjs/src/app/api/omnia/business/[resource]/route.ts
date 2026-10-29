@@ -32,6 +32,9 @@ async function context(request: Request, ctx: Context) {
 export async function POST(request: Request, ctx: Context): Promise<Response> {
   try {
     const { actor, resource } = await context(request, ctx);
+    const expectedActor = request.headers.get("X-Max-Expected-Actor");
+    if (expectedActor !== null && expectedActor !== actor)
+      throw new ManagementError("actor_changed", 409);
     const body = parseManagementBody(await readManagementBody(request));
     const { createManagedBusinessRecord } = await import(
       "@/lib/omnia/business-server"

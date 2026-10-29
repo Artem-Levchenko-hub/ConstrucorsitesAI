@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.services.design_presets import PRESETS
@@ -111,6 +111,15 @@ class ProjectCreate(BaseModel):
     language: str | None = None
     # Wizard settings and module choices commit atomically with the project.
     max_config: MaxProjectConfigPayload | None = None
+
+    @field_validator("max_config")
+    @classmethod
+    def no_legacy_adoption_at_creation(
+        cls, value: MaxProjectConfigPayload | None,
+    ) -> MaxProjectConfigPayload | None:
+        if value is not None and value.legacy_orders_table is not None:
+            raise ValueError("new projects cannot adopt legacy orders")
+        return value
 
 
 class ProjectUpdate(BaseModel):

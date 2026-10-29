@@ -96,6 +96,7 @@ OWNER_OVERRIDES = json.loads(
     )
 )
 assert set(OWNER_OVERRIDES) == {
+    'compat/legacy-orders-owner-mirror.sql.template',
     'src/lib/omnia/management-config.ts',
     'src/lib/omnia/management-auth.ts',
     'src/lib/omnia/management-store.ts',

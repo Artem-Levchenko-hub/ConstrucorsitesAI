@@ -8,8 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type { ManagementModule } from "@/lib/api/types";
-import { MAX_MANAGEMENT_MODULES } from "@/lib/max-brief";
-import { MAX_APP_TYPES, MAX_BRIEF_LENGTH, MAX_FEATURES, MAX_FEATURE_INFO, MAX_STYLES, type MaxAppTypeId, type MaxFeature, type MaxStyleId } from "@/lib/max-brief";
+import { MAX_APP_TYPES, MAX_BRIEF_LENGTH, MAX_FEATURES, MAX_FEATURE_INFO, MAX_MANAGEMENT_MODULES, MAX_STYLES, REQUIRED_MANAGEMENT_MODULES, newProjectManagementModules, type MaxAppTypeId, type MaxFeature, type MaxStyleId } from "@/lib/max-brief";
 import { MaxFeaturePreview } from "./MaxFeaturePreview";
 import { MaxProjectReview } from "./MaxProjectReview";
 import "./max-studio.css";
@@ -47,6 +46,7 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
   const submitLock = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
   const busy = pending || submitting;
+  const managementModules = newProjectManagementModules(values.appType, values.managementModules);
   const length = Array.from(values.idea.trim()).length;
   const ready = values.name.trim().length > 1 && values.idea.trim().length > 9 && length <= MAX_BRIEF_LENGTH;
 
@@ -111,20 +111,14 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
             {step === 2 && <>
               <fieldset>
                 <legend className="text-sm font-medium">Управление в Yleum</legend>
-                <p className="max-wizard-note">Выберите, чем будете управлять обычными формами. Настройки и статистика доступны каждому приложению.</p>
+                <p className="max-wizard-note">Каталог и заявки включены всегда. Профиль, настройки и статистика доступны каждому приложению. Заказы и запись можно выбрать дополнительно.</p>
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {MAX_MANAGEMENT_MODULES.map(module => <label key={module.id} className="max-wizard-option flex items-start gap-3">
-                    <input type="checkbox" className="mt-1 size-4" checked={values.managementModules?.includes(module.id) ?? false}
+                    <input type="checkbox" className="mt-1 size-4" checked={managementModules.includes(module.id)} disabled={REQUIRED_MANAGEMENT_MODULES.includes(module.id)}
                       onChange={event => {
-                        const selected = new Set(values.managementModules ?? []);
-                        if (event.target.checked) {
-                          selected.add(module.id);
-                          if (module.id === "orders" || module.id === "bookings") selected.add("catalog");
-                        } else {
-                          selected.delete(module.id);
-                          if (module.id === "catalog") { selected.delete("orders"); selected.delete("bookings"); }
-                        }
-                        onChange({ managementModules: MAX_MANAGEMENT_MODULES.filter(item => selected.has(item.id)).map(item => item.id) });
+                        const selected = new Set(managementModules);
+                        if (event.target.checked) selected.add(module.id); else selected.delete(module.id);
+                        onChange({ managementModules: newProjectManagementModules(values.appType, [...selected]) });
                       }} />
                     <span><span className="block text-sm font-medium">{module.label}</span><span className="mt-1 block text-xs leading-5 text-fg-secondary">{module.description}</span></span>
                   </label>)}

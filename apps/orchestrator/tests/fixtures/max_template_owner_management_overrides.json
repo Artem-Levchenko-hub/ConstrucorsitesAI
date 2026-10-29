@@ -12,15 +12,15 @@
     "mode": "100644"
   },
   "src/lib/omnia/management-resources.ts": {
-    "sha256": "25c63337b2389f1282b87666e4cb9ff84583fa793aed407b793741026bb11568",
+    "sha256": "61ab04b6ea2193dae3f93839caf840cd57ab83567a6383cf7d327546a81013bd",
     "mode": "100644"
   },
   "src/lib/omnia/business-client.ts": {
-    "sha256": "7085c7e8b93de6741ece6c973002ebf8d68d350b758afde1c362a42a959d20f6",
+    "sha256": "39444ba36a99258531d3a550847e8e209cc3e65d6361c3adb05e8f6fd73a8bbd",
     "mode": "100644"
   },
   "src/lib/omnia/business-server.ts": {
-    "sha256": "42f0c9ef5f6563dd9ac5af00998aecf3e12fc7e7988677a13508a6967cf001e5",
+    "sha256": "0ae822d50a8e9a883560363ae0b60a5cc9ab76b82989a55a5f3c56e2107f279b",
     "mode": "100644"
   },
   "src/app/api/omnia/owner/route.ts": {
@@ -28,7 +28,7 @@
     "mode": "100644"
   },
   "src/app/api/omnia/business/[resource]/route.ts": {
-    "sha256": "820966fe59feb40283d71f67adf38c2cb2acf151913f310942334d568b39f985",
+    "sha256": "c5f2d9b2c0345ce66d4733ecbb6552a8199b787bb38fb440548e35801ed2382b",
     "mode": "100644"
   },
   "src/lib/omnia/app-profile-client.ts": {
@@ -49,6 +49,10 @@
   },
   "src/lib/omnia/analytics.ts": {
     "sha256": "f88a9d341bc64c0bcbf0273da8316f354b8f5f96e5d42aab398ce8c5eed02b71",
+    "mode": "100644"
+  },
+  "compat/legacy-orders-owner-mirror.sql.template": {
+    "sha256": "f400a756828c8b8d397032242fe57ae3afd2ce98223b6eb47e45fddb682fed61",
     "mode": "100644"
   }
 }

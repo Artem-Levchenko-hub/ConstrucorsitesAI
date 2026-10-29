@@ -12,12 +12,17 @@ from uuid import UUID
 
 from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.services.max_content_delivery import public_business_config
+from yleum_api.services.max_legacy_order_management import (
+    LEGACY_ORDER_MANAGED_PATHS,
+    render_legacy_order_management,
+)
 from yleum_api.services.max_management_contract import build_management_contract
 
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 33
+MAX_MANAGED_KIT_VERSION = 34
+# v34 sanitizes catalog selection, adopts legacy orders and recovers pending intents.
 # v33 adds explicit owner management and typed business resources in product DB.
 # v32 adds the owner catalog's shared server/client configuration file contract.
 # v30: keep legal footer links and keyboard focus clear of fixed bottom navigation.
@@ -319,6 +324,10 @@ export default function TermsPage() {
         files.pop(".omnia/management.json", None)
     if not build_management_contract(config.management_modules or []).resources:
         files.pop("drizzle/0003_owner_management.sql", None)
+    if config.legacy_orders_table is not None:
+        if project_id is None:
+            raise ValueError("legacy orders adoption requires a project UUID")
+        files.update(render_legacy_order_management(project_id, config.legacy_orders_table))
     _validate_managed_component_graph(files)
     return files
 
@@ -337,6 +346,7 @@ def render_max_managed_kit_update(
 MAX_SECURITY_LOCKED_FILES = frozenset(
     {
         *MAX_MANAGEMENT_RUNTIME_FILES,
+        *LEGACY_ORDER_MANAGED_PATHS,
         ".omnia/management.json",
         "src/lib/omnia/catalog-server.ts",
         "src/lib/omnia/catalog-actions.ts",
@@ -432,9 +442,22 @@ Each create takes operationKey (one UUID per deliberate intent), customerName
 (explicit form input, never a fabricated MAX profile), optional contacts/comment.
 Orders also take configVersion and items [{catalogId,quantity,unitPriceKopecks,
 option?}]. Convert only explicit numeric RUB catalog prices to integer kopecks.
+For pickup orders the optional fulfillment is {type:"pickup",delayMinutes:0..1440}.
+The server computes fulfillment.scheduled_for after checking an existing receipt;
+render that saved timestamp and delay_minutes. Never submit a client-computed
+scheduled_for or lose the fulfillment/comment when reading historical orders.
 On ManagedBusinessError.code=quote_changed, show error.quote current prices and
 require a separate explicit confirmation; never automatically submit again.
-Keep the same operationKey and body after ambiguous failures. History reads
+Keep the same operationKey and body after ambiguous failures, including a reload.
+On mount call loadPendingManagedIntent(resource) from business-client for each
+selected writable module. Wait for its verified-session lookup before enabling
+the form. Restore the saved frozen input and show an explicit recovery action;
+an order can be recovered even with an empty cart or a changed/hidden catalog.
+Do not discard an unresolved intent after an authentication error or replace it
+with a new UUID. createManaged* persists the frozen intent before a browser POST;
+pending_intent means resolve the existing submission before starting another.
+Handle intent_storage_unavailable honestly: no submission was sent.
+History reads
 getManagedRecords(resource,{limit,cursor}) and renders result.records; show only
 the current customer's records and the server-returned status.
 Bookings take serviceId and requestedFor (timezone-bearing ISO); they are requests
@@ -444,6 +467,14 @@ user-scoped storage and must never become an owner-wide business registry.
 Read `src/lib/omnia/max-config.ts` to understand the saved brief. Product catalog
 screens MUST use `useYleumCatalog()` from `@/lib/omnia/catalog-client`, which
 refreshes on mount/focus from the same mounted public business file as the server.
+Pass its current items to `useYleumCatalogSelection(items)` from the same module.
+Use selection.category/setCategory for category filters (null means All),
+selection.selectOption(id,value) for option inputs, and selection.getOption(item)
+when adding a CURRENT item to the cart. The hook discards removed options and
+categories synchronously; never keep a competing raw option/category state or
+invent a first option. With nonempty options require a deliberate valid choice.
+When accepting a changed server quote replace each line snapshot entirely,
+including an absent option; do not spread an old option into the new quote.
 Never render a live catalog from bundled config, constants or the legacy core
 catalog endpoint; a missing/unavailable file must show an honest error.
 Render only active content items, keep their stable ids and handle loading,

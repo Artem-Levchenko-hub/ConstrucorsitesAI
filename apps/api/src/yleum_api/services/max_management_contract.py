@@ -21,6 +21,19 @@ def validate_management_modules(
     return _validate_modules(modules)
 
 
+def new_project_management_modules(
+    app_type: str, selected: Sequence[str | ManagementModule] | None,
+) -> list[ManagementModule]:
+    """Every new app has daily management; saved legacy configs stay unchanged."""
+    defaults = (
+        ["orders"] if app_type in {"catalog", "loyalty"}
+        else ["bookings"] if app_type == "booking"
+        else []
+    )
+    modules = list(dict.fromkeys(["catalog", "leads", *(selected or defaults)]))
+    return validate_management_modules(modules)
+
+
 def _field(
     key: str, label: str, kind: str, *, editable: bool = False, owner_only: bool = False,
 ) -> ResourceFieldDefinition:

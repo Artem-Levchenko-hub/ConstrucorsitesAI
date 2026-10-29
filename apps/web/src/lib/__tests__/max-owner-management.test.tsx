@@ -19,17 +19,26 @@ let overview: ManagementOverview;
 let config: MaxProjectConfig;
 let requests: Array<{ url: string; init: RequestInit }>;
 let writeMode: "ok" | "network" | "conflict" | "pending";
+let enableMode: "ok" | "network" | "conflict";
 let resolveWrite: ((response: Response) => void) | undefined;
 let root: Root; let node: HTMLDivElement; let client: QueryClient;
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   overview = { state: "active", configured_modules: ["catalog", "orders"], active_modules: ["catalog", "orders"], resources: [resources[0]], publication_id: "published", contract_hash: contract.contract_hash, catalog_limit: 100 };
   config = { project_id: "owned", config_version: 7, config: { app_name: "Приложение", summary: "Описание", app_type: "custom", audience: "Клиенты", primary_action: "Написать", features: ["Другое"], style: "clean", brand_colors: "blue", content: [], management_modules: ["catalog", "orders"], operator: { legal_name: "ИП" }, support: { email: "old@example.test", response_time: "24 часа" }, legal: { age_rating: "0+", has_sales: false, has_user_content: false, marketing_notifications: false, personal_data_consent: false, policy_url: "", terms_accepted: true }, max_url_attached: false }, synced_snapshot_id: null, updated_at: null };
-  requests = []; writeMode = "ok"; resolveWrite = undefined;
+  requests = []; writeMode = "ok"; enableMode = "ok"; resolveWrite = undefined;
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   node = document.createElement("div"); document.body.append(node); root = createRoot(node);
   vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit = {}) => {
     requests.push({ url, init });
+    if (url.endsWith("/management/enable") && init.method === "POST") {
+      if (enableMode === "network") throw new TypeError("offline");
+      if (enableMode === "conflict") return Response.json({ error: { code: "conflict", message: "private diagnostic" } }, { status: 409 });
+      config = { ...config, config_version: config.config_version + 1,
+        config: { ...config.config, management_modules: ["catalog", "orders", "leads"] } };
+      overview = { ...overview, configured_modules: ["catalog", "orders", "leads"] };
+      return Response.json(config);
+    }
     if (init.method === "PATCH") {
       if (writeMode === "network") throw new TypeError("offline");
       if (writeMode === "conflict") return Response.json({ error: { code: "revision_conflict", message: "stale" } }, { status: 409 });
@@ -96,6 +105,83 @@ it.each(["not_published", "unsupported", "unavailable"] as const)("explains %s w
   expect(node.textContent).toMatch(state === "not_published" ? /после публикации/i : state === "unsupported" ? /не поддерживает/i : /недоступн/i);
   expect(button("Настройки")).toBeTruthy(); expect(button("Каталог")).toBeTruthy();
 });
+function legacyUnsupported() {
+  overview = { ...overview, state: "unsupported", configured_modules: [], active_modules: [], resources: [] };
+  config = { ...config, config: { ...config.config, app_type: "catalog", management_modules: null } };
+}
+function enables() { return requests.filter(request => request.url.endsWith("/management/enable")); }
+it("prepares legacy management only on an explicit click using a fresh version and preserves the mounted catalog", async () => {
+  legacyUnsupported(); await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />);
+  const catalog = node.querySelector('[data-embedded="true"]');
+  expect(enables()).toHaveLength(0);
+  config = { ...config, config_version: 9 };
+  await click("Подключить управление");
+  expect(enables()).toHaveLength(1);
+  expect(JSON.parse(enables()[0].init.body as string)).toEqual({ expected_config_version: 9 });
+  expect(node.textContent).toContain("Подготовлено к доработке");
+  expect(button("Подключить управление")).toBeUndefined();
+  expect(node.querySelector('[data-embedded="true"]')).toBe(catalog);
+  expect(node.querySelector('a[href="/max/owned"]')?.textContent).toContain("редактор");
+  expect(requests.filter(request => request.init.method === "POST")).toEqual(enables());
+  expect(records()).toHaveLength(0);
+});
+it("does not repeat preparation when an unsupported app already has configured business modules", async () => {
+  overview = { ...overview, state: "unsupported", active_modules: [], resources: [] };
+  await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />);
+  expect(node.textContent).toContain("Подготовлено к доработке");
+  expect(button("Подключить управление")).toBeUndefined();
+  expect(enables()).toHaveLength(0);
+});
+it("retains the section and retries a preparation conflict only with another click and fresh version", async () => {
+  legacyUnsupported(); enableMode = "conflict";
+  await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />);
+  const catalog = node.querySelector('[data-embedded="true"]');
+  await click("Подключить управление");
+  expect(enables()).toHaveLength(1);
+  expect(node.textContent).not.toContain("private diagnostic");
+  expect(node.textContent).toContain("Повторите попытку");
+  expect(node.querySelector('[data-embedded="true"]')).toBe(catalog);
+  config = { ...config, config_version: 8 }; enableMode = "ok";
+  await click("Подключить управление");
+  expect(enables()).toHaveLength(2);
+  expect(JSON.parse(enables()[1].init.body as string)).toEqual({ expected_config_version: 8 });
+});
+it("blocks preparation while settings contain an unsaved draft", async () => {
+  legacyUnsupported(); await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />);
+  await click("Настройки"); await change("Название приложения", "Не потерять");
+  expect(button("Подключить управление").disabled).toBe(true);
+  await click("Подключить управление");
+  expect(enables()).toHaveLength(0);
+  expect((node.querySelector('[aria-label="Название приложения"]') as HTMLInputElement).value).toBe("Не потерять");
+});
+it("rechecks dirty state after the fresh read before sending the enable POST", async () => {
+  legacyUnsupported(); await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />); await click("Настройки");
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let release: ((response: Response) => void) | undefined;
+  vi.mocked(fetch).mockImplementation((url, init) => String(url).endsWith("/config")
+    ? new Promise<Response>(resolve => { release = resolve; }) : original(url, init));
+  await click("Подключить управление");
+  await change("Название приложения", "Черновик во время чтения");
+  await act(async () => release!(Response.json(config))); await settle();
+  expect(enables()).toHaveLength(0);
+  expect((node.querySelector('[aria-label="Название приложения"]') as HTMLInputElement).value).toBe("Черновик во время чтения");
+});
+it("keeps the current settings section and a draft created while enable POST is in flight", async () => {
+  legacyUnsupported(); config = { ...config, config: { ...config.config, app_type: "custom" } };
+  await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />);
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let release: ((response: Response) => void) | undefined;
+  vi.mocked(fetch).mockImplementation((url, init) => String(url).endsWith("/management/enable")
+    ? new Promise<Response>(resolve => { requests.push({ url: String(url), init: init ?? {} }); release = resolve; }) : original(url, init));
+  await click("Подключить управление");
+  await change("Название приложения", "Черновик во время подключения");
+  config = { ...config, config_version: 8, config: { ...config.config, management_modules: ["catalog", "leads"] } };
+  overview = { ...overview, configured_modules: ["catalog", "leads"] };
+  await act(async () => release!(Response.json(config))); await settle();
+  expect(node.querySelector('[aria-label="Название приложения"]')).not.toBeNull();
+  expect((node.querySelector('[aria-label="Название приложения"]') as HTMLInputElement).value).toBe("Черновик во время подключения");
+  expect(enables()).toHaveLength(1);
+});
 it("does not grant configured draft resources active access or show diary business modules", async () => {
   overview = { ...overview, configured_modules: ["catalog", "orders", "leads", "bookings"], active_modules: ["leads"], resources: [resources[1]] };
   await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />);
@@ -130,6 +216,27 @@ it("renders immutable historical snapshots and escaped customer text with only p
   expect(JSON.parse(patches()[0].init.body as string)).toMatchObject({ expected_revision: first.revision, status: "in_progress", note: "Позвонить" });
   expect(patches()[0].url).toContain(`/records/${first.id}?resource=orders`);
   expect(node.textContent).toContain("Изменения сохранены");
+});
+it("renders pickup fulfillment as readonly server data and leaves legacy orders unchanged", async () => {
+  const scheduledFor = "2026-11-02T13:45:00Z";
+  const orders: OwnerRecord[] = [first,
+    { ...first, id: "pickup-now", customer_name: "Самовывоз сейчас", fulfillment: { type: "pickup", delay_minutes: 0, scheduled_for: scheduledFor } },
+    { ...first, id: "pickup-later", customer_name: "Самовывоз позже", fulfillment: { type: "pickup", delay_minutes: 15, scheduled_for: scheduledFor } }];
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((url, init) => String(url).includes("/records?")
+    ? Promise.resolve(Response.json({ records: orders, next_cursor: null })) : original(url, init));
+  await mountRecords(); await click(first.customer_name);
+  expect(node.querySelector(".max-owner-record-card")?.textContent).not.toContain("Самовывоз");
+  await click("Самовывоз сейчас");
+  expect(node.querySelector(".max-owner-record-card")?.textContent).toContain("Самовывоз: как можно скорее");
+  await click("Самовывоз позже");
+  const card = node.querySelector(".max-owner-record-card")!;
+  expect(card.textContent).toContain("Самовывоз к");
+  expect(card.querySelector(`time[datetime="${scheduledFor}"]`)?.textContent).toBe(new Date(scheduledFor).toLocaleString("ru-RU"));
+  expect(card.querySelector('input[type="datetime-local"]')).toBeNull();
+  expect([...card.querySelectorAll("input,select,textarea")].some(control => /самовывоз|получени/i.test(control.getAttribute("aria-label") ?? ""))).toBe(false);
+  await change("Заметка владельца", "Учесть самовывоз"); await click("Сохранить обращение");
+  expect(JSON.parse(patches()[0].init.body as string)).not.toHaveProperty("fulfillment");
 });
 it("retains the draft and the same operation key after network errors and revision conflicts", async () => {
   await mountRecords(); await click(first.customer_name); await change("Заметка владельца", "Не потерять"); writeMode = "network";

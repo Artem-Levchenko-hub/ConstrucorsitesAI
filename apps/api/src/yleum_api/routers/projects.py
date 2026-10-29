@@ -19,6 +19,7 @@ from yleum_api.core.redis import publish_event
 from yleum_api.models.max_project_config import MaxProjectConfig
 from yleum_api.models.project import Project
 from yleum_api.models.snapshot import Snapshot
+from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.schemas.project import (
     ProjectCreate,
     ProjectPublic,
@@ -28,6 +29,7 @@ from yleum_api.schemas.snapshot import snapshot_event_dict
 from yleum_api.services import repo as repo_svc
 from yleum_api.services.entitlements import assert_can_create_project
 from yleum_api.services.max_access import require_max_studio_access
+from yleum_api.services.max_management_contract import new_project_management_modules
 from yleum_api.services.preset_classifier import classify_preset_sync
 from yleum_api.services.project_cell_access import admit_new_project_cell
 from yleum_api.services.project_deletion import request_project_deletion
@@ -128,16 +130,23 @@ async def create_project(
     session.add(project)
     await session.flush()
 
-    if payload.max_config is not None:
-        from yleum_api.services.max_content_delivery import validate_delivery_size
-        from yleum_api.services.max_project_kit import MAX_MANAGED_KIT_VERSION
+    from yleum_api.services.max_content_delivery import validate_delivery_size
+    from yleum_api.services.max_project_kit import MAX_MANAGED_KIT_VERSION
 
-        validate_delivery_size(payload.max_config, 1)
-        session.add(MaxProjectConfig(
-            project_id=project.id, owner_id=owner.id,
-            config=payload.max_config.model_dump(mode="json"), config_version=1,
-            managed_kit_version=MAX_MANAGED_KIT_VERSION,
-        ))
+    # Initialize even when an older client only submits a project name. Doing
+    # this at creation avoids silently enabling privileges in existing apps.
+    config = payload.max_config or MaxProjectConfigPayload.default_for(payload.name)
+    config = config.model_copy(update={
+        "management_modules": new_project_management_modules(
+            config.app_type, config.management_modules,
+        ),
+    })
+    validate_delivery_size(config, 1)
+    session.add(MaxProjectConfig(
+        project_id=project.id, owner_id=owner.id,
+        config=config.model_dump(mode="json"), config_version=1,
+        managed_kit_version=MAX_MANAGED_KIT_VERSION,
+    ))
 
     template_dir = TEMPLATES_DIR / payload.template
     commit_sha = await asyncio.to_thread(

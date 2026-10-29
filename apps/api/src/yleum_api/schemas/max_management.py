@@ -57,6 +57,10 @@ class _WireModel(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_default=True)
 
 
+class EnableManagementPayload(_WireModel):
+    expected_config_version: StrictInt = Field(ge=0, le=9_007_199_254_740_991)
+
+
 Revision = Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
 Money = Annotated[StrictInt, Field(ge=0, le=9_007_199_254_740_991)]
 Note = Annotated[StrictStr, Field(max_length=2000)]
@@ -120,6 +124,17 @@ class ManagementContract(_WireModel):
         return _validate_modules(value)
 
 
+class OwnerOrderFulfillment(_WireModel):
+    type: Literal["pickup"]
+    delay_minutes: StrictInt = Field(ge=0, le=1440)
+    scheduled_for: Timestamp
+
+    @field_validator("scheduled_for")
+    @classmethod
+    def utc_timestamp(cls, value: datetime) -> datetime:
+        return value.astimezone(UTC)
+
+
 class OwnerRecordItem(_WireModel):
     catalog_id: StrictStr = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     title: StrictStr = Field(min_length=1, max_length=120)
@@ -145,6 +160,7 @@ class OwnerRecordPublic(_WireModel):
     total_kopecks: Money | None = None
     currency: Literal["RUB"] | None = None
     note: Note | None = None
+    fulfillment: OwnerOrderFulfillment | None = None
 
     @field_validator("created_at", "requested_for")
     @classmethod
@@ -153,6 +169,8 @@ class OwnerRecordPublic(_WireModel):
 
     @model_validator(mode="after")
     def coherent_snapshot(self) -> Self:
+        if self.fulfillment is not None and self.resource != ResourceId.orders:
+            raise ValueError("pickup fulfillment is only valid for orders")
         if (self.total_kopecks is None) != (self.currency is None):
             raise ValueError("currency RUB is required exactly when an amount is present")
         if self.resource != ResourceId.bookings and (

@@ -23,12 +23,14 @@ def files(source, modules=("catalog", "orders"), **extra):
 PAGE = """
 import {useState, useEffect} from 'react';
 import {useYleumAppProfile as useProfile} from '@/lib/omnia/app-profile-client';
-import {useYleumCatalog as useCatalog} from '@/lib/omnia/catalog-client';
+import {useYleumCatalog as useCatalog,
+ useYleumCatalogSelection as useSelection} from '@/lib/omnia/catalog-client';
 import {createManagedOrder as createOrder,
   getManagedRecords as readRecords} from '@/lib/omnia/business-client';
 export default function Page() {
   const {profile} = useProfile();
   const {items} = useCatalog();
+  const selection = useSelection(items);
   const [records, setRecords] = useState<any[]>([]);
   useEffect(() => { async function load() {
     const response = await readRecords('orders'); setRecords(response.records);
@@ -45,6 +47,15 @@ export default function Page() {
     <form onSubmit={submit}><button>Send</button></form></main>;
 }
 """
+
+
+@pytest.mark.parametrize("replacement", [
+    "", "const selection = useSelection([]);",
+    "function unused() { return useSelection(items); }",
+])
+def test_catalog_selection_requires_a_live_hook_bound_to_the_real_catalog(replacement):
+    source = PAGE.replace("const selection = useSelection(items);", replacement)
+    assert management_source_gap(files(source))
 
 
 def test_live_aliases_effect_state_history_and_typed_submit_are_connected():

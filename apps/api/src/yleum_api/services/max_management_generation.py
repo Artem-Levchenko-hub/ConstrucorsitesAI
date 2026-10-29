@@ -30,7 +30,7 @@ _CREATE = {
 _SDK = {
     "@/lib/omnia/business-client": {*_CREATE.values(), "getManagedRecords"},
     "@/lib/omnia/app-profile-client": {"useYleumAppProfile"},
-    "@/lib/omnia/catalog-client": {"useYleumCatalog"},
+    "@/lib/omnia/catalog-client": {"useYleumCatalog", "useYleumCatalogSelection"},
     "react": {"useState", "useEffect", "useCallback"},
 }
 # Only the explicitly supported React form/button events are connection evidence.
@@ -90,6 +90,7 @@ class _Connections:
         self.modules: dict[str, dict[str, _Value]] = {}
         self.created: set[str] = set()
         self.rendered: set[str] = set()
+        self.catalog_selection = False
         self.active: set[tuple[str, int]] = set()
         self.steps = 0
         self.event_depth = 0
@@ -671,6 +672,13 @@ class _Connections:
             return _Value(
                 tags={"profile-hook" if fn.sdk == "useYleumAppProfile" else "catalog-hook"}
             )
+        if fn.sdk == "useYleumCatalogSelection":
+            if args and "catalog" in args[0].tags:
+                self.catalog_selection = True
+            return _Value(props={
+                name: _Value(sdk="catalog-selection-" + name)
+                for name in ("getOption", "selectOption", "setCategory")
+            })
         if fn.sdk == "getManagedRecords" and args and args[0].literal in _CREATE:
             return _Value(pending=_Value(tags={"response:" + str(args[0].literal)}))
         if fn.sdk in _CREATE.values() and self.event_depth and args and args[0].props:
@@ -763,6 +771,12 @@ def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
                     frozenset(),
                 )
             capabilities.add("catalog")
+            if not connections.catalog_selection:
+                return (
+                    "Connect useYleumCatalogSelection(items) from catalog-client to the live "
+                    "catalog; use its category and getOption(item) instead of stale local choices.",
+                    frozenset(),
+                )
         elif name in _CREATE:
             if name not in connections.created or "record:" + name not in connections.rendered:
                 return (

@@ -135,6 +135,11 @@ function Records({ projectId, resource, onDirtyChange }: { projectId: string; re
           if (value == null || value === "") return null;
           return <div key={field.key}><dt>{field.label}</dt><dd>{field.kind === "date" ? dateLabel(String(value)) : field.kind === "money" ? ownerMoney(Number(value)) : String(value)}</dd></div>;
         })}</dl>
+        {resource.id === "orders" && draft.record.fulfillment && <p className="max-owner-hint">
+          {draft.record.fulfillment.delay_minutes === 0 ? "Самовывоз: как можно скорее" : <>
+            Самовывоз к <time dateTime={draft.record.fulfillment.scheduled_for}>{dateLabel(draft.record.fulfillment.scheduled_for)}</time>
+          </>}
+        </p>}
         {draft.record.items.length > 0 && <div><h4>Состав заказа</h4><ul>{draft.record.items.map((item, index) => <li key={`${item.catalog_id}:${index}`}><strong>{item.title}</strong>{item.option && <span>{item.option}</span>}<span>{item.quantity.toLocaleString("ru-RU")} × {ownerMoney(item.unit_price_kopecks)}</span></li>)}</ul></div>}
         <form onSubmit={event => { event.preventDefault(); void save(); }}>
           <label>Статус<select aria-label="Статус обращения" disabled={locked} value={draft.status} onChange={event => edit({ status: event.target.value as OwnerStatus })}>{[draft.record.status, ...(resource.transitions[draft.record.status] ?? [])].map(status => <option key={status} value={status}>{resource.status_labels[status]}</option>)}</select></label>

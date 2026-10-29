@@ -11,7 +11,9 @@ MAX_APP_CONFIG_BYTES = 900 * 1024
 
 
 def public_business_config(payload: MaxProjectConfigPayload) -> dict[str, Any]:
-    return payload.model_dump(mode="json", exclude={"max_url_attached", "management_modules"})
+    return payload.model_dump(
+        mode="json", exclude={"max_url_attached", "management_modules", "legacy_orders_table"},
+    )
 
 
 def config_digest(config: dict[str, Any]) -> str:

@@ -8,7 +8,7 @@
     "mode": "100644"
   },
   "src/lib/omnia/catalog-client.ts": {
-    "sha256": "bd30f8af55907b12d2f36a37fee1f245ec0cfc6f6ae0bedd864e5d41297a626f",
+    "sha256": "ea266ff68d2fdf2dcf82d98f63dd885a1129c0943f1642dff2eb6017b6d1ceba",
     "mode": "100644"
   },
   "tests/catalog-config.test.mjs": {

@@ -22,6 +22,7 @@ export type ContactInput = {
 };
 export type ManagedOrderInput = ContactInput & {
   configVersion: number;
+  fulfillment?: { type: "pickup"; delayMinutes: number };
   items: {
     catalogId: string;
     quantity: number;
@@ -65,7 +66,7 @@ export function validateManagedInput(
   const value = object(input, [
     ...common,
     ...(resource === "orders"
-      ? ["configVersion", "items"]
+      ? ["configVersion", "items", "fulfillment"]
       : resource === "bookings"
         ? ["serviceId", "requestedFor"]
         : []),
@@ -88,6 +89,13 @@ export function validateManagedInput(
   }
   if (resource === "orders") {
     result.configVersion = safeInteger(value.configVersion);
+    if (value.fulfillment !== undefined) {
+      const pickup = object(value.fulfillment, ["type", "delayMinutes"]);
+      const delayMinutes = safeInteger(pickup.delayMinutes);
+      if (pickup.type !== "pickup" || delayMinutes > 1440)
+        throw new ManagementError("invalid_request");
+      result.fulfillment = { type: "pickup", delayMinutes };
+    }
     if (
       !Array.isArray(value.items) ||
       !value.items.length ||
@@ -120,6 +128,7 @@ export function prepareManagedSnapshot(
   resource: ResourceId,
   input: unknown,
   catalog?: Catalog,
+  clock: () => number = Date.now,
 ): ManagedSnapshot {
   const v = validateManagedInput(resource, input);
   const snapshot: ManagedSnapshot = {
@@ -181,12 +190,25 @@ export function prepareManagedSnapshot(
       total_kopecks: total,
       currency: "RUB",
     });
+  if (v.fulfillment !== undefined) {
+    const pickup = v.fulfillment as NonNullable<ManagedOrderInput["fulfillment"]>;
+    const scheduled = clock() + pickup.delayMinutes * 60_000;
+    const date = new Date(scheduled);
+    if (!Number.isSafeInteger(scheduled) || !Number.isFinite(date.getTime()) ||
+      date.getUTCFullYear() < 1 || date.getUTCFullYear() > 9999)
+      throw new ManagementError("unavailable", 503);
+    snapshot.fulfillment = {
+      type: "pickup", delay_minutes: pickup.delayMinutes,
+      scheduled_for: date.toISOString(),
+    };
+  }
   return snapshot;
 }
 export async function createManagedBusinessRecord(
   actor: string,
   resource: ResourceId,
   input: unknown,
+  clock: () => number = Date.now,
 ) {
   const validated = validateManagedInput(resourceId(resource), input);
   const { createManagedRecord } = await import("@/lib/omnia/management-store");
@@ -201,7 +223,7 @@ export async function createManagedBusinessRecord(
           : await (
               await import("@/lib/omnia/catalog-server")
             ).getYleumServerAppConfig();
-      return prepareManagedSnapshot(resource, validated, catalog);
+      return prepareManagedSnapshot(resource, validated, catalog, clock);
     },
   );
   {

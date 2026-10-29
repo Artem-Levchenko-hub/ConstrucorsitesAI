@@ -14,7 +14,7 @@ import { describeApiError } from "@/lib/api/errors";
 import { saveLandingPrompt, takeLandingPrompt } from "@/lib/landing-prompt";
 import { createProject, listProjects } from "@/lib/api/projects";
 import type { ManagementModule } from "@/lib/api/types";
-import { buildMaxProjectPrompt, defaultManagementModules, type MaxAppTypeId, type MaxFeature, type MaxStyleId } from "@/lib/max-brief";
+import { buildMaxProjectPrompt, defaultManagementModules, newProjectManagementModules, type MaxAppTypeId, type MaxFeature, type MaxStyleId } from "@/lib/max-brief";
 import { containsChatSecret, redactChatSecrets, resolveChatCredential } from "@/lib/max-chat-credentials";
 import { useOwnerChatQuota } from "@/hooks/useOwnerChatQuota";
 import { FREE_CHAT_UPGRADE_MESSAGE } from "@/lib/owner-chat-quota";
@@ -67,7 +67,7 @@ export function MaxStudio({ email }: { email: string }) {
   const [features, setFeatures] = useState<MaxFeature[]>(STARTER_FEATURES);
   const [style, setStyle] = useState<MaxStyleId>("brand");
   const [brandColors, setBrandColors] = useState("");
-  const [managementModules, setManagementModules] = useState<ManagementModule[]>(["catalog", "orders"]);
+  const [managementModules, setManagementModules] = useState<ManagementModule[]>(() => defaultManagementModules("loyalty"));
 
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const maxProjects = useMemo(() => {
@@ -82,6 +82,7 @@ export function MaxStudio({ email }: { email: string }) {
   const create = useMutation({
     mutationFn: async () => {
       if (quota.initialExhausted) throw new Error(FREE_CHAT_UPGRADE_MESSAGE);
+      const modules = newProjectManagementModules(appType, managementModules);
       const rawPrompt = buildMaxProjectPrompt({
         name,
         idea,
@@ -91,7 +92,7 @@ export function MaxStudio({ email }: { email: string }) {
         features,
         style,
         brandColors,
-        managementModules,
+        managementModules: modules,
       });
       const hasCredential = containsChatSecret(rawPrompt);
       const scrub = (value: string) =>
@@ -117,7 +118,7 @@ export function MaxStudio({ email }: { email: string }) {
         features,
         style,
         brandColors: safeBrandColors,
-        managementModules,
+        managementModules: modules,
       });
       const project = await createProject({
         name: safeName, template: "max_miniapp",
@@ -143,7 +144,7 @@ export function MaxStudio({ email }: { email: string }) {
             policy_url: "",
           },
           max_url_attached: false,
-          management_modules: managementModules,
+          management_modules: modules,
         },
       });
       let credentialReady = !hasCredential;
@@ -294,7 +295,7 @@ export function MaxStudio({ email }: { email: string }) {
           if (patch.features !== undefined) setFeatures(patch.features);
           if (patch.style !== undefined) setStyle(patch.style);
           if (patch.brandColors !== undefined) setBrandColors(patch.brandColors);
-          if (patch.managementModules !== undefined) setManagementModules(patch.managementModules);
+          if (patch.managementModules !== undefined) setManagementModules(newProjectManagementModules(patch.appType ?? appType, patch.managementModules));
         }}
         onSubmit={() => create.mutateAsync()}
       />

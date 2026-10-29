@@ -24,6 +24,44 @@ def schemas():
     return importlib.import_module("yleum_api.schemas.max_management")
 
 
+def test_pickup_order_metadata_is_typed_optional_and_normalized_without_changing_registry():
+    record = schemas().OwnerRecordPublic.model_validate({
+        **RECORD, "resource": "orders", "fulfillment": {
+            "type": "pickup", "delay_minutes": 30,
+            "scheduled_for": "2026-10-29T15:30:00+03:00",
+        },
+    })
+    assert record.fulfillment.scheduled_for.isoformat() == "2026-10-29T12:30:00+00:00"
+    assert record.fulfillment.delay_minutes == 30
+    assert schemas().OwnerRecordPublic.model_validate(RECORD).fulfillment is None
+
+
+@pytest.mark.parametrize("patch", [
+    {"type": "delivery"}, {"delay_minutes": True}, {"delay_minutes": -1},
+    {"delay_minutes": 1441}, {"scheduled_for": "2026-10-29T12:00:00"},
+    {"scheduled_for": 1000}, {"scheduled_for": "1000"}, {"note": "private"},
+])
+def test_pickup_metadata_rejects_invalid_values_and_private_fields(patch):
+    with pytest.raises(ValidationError):
+        schemas().OwnerRecordPublic.model_validate({
+            **RECORD, "resource": "orders", "fulfillment": {
+                "type": "pickup", "delay_minutes": 0,
+                "scheduled_for": "2026-10-29T12:00:00Z", **patch,
+            },
+        })
+
+
+@pytest.mark.parametrize("resource", ["leads", "bookings"])
+def test_pickup_is_never_attached_to_other_resource_types(resource):
+    with pytest.raises(ValidationError):
+        schemas().OwnerRecordPublic.model_validate({
+            **RECORD, "resource": resource, "fulfillment": {
+                "type": "pickup", "delay_minutes": 15,
+                "scheduled_for": "2026-10-29T12:00:00Z",
+            },
+        })
+
+
 def service():
     return importlib.import_module("yleum_api.services.max_management_contract")
 

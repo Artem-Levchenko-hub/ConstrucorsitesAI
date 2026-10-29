@@ -1,0 +1,83 @@
+/** Pure validation of a viewed order against the freshly mounted owner catalog. */
+export type CatalogItemLike = {
+  id: string;
+  title: string;
+  price: string;
+  active: boolean;
+  availability: string;
+  options?: readonly string[];
+};
+
+export type OrderItemSnapshot = {
+  id: string;
+  name: string;
+  price: number;
+  qty: number;
+  option?: string;
+};
+
+export type CatalogOrderResult =
+  | { ok: true; items: OrderItemSnapshot[]; total: number }
+  | { ok: false; code: "invalid_order"; error: string }
+  | { ok: false; code: "catalog_changed"; error: string; current: OrderItemSnapshot[]; total: number };
+
+/** Accept only unambiguous positive whole rubles, with an optional ruble suffix. */
+export function parseRubPrice(raw: unknown): number | null {
+  if (typeof raw !== "string") return null;
+  const match = /^\s*(\d+)\s*(?:₽|руб\.?|р\.?)?\s*$/iu.exec(raw);
+  if (!match) return null;
+  const price = Number(match[1]);
+  return Number.isSafeInteger(price) && price > 0 ? price : null;
+}
+
+/** A changed quote is returned only when every requested line is still valid. */
+export function resolveCatalogOrder(
+  requested: unknown,
+  viewedVersion: unknown,
+  catalog: { configVersion: number; config: { content: readonly CatalogItemLike[] } },
+): CatalogOrderResult {
+  const invalid = (error: string): CatalogOrderResult => ({ ok: false, code: "invalid_order", error });
+  if (typeof viewedVersion !== "number" || !Number.isSafeInteger(viewedVersion) || viewedVersion < 0) {
+    return invalid("Обновите каталог: не указана корректная версия.");
+  }
+  if (!Array.isArray(requested) || requested.length < 1 || requested.length > 20) {
+    return invalid("Выберите от 1 до 20 позиций.");
+  }
+
+  const byId = new Map(catalog.config.content.map(item => [item.id, item]));
+  const seen = new Set<string>();
+  const current: OrderItemSnapshot[] = [];
+  let priceChanged = false;
+  let total = 0;
+  for (const raw of requested) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return invalid("Неверная позиция заказа.");
+    const { id, qty, price: viewedPrice, option } = raw as Record<string, unknown>;
+    if (typeof id !== "string" || !id || seen.has(id)
+      || typeof qty !== "number" || !Number.isInteger(qty) || qty < 1 || qty > 20
+      || typeof viewedPrice !== "number" || !Number.isSafeInteger(viewedPrice) || viewedPrice <= 0) {
+      return invalid("Неверная позиция заказа, количество или цена.");
+    }
+    seen.add(id);
+    const item = byId.get(id);
+    if (!item || !item.active || item.availability !== "in_stock") {
+      return invalid("Некоторые позиции больше недоступны. Обновите корзину.");
+    }
+    const price = parseRubPrice(item.price);
+    if (price === null) return invalid("Для этой позиции нужна цена в целых рублях. Уточните её в кофейне.");
+    const options = item.options ?? [];
+    if (options.length ? typeof option !== "string" || !options.includes(option) : option !== undefined) {
+      return invalid("Выберите доступный вариант позиции.");
+    }
+    current.push({ id: item.id, name: item.title, price, qty,
+      ...(typeof option === "string" ? { option } : {}) });
+    total += price * qty;
+    // The existing total_rub column is a PostgreSQL integer; never overflow it.
+    if (!Number.isSafeInteger(total) || total > 2_147_483_647) return invalid("Сумма заказа слишком велика.");
+    if (price !== viewedPrice) priceChanged = true;
+  }
+  if (viewedVersion !== catalog.configVersion || priceChanged) {
+    return { ok: false, code: "catalog_changed",
+      error: "Каталог изменился. Проверьте новую сумму и подтвердите заказ ещё раз.", current, total };
+  }
+  return { ok: true, items: current, total };
+}

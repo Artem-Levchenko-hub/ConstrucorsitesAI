@@ -9,6 +9,11 @@ export type ManagedItem = {
   unit_price_kopecks: number;
   option?: string;
 };
+export type ManagedOrderFulfillment = {
+  type: "pickup";
+  delay_minutes: number;
+  scheduled_for: string;
+};
 export type ManagedSnapshot = {
   management_protocol: 1;
   resource: ResourceId;
@@ -22,6 +27,7 @@ export type ManagedSnapshot = {
   items: ManagedItem[];
   total_kopecks?: number;
   currency?: "RUB";
+  fulfillment?: ManagedOrderFulfillment;
 };
 export type ResourceDefinition = {
   id: ResourceId;
@@ -376,6 +382,22 @@ export function projectManagedRecord(
     unit_price_kopecks: item.unit_price_kopecks,
     ...(item.option !== undefined ? { option: item.option } : {}),
   }));
+  if (payload.fulfillment !== undefined) {
+    try {
+      const pickup = object(payload.fulfillment, [
+        "type", "delay_minutes", "scheduled_for",
+      ]);
+      const delay = safeInteger(pickup.delay_minutes);
+      if (row.resource !== "orders" || pickup.type !== "pickup" || delay > 1440)
+        throw Error();
+      result.fulfillment = {
+        type: "pickup", delay_minutes: delay,
+        scheduled_for: isoDate(pickup.scheduled_for),
+      };
+    } catch {
+      throw new ManagementError("unavailable", 503);
+    }
+  }
   if (owner) result.note = row.note ?? "";
   return result as ManagedRecord;
 }

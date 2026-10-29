@@ -111,8 +111,9 @@ async def _seed_saved_max_config(
     """Deliver authoritative public metadata before any model/runtime work."""
     from yleum_api.core.errors import ApiError
     from yleum_api.services.max_content_delivery import public_business_config
+    from yleum_api.services.max_legacy_order_management import LEGACY_ORDER_MANAGED_PATHS
     from yleum_api.services.max_managed_generation import load_saved_business_config
-    from yleum_api.services.max_project_kit import render_max_managed_files
+    from yleum_api.services.max_project_kit import _template_file, render_max_managed_files
 
     config, version = await load_saved_business_config(
         factory, project_id=ids.project_id, owner_id=ids.user_id,
@@ -128,16 +129,39 @@ async def _seed_saved_max_config(
             )
         await seed(version, public_business_config(config))
     files = render_max_managed_files(config, ids.project_id)
-    if config.management_modules is not None:
-        # Only an explicit new-app choice creates this privilege contract.
-        # Stage it through the same generation lease as every other SDK file.
+    current = await runtime.handle.snapshot_files() if runtime.handle is not None else {}
+    core_path = "drizzle/0003_owner_management.sql"
+    trusted_paths = {core_path, *LEGACY_ORDER_MANAGED_PATHS}
+    expected = {**files, core_path: _template_file(core_path)}
+    trusted_files = {
+        path: expected[path] for path in sorted(trusted_paths)
+        if path in files or (path == core_path and path in current)
+    }
+    if (
+        config.management_modules is not None or trusted_files
+        or trusted_paths.intersection(current)
+    ):
+        # Explicit owner configuration supplies trusted SQL before the model's
+        # immutable migration baseline. Existing applied migrations are never
+        # rewritten, including after a worker restart or template change.
         if runtime.handle is None:
             raise ApiError(
                 "orchestrator_unavailable", "Не удалось подготовить управление приложением", 503,
             )
-        await runtime.handle.stage_patch(
-            {".omnia/management.json": files[".omnia/management.json"]}, (),
-        )
+        if any(path in current and current[path] != expected.get(path) for path in trusted_paths):
+            raise ApiError(
+                "conflict", "Управляемые миграции приложения изменены", 409,
+                details={"reason": "managed_migration_immutable"},
+            )
+        patch = {
+            **trusted_files,
+            **({".omnia/management.json": files[".omnia/management.json"]}
+               if ".omnia/management.json" in files else {}),
+        }
+        patch = {path: content for path, content in patch.items() if current.get(path) != content}
+        if patch:
+            await runtime.handle.stage_patch(patch, ())
+        runtime.migration_baseline = {**(runtime.migration_baseline or {}), **trusted_files}
     return files["src/lib/omnia/max-config.ts"]
 
 

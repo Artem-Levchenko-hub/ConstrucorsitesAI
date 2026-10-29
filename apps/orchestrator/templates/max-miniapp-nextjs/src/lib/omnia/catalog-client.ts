@@ -62,3 +62,29 @@ export function useYleumCatalog() {
 
   return { ...state, refresh };
 }
+
+function validOption(item: YleumMaxContentItem | undefined, value: unknown): string | undefined {
+  return item?.active && typeof value === "string" && item.options.includes(value) ? value : undefined;
+}
+
+/** Managed UI choices only; never replace a held price/version or confirm an order. */
+export function useYleumCatalogSelection(items: readonly YleumMaxContentItem[]) {
+  const [chosenCategory, setCategory] = useState<string | null>(null);
+  const [chosenOptions, setOptions] = useState<Record<string, string | undefined>>({});
+  // Derive public choices from this render's authoritative items. No effect can
+  // expose a stale value for one render or loop when a caller maps a fresh array.
+  const category = chosenCategory !== null && items.some(item => item.active && item.category === chosenCategory)
+    ? chosenCategory : null;
+  const selectedOptions: Record<string, string> = Object.fromEntries(items.flatMap(item => {
+    const option = validOption(item, chosenOptions[item.id]);
+    return option === undefined ? [] : [[item.id, option]];
+  }));
+  function getOption(item: Pick<YleumMaxContentItem, "id">): string | undefined {
+    return validOption(items.find(current => current.id === item.id), chosenOptions[item.id]);
+  }
+  function selectOption(itemId: string, value: string): void {
+    const option = validOption(items.find(item => item.id === itemId), value);
+    setOptions(previous => ({ ...previous, [itemId]: option }));
+  }
+  return { category, setCategory, selectedOptions, selectOption, getOption };
+}
