@@ -21,6 +21,7 @@ from yleum_api.schemas.max_management import ManagementContract
 from yleum_api.services.max_management_contract import parse_management_contract
 
 _MANIFEST = ".omnia/management.json"
+_MAX_COLLECTION_ITEMS = 16
 _CREATE = {
     "orders": "createManagedOrder",
     "leads": "createManagedLead",
@@ -59,6 +60,9 @@ class _Value:
     literal: object = None
     setter: _Value | None = None
     state: bool = False
+    elements: tuple[_Value, ...] | None = None
+    pending: _Value | None = None
+    mutation_roots: tuple[_Value, ...] = ()
 
 
 def _contract(files: Mapping[str, str]) -> ManagementContract | None:
@@ -82,12 +86,15 @@ class _Connections:
             and path.endswith((".tsx", ".ts"))
             and not path.startswith(("src/lib/omnia/", "src/app/api/"))
         }
+        self.promise = _Value(sdk="Promise")
         self.modules: dict[str, dict[str, _Value]] = {}
         self.created: set[str] = set()
         self.rendered: set[str] = set()
         self.active: set[tuple[str, int]] = set()
         self.steps = 0
         self.event_depth = 0
+        self.projection_depth = 0
+        self.projections: dict[tuple[str, int], bool] = {}
 
     def _resolve(self, path: str, source: str) -> str | None:
         base = (
@@ -107,7 +114,7 @@ class _Connections:
     def module(self, path: str) -> dict[str, _Value]:
         if path in self.modules:
             return self.modules[path]
-        env: dict[str, _Value] = {}
+        env: dict[str, _Value] = {"Promise": self.promise}
         self.modules[path] = env
         program = self.programs[path]
         if program.has_error:
@@ -177,11 +184,23 @@ class _Connections:
                 )
         elif pattern.type == "array_pattern" and value.state:
             children = pattern.named_children
-            state = _Value()
+            state = _Value(tags=set(value.tags), props=dict(value.props), elements=value.elements)
             if children:
                 self.bind(children[0], state, env)
             if len(children) > 1:
                 self.bind(children[1], _Value(setter=state), env)
+        elif pattern.type == "array_pattern":
+            index = 0
+            for child in pattern.children:
+                if child.type == ",":
+                    index += 1
+                elif child.is_named:
+                    element = (
+                        value.elements[index]
+                        if value.elements is not None and index < len(value.elements)
+                        else _Value()
+                    )
+                    self.bind(child, element, env)
 
     def declare(self, node: Node, env: dict[str, _Value], path: str) -> None:
         if node.type == "function_declaration":
@@ -198,6 +217,9 @@ class _Connections:
     def member(self, value: _Value, key: str) -> _Value:
         if key in value.props:
             return value.props[key]
+        if key == "refresh" and value.tags & {"catalog-hook", "profile-hook"}:
+            # The locked hooks expose a read/refresh operation, not an opaque mutator.
+            return _Value(sdk="managed-hook-refresh")
         tags = set()
         for tag in value.tags:
             if tag == "profile-hook" and key == "profile":
@@ -214,15 +236,161 @@ class _Connections:
                 tags.add("records:" + tag.split(":", 1)[1])
             elif tag.startswith(("item:", "record:")):
                 tags.add(tag)
-        return _Value(tags=tags)
+        elements = tuple(
+            _Value(tags={"item:catalog" if tag == "catalog" else "record:" + tag.split(":", 1)[1]})
+            for tag in tags
+            if tag == "catalog" or tag.startswith("records:")
+        )
+        result = _Value(tags=tags, elements=elements or None, mutation_roots=value.mutation_roots)
+        if elements:
+            # Re-reading a response property must observe mutations to that collection.
+            value.props[key] = result
+        return result
+
+    def mutation_root(self, node: Node | None, env: dict[str, _Value]) -> _Value | None:
+        """Find mutation authority without interpreting property/index values."""
+        while node is not None:
+            self.steps += 1
+            if self.steps > 4000:
+                return None
+            if node.type == "identifier":
+                return env.get(_text(node))
+            if node.type in {"member_expression", "subscript_expression"}:
+                node = node.child_by_field_name("object")
+            elif node.type in {"as_expression", "parenthesized_expression", "non_null_expression"}:
+                node = node.named_children[0] if node.named_children else None
+            else:
+                return None
+        return None
+
+    def invalidate(self, value: _Value) -> None:
+        """Unknown mutation cannot retain evidence through another collection alias."""
+        pending = [value]
+        seen = set()
+        while pending:
+            current = pending.pop()
+            if id(current) in seen:
+                continue
+            seen.add(id(current))
+            pending.extend(
+                (
+                    *current.props.values(),
+                    *(current.elements or ()),
+                    *current.mutation_roots,
+                )
+            )
+            current.mutation_roots = ()
+            if current.pending is not None:
+                pending.append(current.pending)
+            current.pending = None
+            current.tags.clear()
+            current.props.clear()
+            current.elements = None
+            current.sdk = ""
+            current.function = None
+            current.setter = None
+            current.literal = None
+
+    def projection_is_bounded(self, path: str, node: Node) -> bool:
+        key = (path, node.start_byte)
+        if key not in self.projections:
+            pending = [node]
+            allowed = True
+            while pending:
+                child = pending.pop()
+                self.steps += 1
+                if self.steps > 4000 or child.type in {
+                    "binary_expression",
+                    "ternary_expression",
+                    "if_statement",
+                    "switch_statement",
+                    "for_statement",
+                    "for_in_statement",
+                    "while_statement",
+                    "do_statement",
+                    "assignment_expression",
+                    "augmented_assignment_expression",
+                    "update_expression",
+                    "spread_element",
+                    "throw_statement",
+                    "try_statement",
+                    "new_expression",
+                }:
+                    allowed = False
+                    break
+                pending.extend(child.named_children)
+            self.projections[key] = allowed
+        return self.projections[key]
+
+    def sort_is_read_only(self, fn: _Value, elements: tuple[_Value, ...]) -> bool:
+        # Only the candidate's proven timestamp comparison, never arbitrary sort
+        # callbacks which could mutate records/collections while returning them.
+        if fn.function is None:
+            return False
+        path, node, closure = fn.function
+        parameters = node.child_by_field_name("parameters")
+        if parameters is None or len(parameters.named_children) != 2:
+            return False
+        patterns = [child.child_by_field_name("pattern") for child in parameters.named_children]
+        if any(pattern is None or pattern.type != "identifier" for pattern in patterns):
+            return False
+        names = {_text(pattern) for pattern in patterns}
+        body = node.child_by_field_name("body")
+        if body is None or body.type != "call_expression":
+            return False
+        target = body.child_by_field_name("function")
+        arguments = body.child_by_field_name("arguments")
+        if (
+            target is None
+            or target.type != "member_expression"
+            or _text(target.child_by_field_name("property")) != "localeCompare"
+            or arguments is None
+            or len(arguments.named_children) != 1
+        ):
+            return False
+        operands = [target.child_by_field_name("object"), arguments.named_children[0]]
+        for operand in operands:
+            if (
+                operand is None
+                or operand.type != "member_expression"
+                or _text(operand.child_by_field_name("property")) != "created_at"
+            ):
+                return False
+            base: Node | None = operand
+            while base is not None and base.type == "member_expression":
+                base = base.child_by_field_name("object")
+            if base is None or base.type != "identifier" or _text(base) not in names:
+                return False
+        for element in elements:
+            scope = {**closure, **dict.fromkeys(names, element)}
+            if any(
+                not any(
+                    tag.startswith("record:")
+                    for tag in self.value(
+                        operand,
+                        scope,
+                        path,
+                    ).tags
+                )
+                for operand in operands
+            ):
+                return False
+        return True
 
     def invoke(self, fn: _Value, args: list[_Value], render: bool = False) -> _Value:
         if fn.setter is not None and args:
-            fn.setter.tags.update(args[0].tags)
+            fn.setter.tags = set(args[0].tags)
+            fn.setter.props = dict(args[0].props)
+            fn.setter.elements = args[0].elements
             return _Value()
         if fn.function is None:
+            if not fn.sdk:
+                for arg in args:
+                    self.invalidate(arg)
             return _Value()
         path, node, closure = fn.function
+        if self.projection_depth and not self.projection_is_bounded(path, node):
+            return _Value()
         key = (path, node.start_byte)
         if key in self.active or self.steps > 4000:
             return _Value()
@@ -241,11 +409,20 @@ class _Connections:
             else self.value(body, env, path, render)
         )
         self.active.remove(key)
-        return result
+        return (
+            _Value(pending=result.pending or result)
+            if any(child.type == "async" for child in node.children)
+            else result
+        )
 
     def block(
         self, node: Node, env: dict[str, _Value], path: str, render: bool
     ) -> tuple[bool, _Value]:
+        for child in node.named_children:
+            if child.type in {"lexical_declaration", "variable_declaration"}:
+                for declaration in child.named_children:
+                    if declaration.type == "variable_declarator":
+                        self.bind(declaration.child_by_field_name("name"), _Value(), env)
         for child in node.named_children:
             if child.type == "function_declaration":
                 self.declare(child, env, path)
@@ -300,16 +477,23 @@ class _Connections:
             result = _Value(function=(path, node, env))
         elif kind in {
             "parenthesized_expression",
-            "await_expression",
             "as_expression",
             "non_null_expression",
         }:
             result = self.value(
                 node.named_children[0] if node.named_children else None, env, path, render
             )
+        elif kind == "await_expression":
+            result = self.value(node.named_children[0] if node.named_children else None, env, path)
+            result = result.pending or result
         elif kind == "unary_expression":
             operand = self.value(node.named_children[0] if node.named_children else None, env, path)
             operator = _text(node.children[0])
+            if operator == "delete":
+                root = self.mutation_root(node.child_by_field_name("argument"), env)
+                if root is not None:
+                    self.invalidate(root)
+                self.invalidate(operand)
             result = _Value(
                 literal=not operand.literal
                 if operator == "!" and isinstance(operand.literal, bool)
@@ -324,6 +508,56 @@ class _Connections:
                 self.value(node.child_by_field_name("object"), env, path),
                 _text(node.child_by_field_name("property")),
             )
+        elif kind == "subscript_expression":
+            # Unknown indices never grant readable history, but cannot hide aliases
+            # from later opaque calls or mutations.
+            source = self.value(node.child_by_field_name("object"), env, path)
+            self.value(node.child_by_field_name("index"), env, path)
+            result = _Value(mutation_roots=(source,))
+        elif kind == "array":
+            children = [child for child in node.named_children if child.type != "comment"]
+            expecting_value = True
+            sparse = False
+            for child in node.children:
+                if child.type == ",":
+                    sparse |= expecting_value
+                    expecting_value = True
+                elif child.is_named and child.type != "comment":
+                    expecting_value = False
+            elements = tuple(self.value(child, env, path) for child in children)
+            if (
+                not sparse
+                and len(children) <= _MAX_COLLECTION_ITEMS
+                and all(child.type != "spread_element" for child in children)
+            ):
+                result = _Value(elements=elements)
+            else:
+                for element in elements:
+                    self.invalidate(element)
+                result = _Value()
+        elif kind == "spread_element":
+            # Unsupported arity cannot conceal an authority-bearing argument.
+            for child in node.named_children:
+                self.invalidate(self.value(child, env, path))
+            result = _Value()
+        elif kind == "new_expression":
+            # Constructors are opaque calls, never an interpreted class body.
+            self.value(node.child_by_field_name("constructor"), env, path)
+            arguments = node.child_by_field_name("arguments")
+            for argument in arguments.named_children if arguments is not None else ():
+                self.invalidate(self.value(argument, env, path))
+            result = _Value()
+        elif kind in {
+            "assignment_expression",
+            "augmented_assignment_expression",
+            "update_expression",
+        }:
+            assigned = node.child_by_field_name("left") or node.child_by_field_name("argument")
+            root = self.mutation_root(assigned, env)
+            if root is not None:
+                self.invalidate(root)
+            self.value(node.child_by_field_name("right"), env, path)
+            result = _Value()
         elif kind == "object":
             props = {}
             for child in node.named_children:
@@ -331,6 +565,8 @@ class _Connections:
                     props[_text(child.child_by_field_name("key"))] = self.value(
                         child.child_by_field_name("value"), env, path
                     )
+                elif child.type == "spread_element":
+                    self.value(child, env, path)
                 elif child.type == "shorthand_property_identifier":
                     props[_text(child)] = env.get(_text(child), _Value())
             result = _Value(props=props)
@@ -375,18 +611,58 @@ class _Connections:
         if target is not None and target.type == "member_expression":
             source = self.value(target.child_by_field_name("object"), env, path)
             operation = _text(target.child_by_field_name("property"))
-            if operation == "map" and render and args:
-                tags = {
-                    "item:catalog" if tag == "catalog" else "record:" + tag.split(":", 1)[1]
-                    for tag in source.tags
-                    if tag == "catalog" or tag.startswith("records:")
-                }
-                return self.invoke(args[0], [_Value(tags=tags)], True)
-            if operation == "then" and args:
-                return self.invoke(args[0], [source])
+            if (
+                operation == "all"
+                and _text(target.child_by_field_name("object")) == "Promise"
+                and source is self.promise
+                and source.sdk == "Promise"
+                and len(args) == 1
+                and args[0].elements is not None
+            ):
+                return _Value(
+                    pending=_Value(
+                        elements=tuple(element.pending or element for element in args[0].elements)
+                    )
+                )
+            if source.elements is not None:
+                if operation == "map" and len(args) == 1 and args[0].function is not None:
+                    self.projection_depth += int(not render)
+                    try:
+                        return _Value(
+                            elements=tuple(
+                                self.invoke(args[0], [element], render)
+                                for element in source.elements
+                            )
+                        )
+                    finally:
+                        self.projection_depth -= int(not render)
+                if operation == "flat" and not args:
+                    if all(element.elements is not None for element in source.elements):
+                        flat = tuple(
+                            child for element in source.elements for child in element.elements or ()
+                        )
+                        if len(flat) <= _MAX_COLLECTION_ITEMS:
+                            return _Value(elements=flat)
+                if (
+                    operation == "sort"
+                    and len(args) == 1
+                    and self.sort_is_read_only(args[0], source.elements)
+                ):
+                    return source
+                if operation != "then":
+                    self.invalidate(source)
+            if operation == "then" and args and source.pending is not None:
+                result = self.invoke(args[0], [source.pending])
+                return _Value(pending=result.pending or result)
         fn = self.value(target, env, path)
         if fn.sdk == "useState":
-            return _Value(state=True)
+            initial = args[0] if args else _Value()
+            return _Value(
+                state=True,
+                tags=set(initial.tags),
+                props=dict(initial.props),
+                elements=initial.elements,
+            )
         if fn.sdk == "useEffect":
             return self.invoke(args[0], []) if args else _Value()
         if fn.sdk == "useCallback":
@@ -396,11 +672,16 @@ class _Connections:
                 tags={"profile-hook" if fn.sdk == "useYleumAppProfile" else "catalog-hook"}
             )
         if fn.sdk == "getManagedRecords" and args and args[0].literal in _CREATE:
-            return _Value(tags={"response:" + str(args[0].literal)})
+            return _Value(pending=_Value(tags={"response:" + str(args[0].literal)}))
         if fn.sdk in _CREATE.values() and self.event_depth and args and args[0].props:
             self.created.add(
                 next(resource for resource, method in _CREATE.items() if method == fn.sdk)
             )
+        if fn.function is None and not fn.sdk and fn.setter is None:
+            root = self.mutation_root(target, env)
+            if root is not None:
+                self.invalidate(root)
+            self.invalidate(fn)
         return self.invoke(fn, args, render)
 
     def jsx(self, node: Node, env: dict[str, _Value], path: str) -> _Value:
@@ -463,6 +744,8 @@ def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
         return None, frozenset()
     connections = _Connections(files)
     connections.analyze()
+    if connections.steps > 4000:
+        return "Managed source connection analysis exceeded its bounded AST budget.", frozenset()
     if "profile-field" not in connections.rendered:
         return (
             "Connect useYleumAppProfile from app-profile-client "
