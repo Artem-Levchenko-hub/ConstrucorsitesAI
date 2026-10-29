@@ -27,6 +27,7 @@ from yleum_api.models.snapshot import Snapshot
 from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.schemas.restoration import RestoreReport, RuntimeRestoration
 from yleum_api.services import entitlements, orchestrator_client, project_cell_runtime
+from yleum_api.services.max_content_delivery import public_business_config
 from yleum_api.services.project_cell_proofs import (
     ProofDimension,
     proof_identity_from_model,
@@ -427,7 +428,7 @@ async def submit_publication(
             **evidence,
             "idempotency_key": publication_key,
             "runtime_env": integration_runtime_env(integration),
-            "business_config": config.model_dump(mode="json", exclude={"max_url_attached"}),
+            "business_config": public_business_config(config),
             "business_config_version": record.config_version if record is not None else 0,
         },
     )

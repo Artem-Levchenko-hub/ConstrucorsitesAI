@@ -24,7 +24,7 @@ export type ManagementOverview = {
 };
 export type OwnerRecordsQuery = {
   resource: ResourceId; limit?: number; cursor?: string; query?: string; status?: OwnerStatus;
-  created_from?: string; created_to?: string;
+  created_from?: string; created_to?: string; requested_from?: string; requested_to?: string;
 };
 export type OwnerRecordsPage = { records: OwnerRecord[]; next_cursor: string | null };
 export type OwnerRecordUpdate = { expected_revision: string; operation_key: string; status?: OwnerStatus; note?: string };

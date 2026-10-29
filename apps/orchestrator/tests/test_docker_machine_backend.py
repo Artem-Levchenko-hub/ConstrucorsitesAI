@@ -1,6 +1,7 @@
 import hashlib
 import importlib
 import importlib.util
+import json
 import os
 import stat
 import subprocess
@@ -765,7 +766,9 @@ def stale_service_fixture(tmp_path, *, missing=True, stop_failure=None):
         stop=lambda **_kw: pytest.fail("project database must not be stopped"),
     )
     proxy = SimpleNamespace(
-        labels=runtime.labels("egress-proxy"), status="running", reload=lambda: None,
+        labels={**runtime.labels("egress-proxy"), "omnia.relay_digest":
+                hashlib.sha256(json.dumps(runtime._egress_proxy_command()).encode()).hexdigest()},
+        status="running", reload=lambda: None,
         attrs={
             "Config": {"Labels": runtime.labels("egress-proxy")},
             "NetworkSettings": {

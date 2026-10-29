@@ -60,6 +60,8 @@ export type RecordsQuery = {
   status?: OwnerStatus;
   created_from?: string;
   created_to?: string;
+  requested_from?: string;
+  requested_to?: string;
 };
 export type RecordUpdate = {
   expected_revision: string;
@@ -284,6 +286,8 @@ export function parseRecordsQuery(value: unknown): RecordsQuery {
     "status",
     "created_from",
     "created_to",
+    "requested_from",
+    "requested_to",
   ]);
   const result: RecordsQuery = {
     resource: resourceId(v.resource),
@@ -297,14 +301,14 @@ export function parseRecordsQuery(value: unknown): RecordsQuery {
       throw new ManagementError("invalid_request");
     result.status = v.status as OwnerStatus;
   }
-  if (v.created_from != null) result.created_from = isoDate(v.created_from);
-  if (v.created_to != null) result.created_to = isoDate(v.created_to);
-  if (
-    result.created_from &&
-    result.created_to &&
-    result.created_from > result.created_to
-  )
-    throw new ManagementError("invalid_request");
+  for (const [from, to] of [["created_from", "created_to"], ["requested_from", "requested_to"]] as const) {
+    if (from === "requested_from" && result.resource !== "bookings" && (v[from] != null || v[to] != null))
+      throw new ManagementError("invalid_request");
+    if (v[from] != null) result[from] = isoDate(v[from]);
+    if (v[to] != null) result[to] = isoDate(v[to]);
+    if (result[from] && result[to] && result[from]! > result[to]!)
+      throw new ManagementError("invalid_request");
+  }
   return result;
 }
 export function parseRecordUpdate(value: unknown): RecordUpdate {

@@ -204,7 +204,8 @@ export async function createManagedBusinessRecord(
       return prepareManagedSnapshot(resource, validated, catalog);
     },
   );
-  if (result.created) {
+  {
+    // Replay repairs an ambiguous/failed analytics delivery with the same receipt.
     try {
       const { forwardMaxAnalytics } = await import("@/lib/omnia/analytics");
       await forwardMaxAnalytics(

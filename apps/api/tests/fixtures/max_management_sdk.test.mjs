@@ -22,7 +22,7 @@ const ids = [
   "22222222-2222-4222-8222-222222222222",
   "33333333-3333-4333-8333-333333333333",
 ];
-function runtime(overrides = {}) {
+function runtime(overrides = {}, transport) {
   const env = {
     YLEUM_OWNER_ASSERTION_KEY: "ab".repeat(32),
     YLEUM_OWNER_PROJECT_ID: ids[0],
@@ -69,6 +69,7 @@ function runtime(overrides = {}) {
         TextDecoder,
         TextEncoder,
         URL,
+        URLSearchParams,
         Date,
         Request,
         Response,
@@ -80,6 +81,7 @@ function runtime(overrides = {}) {
         process: { env, cwd: () => base },
         fetch: async (url, opts) => {
           calls.push({ url, ...opts });
+          if (transport) return transport(url, opts);
           return new Response(
             JSON.stringify({
               error: { code: "quote_changed", message: "Changed" },
@@ -416,6 +418,11 @@ test(
       owner_id: ids[1],
       publication_id: ids[2],
     };
+    const booking = await store.createManagedRecord("42", "bookings", {operationKey: ids[2], customerName:"Tomorrow"}, () => ({management_protocol:1,resource:"bookings",customer_name:"Tomorrow",requested_for:"2030-06-10T08:00:00.000Z",service_title:"Service",items:[]}));
+    const bookingQuery = {resource:"bookings",limit:1,query:"",requested_from:"2030-06-10T00:00:00Z",requested_to:"2030-06-10T23:59:59Z"};
+    assert.equal((await store.listManagedRecords({owner},bookingQuery)).records[0].id,booking.record.id);
+    assert.equal((await store.listManagedRecords({owner},{...bookingQuery,requested_from:"2030-06-11T00:00:00Z",requested_to:"2030-06-11T23:59:59Z"})).records.length,0);
+    assert.equal((await store.listManagedRecords({owner},{...bookingQuery,created_from:"2030-06-10T00:00:00Z"})).records.length,0);
     const snapshot = () => ({
       management_protocol: 1,
       resource: "leads",
@@ -633,7 +640,7 @@ test(
     assert.equal(created.status, 201);
     const routeRecord = await created.json();
     assert.equal((await (await create()).json()).id, routeRecord.id);
-    assert.equal(forwards, 1);
+    assert.equal(forwards, 2);
     const customerResponse = await businessRoute.GET(
       new Request("https://app.test/api/omnia/business/leads"),
       { params: Promise.resolve({ resource: "leads" }) },
@@ -847,3 +854,34 @@ test("rejects ambiguous one decimal catalog price", () =>
   assert.throws(() =>
     runtime().load("lib/omnia/business-server.ts").parseRubPrice("1.5"),
   ));
+
+for (const body of [() => new Response('{"id":', {status:201}),
+  () => ({ok:true,status:201,json:async()=>{throw new TypeError("body lost");}}),
+  () => Response.json({}), () => Response.json({records: [], next_cursor: 42})]) {
+  test("customer rejects ambiguous/invalid success without retry and preserves same-key replay", async () => {
+    const receipt = {id: ids[1],resource:"leads",created_at:"2026-10-29T09:00:00Z",revision:"a".repeat(64),status:"new",customer_name:"Анна",items:[]};
+    let replay = false;
+    const app = runtime({}, () => replay ? Response.json(receipt) : body());
+    const client = app.load("lib/omnia/business-client.ts");
+    const original = JSON.stringify(lead);
+    await assert.rejects(client.createManagedLead(lead), e => e.code === "unavailable" && e.status === 503);
+    assert.equal(app.calls.length, 1);
+    assert.equal(JSON.stringify(lead), original);
+    replay = true;
+    assert.equal((await client.createManagedLead(lead)).id, receipt.id);
+    assert.equal(app.calls[0].body, app.calls[1].body);
+  });
+}
+test("customer history rejects malformed success pages", async () => {
+  for (const data of [{}, {records:[{}],next_cursor:null}, {records:[],next_cursor:42}]) {
+    const app=runtime({},()=>Response.json(data));
+    await assert.rejects(app.load("lib/omnia/business-client.ts").getManagedRecords("leads"), e=>e.code==="unavailable");
+  }
+});
+test("requested date filters are explicit, ordered and booking only", () => {
+  const m=runtime().load("lib/omnia/management-resources.ts");
+  const q={resource:"bookings",requested_from:"2026-10-30T00:00:00+03:00",requested_to:"2026-10-30T23:59:59+03:00"};
+  assert.equal(m.parseRecordsQuery(q).requested_from,"2026-10-29T21:00:00.000Z");
+  assert.throws(()=>m.parseRecordsQuery({...q,resource:"leads"}));
+  assert.throws(()=>m.parseRecordsQuery({...q,requested_to:"2026-10-28T00:00:00Z"}));
+});

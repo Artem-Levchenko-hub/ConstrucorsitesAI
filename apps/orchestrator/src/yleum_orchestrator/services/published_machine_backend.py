@@ -373,13 +373,24 @@ class PublishedMachineBackend(DockerMachineBackend):
                 if "=" in item
             )
             expected = self.project_database_env()
-            capabilities_changed = (
-                self.owner_management_env is not None
-                and not owner_capabilities_match(configured, self.owner_management_env)
+            capabilities_changed = self.owner_management_env is not None and (
+                not owner_capabilities_match(configured, self.owner_management_env)
+                or configured.get("YLEUM_BUSINESS_ANALYTICS_RELAY")
+                != (
+                    f"http://{metadata.get('proxy_ip', '127.0.0.1')}:3128"
+                    "/__yleum/business-analytics"
+                )
             )
             if (container.status == "running" and not capabilities_changed
                     and metadata.get("project_database_role_protocol") == 1
                     and all(configured.get(key) == value for key, value in expected.items())):
+                if self.owner_management_env is not None:
+                    internal = self.client.networks.get(self.internal_network)
+                    if not internal.attrs.get("Internal") or (
+                        internal.attrs.get("Labels") or {}
+                    ).get("omnia.workspace_id") != str(self.workspace_id):
+                        raise CellIdentityConflict("project data network identity mismatch")
+                    self._ensure_egress_proxy(internal)
                 return
             if self.owner_management_env is None:
                 # Observation/recovery without supplied credentials is not revoke.

@@ -5,9 +5,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ApiError } from "@/lib/api/client";
-import { getMaxProjectConfig, saveMaxProjectConfig } from "@/lib/api/max-studio";
+import { getMaxProjectConfig, getMaxProjectContent, saveMaxProjectConfig } from "@/lib/api/max-studio";
 import { ownerRequestError } from "@/lib/api/max-management";
-import type { MaxProjectConfig } from "@/lib/api/types";
+import type { MaxContentDelivery, MaxProjectConfig } from "@/lib/api/types";
 
 type Fields = { name: string; summary: string; email: string };
 type Draft = { baseline: MaxProjectConfig; fields: Fields };
@@ -22,7 +22,12 @@ function Settings({ projectId, onDirtyChange }: { projectId: string; onDirtyChan
   const [draft, setDraft] = useState<Draft | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [saved, setSaved] = useState(false);
+  const [savedVersion, setSavedVersion] = useState<number | null>(null);
+  const delivery = useQuery({
+    queryKey: ["max-content", projectId], queryFn: () => getMaxProjectContent(projectId),
+    enabled: !pending, retry: false,
+    refetchInterval: query => query.state.data && [query.state.data.public.state, query.state.data.preview.state].some(state => state === "pending" || state === "unknown") ? 5_000 : false,
+  });
   const [latest, setLatest] = useState<MaxProjectConfig | null>(null);
   const saving = useRef(false); const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -36,11 +41,11 @@ function Settings({ projectId, onDirtyChange }: { projectId: string; onDirtyChan
   const conflict = error instanceof ApiError && error.status === 409;
   function edit(patch: Partial<Fields>) {
     if (!config.data || !fields) return;
-    setDraft(previous => ({ baseline: previous?.baseline ?? config.data!, fields: { ...fields, ...patch } })); setError(null); setSaved(false); setLatest(null);
+    setDraft(previous => ({ baseline: previous?.baseline ?? config.data!, fields: { ...fields, ...patch } })); setError(null); setSavedVersion(null); setLatest(null);
   }
   async function save() {
     if (!draft || saving.current || !draft.fields.name.trim() || !draft.fields.summary.trim()) return;
-    saving.current = true; setPending(true); setError(null); setSaved(false);
+    saving.current = true; setPending(true); setError(null); setSavedVersion(null);
     const base = draft.baseline.config;
     try {
       const response = await saveMaxProjectConfig(projectId, {
@@ -49,7 +54,20 @@ function Settings({ projectId, onDirtyChange }: { projectId: string; onDirtyChan
       }, draft.baseline.config_version);
       if (!mounted.current) return;
       await qc.cancelQueries({ queryKey: ["max-config", projectId] });
-      qc.setQueryData(["max-config", projectId], response); setDraft(null); setSaved(true); setLatest(null);
+      qc.setQueryData(["max-config", projectId], response); setDraft(null); setSavedVersion(response.config_version); setLatest(null);
+      await delivery.refetch();
+    } catch (failure) { if (mounted.current) setError(failure); }
+    finally { saving.current = false; if (mounted.current) setPending(false); }
+  }
+  async function reapply() {
+    if (!config.data || draft || saving.current) return;
+    saving.current = true; setPending(true); setError(null);
+    try {
+      const response = await saveMaxProjectConfig(projectId, config.data.config, config.data.config_version);
+      if (!mounted.current) return;
+      qc.setQueryData(["max-config", projectId], response);
+      setSavedVersion(response.config_version);
+      await delivery.refetch();
     } catch (failure) { if (mounted.current) setError(failure); }
     finally { saving.current = false; if (mounted.current) setPending(false); }
   }
@@ -70,7 +88,18 @@ function Settings({ projectId, onDirtyChange }: { projectId: string; onDirtyChan
       </fieldset>
       {error ? <div role="alert" className="max-owner-error"><p>{conflict ? "Настройки изменились в другой вкладке. Ваш черновик остался в форме. Загрузите актуальную версию перед сохранением." : ownerRequestError(error)}</p>{conflict && <Button type="button" variant="outline" disabled={config.isFetching} onClick={() => void reload()}>Загрузить актуальные настройки</Button>}</div> : null}
       {latest && <div className="max-owner-notice"><p>Актуальные настройки загружены. Перенесите свои название, описание и email поверх них и проверьте перед сохранением.</p><Button type="button" variant="outline" onClick={() => { setDraft(previous => previous ? { ...previous, baseline: latest } : previous); setLatest(null); setError(null); }}>Перенести мои настройки</Button></div>}
-      {saved && <p role="status" className="max-owner-notice">Настройки сохранены в Yleum. Применение в опубликованном приложении ещё не подтверждено.</p>}
+      {config.data && <div role="status" className="max-owner-notice">
+        <p>Настройки сохранены в Yleum. Версия {savedVersion ?? config.data.config_version}.</p>
+        {(["public", "preview"] as const).map(target => {
+          const status = delivery.data?.[target];
+          const version = savedVersion ?? config.data!.config_version;
+          const state = delivery.data?.config_version === version && status?.desired_config_version === version &&
+            (status.state !== "applied" || status.confirmed_config_version === version) ? status.state : "unknown";
+          const copy: Record<MaxContentDelivery["state"], string> = {applied:"Применение подтверждено",pending:"Применяются",unknown:"Применение не подтверждено",not_published:"Ещё не опубликовано",blocked:"Применение приостановлено",deferred:"Применятся после пробуждения",not_created:"Ещё не создан"};
+          return <p key={target}>{target === "public" ? "Опубликованное приложение" : "Предпросмотр"}: {copy[state]}</p>;
+        })}
+        <Button type="button" variant="outline" disabled={Boolean(draft) || pending} onClick={() => void reapply()}>Повторить применение</Button>
+      </div>}
       <div className="max-owner-actions"><Button type="submit" aria-busy={pending} disabled={!draft || pending || !fields.name.trim() || !fields.summary.trim()}>Сохранить настройки</Button><Button type="button" variant="outline" disabled={!draft || pending} onClick={() => { setDraft(null); setError(null); setLatest(null); }}>Отменить правки</Button></div>
     </form>}
   </section>;

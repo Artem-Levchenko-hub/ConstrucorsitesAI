@@ -1,0 +1,54 @@
+{
+  "src/lib/omnia/management-config.ts": {
+    "sha256": "971cc140db60a501d972375ddc8b2fc93607a24f30ae28efa845b90a24950b1b",
+    "mode": "100644"
+  },
+  "src/lib/omnia/management-auth.ts": {
+    "sha256": "daeb5c97b49db00516b27e285b70a89a8ca097e2b22ea3b3ab6b5fda241fb5b4",
+    "mode": "100644"
+  },
+  "src/lib/omnia/management-store.ts": {
+    "sha256": "23a7efe6135782dd86f4e7b595644a970988849bbe28d1b0752b220c1a7c34f8",
+    "mode": "100644"
+  },
+  "src/lib/omnia/management-resources.ts": {
+    "sha256": "25c63337b2389f1282b87666e4cb9ff84583fa793aed407b793741026bb11568",
+    "mode": "100644"
+  },
+  "src/lib/omnia/business-client.ts": {
+    "sha256": "7085c7e8b93de6741ece6c973002ebf8d68d350b758afde1c362a42a959d20f6",
+    "mode": "100644"
+  },
+  "src/lib/omnia/business-server.ts": {
+    "sha256": "42f0c9ef5f6563dd9ac5af00998aecf3e12fc7e7988677a13508a6967cf001e5",
+    "mode": "100644"
+  },
+  "src/app/api/omnia/owner/route.ts": {
+    "sha256": "db91863788a8288d31c84dbe6e7e1e7c1a51e5355ffa85e50745fad4eff62d98",
+    "mode": "100644"
+  },
+  "src/app/api/omnia/business/[resource]/route.ts": {
+    "sha256": "820966fe59feb40283d71f67adf38c2cb2acf151913f310942334d568b39f985",
+    "mode": "100644"
+  },
+  "src/lib/omnia/app-profile-client.ts": {
+    "sha256": "087941cabf1e395ac9915b1d16dd77115c843896665c43ca20e3943291c78371",
+    "mode": "100644"
+  },
+  "src/lib/omnia/app-profile-actions.ts": {
+    "sha256": "65f0635e74b410d07c3c2cc5f37bb80e35c073bfa8f69956ec676ada0990c4bd",
+    "mode": "100644"
+  },
+  "drizzle/0003_owner_management.sql": {
+    "sha256": "e457fd138b97444233a435bfe073112bac649126a7e3d43052ab4604490e11f3",
+    "mode": "100644"
+  },
+  "next.config.ts": {
+    "sha256": "2a119d426c7c2c0c91c6d1905eec5567675f168e6077075d57cd2322f25d89ea",
+    "mode": "100644"
+  },
+  "src/lib/omnia/analytics.ts": {
+    "sha256": "f88a9d341bc64c0bcbf0273da8316f354b8f5f96e5d42aab398ce8c5eed02b71",
+    "mode": "100644"
+  }
+}

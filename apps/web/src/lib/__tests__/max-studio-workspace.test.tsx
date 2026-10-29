@@ -91,7 +91,13 @@ it("validates name and idea, retains answers through Back, and creates only afte
   await click("Создать проект");
   await settle(() => expect(mocks.push).toHaveBeenCalledWith("/max/coffee?starter=1"));
   expect(mocks.create).toHaveBeenCalledTimes(1);
-  expect(mocks.save).toHaveBeenCalledWith("coffee", expect.objectContaining({ app_type: "loyalty", audience: "Гости кофейни", primary_action: "Выбрать награду", features: ["Профиль пользователя", "История действий"], style: "brand", brand_colors: "молочный" }));
+  expect(mocks.create).toHaveBeenCalledWith({name:"Кофе рядом",template:"max_miniapp",max_config:{
+    app_name:"Кофе рядом",summary:"Получать баллы и выбирать награды",app_type:"loyalty",audience:"Гости кофейни",primary_action:"Выбрать награду",
+    features:["Профиль пользователя","История действий"],style:"brand",brand_colors:"молочный",management_modules:["catalog","orders"],content:[],
+    operator:{legal_name:""},support:{email:null,response_time:"Ответим в течение 2 рабочих дней"},
+    legal:{age_rating:"0+",has_sales:false,has_user_content:false,marketing_notifications:false,personal_data_consent:true,terms_accepted:false,policy_url:""},max_url_attached:false,
+  }});
+  expect(mocks.save).not.toHaveBeenCalled();
   expect(sessionStorage.getItem("omnia:max:starter:coffee")).toContain("Получать баллы и выбирать награды");
 });
 

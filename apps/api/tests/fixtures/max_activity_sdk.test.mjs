@@ -12,9 +12,11 @@ test("product DB receipts use a purpose key that cannot call integrations", asyn
   const key = createHmac("sha256", app.env.MAX_BOT_TOKEN).update("yleum:business-analytics:v1").digest();
   delete app.env.MAX_BOT_TOKEN;
   app.env.YLEUM_BUSINESS_ANALYTICS_KEY = key.toString("hex");
+  app.env.YLEUM_BUSINESS_ANALYTICS_RELAY = "http://analytics-relay:3128/__yleum/business-analytics";
   const analytics = app.load("lib/omnia/analytics.ts");
   assert.equal(await analytics.forwardMaxAnalytics("42", receipt, "action", "order_created"), true);
   assert.equal(app.calls.length, 1);
+  assert.equal(app.calls[0].url, app.env.YLEUM_BUSINESS_ANALYTICS_RELAY);
   const assertion = app.calls[0].headers["X-Yleum-Business-Assertion"];
   const [version, encoded, signature] = assertion.split(".");
   assert.equal(signature, createHmac("sha256", key).update(`${version}.${encoded}`).digest("hex"));
@@ -171,4 +173,16 @@ test("telemetry returns retryable failure when bounded platform delivery fails",
   assert.equal((await app.post({ eventType: "cart_add", eventId: receipt })).status, 503);
   assert.equal(app.calls.length, 2);
   assert.equal(app.calls[0].body, app.calls[1].body);
+});
+
+test("receipt forwarding fails closed after key revocation and without a relay", async () => {
+  const app=runtime(); delete app.env.MAX_BOT_TOKEN;
+  app.env.YLEUM_BUSINESS_ANALYTICS_RELAY="http://analytics-relay:3128/__yleum/business-analytics";
+  const analytics=app.load("lib/omnia/analytics.ts");
+  assert.equal(await analytics.forwardMaxAnalytics("42",receipt,"action","order_created"),false);
+  assert.equal(app.calls.length,0);
+  app.env.YLEUM_BUSINESS_ANALYTICS_KEY="ab".repeat(32);
+  delete app.env.YLEUM_BUSINESS_ANALYTICS_RELAY;
+  assert.equal(await analytics.forwardMaxAnalytics("42",receipt,"action","order_created"),false);
+  assert.equal(app.calls.length,0);
 });

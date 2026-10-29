@@ -221,7 +221,7 @@ export async function listManagedRecords(
   return transaction(scope, async (client) => {
     const escaped = query.query.replace(/[\\%_]/g, "\\$&");
     const result = await client.query(
-      `${selection} WHERE m.resource=$1 AND a.action_type=$2 AND a.payload->>'management_protocol'='1' AND a.payload->>'resource'=$1 AND ($3::text IS NULL OR a.max_user_id=$3) AND ($4::text IS NULL OR m.status=$4) AND ($5::timestamptz IS NULL OR a.created_at >= $5) AND ($6::timestamptz IS NULL OR a.created_at <= $6) AND ($7::text='' OR concat_ws(' ',a.payload->>'customer_name',a.payload->>'contact_phone',a.payload->>'contact_email',a.payload->>'comment',a.payload->>'service_title') ILIKE '%' || $7 || '%') AND ($8::timestamptz IS NULL OR (a.created_at,a.id)<($8::timestamptz,$9::uuid)) ORDER BY a.created_at DESC,a.id DESC LIMIT $10`,
+      `${selection} WHERE m.resource=$1 AND a.action_type=$2 AND a.payload->>'management_protocol'='1' AND a.payload->>'resource'=$1 AND ($3::text IS NULL OR a.max_user_id=$3) AND ($4::text IS NULL OR m.status=$4) AND ($5::timestamptz IS NULL OR a.created_at >= $5) AND ($6::timestamptz IS NULL OR a.created_at <= $6) AND ($7::text='' OR concat_ws(' ',a.payload->>'customer_name',a.payload->>'contact_phone',a.payload->>'contact_email',a.payload->>'comment',a.payload->>'service_title') ILIKE '%' || $7 || '%') AND ($8::timestamptz IS NULL OR (a.created_at,a.id)<($8::timestamptz,$9::uuid)) AND ($11::timestamptz IS NULL OR (a.payload->>'requested_for')::timestamptz >= $11) AND ($12::timestamptz IS NULL OR (a.payload->>'requested_for')::timestamptz <= $12) ORDER BY a.created_at DESC,a.id DESC LIMIT $10`,
       [
         query.resource,
         ACTION_TYPES[query.resource],
@@ -233,6 +233,8 @@ export async function listManagedRecords(
         position?.created_at || null,
         position?.id || null,
         query.limit + 1,
+        query.requested_from || null,
+        query.requested_to || null,
       ],
     );
     const rows = result.rows.slice(0, query.limit),

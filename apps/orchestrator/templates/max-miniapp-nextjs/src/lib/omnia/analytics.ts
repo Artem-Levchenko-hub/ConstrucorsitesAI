@@ -40,12 +40,15 @@ export async function forwardMaxAnalytics(
   const signed = `v1.${encoded}`;
   const assertion = `${signed}.${createHmac("sha256", key).update(signed).digest("hex")}`;
   const platform = (process.env.OMNIA_PLATFORM_API_URL || "https://yleum.ru").replace(/\/$/, "");
+  const relay = process.env.YLEUM_BUSINESS_ANALYTICS_RELAY;
+  if (!token && !relay) return false;
+  const destination = token ? `${platform}${path}` : relay!;
   // Both attempts carry the same receipt. Callers with committed business data
   // ignore delivery failure; lightweight telemetry reports failure for retry.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const response = await fetch(`${platform}${path}`, {
-        method: "POST", body, cache: "no-store", signal: AbortSignal.timeout(2_000),
+      const response = await fetch(destination, {
+        method: "POST", body, redirect: "error", cache: "no-store", signal: AbortSignal.timeout(2_000),
         headers: { "Content-Type": "application/json", [token
           ? "X-Omnia-Integration-Assertion" : "X-Yleum-Business-Assertion"]: assertion },
       });

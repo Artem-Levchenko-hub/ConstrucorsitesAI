@@ -196,9 +196,12 @@ async def test_sdk_delivery_uses_current_generation_revision_and_is_exported(
         for path in (
             SDK_PATH, LEGACY_CLIENT_PATH, ACTIVITY_PATH,
             CATALOG_SERVER_PATH, CATALOG_ACTIONS_PATH, CATALOG_CLIENT_PATH,
-            PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH
+            PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH, "next.config.ts",
+            *(path for path in MAX_MANAGEMENT_RUNTIME_FILES
+              if path != "drizzle/0003_owner_management.sql"),
         )
     }
+    assert "drizzle/0003_owner_management.sql" not in canonical
     canonical[CONFIG_PATH] = saved_source
     assert await handle.snapshot_files() == {**original, **canonical}
     assert await handle.export_files() == canonical

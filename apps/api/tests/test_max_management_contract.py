@@ -281,3 +281,15 @@ def test_overview_rejects_invalid_identity_capabilities_and_numeric_coercion(pat
             "state": "active", "configured_modules": [], "active_modules": [],
             "resources": [], **patch,
         })
+
+
+def test_requested_date_query_is_booking_only_and_independent_of_created_date():
+    value = schemas().OwnerRecordsQuery.model_validate({
+        "resource": "bookings", "created_to": "2026-10-01T00:00:00Z",
+        "requested_from": "2030-06-10T00:00:00+03:00",
+        "requested_to": "2030-06-10T23:59:59+03:00",
+    })
+    assert value.requested_from > value.created_to
+    for patch in ({"resource": "leads"}, {"requested_to": "2030-06-09T00:00:00Z"}):
+        with pytest.raises(ValidationError):
+            schemas().OwnerRecordsQuery.model_validate({**value.model_dump(mode="json"), **patch})

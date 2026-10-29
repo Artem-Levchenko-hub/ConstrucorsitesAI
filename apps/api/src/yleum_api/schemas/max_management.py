@@ -175,15 +175,19 @@ class OwnerRecordsQuery(_WireModel):
     status: OwnerStatus | None = None
     created_from: Timestamp | None = None
     created_to: Timestamp | None = None
+    requested_from: Timestamp | None = None
+    requested_to: Timestamp | None = None
 
     @model_validator(mode="after")
     def ordered_dates(self) -> Self:
-        if (
-            self.created_from is not None
-            and self.created_to is not None
-            and self.created_from > self.created_to
+        if self.resource != ResourceId.bookings and (
+            self.requested_from is not None or self.requested_to is not None
         ):
-            raise ValueError("created_from must not be after created_to")
+            raise ValueError("requested dates require bookings")
+        for start, end in ((self.created_from, self.created_to),
+                           (self.requested_from, self.requested_to)):
+            if start is not None and end is not None and start > end:
+                raise ValueError("date range must be ordered")
         return self
 
 

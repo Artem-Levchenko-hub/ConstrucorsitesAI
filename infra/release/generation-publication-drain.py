@@ -102,13 +102,26 @@ _PORTABLE_QUIESCENCE_CATALOG_SOURCES = {
     "routers.workspace": "a32fedaf6bb0bca42950a8f1f777937314154ef6d93436b4a0d7610423dc769a",
     "services.app_business_config": "2e6a05f2b43773fbb8ae5b0fcdf9effdb1ace86782592fa74d2dba363cd85601",
 }
+# Owner-management successor: public config remains atomic; published recovery
+# quiesces/recreates only accepted compute and retains volumes. The stateless
+# receipt proxy runs controller bytes, keeps its enforced internal address on
+# upgrade, and uses the existing reader_dispatch boundary. Pin its new helper
+# and identity/origin dependencies together with the production lifecycle.
+_PORTABLE_QUIESCENCE_OWNER_SOURCES = {
+    **_PORTABLE_QUIESCENCE_CATALOG_SOURCES,
+    "services.docker_machine_backend": "74caba16187c229a257e66ccedf18c4ee17c07ed2612411b8eef68f19b697138",
+    "services.published_machine_backend": "3316b751db9d424cd139758b3c0784c052fb32f1db67fe52c5710b25948e1805",
+    "services.owner_management_identity": "589baa7e32e61432e36cfab21efd69602170cb79a1bf24471af4a375a50a8104",
+    "services.machine_egress": "78dceaba28d412f9dbb2c590ec955d51a9b7c47df0d4a342fdcc0e6111ad8db1",
+    "services.studio_origins": "2f6a5f03ede22d8e72f453f5ebde2c7a0e28f7b31a5037565d88beab38cb3a45",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
         **dict(zip(_PORTABLE_QUIESCENCE_PAIRED_SOURCES, pair, strict=True)),
     }
     for pair in _PORTABLE_QUIESCENCE_SOURCE_PAIRS
-) + (_PORTABLE_QUIESCENCE_CATALOG_SOURCES,)
+) + (_PORTABLE_QUIESCENCE_CATALOG_SOURCES, _PORTABLE_QUIESCENCE_OWNER_SOURCES,)
 _PORTABLE_QUIESCENCE_SOURCE_NAMES = tuple(
     sorted({name for bundle in _PORTABLE_QUIESCENCE_SOURCE_BUNDLES for name in bundle})
 )

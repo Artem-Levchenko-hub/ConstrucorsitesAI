@@ -43,6 +43,7 @@ from yleum_orchestrator.services.project_machine import (
     machine_remaining_seconds,
     write_controller_json,
 )
+from yleum_orchestrator.services.studio_origins import platform_api_url
 
 _PIN = re.compile(r"^(?:sha256:|[^\s@]+@sha256:)[0-9a-f]{64}$")
 _PROJECT_POSTGRES_HOST = "127.0.0.1"
@@ -644,6 +645,7 @@ class DockerMachineBackend:
                     else min(512, max(128, self.memory_bytes // 1024**2 * 3 // 5))
                 ),
                 "NEXT_TELEMETRY_DISABLED": "1",
+                "YLEUM_BUSINESS_ANALYTICS_RELAY": f"http://{proxy_ip}:3128/__yleum/business-analytics",
                 "HTTP_PROXY": f"http://{proxy_ip}:3128",
                 "HTTPS_PROXY": f"http://{proxy_ip}:3128",
                 "http_proxy": f"http://{proxy_ip}:3128",
@@ -732,41 +734,7 @@ class DockerMachineBackend:
         network_labels = internal.attrs.get("Labels") or {}
         if network_labels.get("omnia.workspace_id") != str(self.workspace_id):
             raise CellIdentityConflict("project internal network owner mismatch")
-        outward = self._network(self.stem + "-public", internal=False)
-        proxy = self._lookup(self.client.containers, self.stem + "-proxy", "egress-proxy")
-        if proxy is None:
-            proxy = reader_dispatch(self.client.containers.create,
-                self.guard_image,
-                [
-                    "python3",
-                    "/opt/omnia/machine_egress.py",
-                    "--bind",
-                    "0.0.0.0",
-                    *[arg for cidr in self.denied_cidrs for arg in ("--deny", cidr)],
-                ],
-                name=self.stem + "-proxy",
-                labels=self.labels("egress-proxy"),
-                detach=True,
-                network=outward.name,
-                user="65534:65534",
-                cap_drop=["ALL"],
-                privileged=False,
-                security_opt=["no-new-privileges:true"],
-                read_only=True,
-                mem_limit=64 * 1024**2,
-                memswap_limit=64 * 1024**2,
-                nano_cpus=100_000_000,
-                pids_limit=64,
-                tmpfs={"/tmp": "size=8m"},
-            )
-            internal.connect(proxy)
-            reader_dispatch(proxy.start)
-        proxy.reload()
-        if proxy.status != "running":
-            reader_dispatch(proxy.start)
-            proxy.reload()
-        proxy_ip = proxy.attrs["NetworkSettings"]["Networks"][self.internal_network]["IPAddress"]
-        self._wait_proxy_ready(proxy, proxy_ip)
+        proxy_ip = self._ensure_egress_proxy(internal)
         policy = GuardPolicy(workspace_id=str(self.workspace_id), proxy_ip=proxy_ip)
         self._volume(self.stem + "-logs")
         guard = self._ensure_namespace_guard(policy)
@@ -806,6 +774,70 @@ class DockerMachineBackend:
             **self.container_options(manifest, guard.id, epoch),
         )
         reader_dispatch(machine.start)
+
+    def _egress_proxy_command(self) -> list[str]:
+        return [
+            "python3",
+            "-c",
+            Path(__file__).with_name("machine_egress.py").read_text(encoding="utf-8"),
+            "--bind",
+            "0.0.0.0",
+            "--analytics-project",
+            str(self.project_id),
+            "--analytics-origin",
+            platform_api_url(),
+            *[arg for cidr in self.denied_cidrs for arg in ("--deny", cidr)],
+        ]
+
+    def _ensure_egress_proxy(self, internal: Any) -> str:
+        command = self._egress_proxy_command()
+        digest = hashlib.sha256(json.dumps(command).encode()).hexdigest()
+        outward = self._network(self.stem + "-public", internal=False)
+        proxy = self._lookup(self.client.containers, self.stem + "-proxy", "egress-proxy")
+        fixed_ip = None
+        if proxy is not None and proxy.labels.get("omnia.relay_digest") != digest:
+            proxy.reload()
+            fixed_ip = proxy.attrs["NetworkSettings"]["Networks"][self.internal_network][
+                "IPAddress"
+            ]
+            if not fixed_ip:
+                raise CellIdentityConflict("proxy internal address missing")
+            # Keep the enforced namespace destination stable. This retires only
+            # the stateless trusted proxy, never product compute or data volumes.
+            reader_dispatch(proxy.remove, force=True)
+            proxy = None
+        if proxy is None:
+            proxy = reader_dispatch(self.client.containers.create,
+                self.guard_image,
+                command,
+                name=self.stem + "-proxy",
+                labels={**self.labels("egress-proxy"), "omnia.relay_digest": digest},
+                detach=True,
+                network=outward.name,
+                user="65534:65534",
+                cap_drop=["ALL"],
+                privileged=False,
+                security_opt=["no-new-privileges:true"],
+                read_only=True,
+                mem_limit=64 * 1024**2,
+                memswap_limit=64 * 1024**2,
+                nano_cpus=100_000_000,
+                pids_limit=64,
+                tmpfs={"/tmp": "size=8m"},
+            )
+            reader_dispatch(
+                internal.connect, proxy, **({"ipv4_address": fixed_ip} if fixed_ip else {})
+            )
+            reader_dispatch(proxy.start)
+        proxy.reload()
+        if proxy.status != "running":
+            reader_dispatch(proxy.start)
+            proxy.reload()
+        proxy_ip = proxy.attrs["NetworkSettings"]["Networks"][self.internal_network]["IPAddress"]
+        if not isinstance(proxy_ip, str) or not proxy_ip:
+            raise CellIdentityConflict("proxy internal address missing")
+        self._wait_proxy_ready(proxy, proxy_ip)
+        return proxy_ip
 
     def _ensure_namespace_guard(self, policy: GuardPolicy) -> Any:
         """The running guard whose policy matches ``policy`` — started or recreated as needed.

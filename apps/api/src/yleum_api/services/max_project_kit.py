@@ -197,7 +197,8 @@ def render_max_managed_files(
         "src/lib/omnia/catalog-client.ts": _template_file("src/lib/omnia/catalog-client.ts"),
         "src/lib/omnia/consent.ts": _template_file("src/lib/omnia/consent.ts"),
         "src/lib/omnia/analytics.ts": _template_file("src/lib/omnia/analytics.ts").replace(
-            'process.env.OMNIA_PROJECT_ID || ""', project_literal, 1
+            'process.env.OMNIA_PROJECT_ID || process.env.YLEUM_OWNER_PROJECT_ID || ""',
+            project_literal, 1
         ),
         "src/lib/omnia/client.ts": _template_file("src/lib/omnia/client.ts"),
         "src/lib/omnia/max-config.ts": (

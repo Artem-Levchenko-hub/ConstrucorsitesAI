@@ -36,6 +36,7 @@ beforeEach(() => {
       if (writeMode === "pending") return new Promise<Response>(resolve => { resolveWrite = resolve; });
       return Response.json({ ...first, ...JSON.parse(init.body as string), revision: "b".repeat(64) });
     }
+    if (url.endsWith("/content")) return Response.json({config_version:config.config_version,public:{state:"pending",desired_config_version:config.config_version},preview:{state:"not_created",desired_config_version:config.config_version}});
     if (url.endsWith("/config")) {
       if (init.method === "PUT") return Response.json({ ...config, config_version: 8, config: JSON.parse(init.body as string) });
       return Response.json(config);
@@ -250,4 +251,50 @@ it("saves only supported settings over the captured full-config baseline and ver
   expect(JSON.parse(write.init.body as string)).toEqual({ ...original, app_name: "Новое название", summary: "Новое описание", support: { ...original.support, email: "support@example.test" } });
   expect(node.textContent).toContain("Настройки сохранены в Yleum");
   expect(node.textContent).not.toContain("Приложение обновлено");
+});
+
+it("booking dates target appointments and display service and requested time", async () => {
+  const booking = {...first, resource:"bookings",requested_for:"2030-06-10T08:00:00Z",service_title:"Маникюр"};
+  const original=vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((url,init)=>String(url).includes("/records?") ? Promise.resolve(Response.json({records:[booking],next_cursor:null})) : original(url,init));
+  await mountRecords(resources[2]);
+  await change("Дата записи с", "2030-06-10");
+  const query=new URL(String(vi.mocked(fetch).mock.calls.filter(c=>String(c[0]).includes("/records?")).at(-1)![0]),"https://yleum.test").searchParams;
+  expect(query.get("requested_from")).toBe(new Date(2030,5,10).toISOString());
+  expect(query.has("created_from")).toBe(false);
+  expect(node.textContent).toContain("Маникюр");
+  expect(node.querySelector('time')?.dateTime).toBe(booking.requested_for);
+});
+
+it("settings observe whole-config confirmation and reapply the same saved version", async () => {
+  let applied=false;
+  const original=vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((url,init)=>String(url).endsWith("/content") ? Promise.resolve(Response.json({config_version:8,public:{state:applied?"applied":"unknown",desired_config_version:8,confirmed_config_version:applied?8:null},preview:{state:"not_created",desired_config_version:8}})) : original(url,init));
+  await render(<MaxOwnerSettings projectId="owned" />);
+  await change("Название приложения","Новое имя"); await click("Сохранить настройки");
+  expect(node.textContent).toContain("Применение не подтверждено");
+  const firstSave=requests.find(r=>r.init.method==="PUT")!;
+  applied=true;
+  await click("Повторить применение");
+  const saves=requests.filter(r=>r.init.method==="PUT");
+  expect(saves).toHaveLength(2); expect(saves[1].init.body).toBe(firstSave.init.body);
+  expect(new Headers(saves[1].init.headers).get("X-Max-Config-Version")).toBe("8");
+  expect(node.textContent).toContain("Применение подтверждено");
+  expect(requests.some(r=>/generate|snapshot|publish$/.test(r.url))).toBe(false);
+});
+
+it("settings keep saved version visible when application retry fails and after reopening", async () => {
+  config = {...config,config_version:8};
+  const original=vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((url,init)=>init?.method==="PUT" ? Promise.reject(new TypeError("offline")) : original(url,init));
+  await render(<MaxOwnerSettings projectId="owned" />);
+  await click("Повторить применение");
+  expect(node.textContent).toContain("Версия 8");
+  expect(node.querySelector('[role="alert"]')).not.toBeNull();
+  expect(node.textContent).not.toContain("Применение подтверждено");
+  expect(button("Повторить применение").disabled).toBe(false);
+  await act(async()=>root.render(<QueryClientProvider client={client}><div /></QueryClientProvider>));
+  await render(<MaxOwnerSettings projectId="owned" />);
+  expect(node.textContent).toContain("Версия 8");
+  expect(node.textContent).toContain("Применяются");
 });

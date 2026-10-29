@@ -1,3 +1,5 @@
+import hashlib
+import json
 from contextlib import nullcontext
 from types import SimpleNamespace
 
@@ -69,7 +71,7 @@ class DockerFixture:
         return list(self.objects.values())
 
     def network(self, name):
-        return SimpleNamespace(name=name, attrs={
+        return SimpleNamespace(name=name, connect=lambda *args, **kwargs: None, attrs={
             "Internal": name == self.runtime.internal_network,
             "Labels": self.runtime.labels("public-egress"),
         })
@@ -180,8 +182,18 @@ def rotation_fixture(tmp_path, monkeypatch, *, status="running", token="old", ca
     fixture.add("guard-image", {"name": guard_id, "labels": {
         **runtime.labels("namespace-guard"), "omnia.policy_digest": policy.digest(),
     }})
-    fixture.add("proxy-image", {"name": runtime.stem + "-proxy",
-                                "labels": runtime.labels("egress-proxy")})
+    fixture.add(
+        "proxy-image",
+        {
+            "name": runtime.stem + "-proxy",
+            "labels": {
+                **runtime.labels("egress-proxy"),
+                "omnia.relay_digest": hashlib.sha256(
+                    json.dumps(runtime._egress_proxy_command()).encode()
+                ).hexdigest(),
+            },
+        },
+    )
     fixture.add(runtime.postgres_image, runtime._project_postgres_options(guard_id, 7))
     runtime.owner_management_env = owner_management_environment(
         runtime.project_id, runtime.owner_id, runtime.release_id,
@@ -422,3 +434,23 @@ def test_rotation_quiesces_live_embedded_store_before_removal_but_skips_stopped_
     assert runtime._metadata()["restored_image"] == image
     assert docker_io.volumes[data_volume] == b"live-customer-records"
     assert not {"capture-image", "export-rootfs", "export-volume"}.intersection(docker_io.events)
+
+
+def test_old_proxy_upgrades_at_same_ip_without_source_or_database_replacement(
+    tmp_path, monkeypatch
+):
+    runtime, manifest, docker_io, product, image = rotation_fixture(tmp_path, monkeypatch)
+    proxy = docker_io.objects[runtime.stem + "-proxy"]
+    proxy.labels.pop("omnia.relay_digest")
+    before = dict(docker_io.volumes)
+    runtime.ensure_published(manifest, image, 7)
+    assert "remove:egress-proxy" in docker_io.events
+    assert "create:egress-proxy" in docker_io.events
+    assert runtime._container() is product
+    assert docker_io.volumes == before
+    assert not {"remove:project-postgres", "remove:development", "capture-image"}.intersection(
+        docker_io.events
+    )
+    events = list(docker_io.events)
+    runtime.ensure_published(manifest, image, 7)
+    assert docker_io.events == events

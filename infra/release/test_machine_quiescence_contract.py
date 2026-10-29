@@ -66,7 +66,10 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             "routers.workspace": "a32fedaf6bb0bca42950a8f1f777937314154ef6d93436b4a0d7610423dc769a",
             "services.app_business_config": "2e6a05f2b43773fbb8ae5b0fcdf9effdb1ace86782592fa74d2dba363cd85601",
         }
-        self.reviewed = (self.old, self.new, self.snapshot, self.catalog)
+        self.owner = json.loads(
+            (Path(__file__).parent / "fixtures/owner-management-quiescence-sources.json").read_text()
+        )
+        self.reviewed = (self.old, self.new, self.snapshot, self.catalog, self.owner)
 
     def test_live_and_reviewed_successor_are_complete_supported_bundles(self):
         self.assertEqual(len(self.old), 9)
@@ -97,9 +100,25 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
         self.assertEqual(len(self.catalog), 10)
         self.assertNotEqual(self.checker._digest(self.catalog), self.checker._digest(self.snapshot))
 
-    def test_catalog_bundle_matches_exact_current_source(self):
+    def test_owner_bundle_preserves_historical_trust_and_exact_dependency_closure(self):
+        self.assertEqual(len(self.owner), 14)
+        self.assertEqual(self.checker._PORTABLE_QUIESCENCE_OWNER_SOURCES, self.owner)
+        self.checker._require_reviewed_portable_sources(self.owner)
+        self.checker._require_reviewed_portable_sources(self.catalog)
+        for changed in self.owner:
+            mixed = dict(self.owner)
+            if changed in self.catalog:
+                mixed[changed] = self.catalog[changed]
+            else:
+                del mixed[changed]
+            if mixed == self.owner:
+                continue
+            with self.assertRaisesRegex(self.checker.PhysicalDrainError, "quiescence_unsupported_source"):
+                self.checker._require_reviewed_portable_sources(mixed)
+
+    def test_owner_bundle_matches_exact_current_source(self):
         root = Path(__file__).resolve().parents[2] / "apps/orchestrator/src/yleum_orchestrator"
-        for name, expected in self.catalog.items():
+        for name, expected in self.owner.items():
             source = root.joinpath(*name.split(".")).with_suffix(".py").read_bytes()
             # Git checkouts on Windows may materialize CRLF; live Linux bytes
             # and the authority table remain exact LF source, never normalized.
@@ -146,7 +165,7 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
 
     def test_dependency_absence_is_allowed_only_for_exact_historical_bundles(self):
         name = "services.app_business_config"
-        for original in self.reviewed[:-1]:
+        for original in (self.old, self.new, self.snapshot):
             self.checker._require_reviewed_portable_sources(original)
             with self.assertRaisesRegex(
                 self.checker.PhysicalDrainError, "quiescence_unsupported_source"
@@ -178,13 +197,13 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2] / "apps/orchestrator/src/yleum_orchestrator"
         with tempfile.TemporaryDirectory() as temporary:
             origins = {}
-            for name in self.catalog:
+            for name in self.owner:
                 source = root.joinpath(*name.split(".")).with_suffix(".py").read_bytes()
                 path = Path(temporary) / (name + ".py")
                 path.write_bytes(source.replace(b"\r\n", b"\n"))
                 origins["yleum_orchestrator." + name] = SimpleNamespace(origin=str(path))
             with patch.object(importlib.util, "find_spec", side_effect=origins.get):
-                self.assertEqual(self.checker._portable_quiescence_sources(), self.catalog)
+                self.assertEqual(self.checker._portable_quiescence_sources(), self.owner)
                 helper = origins.pop("yleum_orchestrator.services.app_business_config")
                 with self.assertRaisesRegex(
                     self.checker.PhysicalDrainError, "quiescence_unsupported_source"

@@ -54,7 +54,7 @@ function Records({ projectId, resource, onDirtyChange }: { projectId: string; re
     createdFrom = dayBound(filters.from); createdTo = dayBound(filters.to, true);
     if (createdFrom && createdTo && createdFrom > createdTo) dateError = "Дата начала не может быть позже даты окончания.";
   } catch (error) { dateError = (error as Error).message; }
-  const query = { resource: resource.id, limit: 25, cursor: cursors.at(-1), query: filters.query, status: (filters.status || undefined) as OwnerStatus | undefined, created_from: createdFrom, created_to: createdTo };
+  const query = { resource: resource.id, limit: 25, cursor: cursors.at(-1), query: filters.query, status: (filters.status || undefined) as OwnerStatus | undefined, ...(resource.id === "bookings" ? { requested_from: createdFrom, requested_to: createdTo } : { created_from: createdFrom, created_to: createdTo }) };
   const records = useQuery({
     queryKey: ["max-owner-records", projectId, query], queryFn: ({ signal }) => getMaxOwnerRecords(projectId, query, signal),
     retry: false, enabled: !dateError && !pending, refetchOnWindowFocus: false,
@@ -111,8 +111,8 @@ function Records({ projectId, resource, onDirtyChange }: { projectId: string; re
     <div className="max-owner-filters">
       <label>Поиск<Input aria-label="Поиск обращений" maxLength={120} value={filters.query} disabled={pending} placeholder="Имя или контакт клиента" onChange={event => changeFilter({ query: event.target.value })} /></label>
       <label>Статус<select aria-label="Фильтр статуса" value={filters.status} disabled={pending} onChange={event => changeFilter({ status: event.target.value })}><option value="">Все статусы</option>{Object.entries(resource.status_labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-      <label>С даты<Input aria-label="С даты" type="date" value={filters.from} disabled={pending} onChange={event => changeFilter({ from: event.target.value })} /></label>
-      <label>По дату<Input aria-label="По дату" type="date" value={filters.to} disabled={pending} onChange={event => changeFilter({ to: event.target.value })} /></label>
+      <label>{resource.id === "bookings" ? "Дата записи с" : "Дата создания с"}<Input aria-label={resource.id === "bookings" ? "Дата записи с" : "С даты"} type="date" value={filters.from} disabled={pending} onChange={event => changeFilter({ from: event.target.value })} /></label>
+      <label>{resource.id === "bookings" ? "Дата записи по" : "Дата создания по"}<Input aria-label={resource.id === "bookings" ? "Дата записи по" : "По дату"} type="date" value={filters.to} disabled={pending} onChange={event => changeFilter({ to: event.target.value })} /></label>
     </div>
     {dateError && <p role="alert" className="max-owner-error">{dateError}</p>}
     {!dateError && <div className="max-owner-record-layout">
@@ -122,7 +122,8 @@ function Records({ projectId, resource, onDirtyChange }: { projectId: string; re
         {records.isSuccess && !records.data.records.length && <p className="max-owner-notice">{filters.query || filters.status || filters.from || filters.to ? "По этим условиям ничего не найдено. Измените фильтры." : "Обращений пока нет. Здесь появятся обращения клиентов после отправки через опубликованное приложение."}</p>}
         <div className="max-owner-record-list">{records.data?.records.map(record => <article key={record.id} className="max-owner-record-row" data-selected={draft?.record.id === record.id}>
           <Button variant="ghost" disabled={pending} onClick={() => select(record)}>{record.customer_name}</Button>
-          <span>{resource.status_labels[record.status]}</span><time dateTime={record.created_at}>{dateLabel(record.created_at)}</time>
+          <span>{resource.status_labels[record.status]}</span><time dateTime={resource.id === "bookings" ? record.requested_for ?? record.created_at : record.created_at}>{dateLabel(resource.id === "bookings" ? record.requested_for ?? record.created_at : record.created_at)}</time>
+          {resource.id === "bookings" && <span>{record.service_title}</span>}
           {record.total_kopecks != null && <strong>{ownerMoney(record.total_kopecks)}</strong>}
         </article>)}</div>
         <div className="max-owner-actions"><Button variant="outline" disabled={cursors.length === 1 || pending || records.isFetching} onClick={() => page(false)}>Предыдущая страница</Button><span>Страница {cursors.length}</span><Button variant="outline" disabled={!records.data?.next_cursor || pending || records.isFetching} onClick={() => page(true)}>Следующая страница</Button></div>

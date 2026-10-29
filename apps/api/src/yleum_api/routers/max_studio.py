@@ -441,9 +441,7 @@ async def _save_cell_business_config(
                 project.id,
                 {
                     "owner_id": str(current_user.id),
-                    "business_config": payload.model_dump(
-                        mode="json", exclude={"max_url_attached"}
-                    ),
+                    "business_config": public_business_config(payload),
                     "business_config_version": version,
                 },
             )
@@ -458,7 +456,7 @@ async def _save_cell_business_config(
                 project_id=project.id,
                 owner_id=current_user.id,
                 version=version,
-                config=payload.model_dump(mode="json", exclude={"max_url_attached"}),
+                config=public_business_config(payload),
             )
         except Exception as exc:
             if isinstance(exc, ApiError) and exc.status_code < 500:
