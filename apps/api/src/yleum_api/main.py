@@ -37,6 +37,7 @@ from yleum_api.routers import integration_runtime as integration_runtime_router
 from yleum_api.routers import max_accounts as max_accounts_router
 from yleum_api.routers import max_analytics as max_analytics_router
 from yleum_api.routers import max_integrations as max_integrations_router
+from yleum_api.routers import max_management as max_management_router
 from yleum_api.routers import max_studio as max_studio_router
 from yleum_api.routers import messages as messages_router
 from yleum_api.routers import models_router
@@ -274,6 +275,7 @@ def create_app() -> FastAPI:
     app.include_router(max_integrations_router.router)
     app.include_router(max_accounts_router.router)
     app.include_router(max_studio_router.router)
+    app.include_router(max_management_router.router)
     app.include_router(publication_migrations_router.router)
     app.include_router(rollback_router.router)
     app.include_router(task_board_router.router)
