@@ -456,6 +456,8 @@ jobs:
           test_root=$(mktemp -d)
           cp templates/max-miniapp-nextjs/package.json templates/max-miniapp-nextjs/pnpm-lock.yaml "$test_root/"
           cp -R templates/max-miniapp-nextjs/drizzle templates/max-miniapp-nextjs/scripts "$test_root/"
+          node --test scripts/public-max-core/core-migrations.test.mjs
+          node scripts/public-max-core/core-migrations.mjs "$test_root/drizzle"
           cp scripts/public-max-core/bootstrap-database.mjs scripts/public-max-core/database-role.test.mjs "$test_root/scripts/"
           cd "$test_root"
           pnpm install --frozen-lockfile --prod --ignore-scripts
