@@ -151,7 +151,7 @@ def test_core_upgrade_is_staged_and_preserves_project_data(
     monkeypatch.setattr(config, "apply_public_core_overlay", lambda _: None)
     monkeypatch.setattr(config, "apply_core_config", apply_config)
     monkeypatch.setattr(config, "boundary_source", lambda: "trusted")
-    manifest = SimpleNamespace(routes=[])
+    manifest = SimpleNamespace(routes=[], app_config_protocol=None)
     expected_failure = failure is not None and (failure != "auth" or public_mode)
 
     def start():
