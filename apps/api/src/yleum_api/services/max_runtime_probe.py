@@ -180,6 +180,7 @@ async def probe_max_cell_runtime(
     expected_epoch: int | None = None,
     proof_key: str | None = None,
     business_path: str | None = None,
+    management_resources: Sequence[str] = (),
 ) -> MaxRuntimeProbe:
     """Use the validated, lease-scoped cell session without project-runtime fallback.
 
@@ -188,6 +189,10 @@ async def probe_max_cell_runtime(
     read that route, because a green build with a broken data plane looked identical to
     success in the live failure. It is never a path chosen by the model.
     """
+    if (isinstance(management_resources, (str, bytes))
+            or len(set(management_resources)) != len(management_resources)
+            or any(item not in {"orders", "leads", "bookings"} for item in management_resources)):
+        return MaxRuntimeProbe(False, "managed business resource is invalid")
     candidate_paths = (path, *tuple(fallback_paths))
     for candidate_path in candidate_paths:
         if (
@@ -206,6 +211,7 @@ async def probe_max_cell_runtime(
         request_timeout=_CELL_STARTUP_TIMEOUT,
         portable_project_id=portable_project_id,
         expected_epoch=expected_epoch,
+        management_resources=management_resources,
     )
     if not result.ok:
         return result
@@ -257,6 +263,7 @@ async def _probe_signed_runtime(
     request_timeout: httpx.Timeout = _TIMEOUT,
     portable_project_id: UUID | None = None,
     expected_epoch: int | None = None,
+    management_resources: Sequence[str] = (),
 ) -> MaxRuntimeProbe:
     parsed = urlsplit(bootstrap_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
@@ -386,6 +393,34 @@ async def _probe_signed_runtime(
                     or identity_body["epoch"] != expected_epoch
                 ):
                     return MaxRuntimeProbe(False, "portable boundary identity proof failed")
+            # These reads exercise the actual registered product DB modules with
+            # the signed preview actor; platform health and unused SDK imports
+            # cannot satisfy this proof. Never create or mutate customer records.
+            from pydantic import ValidationError
+
+            from yleum_api.schemas.max_management import OwnerRecordsPagePublic
+
+            for resource in management_resources:
+                module = await get(
+                    client, f"{origin}/api/omnia/business/{resource}?limit=1",
+                    stage="managed_business",
+                )
+                if module.status_code != 200:
+                    return MaxRuntimeProbe(
+                        False, f"managed {resource} read failed (HTTP {module.status_code})",
+                    )
+                try:
+                    value = module.json()
+                    page = OwnerRecordsPagePublic.model_validate(value)
+                    if (any(record.resource.value != resource for record in page.records)
+                            or any("note" in record for record in value["records"])):
+                        raise ValueError("private or foreign record")
+                except (ValueError, TypeError, ValidationError):
+                    return MaxRuntimeProbe(False, f"managed {resource} response is invalid")
+            if management_resources:
+                product_detail += (
+                    "; managed business reads passed: " + ", ".join(management_resources)
+                )
     except httpx.HTTPError as exc:
         return MaxRuntimeProbe(
             False,

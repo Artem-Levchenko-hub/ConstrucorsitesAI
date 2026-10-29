@@ -618,6 +618,7 @@ class DockerMachineBackend:
             },
             "tmpfs": {"/run": "rw,nosuid,nodev,size=32m", "/tmp": "rw,nosuid,nodev,size=128m"},
             "environment": {
+                "OMNIA_PROJECT_ID": str(self.project_id),
                 "HOME": "/root",
                 "CI": "1",
                 "PYTHONUNBUFFERED": "1",

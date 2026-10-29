@@ -33,11 +33,17 @@ class AnalyticsEventRequest(BaseModel):
 async def collect_event(
     project_id: UUID, payload: AnalyticsEventRequest, session: SessionDep, request: Request
 ) -> Response:
-    # Only the immutable core may attest a durable success; direct initData is
-    # insufficient to claim that an action committed in an app's database.
-    if not request.headers.get("X-Omnia-Integration-Assertion"):
+    core = request.headers.get("X-Omnia-Integration-Assertion")
+    business = request.headers.get("X-Yleum-Business-Assertion")
+    if bool(core) == bool(business):
         raise ApiError("unauthorized", "Signed core event required", 401)
-    context = await _runtime_context(session, project_id, "", request)
+    if business and (payload.kind != "action" or payload.event_type not in {
+        "order_created", "lead_created", "booking_created",
+    }):
+        raise ApiError("unauthorized", "Signed business receipt required", 401)
+    context = await _runtime_context(
+        session, project_id, "", request, **({"business_analytics": True} if business else {}),
+    )
     await record_event(
         session, project_id, context.max_user_id, payload.event_id, payload.kind, payload.event_type
     )

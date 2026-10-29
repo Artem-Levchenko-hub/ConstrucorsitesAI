@@ -275,6 +275,24 @@ jobs:
       - name: Install frozen managed-footer browser fixture dependencies
         working-directory: apps/orchestrator/templates/max-miniapp-nextjs
         run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Verify owner business receipts and RLS on native PostgreSQL
+        if: matrix.shard == 1
+        working-directory: apps/api
+        env:
+          YLEUM_MANAGEMENT_TEST_DATABASE_URL: postgresql://omnia:omnia@127.0.0.1:5432/owner_management_test
+        run: |
+          uv run --frozen python - <<'PY'
+          import asyncio
+          import asyncpg
+          async def create():
+              connection = await asyncpg.connect('postgresql://omnia:omnia@127.0.0.1:5432/postgres')
+              try:
+                  await connection.execute('CREATE DATABASE owner_management_test')
+              finally:
+                  await connection.close()
+          asyncio.run(create())
+          PY
+          node --test tests/fixtures/max_management_sdk.test.mjs
       - name: Run API suite shard ${{ matrix.shard }} of 6 on disposable services
         working-directory: apps/api
         run: |

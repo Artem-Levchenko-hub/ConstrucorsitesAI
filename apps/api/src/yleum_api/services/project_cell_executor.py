@@ -1306,6 +1306,7 @@ async def maybe_create_project_cell_executor(
         return await project_cell_agent_operation_status(agent_workspace_id, operation_id)
 
     async def _runtime_probe(proof_key: str) -> Any:
+        from yleum_api.services.max_management_generation import management_probe_resources
         from yleum_api.services.max_runtime_probe import probe_max_cell_runtime
 
         preview = await project_cell_create_preview_session(
@@ -1318,6 +1319,7 @@ async def maybe_create_project_cell_executor(
             portable_project_id=project_id,
             expected_epoch=fencing_epoch,
             proof_key=proof_key,
+            management_resources=management_probe_resources(await _snapshot_files()),
         )
 
     from yleum_api.services.generation import recovery_tool_receipts as tool_receipts
@@ -1864,6 +1866,9 @@ async def maybe_create_project_cell_executor(
                         fencing_epoch=fencing_epoch,
                     )
                     if action.name == "runtime_check":
+                        from yleum_api.services.max_management_generation import (
+                            management_probe_resources,
+                        )
                         from yleum_api.services.max_runtime_probe import probe_max_cell_runtime
                         from yleum_api.services.max_runtime_routes import (
                             resolve_max_runtime_probe_paths,
@@ -1886,6 +1891,7 @@ async def maybe_create_project_cell_executor(
                         proof = await probe_max_cell_runtime(
                             preview,
                             path=runtime_path,
+                            management_resources=management_probe_resources(workspace_files),
                             **proof_kwargs,
                         )
                         runtime_result = {"ok": proof.ok, "detail": proof.detail}

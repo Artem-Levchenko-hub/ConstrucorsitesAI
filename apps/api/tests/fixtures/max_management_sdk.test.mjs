@@ -718,6 +718,45 @@ test(
   },
 );
 
+test("missing owner key with retained binding rejects a formerly valid assertion before DB or fetch", async () => {
+  const app = runtime(),
+    body = Buffer.from('{"op":"describe"}'),
+    request = new Request("https://app.test/api/omnia/owner", {
+      method: "POST",
+      headers: { "X-Yleum-Owner-Assertion": sign(app, body) },
+      body,
+    });
+  assert.equal(
+    app.load("lib/omnia/management-auth.ts")
+      .verifyOwnerAssertion(request, body, fixture).owner_id,
+    ids[1],
+  );
+  delete app.env.YLEUM_OWNER_ASSERTION_KEY;
+  assert.deepEqual(
+    [
+      app.env.YLEUM_OWNER_PROJECT_ID,
+      app.env.YLEUM_OWNER_ID,
+      app.env.YLEUM_OWNER_PUBLICATION_ID,
+    ],
+    ids,
+  );
+  app.dependencies.set("@/lib/omnia/management-config", {
+    getManagementContract: async () => fixture,
+  });
+  let databaseImports = 0;
+  app.dependencies.set("@/lib/db", {
+    get pool() {
+      databaseImports += 1;
+      throw Error("DB opened after capability revocation");
+    },
+  });
+  const result = await app.load("app/api/omnia/owner/route.ts").POST(request);
+  assert.equal(result.status, 503);
+  assert.equal((await result.json()).error.code, "unavailable");
+  assert.equal(databaseImports, 0);
+  assert.equal(app.calls.length, 0);
+});
+
 test("auth expiration boundary, invalid calendar days and one decimal prices fail closed", () => {
   const app = runtime(),
     auth = app.load("lib/omnia/management-auth.ts"),

@@ -547,6 +547,11 @@ def max_source_completion_gap(
     """
 
     prompt = prompt.replace(_WIZARD_INFRASTRUCTURE, "")
+    from yleum_api.services.max_management_generation import (
+        management_implemented_capabilities,
+        management_source_gap,
+    )
+
     # Checked before anything else: a product that lost the migrations creating
     # its platform tables looks finished and answers 500 on its first real
     # request. Nothing further in this contract can compensate for that.
@@ -555,6 +560,9 @@ def max_source_completion_gap(
     starter_gap = starter_artifact_gap(files)
     if starter_gap:
         return starter_gap
+    management_gap = management_source_gap(files)
+    if management_gap:
+        return management_gap
 
     capabilities = requested_max_capabilities(prompt)
     collection_operations = frozenset(
@@ -582,10 +590,13 @@ def max_source_completion_gap(
             for path, content in files.items()
             if _is_product_source(path)
         )
+        managed_capabilities = management_implemented_capabilities(files)
         return portable_source_gap(
             files,
             capabilities,
-            implemented_capabilities=frozenset({"history"}) if managed_history else frozenset(),
+            implemented_capabilities=managed_capabilities | (
+                frozenset({"history"}) if managed_history else frozenset()
+            ),
         )
     page = files.get("src/app/page.tsx", "")
     if not page:

@@ -13,8 +13,8 @@ import { connectAppIntegration, getIntegrationCatalog } from "@/lib/api/app-inte
 import { describeApiError } from "@/lib/api/errors";
 import { saveLandingPrompt, takeLandingPrompt } from "@/lib/landing-prompt";
 import { createProject, listProjects } from "@/lib/api/projects";
-import { saveMaxProjectConfig } from "@/lib/api/max-studio";
-import { buildMaxProjectPrompt, type MaxAppTypeId, type MaxFeature, type MaxStyleId } from "@/lib/max-brief";
+import type { ManagementModule } from "@/lib/api/types";
+import { buildMaxProjectPrompt, defaultManagementModules, type MaxAppTypeId, type MaxFeature, type MaxStyleId } from "@/lib/max-brief";
 import { containsChatSecret, redactChatSecrets, resolveChatCredential } from "@/lib/max-chat-credentials";
 import { useOwnerChatQuota } from "@/hooks/useOwnerChatQuota";
 import { FREE_CHAT_UPGRADE_MESSAGE } from "@/lib/owner-chat-quota";
@@ -67,6 +67,7 @@ export function MaxStudio({ email }: { email: string }) {
   const [features, setFeatures] = useState<MaxFeature[]>(STARTER_FEATURES);
   const [style, setStyle] = useState<MaxStyleId>("brand");
   const [brandColors, setBrandColors] = useState("");
+  const [managementModules, setManagementModules] = useState<ManagementModule[]>(["catalog", "orders"]);
 
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const maxProjects = useMemo(() => {
@@ -90,6 +91,7 @@ export function MaxStudio({ email }: { email: string }) {
         features,
         style,
         brandColors,
+        managementModules,
       });
       const hasCredential = containsChatSecret(rawPrompt);
       const scrub = (value: string) =>
@@ -106,10 +108,6 @@ export function MaxStudio({ email }: { email: string }) {
       const safeBrandColors = hasCredential
         ? scrub(brandColors).trim()
         : brandColors.trim();
-      const project = await createProject({
-        name: safeName,
-        template: "max_miniapp",
-      });
       let prompt = buildMaxProjectPrompt({
         name: safeName,
         idea: safeIdea,
@@ -119,10 +117,11 @@ export function MaxStudio({ email }: { email: string }) {
         features,
         style,
         brandColors: safeBrandColors,
+        managementModules,
       });
-      let configSaved = true;
-      try {
-        await saveMaxProjectConfig(project.id, {
+      const project = await createProject({
+        name: safeName, template: "max_miniapp",
+        max_config: {
           app_name: safeName,
           app_type: appType,
           summary: safeIdea,
@@ -144,10 +143,9 @@ export function MaxStudio({ email }: { email: string }) {
             policy_url: "",
           },
           max_url_attached: false,
-        });
-      } catch {
-        configSaved = false;
-      }
+          management_modules: managementModules,
+        },
+      });
       let credentialReady = !hasCredential;
       if (hasCredential) {
         try {
@@ -169,9 +167,9 @@ export function MaxStudio({ email }: { email: string }) {
           credentialReady = false;
         }
       }
-      return { project, prompt, configSaved, credentialReady };
+      return { project, prompt, credentialReady };
     },
-    onSuccess: ({ project, prompt, configSaved, credentialReady }) => {
+    onSuccess: ({ project, prompt, credentialReady }) => {
       qc.invalidateQueries({ queryKey: ["projects"] });
       if (!credentialReady) {
         toast.warning("Проект создан, но ключ не подключён", {
@@ -181,14 +179,7 @@ export function MaxStudio({ email }: { email: string }) {
         router.push(`/max/${project.id}`);
         return;
       }
-      toast[configSaved ? "success" : "warning"](
-        configSaved ? "MAX Mini App создан" : "Приложение создано",
-        {
-          description: configSaved
-            ? "Открываем студию для первой сборки."
-            : "Профиль нужно сохранить в панели готовности.",
-        },
-      );
+      toast.success("MAX Mini App создан", { description: "Открываем студию для первой сборки." });
       try {
         window.sessionStorage.setItem(`omnia:max:starter:${project.id}`, prompt);
         router.push(`/max/${project.id}?starter=1`);
@@ -210,6 +201,7 @@ export function MaxStudio({ email }: { email: string }) {
     setName(idea.title);
     setIdea(idea.idea);
     setAppType(idea.appType);
+    setManagementModules(defaultManagementModules(idea.appType));
     setAudience(idea.audience);
     setPrimaryAction(idea.primaryAction);
     setDialogOpen(true);
@@ -289,16 +281,20 @@ export function MaxStudio({ email }: { email: string }) {
         pending={create.isPending}
         submitDisabled={quota.initialExhausted}
         quotaNotice={<OwnerChatQuotaNotice {...quota} initialOnly />}
-        values={{ name, idea, appType, audience, primaryAction, features, style, brandColors }}
+        values={{ name, idea, appType, audience, primaryAction, features, style, brandColors, managementModules }}
         onChange={(patch) => {
           if (patch.name !== undefined) setName(patch.name);
           if (patch.idea !== undefined) setIdea(patch.idea);
-          if (patch.appType !== undefined) setAppType(patch.appType);
+          if (patch.appType !== undefined) {
+            setAppType(patch.appType);
+            setManagementModules(defaultManagementModules(patch.appType));
+          }
           if (patch.audience !== undefined) setAudience(patch.audience);
           if (patch.primaryAction !== undefined) setPrimaryAction(patch.primaryAction);
           if (patch.features !== undefined) setFeatures(patch.features);
           if (patch.style !== undefined) setStyle(patch.style);
           if (patch.brandColors !== undefined) setBrandColors(patch.brandColors);
+          if (patch.managementModules !== undefined) setManagementModules(patch.managementModules);
         }}
         onSubmit={() => create.mutateAsync()}
       />

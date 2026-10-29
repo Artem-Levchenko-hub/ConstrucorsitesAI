@@ -1,6 +1,6 @@
 import { ApiError, apiFetch, apiUrl } from "./client";
 import { mockApi, USE_MOCKS } from "./mocks";
-import type { Project, ProjectTemplate } from "./types";
+import type { Project, ProjectTemplate, MaxProjectConfigPayload } from "./types";
 
 export async function listProjects(): Promise<Project[]> {
   if (USE_MOCKS) return mockApi.listProjects();
@@ -15,6 +15,7 @@ export async function getProject(id: string): Promise<Project> {
 export async function createProject(input: {
   name: string;
   template: ProjectTemplate;
+  max_config?: MaxProjectConfigPayload;
 }): Promise<Project> {
   if (USE_MOCKS) return mockApi.createProject(input.name, input.template);
   return apiFetch<Project>("/api/projects", { method: "POST", json: input });

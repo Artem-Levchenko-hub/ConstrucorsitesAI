@@ -44,6 +44,7 @@ from yleum_orchestrator.services.app_business_config import (
     config_digest,
 )
 from yleum_orchestrator.services.k8s_config_observer import observe_in_subprocess
+from yleum_orchestrator.services.owner_management_identity import owner_management_environment
 from yleum_orchestrator.services.project_database_credentials import ProjectDatabaseCredentials
 from yleum_orchestrator.services.project_database_roles import (
     PROJECT_RUNTIME_ROLE,
@@ -819,7 +820,12 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
         "PORT": str(app_port),
         "HOSTNAME": "0.0.0.0",
         "OMNIA_PUBLIC_APP_ORIGIN": spec.public_origin,
-        **spec.app_env,
+        **{key: value for key, value in spec.app_env.items()
+           if not key.startswith(("YLEUM_OWNER_", "YLEUM_BUSINESS_"))},
+        "OMNIA_PROJECT_ID": str(spec.project_id),
+        **owner_management_environment(
+            spec.project_id, spec.owner_id, spec.release_id, spec.runtime_env,
+        ),
         # User configuration cannot redirect the controller-owned database login.
         "PGHOST": "project-postgres",
         "PGPORT": "5432",

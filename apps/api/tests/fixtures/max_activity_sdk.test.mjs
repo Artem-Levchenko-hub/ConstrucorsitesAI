@@ -7,6 +7,22 @@ import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import test from "node:test";
 
+test("product DB receipts use a purpose key that cannot call integrations", async () => {
+  const app = runtime();
+  const key = createHmac("sha256", app.env.MAX_BOT_TOKEN).update("yleum:business-analytics:v1").digest();
+  delete app.env.MAX_BOT_TOKEN;
+  app.env.YLEUM_BUSINESS_ANALYTICS_KEY = key.toString("hex");
+  const analytics = app.load("lib/omnia/analytics.ts");
+  assert.equal(await analytics.forwardMaxAnalytics("42", receipt, "action", "order_created"), true);
+  assert.equal(app.calls.length, 1);
+  const assertion = app.calls[0].headers["X-Yleum-Business-Assertion"];
+  const [version, encoded, signature] = assertion.split(".");
+  assert.equal(signature, createHmac("sha256", key).update(`${version}.${encoded}`).digest("hex"));
+  assert.equal(app.calls[0].headers["X-Omnia-Integration-Assertion"], undefined);
+  assert.equal(await analytics.forwardMaxAnalytics("42", receipt, "open", "app_open"), false);
+  assert.equal(app.calls.length, 1);
+});
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../../orchestrator/templates/max-miniapp-nextjs/src");
 const require = createRequire(import.meta.url);
 const receipt = "ABCDEFAB-1234-4123-8123-123456789ABC";

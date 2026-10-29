@@ -1,3 +1,5 @@
+import type { ManagementModule } from "./api/types";
+
 export const MAX_BRIEF_LENGTH = 20_000;
 export const MAX_PROMPT_LENGTH = 30_000;
 
@@ -67,6 +69,18 @@ export type MaxAppTypeId = (typeof MAX_APP_TYPES)[number]["id"];
 export type MaxStyleId = (typeof MAX_STYLES)[number]["id"];
 export type MaxFeature = (typeof MAX_FEATURES)[number];
 
+export const MAX_MANAGEMENT_MODULES: { id: ManagementModule; label: string; description: string }[] = [
+  { id: "catalog", label: "Каталог", description: "До 100 товаров или услуг: цены, фото, разделы и наличие." },
+  { id: "orders", label: "Заказы", description: "Состав, сумма и статус каждого заказа." },
+  { id: "leads", label: "Заявки", description: "Обращения клиентов и заметки для работы с ними." },
+  { id: "bookings", label: "Запросы на запись", description: "Выбранная услуга и дата; запись подтверждаете вы." },
+];
+export function defaultManagementModules(appType: MaxAppTypeId): ManagementModule[] {
+  if (appType === "catalog" || appType === "loyalty") return ["catalog", "orders"];
+  if (appType === "booking") return ["catalog", "bookings"];
+  return [];
+}
+
 export type MaxProjectBrief = {
   name: string;
   idea: string;
@@ -76,6 +90,7 @@ export type MaxProjectBrief = {
   features: MaxFeature[];
   style: MaxStyleId;
   brandColors: string;
+  managementModules?: ManagementModule[];
 };
 
 function optionLabel<T extends { id: string; label: string }>(
@@ -108,6 +123,9 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
     `Целевая аудитория: ${audience}.`,
     `Главное действие пользователя: ${primaryAction}.`,
     `Нужные возможности: ${features}.`,
+    brief.managementModules?.length
+      ? `Управление в Yleum: ${MAX_MANAGEMENT_MODULES.filter(item => brief.managementModules!.includes(item.id)).map(item => item.label).join(", ")}. Подключи выбранные штатные бизнес-модули из .omnia/management.json; данные меняются обычными формами без генерации.`
+      : "Кабинет владельца: настройки и статистика, без общего реестра личных данных пользователей.",
     `Визуальное направление: ${optionLabel(MAX_STYLES, brief.style)}.`,
     `Цвета бренда: ${colors}.`,
     "",
@@ -153,7 +171,7 @@ export const MAX_FEATURE_INFO: Record<MaxFeature, { summary: string; screen: Max
     screen: "loyalty",
   },
   "Онлайн-запись": {
-    summary: "Выбор дня и свободного времени с подтверждением записи.",
+    summary: "Запрос на удобную дату и время; владелец подтверждает запись.",
     screen: "booking",
   },
   "Уведомления бота": {

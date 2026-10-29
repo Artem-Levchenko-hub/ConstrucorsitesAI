@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
+from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.services.design_presets import PRESETS
 
 # Only `max_miniapp` can be created (see `ProjectCreate`); the other values stay
@@ -108,6 +109,8 @@ class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     template: Literal["max_miniapp"] = "max_miniapp"
     language: str | None = None
+    # Wizard settings and module choices commit atomically with the project.
+    max_config: MaxProjectConfigPayload | None = None
 
 
 class ProjectUpdate(BaseModel):

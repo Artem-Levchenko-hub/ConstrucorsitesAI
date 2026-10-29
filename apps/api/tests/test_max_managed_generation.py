@@ -6,7 +6,7 @@ import pytest
 
 from tests.test_project_cell_executor import _prepare_executor
 from yleum_api.services.generation import runtime
-from yleum_api.services.max_project_kit import _template_file
+from yleum_api.services.max_project_kit import MAX_MANAGEMENT_RUNTIME_FILES, _template_file
 
 SDK_PATH = "src/lib/omnia/integration-client.ts"
 LEGACY_CLIENT_PATH = "src/lib/omnia/client.ts"
@@ -71,10 +71,12 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
     canonical = {
         path: _template_file(path)
         for path in (
+            *MAX_MANAGEMENT_RUNTIME_FILES, "next.config.ts",
             SDK_PATH, LEGACY_CLIENT_PATH, ACTIVITY_PATH,
             CATALOG_SERVER_PATH, CATALOG_ACTIONS_PATH, CATALOG_CLIENT_PATH,
             PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH
         )
+        if path != "drizzle/0003_owner_management.sql"
     }
     assert writes == [(canonical, ())]
     assert tree["src/app/page.tsx"] == "existing product"
@@ -88,10 +90,12 @@ async def test_generation_retires_encrypted_crud_files_from_existing_projects():
     canonical = {
         path: _template_file(path)
         for path in (
+            *MAX_MANAGEMENT_RUNTIME_FILES, "next.config.ts",
             SDK_PATH, LEGACY_CLIENT_PATH, ACTIVITY_PATH,
             CATALOG_SERVER_PATH, CATALOG_ACTIONS_PATH, CATALOG_CLIENT_PATH,
             PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH
         )
+        if path != "drizzle/0003_owner_management.sql"
     }
     tree = {
         **canonical,

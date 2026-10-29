@@ -11,11 +11,14 @@ from pathlib import Path
 from uuid import UUID
 
 from yleum_api.schemas.max_studio import MaxProjectConfigPayload
+from yleum_api.services.max_content_delivery import public_business_config
+from yleum_api.services.max_management_contract import build_management_contract
 
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 32
+MAX_MANAGED_KIT_VERSION = 33
+# v33 adds explicit owner management and typed business resources in product DB.
 # v32 adds the owner catalog's shared server/client configuration file contract.
 # v30: keep legal footer links and keyboard focus clear of fixed bottom navigation.
 # v29 adds authenticated exact lead receipt lookup for safe legacy adoption.
@@ -49,6 +52,15 @@ _MANAGED_COMPONENT_IMPORT_RE = re.compile(
     r"""from\s+["']@/components/((?:Yleum|Omnia)[A-Za-z0-9_/-]+)["']"""
 )
 
+MAX_MANAGEMENT_RUNTIME_FILES = (
+    "src/lib/omnia/management-config.ts", "src/lib/omnia/management-auth.ts",
+    "src/lib/omnia/management-store.ts", "src/lib/omnia/management-resources.ts",
+    "src/lib/omnia/business-client.ts", "src/lib/omnia/business-server.ts",
+    "src/app/api/omnia/owner/route.ts", "src/app/api/omnia/business/[resource]/route.ts",
+    "src/lib/omnia/app-profile-client.ts", "src/lib/omnia/app-profile-actions.ts",
+    "drizzle/0003_owner_management.sql",
+)
+
 
 def _template_candidates(
     relative_path: str,
@@ -74,7 +86,7 @@ def _template_file(relative_path: str) -> str:
 
 def _json(config: MaxProjectConfigPayload) -> str:
     return json.dumps(
-        config.model_dump(mode="json", exclude={"max_url_attached"}),
+        public_business_config(config),
         ensure_ascii=False,
         indent=2,
         separators=(",", ": "),
@@ -150,6 +162,12 @@ def render_max_managed_files(
         '"__OMNIA_PROJECT_ID__"', project_literal, 1
     )
     files = {
+        **{path: _template_file(path) for path in MAX_MANAGEMENT_RUNTIME_FILES},
+        "next.config.ts": _template_file("next.config.ts"),
+        ".omnia/management.json": json.dumps(
+            build_management_contract(config.management_modules or []).model_dump(mode="json"),
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        ) + "\n",
         "postcss.config.mjs": _template_file("postcss.config.mjs"),
         "src/app/layout.tsx": _template_file("src/app/layout.tsx"),
         "src/app/api/omnia/health/route.ts": _template_file("src/app/api/omnia/health/route.ts"),
@@ -296,6 +314,10 @@ export default function TermsPage() {
 """,
         "src/app/support/page.tsx": _template_file("src/app/support/page.tsx"),
     }
+    if config.management_modules is None:
+        files.pop(".omnia/management.json", None)
+    if not build_management_contract(config.management_modules or []).resources:
+        files.pop("drizzle/0003_owner_management.sql", None)
     _validate_managed_component_graph(files)
     return files
 
@@ -313,6 +335,8 @@ def render_max_managed_kit_update(
 
 MAX_SECURITY_LOCKED_FILES = frozenset(
     {
+        *MAX_MANAGEMENT_RUNTIME_FILES,
+        ".omnia/management.json",
         "src/lib/omnia/catalog-server.ts",
         "src/lib/omnia/catalog-actions.ts",
         "src/lib/omnia/catalog-client.ts",
@@ -394,6 +418,28 @@ rewrite platform-owned files.
     + "\n\n"
     + """
 The owner edits business data in Yleum's Catalog and project settings.
+For a new app with `.omnia/management.json`, render its public name/description/
+support using `useYleumAppProfile()` from `@/lib/omnia/app-profile-client`.
+It returns {profile,configVersion,status,error,refresh}; profile contains app_name,
+summary and support.email/response_time. Handle loading/error; no bundled fallback.
+Read the locked management manifest before implementing business flows. Selected
+orders/leads/bookings MUST use createManagedOrder/createManagedLead/
+createManagedBooking and getManagedRecords from `@/lib/omnia/business-client`.
+Do not replace a selected managed module with a custom SQL table or generic action.
+Read business-client.ts and business-server.ts for the exact typed signatures.
+Each create takes operationKey (one UUID per deliberate intent), customerName
+(explicit form input, never a fabricated MAX profile), optional contacts/comment.
+Orders also take configVersion and items [{catalogId,quantity,unitPriceKopecks,
+option?}]. Convert only explicit numeric RUB catalog prices to integer kopecks.
+On ManagedBusinessError.code=quote_changed, show error.quote current prices and
+require a separate explicit confirmation; never automatically submit again.
+Keep the same operationKey and body after ambiguous failures. History reads
+getManagedRecords(resource,{limit,cursor}) and renders result.records; show only
+the current customer's records and the server-returned status.
+Bookings take serviceId and requestedFor (timezone-bearing ISO); they are requests
+until the owner confirms them. Do not invent free slots, capacity or payment.
+Private/personal features outside these selected modules keep their existing
+user-scoped storage and must never become an owner-wide business registry.
 Read `src/lib/omnia/max-config.ts` to understand the saved brief. Product catalog
 screens MUST use `useYleumCatalog()` from `@/lib/omnia/catalog-client`, which
 refreshes on mount/focus from the same mounted public business file as the server.

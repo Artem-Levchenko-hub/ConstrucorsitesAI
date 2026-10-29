@@ -292,6 +292,10 @@ async def put_max_config(
     project = await _owned_max_project(session, project_id, current_user.id, lock=True)
     record = await session.get(MaxProjectConfig, project_id)
     current_payload = _config_payload(project, record)
+    payload = _prepare_config_change(
+        current_payload, payload, current_version=record.config_version if record else 0,
+        expected_version=x_max_config_version if isinstance(x_max_config_version, int) else None,
+    )
     _check_content_version(
         current_payload.content, payload.content,
         current_version=record.config_version if record else 0,
@@ -479,6 +483,22 @@ async def _save_cell_business_config(
     result = _public(project, record)
     result.application_mode = "runtime"
     return result
+
+
+def _prepare_config_change(
+    current: MaxProjectConfigPayload, desired: MaxProjectConfigPayload, *,
+    current_version: int, expected_version: int | None,
+) -> MaxProjectConfigPayload:
+    # Older settings clients do not know this private field. Omission is never
+    # an instruction to disable previously selected business modules.
+    if "management_modules" not in desired.model_fields_set:
+        desired = desired.model_copy(update={"management_modules": current.management_modules})
+    if current_version > 0 and current != desired and expected_version != current_version:
+        raise ApiError(
+            "conflict", "Данные изменились. Обновите настройки и повторите изменения", 409,
+            details={"reason": "config_version_conflict"},
+        )
+    return desired
 
 
 def _check_content_version(

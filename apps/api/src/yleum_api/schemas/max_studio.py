@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from yleum_api.schemas.billing import UsageCostBreakdownPublic
+from yleum_api.schemas.max_management import ManagementModule, _validate_modules
 
 
 class MaxContentItem(BaseModel):
@@ -149,8 +150,19 @@ class MaxProjectConfigPayload(BaseModel):
     support: MaxSupport = Field(default_factory=MaxSupport)
     legal: MaxLegal = Field(default_factory=MaxLegal)
     max_url_attached: bool = False
+    # None distinguishes saved legacy apps from an explicit new-project choice.
+    # Capabilities are frozen in the published managed manifest, never in this
+    # mutable config alone.
+    management_modules: list[ManagementModule] | None = Field(default=None, strict=True)
 
     _unique_ids = field_validator("content")(_unique_content_ids)
+
+    @field_validator("management_modules")
+    @classmethod
+    def valid_management_modules(
+        cls, value: list[ManagementModule] | None,
+    ) -> list[ManagementModule] | None:
+        return _validate_modules(value) if value is not None else None
 
     @classmethod
     def default_for(cls, app_name: str) -> "MaxProjectConfigPayload":

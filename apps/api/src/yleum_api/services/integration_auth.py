@@ -22,6 +22,27 @@ def verify_integration_assertion(
     path: str,
     body: bytes,
 ) -> int:
+    return _verify_assertion(
+        assertion, bot_token, project_id=project_id, method=method, path=path,
+        body=body, purpose=_DOMAIN,
+    )
+
+
+def verify_business_analytics_assertion(
+    assertion: str, bot_token: str, *, project_id: UUID, method: str, path: str, body: bytes,
+) -> int:
+    if method != "POST" or path != f"/api/runtime/projects/{project_id}/analytics":
+        raise ValueError("invalid business analytics destination")
+    return _verify_assertion(
+        assertion, bot_token, project_id=project_id, method=method, path=path,
+        body=body, purpose=b"yleum:business-analytics:v1",
+    )
+
+
+def _verify_assertion(
+    assertion: str, bot_token: str, *, project_id: UUID, method: str, path: str,
+    body: bytes, purpose: bytes,
+) -> int:
     """Authenticate both the MAX identity and the exact upstream operation."""
     if len(assertion) > 4096:
         raise ValueError("invalid integration assertion")
@@ -34,7 +55,7 @@ def verify_integration_assertion(
     ):
         raise ValueError("invalid integration assertion")
     encoded, provided = pieces[1:]
-    key = hmac.digest(bot_token.encode(), _DOMAIN, "sha256")
+    key = hmac.digest(bot_token.encode(), purpose, "sha256")
     expected = hmac.new(key, f"v1.{encoded}".encode(), "sha256").hexdigest()
     if not hmac.compare_digest(provided, expected):
         raise ValueError("invalid integration assertion")

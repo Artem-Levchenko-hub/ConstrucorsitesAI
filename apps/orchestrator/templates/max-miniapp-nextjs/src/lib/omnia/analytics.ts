@@ -12,10 +12,14 @@ export async function forwardMaxAnalytics(
   eventType?: MaxActivityType | "app_open",
 ): Promise<boolean> {
   // Owner previews and activation probes are never customer traffic.
-  const project = process.env.OMNIA_PROJECT_ID || "";
+  const project = process.env.OMNIA_PROJECT_ID || process.env.YLEUM_OWNER_PROJECT_ID || "";
   const token = process.env.MAX_BOT_TOKEN;
+  const businessKey = process.env.YLEUM_BUSINESS_ANALYTICS_KEY;
   if (!process.env.OMNIA_PUBLIC_APP_ORIGIN || !/^[1-9][0-9]{0,19}$/.test(actor)) return true;
-  if (!project || !token) return false;
+  if (!project || (!token && !/^[0-9a-f]{64}$/.test(businessKey || ""))) return false;
+  if (!token && (kind !== "action" || !eventType || ![
+    "order_created", "lead_created", "booking_created",
+  ].includes(eventType))) return false;
   if (eventType !== undefined) {
     const family = maxActivityKind(eventType);
     if (eventType === "app_open" ? kind !== "open" :
@@ -30,7 +34,9 @@ export async function forwardMaxAnalytics(
     project_id: project, max_user_id: actor, iat: issued, exp: issued + 60,
     method: "POST", path, body_sha256: createHash("sha256").update(body).digest("hex"),
   })).toString("base64url");
-  const key = createHmac("sha256", token).update("omnia:integration-assertion:v1").digest();
+  const key = token
+    ? createHmac("sha256", token).update("omnia:integration-assertion:v1").digest()
+    : Buffer.from(businessKey!, "hex");
   const signed = `v1.${encoded}`;
   const assertion = `${signed}.${createHmac("sha256", key).update(signed).digest("hex")}`;
   const platform = (process.env.OMNIA_PLATFORM_API_URL || "https://yleum.ru").replace(/\/$/, "");
@@ -40,7 +46,8 @@ export async function forwardMaxAnalytics(
     try {
       const response = await fetch(`${platform}${path}`, {
         method: "POST", body, cache: "no-store", signal: AbortSignal.timeout(2_000),
-        headers: { "Content-Type": "application/json", "X-Omnia-Integration-Assertion": assertion },
+        headers: { "Content-Type": "application/json", [token
+          ? "X-Omnia-Integration-Assertion" : "X-Yleum-Business-Assertion"]: assertion },
       });
       if (response.ok) return true;
       if (response.status < 500 && response.status !== 429) return false;

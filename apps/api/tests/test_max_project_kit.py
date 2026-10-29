@@ -29,6 +29,7 @@ from yleum_api.schemas.max_studio import (
 from yleum_api.services import max_project_kit as max_project_kit_svc
 from yleum_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
+    MAX_MANAGEMENT_RUNTIME_FILES,
     MAX_MODEL_LOCKED_FILES,
     MAX_RETIRED_MANAGED_FILES,
     MAX_SECURITY_LOCKED_FILES,
@@ -95,7 +96,7 @@ def test_catalog_item_refuses_a_photo_address_that_is_not_https() -> None:
 
 def test_kit_v24_retires_encrypted_crud_and_stores_only_the_max_user_id() -> None:
     project_id = uuid4()
-    assert MAX_MANAGED_KIT_VERSION == 32
+    assert MAX_MANAGED_KIT_VERSION == 33
     managed = render_max_managed_files(_config(), project_id)
     starter = render_max_starter_files(_config(), project_id, portable=True)
     # v22: no managed server file reads or persists the MAX visitor profile.
@@ -148,6 +149,8 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     files = render_max_managed_files(_config(), project_id)
 
     assert set(files) == {
+        *set(MAX_MANAGEMENT_RUNTIME_FILES) - {"drizzle/0003_owner_management.sql"},
+        "next.config.ts",
         "postcss.config.mjs",
         "src/app/layout.tsx",
         "src/app/api/omnia/health/route.ts",
@@ -950,7 +953,7 @@ def test_portable_starter_does_not_reintroduce_legacy_database_scripts():
 
 
 def test_managed_kit_refresh_exposes_authenticated_lead_receipt_read() -> None:
-    assert MAX_MANAGED_KIT_VERSION == 32
+    assert MAX_MANAGED_KIT_VERSION == 33
     managed = render_max_managed_files(_config(), uuid4())
     assert "getYleumLeadReceipt" in managed["src/lib/omnia/integration-client.ts"]
     route = managed["src/app/api/omnia/integrations/[...path]/route.ts"]

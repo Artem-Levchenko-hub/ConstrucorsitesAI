@@ -37,11 +37,20 @@ it("transfers the entire pasted brief from creation to the chat starter", async 
     expect(next().disabled).toBe(true);
     expect(input.value.length).toBe(20_001);
     await act(async () => { change(input, brief); });
-    for (let step = 0; step < 3; step++) await act(async () => { next().click(); });
+    for (let step = 0; step < 2; step++) await act(async () => { next().click(); });
+    const modules = () => [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+    expect(modules().slice(0, 2).every(input => input.checked)).toBe(true);
+    await act(async () => { modules()[0].click(); });
+    expect(modules().slice(0, 2).every(input => !input.checked)).toBe(true);
+    await act(async () => { modules()[1].click(); });
+    expect(modules().slice(0, 2).every(input => input.checked)).toBe(true);
+    await act(async () => { next().click(); });
     const submit = [...document.querySelectorAll("button")].find(b => b.textContent?.includes("Создать проект"))!;
     await act(async () => { submit.click(); });
     await act(async () => { await vi.waitFor(() => expect(mocks.push).toHaveBeenCalled()); });
-    expect(mocks.save.mock.calls[0][1].summary).toBe(brief);
+    expect(mocks.create.mock.calls[0][0].max_config.summary).toBe(brief);
+    expect(mocks.create.mock.calls[0][0].max_config.management_modules).toEqual(["catalog", "orders"]);
+    expect(mocks.save).not.toHaveBeenCalled();
     expect(sessionStorage.getItem("omnia:max:starter:long-brief-qa")).toContain(brief);
     expect(mocks.push).toHaveBeenCalledWith("/max/long-brief-qa?starter=1");
   } finally {

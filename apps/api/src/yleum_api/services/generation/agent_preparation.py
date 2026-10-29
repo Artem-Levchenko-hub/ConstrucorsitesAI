@@ -110,6 +110,7 @@ async def _seed_saved_max_config(
 ) -> str | None:
     """Deliver authoritative public metadata before any model/runtime work."""
     from yleum_api.core.errors import ApiError
+    from yleum_api.services.max_content_delivery import public_business_config
     from yleum_api.services.max_managed_generation import load_saved_business_config
     from yleum_api.services.max_project_kit import render_max_managed_files
 
@@ -125,8 +126,19 @@ async def _seed_saved_max_config(
             raise ApiError(
                 "orchestrator_unavailable", "Не удалось подготовить каталог приложения", 503,
             )
-        await seed(version, config.model_dump(mode="json", exclude={"max_url_attached"}))
-    return render_max_managed_files(config, ids.project_id)["src/lib/omnia/max-config.ts"]
+        await seed(version, public_business_config(config))
+    files = render_max_managed_files(config, ids.project_id)
+    if config.management_modules is not None:
+        # Only an explicit new-app choice creates this privilege contract.
+        # Stage it through the same generation lease as every other SDK file.
+        if runtime.handle is None:
+            raise ApiError(
+                "orchestrator_unavailable", "Не удалось подготовить управление приложением", 503,
+            )
+        await runtime.handle.stage_patch(
+            {".omnia/management.json": files[".omnia/management.json"]}, (),
+        )
+    return files["src/lib/omnia/max-config.ts"]
 
 
 async def prepare_stack_prompt(
