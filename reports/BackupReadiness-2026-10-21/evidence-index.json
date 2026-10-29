@@ -1,0 +1,135 @@
+{
+  "schema": 1,
+  "cutoff_utc": "2026-10-21T14:58:00Z",
+  "status": "incomplete_backup_recovery_acceptance",
+  "pushed_product_base": "ae2851aa521698a01900601d25d8abb049d149e0",
+  "live_backend_verified": "6b39fc0f38e54332220ea4209b44db05f77b6234",
+  "live_web_verified": "ebda1b45f2d84160a9c0c5452ccdb35a3730dc84",
+  "live_verified_at_utc": "2026-10-21T14:54:41.805777Z",
+  "ci": {
+    "run_id": 39597138139,
+    "jobs": 13,
+    "all_jobs_success": true,
+    "source_sha": "ae2851aa521698a01900601d25d8abb049d149e0"
+  },
+  "fresh_copy": {
+    "timestamp": "20261021-104532",
+    "cms_bytes": 1617052010,
+    "cms_sha256": "aaa6e1b2c00f499757fc3ab37e58be12aed53ee10b7b5a68709e9f0343ea3f79",
+    "plaintext_bytes": 1617051304,
+    "plaintext_sha256": "4def66beec6ec7fe600668af9ad54f30e8f84b253fcbd096997e4d6a44325a1c",
+    "downloaded_locally": true,
+    "decrypted_locally": true,
+    "actual_sql_minio_restore_accepted": false,
+    "new_mesh_transfer_completed": false,
+    "restore_proof_published": false,
+    "full_dr_verified": false
+  },
+  "known_github_artifact": {
+    "workflow_run_id": 39597138166,
+    "artifact_id": 12343259525,
+    "copy_timestamp": "20261021-002220",
+    "zip_bytes": 247399104,
+    "created_at_utc": "2026-10-21T12:08:10Z",
+    "expired": false,
+    "not_the_fresh_copy": true
+  },
+  "portable_foundation": {
+    "pr": 99,
+    "state": "open",
+    "draft": true,
+    "merged": false,
+    "head_sha": "8fc135321600d11a26a878bac222963e95a28160",
+    "one_click_recovery_verified": false
+  },
+  "evidence": [
+    {
+      "local_evidence_relative_to_qa_root": "backup-plan-report-health-current.json",
+      "sha256": "838a0dae26c427ecb57915c6030839724f4f8b6b12b5dbda5cfe6b275fc89c19",
+      "bytes": 16771,
+      "purpose": "Живой health, reader identity, отсутствие старых ограничений",
+      "raw_evidence_published": false
+    },
+    {
+      "local_evidence_relative_to_qa_root": "backup-plan-report-data-current.json",
+      "sha256": "87ea8ee6b10fe85bad82372555a7e65f17c6df1b643a888a91a08c2c09161100",
+      "bytes": 645,
+      "purpose": "Read-only counts, ownership/snapshot binding и schema",
+      "raw_evidence_published": false
+    },
+    {
+      "local_evidence_relative_to_qa_root": "cms104532-copy-httpv3-after-hardening.json",
+      "sha256": "79b3703648840c18660433b1910eda8cb4294c36d95859378d18b02fd7d53611",
+      "bytes": 6865,
+      "purpose": "Полный readback свежей CMS и sidecar из MinIO",
+      "raw_evidence_published": false
+    },
+    {
+      "local_evidence_relative_to_qa_root": "cms-continuation1b61-progress1.json",
+      "sha256": "7fb68e43e611ebab83a0b5e299d7c815a4c6980113c717c7c193dbe4294bac5a",
+      "bytes": 612,
+      "purpose": "Результат отдельного продолжения загрузки, исходный failed-job не изменяется",
+      "raw_evidence_published": false
+    },
+    {
+      "local_evidence_relative_to_qa_root": "owned-engine-resume7180-progress1.json",
+      "sha256": "aa2ec89fedbdc7ddd6a23340d459fca935c4de0371256073a8eeacf9c2d6bfa6",
+      "bytes": 5787,
+      "purpose": "Явное возобновление изолированного engine, production unchanged",
+      "raw_evidence_published": false
+    },
+    {
+      "local_evidence_relative_to_qa_root": "core-reconstruction3201-result-actual-v2.json",
+      "sha256": "b1bc84b518eca5e29b2c15fda9e22beac4811533b7a9202e97b4349202cc9050",
+      "bytes": 11217,
+      "purpose": "Побайтно идентичный plaintext источник для mesh-передачи",
+      "raw_evidence_published": false
+    },
+    {
+      "local_evidence_relative_to_qa_root": "runtime-staging73a-writer-closed-actual.json",
+      "sha256": "bd0364a24de78f5ef7337e9f0c32900975bb0d1a7f507332314899e5e0a4d779",
+      "bytes": 1610,
+      "purpose": "Прежний WAN receiver завершён, частичные файлы сохранены",
+      "raw_evidence_published": false
+    },
+    {
+      "local_evidence_relative_to_qa_root": "live-cells-all3-census-progress1.json",
+      "sha256": "8f87dda5e78225d54dc14b104869531b4f3867d8b5db0bed5f1bded8d7bd8c8e",
+      "bytes": 792,
+      "purpose": "Первый census failed, точная причина не воспроизведена",
+      "raw_evidence_published": false
+    },
+    {
+      "local_evidence_relative_to_qa_root": "live-cells-all3-diagnostic-v2-actual.json",
+      "sha256": "5bc32d62679b1d61162e575731c3347d535141ab4bcfd3253973a00ee3087e88",
+      "bytes": 1327227,
+      "purpose": "Успешный последующий read-only census и units трёх ролей",
+      "raw_evidence_published": false
+    },
+    {
+      "local_evidence_relative_to_qa_root": "host-snapshot-install-proposal/phase2-retirement/live-crosswalk104532-actual-v2.json",
+      "sha256": "5a00a254f004fdbc94205d03d8fc0ddc243b763d58c26e4902c5394daaef2de3",
+      "bytes": 43190,
+      "purpose": "Сверка архивных и живых владельцев, журналов и томов",
+      "raw_evidence_published": false
+    }
+  ],
+  "secrets_or_sql_exported_in_this_index": false,
+  "raw_evidence_location": "qa-evidence/release-resume-20261021 in the operator workspace, outside this documentation commit",
+  "private_receipt_digests": [
+    {
+      "receipt_name": "decrypt-receipt.json",
+      "sha256": "d1213ad1774b5e6737a7bdae9a94392784bd74174f86a2a77224fe09bfdb1997",
+      "bytes": 5851,
+      "contents_published": false,
+      "location": "private local recovery acceptance directory; not in Git"
+    },
+    {
+      "receipt_name": "stream-decrypt-receipt.json",
+      "sha256": "d1608ca9a8222ec02e0aafe1f0c555ae3cd27c2701edf0e4eeacbc2d6758c981",
+      "bytes": 1340,
+      "contents_published": false,
+      "location": "private local recovery acceptance directory; not in Git"
+    }
+  ]
+}
