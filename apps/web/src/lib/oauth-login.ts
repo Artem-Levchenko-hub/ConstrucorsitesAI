@@ -44,6 +44,8 @@ const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   oauth_email_required:
     "Провайдер не передал email. Разрешите доступ к адресу почты или войдите по email.",
   oauth_provider_unavailable: "Вход через этого провайдера сейчас не настроен.",
+  oauth_account_confirmation_required:
+    "Этот email уже указан в аккаунте. Войдите по паролю и подтвердите почту. Если пароль вам неизвестен, восстановите его.",
   account_unavailable: "Аккаунт недоступен. Напишите в поддержку, если это ошибка.",
 };
 

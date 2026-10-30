@@ -79,6 +79,7 @@ describe("provider helpers", () => {
     expect(oauthButtonLabel({ provider: "vk", label: "VK ID" })).toBe("Войти через VK ID");
     expect(oauthErrorMessage("oauth_cancelled")).toContain("отменён");
     expect(oauthErrorMessage("oauth_email_required")).toContain("email");
+    expect(oauthErrorMessage("oauth_account_confirmation_required")).toContain("восстановите");
     expect(oauthErrorMessage("account_unavailable")).toContain("недоступен");
     expect(oauthErrorMessage("something_new")).toContain("Не удалось войти");
     expect(oauthErrorMessage(undefined)).toBeNull();

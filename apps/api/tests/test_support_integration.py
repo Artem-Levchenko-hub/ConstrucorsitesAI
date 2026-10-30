@@ -190,7 +190,9 @@ async def test_archive_boundary_reopen_assignment_conflict_and_reply_mail(client
 async def test_origin_honeypot_consent_limits_and_search(client, db_session):
     admin = await account(db_session, "staff@example.com", "admin")
     body = guest_payload()
-    assert (await client.post("/api/support/tickets", json=body)).status_code == 403
+    missing_origin = client.build_request("POST", "/api/support/tickets", json=body)
+    missing_origin.headers.pop("origin", None)
+    assert (await client.send(missing_origin)).status_code == 403
     assert (
         await client.post(
             "/api/support/tickets", json=body, headers={"origin": "https://evil.example"}

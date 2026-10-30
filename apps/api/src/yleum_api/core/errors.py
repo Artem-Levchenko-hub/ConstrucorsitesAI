@@ -141,6 +141,7 @@ ErrorCode = Literal[
     "oauth_exchange_failed",
     "oauth_email_required",
     "oauth_ticket_invalid",
+    "oauth_account_confirmation_required",
 ]
 
 

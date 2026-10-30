@@ -2,7 +2,7 @@
 
 Рукопожатие целиком серверное: ``state`` и PKCE-verifier лежат в
 ``oauth_login_states`` с TTL, браузер получает только ссылку на провайдера.
-Существующий аккаунт (по связке провайдера или по его email) входит сразу и
+Существующий аккаунт (по связке провайдера или подтверждённому email) входит сразу и
 получает ту же cookie-сессию, что и при входе по паролю. Для нового человека
 callback НЕ создаёт аккаунт молча: он выдаёт одноразовый билет и отправляет
 браузер на экран подтверждения документов в web; аккаунт появляется только в
@@ -29,7 +29,7 @@ from sqlalchemy.exc import IntegrityError
 
 from yleum_api.core.config import get_settings
 from yleum_api.core.deps import SessionDep
-from yleum_api.core.errors import ApiError
+from yleum_api.core.errors import ApiError, ErrorCode
 from yleum_api.core.oauth_browser_binding import clear_binding, has_binding, set_binding
 from yleum_api.core.ratelimit import rate_limit_auth
 from yleum_api.models.oauth_login import OAuthLoginState, UserIdentity
@@ -50,7 +50,7 @@ from yleum_api.services.account_sessions import (
     request_ip,
     request_user_agent,
 )
-from yleum_api.services.accounts import LegalConsent, create_account
+from yleum_api.services.accounts import LegalConsent, create_account, has_verified_email
 from yleum_api.services.oauth_login import OAuthLoginError, ProviderIdentity
 
 log = logging.getLogger(__name__)
@@ -63,6 +63,15 @@ TICKET_TTL = timedelta(minutes=15)
 # Отработавшие строки убираем при следующем старте, когда им больше суток.
 STALE_AFTER = timedelta(days=1)
 DEFAULT_NEXT = "/max"
+ACCOUNT_CONFIRMATION_REQUIRED: ErrorCode = "oauth_account_confirmation_required"
+ACCOUNT_CONFIRMATION_MESSAGE = (
+    "Этот email уже указан в аккаунте. Войдите по паролю и подтвердите почту. "
+    "Если пароль вам неизвестен, восстановите его"
+)
+
+
+class _AccountConfirmationRequired(Exception):
+    """A provider email must not promote credentials with unproven inbox ownership."""
 
 
 def _hash(raw: str) -> str:
@@ -109,13 +118,13 @@ def _require_provider(provider: str) -> OAuthProvider:
 
 
 async def _resolve_user(
-    session: SessionDep, identity: ProviderIdentity, now: datetime
+    session: SessionDep, identity: ProviderIdentity
 ) -> User | None:
-    """Аккаунт по связке провайдера, иначе по его email (тогда связка создаётся).
+    """Аккаунт по связке провайдера, иначе по ранее подтверждённому email.
 
-    Email провайдера считается подтверждённым: найденный по нему аккаунт
-    получает ``email_verified_at``. Неактивный аккаунт возвращается как есть —
-    без привязки, вызывающий откажет во входе.
+    Неподтверждённое совпадение требует отдельного входа/восстановления: иначе
+    человек может принять аккаунт с заранее установленными чужими реквизитами.
+    Неактивный аккаунт возвращается без привязки; вызывающий откажет во входе.
     """
     linked = (
         await session.execute(
@@ -133,10 +142,15 @@ async def _resolve_user(
     if identity.email is None:
         return None
     user = (
-        await session.execute(select(User).where(User.email == identity.email))
+        await session.execute(
+            select(User).where(User.email == identity.email).with_for_update()
+            .execution_options(populate_existing=True)
+        )
     ).scalar_one_or_none()
     if user is None or user.status != "active":
         return user
+    if not await has_verified_email(session, user):
+        raise _AccountConfirmationRequired
     session.add(
         UserIdentity(
             user_id=user.id,
@@ -145,8 +159,6 @@ async def _resolve_user(
             email=identity.email,
         )
     )
-    if user.email_verified_at is None:
-        user.email_verified_at = now
     return user
 
 
@@ -321,7 +333,11 @@ async def finish_login(
         await session.commit()
         return _login_redirect("oauth_email_required", next_path, state)
 
-    user = await _resolve_user(session, identity, now)
+    try:
+        user = await _resolve_user(session, identity)
+    except _AccountConfirmationRequired:
+        await session.commit()
+        return _login_redirect(ACCOUNT_CONFIRMATION_REQUIRED, next_path, state)
     if user is None:
         raw_ticket = secrets.token_urlsafe(40)
         record.ticket_hash = _hash(raw_ticket)
@@ -380,9 +396,15 @@ async def complete_registration(
         provider_user_id=cast(str, record.pending_provider_user_id),
         email=cast(str, record.pending_email),
     )
-    # Пока человек читал документы, аккаунт с этим email мог появиться (например,
-    # регистрация по паролю в соседней вкладке) — тогда просто связываем и входим.
-    user = await _resolve_user(session, identity, now)
+    # A new email collision while consent was pending needs the same ownership
+    # proof as the callback; preserve the existing account and unspent ticket.
+    try:
+        user = await _resolve_user(session, identity)
+    except _AccountConfirmationRequired as exc:
+        raise ApiError(
+            ACCOUNT_CONFIRMATION_REQUIRED, ACCOUNT_CONFIRMATION_MESSAGE,
+            status.HTTP_409_CONFLICT,
+        ) from exc
     if user is not None and user.status != "active":
         raise ApiError("account_unavailable", "account is not active", status.HTTP_403_FORBIDDEN)
     try:

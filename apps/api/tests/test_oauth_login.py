@@ -603,6 +603,107 @@ async def test_password_login_is_impossible_for_provider_only_account(
     assert login.status_code == 401
 
 
+async def _register_password_account(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, *, verify: bool = False
+) -> str:
+    from yleum_api.routers import auth as auth_router
+
+    raw_verification: str | None = None
+
+    async def no_letter(_user: User, token: str) -> None:
+        nonlocal raw_verification
+        raw_verification = token
+
+    monkeypatch.setattr(auth_router, "_send_verification", no_letter)
+    registered = await client.post("/api/auth/register", json=MAX_REGISTRATION)
+    assert registered.status_code == 201, registered.text
+    assert registered.json()["email_verified_at"] is None
+    if verify:
+        assert raw_verification is not None
+        verified = await client.post(
+            "/api/auth/email/verify", json={"token": raw_verification}
+        )
+        assert verified.status_code == 200, verified.text
+    return registered.json()["id"]
+
+
+@pytest.mark.parametrize("retain_password", [True, False])
+@pytest.mark.parametrize("legacy_hint", [False, True], ids=["unverified", "legacy-signup-hint"])
+async def test_unverified_email_collision_requires_account_confirmation(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    providers_configured: None,
+    provider: Provider,
+    monkeypatch: pytest.MonkeyPatch,
+    retain_password: bool,
+    legacy_hint: bool,
+) -> None:
+    user_id = await _register_password_account(client, monkeypatch)
+    user = (await db_session.execute(select(User))).scalar_one()
+    if legacy_hint:
+        user.email_verified_at = datetime.now(UTC)
+    if not retain_password:
+        user.password_hash = None
+        user.phone_e164 = MAX_REGISTRATION["phone"]
+        user.phone_verified_at = datetime.now(UTC)
+    await db_session.commit()
+    original_hash = user.password_hash
+    original_version = user.session_version
+    original_phone = user.phone_e164
+    original_verification_hint = user.email_verified_at
+
+    async with _other_browser(client) as victim:
+        params = await _start(victim, "yandex", next="/billing/plan")
+        callback = await _callback(victim, "yandex", state=params["state"], code="ya-code")
+        assert callback.headers["location"] == (
+            f"{WEB}/login?oauth_error=oauth_account_confirmation_required&next=%2Fbilling%2Fplan"
+        )
+        assert "omnia_session" not in callback.cookies
+        assert (await victim.get("/api/auth/me")).status_code == 401
+
+    await db_session.refresh(user)
+    assert user.email_verified_at == original_verification_hint
+    assert user.password_hash == original_hash
+    assert user.session_version == original_version
+    assert user.phone_e164 == original_phone
+    assert (await db_session.execute(select(UserIdentity))).scalars().all() == []
+    assert len((await db_session.execute(select(AuthSession))).scalars().all()) == 1
+    assert (await client.get("/api/auth/me")).json()["id"] == user_id
+    (state,) = await _state_rows(db_session)
+    assert state.used_at is not None and state.ticket_hash is None
+
+
+async def test_pending_ticket_cannot_adopt_later_unverified_registration(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    providers_configured: None,
+    provider: Provider,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    params = await _start(client, "yandex")
+    callback = await _callback(client, "yandex", state=params["state"], code="ya-code")
+    ticket = _query(callback.headers["location"])["ticket"]
+    async with _other_browser(client) as preregistration:
+        user_id = await _register_password_account(preregistration, monkeypatch)
+        user = (await db_session.execute(select(User))).scalar_one()
+        original_hash = user.password_hash
+        completed = await client.post(
+            "/api/auth/oauth/complete", json={"ticket": ticket, **CONSENT}
+        )
+        assert completed.status_code == 409, completed.text
+        assert completed.json()["error"]["code"] == "oauth_account_confirmation_required"
+        assert "omnia_session" not in completed.cookies
+        assert (await client.get("/api/auth/me")).status_code == 401
+        assert (await preregistration.get("/api/auth/me")).json()["id"] == user_id
+
+    await db_session.refresh(user)
+    assert user.email_verified_at is None and user.password_hash == original_hash
+    assert (await db_session.execute(select(UserIdentity))).scalars().all() == []
+    assert len((await db_session.execute(select(AuthSession))).scalars().all()) == 1
+    (state,) = await _state_rows(db_session)
+    assert state.completed_at is None
+
+
 async def test_existing_account_is_linked_by_verified_email_and_signed_in(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
@@ -610,16 +711,7 @@ async def test_existing_account_is_linked_by_verified_email_and_signed_in(
     provider: Provider,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from yleum_api.routers import auth as auth_router
-
-    async def no_letter(_user: User, _token: str) -> None:
-        return None
-
-    monkeypatch.setattr(auth_router, "_send_verification", no_letter)
-    registered = await client.post("/api/auth/register", json=MAX_REGISTRATION)
-    assert registered.status_code == 201
-    assert registered.json()["email_verified_at"] is None
-    user_id = registered.json()["id"]
+    user_id = await _register_password_account(client, monkeypatch, verify=True)
     client.cookies.clear()
 
     params = await _start(client, "yandex", next="/billing/plan")
@@ -637,7 +729,7 @@ async def test_existing_account_is_linked_by_verified_email_and_signed_in(
     me = await client.get("/api/auth/me")
     assert me.status_code == 200
     assert me.json()["id"] == user_id
-    # Провайдер подтвердил адрес — письмо больше не нужно.
+    # Связываем только аккаунт с ранее подтверждённым адресом.
     assert me.json()["email_verified_at"] is not None
 
     identity = (await db_session.execute(select(UserIdentity))).scalar_one()
