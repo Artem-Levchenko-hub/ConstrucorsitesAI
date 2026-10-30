@@ -144,6 +144,20 @@ read/write persistence after restart.
 
 ## Install the delivered hooks
 
+The runtime census also covers the stateless `analytics-relay` alongside the
+four mandatory published image roles. Its image must be identical to the guard
+image; its owned ConfigMap and mounted source, read-only Pod specification and
+every replica are bound into the source witness. Shared source artifacts are
+created once with exclusive file creation while each replica is checked before
+database export and again at final closure. Unknown components and durable or
+mutable relay storage still fail closed. Earlier guard-only v2 bundles remain
+verifiable.
+
+The 2026-10-30 security repair rotates the recipient for future copies only.
+The matching private key stays offline; all previous keys and ciphertext remain
+preserved. Recipient SPKI SHA-256:
+`986a485ad840952369642e3f8cde74d234eb102af54ba7165143252b8d976325`.
+
 After the pushed revision has passed CI and canonical deployment, on Core:
 
 1. Confirm the exact delivered `/opt/omnia` revision and that

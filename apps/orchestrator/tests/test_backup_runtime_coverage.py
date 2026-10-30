@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import hashlib
 import importlib.util
 import io
 import json
@@ -94,6 +95,7 @@ class Kube:
                 },
             ]
         self.boundary_source = b"print('boundary fixture')\n"
+        self.mounted_sources = {}
         self.configmap = {"metadata": {"name": "boundary-server", "uid": "cm-uid",
                           "resourceVersion": "1",
                           "labels": {**tags, runtime.COMPONENT: "boundary"}},
@@ -133,6 +135,10 @@ class Kube:
 
     def run(self, args, **_kwargs):
         self.calls.append(tuple(args))
+        if "-c" in args and args[-1] == "/run/omnia-boundary/server.py":
+            payload = self.mounted_source(args, self.boundary_source)
+            value = {"bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+            return cells.CommandResult(tuple(args), 0, json.dumps(value).encode(), b"")
         if args[:2] == ["crictl", "inspecti"]:
             return cells.CommandResult(tuple(args), 0, json.dumps(self.cri[args[-1]]).encode(), b"")
         if "get" in args:
@@ -144,6 +150,10 @@ class Kube:
             return cells.CommandResult(tuple(args), 0, json.dumps({"items": items}).encode(), b"")
         return cells.CommandResult(tuple(args), 0, b"7\n", b"")
 
+    def mounted_source(self, args, default):
+        pod = args[args.index("--namespace") + 2]
+        return self.mounted_sources.get(pod, default)
+
     def run_to_file(self, args, *, path, **_kwargs):
         import hashlib
 
@@ -151,8 +161,10 @@ class Kube:
         is_source = args[-2:] == ["cat", "/run/omnia-boundary/server.py"]
         if not is_source:
             self.dumps += 1
-        payload = self.boundary_source if is_source else b"-- fixture cluster dump\n"
-        path.write_bytes(payload)
+        payload = (self.mounted_source(args, self.boundary_source) if is_source
+                   else b"-- fixture cluster dump\n")
+        with os.fdopen(cells._create_private_file(path), "wb") as output:
+            output.write(payload)
         return cells.StreamResult(
             tuple(args), 0, len(payload), hashlib.sha256(payload).hexdigest(), b""
         )
@@ -837,9 +849,9 @@ def test_boundary_source_offline_corruption_and_missing_fail(tmp_path):
         runtime.validate_boundary_sources([], facts)
 
 
-def _add_service_account_mount(kube):
+def _add_service_account_mount(kube, pod_name="boundary-pod"):
     pod = next(item for item in kube.resources if item.get("kind") == "Pod"
-               and item["metadata"]["name"] == "boundary-pod")
+               and item["metadata"]["name"] == pod_name)
     mount = {"name": "kube-api-access-t6b6n", "readOnly": True,
              "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount"}
     pod["spec"]["containers"][0]["volumeMounts"].append(mount)
@@ -917,3 +929,342 @@ def test_final_images_probe_rejects_boundary_drift(monkeypatch, fault):
             "mode": "images-only", "provider": "kubernetes", "kubectl": "kubectl",
             "context": "default", "producer_sha256": {},
             "expected_boundary_sources": expected}})
+
+
+class RelayKube(Kube):
+    """Actual relay Pod shape, with only Kubernetes/CRI I/O replaced."""
+
+    def __init__(self):
+        super().__init__()
+        self.relay_source = b"print('receipt relay fixture')\n"
+        tags = {**self.namespaces[0]["metadata"]["labels"],
+                runtime.COMPONENT: "analytics-relay"}
+        self.relay_configmap = {
+            "metadata": {"name": "analytics-relay", "namespace": NAMESPACE,
+                         "uid": "relay-cm-uid", "resourceVersion": "7", "labels": tags},
+            "data": {"relay.py": self.relay_source.decode()},
+        }
+        guard = next(pod for pod in self.resources
+                     if pod["metadata"]["name"] == "boundary-pod")
+        guard_container = guard["spec"]["containers"][0]
+        self.relay = {
+            "kind": "Pod",
+            "metadata": {
+                "name": "analytics-relay-5c6fdd4cc9-b75wv", "namespace": NAMESPACE,
+                "uid": "relay-pod-uid", "labels": tags,
+                "ownerReferences": [{"apiVersion": "apps/v1", "kind": "ReplicaSet",
+                                     "name": "analytics-relay-5c6fdd4cc9", "uid": "relay-rs-uid",
+                                     "controller": True, "blockOwnerDeletion": True}],
+            },
+            "spec": {
+                "containers": [{
+                    "name": "relay", "image": guard_container["image"],
+                    "command": ["python3", "/run/relay/relay.py", "--bind", "0.0.0.0",
+                                "--relay-only", "--analytics-project", PROJECT,
+                                "--analytics-origin", "https://yleum.ru"],
+                    "securityContext": {
+                        "runAsUser": 65534, "runAsGroup": 65534,
+                        "allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]},
+                        "readOnlyRootFilesystem": True,
+                    },
+                    "volumeMounts": [
+                        {"name": "relay", "mountPath": "/run/relay", "readOnly": True}],
+                }],
+                "volumes": [{"name": "relay", "configMap": {
+                    "name": "analytics-relay", "defaultMode": 420}}],
+            },
+            "status": {"phase": "Running", "containerStatuses": [{
+                "name": "relay", "ready": True, "containerID": "containerd://relay",
+                "imageID": guard["status"]["containerStatuses"][0]["imageID"],
+                "state": {"running": {}},
+            }]},
+        }
+        self.resources.append(self.relay)
+
+    def run(self, args, **kwargs):
+        if ("configmaps" in args and "metadata.name=analytics-relay" in args):
+            self.calls.append(tuple(args))
+            return cells.CommandResult(tuple(args), 0,
+                                       json.dumps({"items": [self.relay_configmap]}).encode(), b"")
+        if "-c" in args and args[-1] == "/run/relay/relay.py":
+            self.calls.append(tuple(args))
+            payload = self.mounted_source(args, self.relay_source)
+            value = {"bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+            return cells.CommandResult(tuple(args), 0, json.dumps(value).encode(), b"")
+        return super().run(args, **kwargs)
+
+    def run_to_file(self, args, *, path, **kwargs):
+        if args[-2:] == ["cat", "/run/relay/relay.py"]:
+            self.calls.append(tuple(args))
+            payload = self.mounted_source(args, self.relay_source)
+            with os.fdopen(cells._create_private_file(path), "wb") as output:
+                output.write(payload)
+            return cells.StreamResult(tuple(args), 0, len(payload),
+                                      hashlib.sha256(payload).hexdigest(), b"")
+        return super().run_to_file(args, path=path, **kwargs)
+
+
+def test_backup_captures_stateless_relay_with_four_role_artifact_closure(tmp_path, monkeypatch):
+    kube = RelayKube()
+    _add_service_account_mount(kube, kube.relay["metadata"]["name"])
+    monkeypatch.setattr(cells, "DockerRunner", lambda *_: kube)
+    manifest, code = runtime.kube_backup(
+        cells, {"kubectl": "kubectl", "context": "default", "postgres_image": IMAGE}, tmp_path
+    )
+    assert code == 0 and len(manifest["runtime_images"]) == 5
+    images = runtime.validate_runtime_images(manifest["runtime_images"])
+    assert set(images[PROJECT]) == {"app", "core", "guard", "redis"}
+    source = next(row for row in manifest["boundary_sources"]
+                  if row.get("component") == "analytics-relay")
+    assert source["file"] == PROJECT + "-analytics-relay.py"
+    assert source["mounted_path"] == "/run/relay/relay.py"
+    assert source["configmap_uid"] == "relay-cm-uid"
+    assert source["configmap_resource_version"] == "7"
+    assert source["pod_uid"] == "relay-pod-uid"
+    assert (tmp_path / source["file"]).read_bytes() == kube.relay_source
+    assert "PRIVATE=never-persist" not in json.dumps(manifest)
+    assert "serviceAccountToken" not in json.dumps(manifest)
+    cells._write_private_json(tmp_path / "MANIFEST.json", manifest)
+    assert runtime.validate_local(cells, tmp_path) == manifest
+    complete = complete_v2_manifests()
+    complete["runtime"] = manifest
+    closure = runtime.close_coverage(complete, require_published=True)
+    assert closure["coverage_complete"] is True
+    assert closure["boundary_sources"] == manifest["boundary_sources"]
+    assert not any(verb in call for call in kube.calls
+                   for verb in ("pull", "apply", "delete", "scale", "patch"))
+
+
+@pytest.mark.parametrize("fault", [
+    "manifest", "config", "platform", "reference", "missing_guard", "unknown"])
+def test_relay_image_never_bypasses_exact_guard_identity_or_required_roles(fault):
+    kube = RelayKube()
+    facts = runtime.kube_runtime_images(kube, kube, "default")
+    relay = next(row for row in facts if row["component"] == "analytics-relay")
+    if fault == "manifest":
+        relay["runtime_image_id"] = "registry/boundary@sha256:" + "f" * 64
+        relay["repo_digests"] = [relay["runtime_image_id"]]
+    elif fault == "config":
+        relay["config_id"] = "sha256:" + "f" * 64
+    elif fault == "platform":
+        relay["platform"] = {"os": "linux", "architecture": "arm64", "variant": "v8"}
+    elif fault == "reference":
+        relay["reference"] = "untrusted/guard:latest"
+    elif fault == "missing_guard":
+        facts = [row for row in facts if row["component"] != "guard"]
+    else:
+        relay["component"] = "unregistered-helper"
+    with pytest.raises((ValueError, runtime.published_module().PublishedError)):
+        runtime.validate_runtime_images(facts)
+
+
+@pytest.mark.parametrize("fault", [
+    "pod_owner", "controller", "namespace", "component", "not_ready", "init_container",
+    "ephemeral_container", "root_writable", "mount_writable", "subpath", "unknown_mount",
+    "pvc", "host", "secret", "unmounted_pvc", "optional", "other_configmap", "binary",
+    "extra_key", "missing_source", "cm_owner", "cm_deleted", "command", "env", "device",
+])
+def test_relay_source_rejects_untrusted_or_uncovered_runtime_state(tmp_path, monkeypatch, fault):
+    kube = RelayKube()
+    pod, config = kube.relay, kube.relay_configmap
+    container, volume = pod["spec"]["containers"][0], pod["spec"]["volumes"][0]
+    mount = container["volumeMounts"][0]
+    if fault == "pod_owner":
+        pod["metadata"]["labels"][runtime.MANAGED] = "foreign"
+    elif fault == "controller":
+        pod["metadata"]["ownerReferences"][0]["kind"] = "Job"
+    elif fault == "namespace":
+        pod["metadata"]["namespace"] = "app-foreign"
+    elif fault == "component":
+        pod["metadata"]["labels"][runtime.COMPONENT] = "unknown-helper"
+    elif fault == "not_ready":
+        pod["status"]["containerStatuses"][0]["ready"] = False
+    elif fault == "init_container":
+        pod["spec"]["initContainers"] = [{"name": "uncovered", "image": "foreign:latest"}]
+    elif fault == "ephemeral_container":
+        pod["spec"]["ephemeralContainers"] = [{"name": "debug", "image": "foreign:latest"}]
+    elif fault == "root_writable":
+        container["securityContext"]["readOnlyRootFilesystem"] = False
+    elif fault == "mount_writable":
+        mount["readOnly"] = False
+    elif fault == "subpath":
+        mount["subPath"] = "relay.py"
+    elif fault == "unknown_mount":
+        container["volumeMounts"].append({"name": "extra", "mountPath": "/data", "readOnly": True})
+    elif fault in {"pvc", "host", "secret"}:
+        volume.pop("configMap")
+        volume.update({"pvc": {"persistentVolumeClaim": {"claimName": "business-data"}},
+                       "host": {"hostPath": {"path": "/data"}},
+                       "secret": {"secret": {"secretName": "credentials"}}}[fault])
+    elif fault == "unmounted_pvc":
+        pod["spec"]["volumes"].append({
+            "name": "data", "persistentVolumeClaim": {"claimName": "business-data"}})
+    elif fault == "optional":
+        volume["configMap"]["optional"] = True
+    elif fault == "other_configmap":
+        volume["configMap"]["name"] = "foreign-source"
+    elif fault == "binary":
+        config["binaryData"] = {"extra": "Ynl0ZXM="}
+    elif fault == "extra_key":
+        config["data"]["uncovered.py"] = "other code"
+    elif fault == "missing_source":
+        config["data"] = {}
+    elif fault == "cm_owner":
+        config["metadata"]["labels"][runtime.PROJECT] = "foreign"
+    elif fault == "cm_deleted":
+        config["metadata"]["deletionTimestamp"] = "2026-10-30T00:00:00Z"
+    elif fault == "command":
+        container["command"] = ["python3", "-c", "exec('uncovered')"]
+    elif fault == "env":
+        container["envFrom"] = [{"secretRef": {"name": "credentials"}}]
+    else:
+        container["volumeDevices"] = [{"name": "business-data", "devicePath": "/dev/disk"}]
+    monkeypatch.setattr(cells, "DockerRunner", lambda *_: kube)
+    with pytest.raises(ValueError):
+        runtime.kube_backup(
+            cells, {"kubectl": "kubectl", "context": "default", "postgres_image": IMAGE}, tmp_path)
+    assert not (tmp_path / "MANIFEST.json").exists()
+
+
+@pytest.mark.parametrize("component", ["guard", "analytics-relay"])
+def test_source_replicas_share_one_exclusive_archive(tmp_path, monkeypatch, component):
+    kube = RelayKube()
+    original = (kube.relay if component == "analytics-relay" else next(
+        pod for pod in kube.resources if pod["metadata"]["name"] == "boundary-pod"))
+    replica = copy.deepcopy(original)
+    replica["metadata"].update(
+        name=original["metadata"]["name"] + "-replica", uid="source-replica-uid")
+    replica["status"]["containerStatuses"][0]["containerID"] = "containerd://source-replica"
+    kube.resources.append(replica)
+    monkeypatch.setattr(cells, "DockerRunner", lambda *_: kube)
+    manifest, code = runtime.kube_backup(
+        cells, {"kubectl": "kubectl", "context": "default", "postgres_image": IMAGE}, tmp_path
+    )
+    assert code == 0
+    rows = manifest["boundary_sources"]
+    source_rows = [row for row in rows if row.get("component", "guard") == component]
+    assert {row["pod_uid"] for row in source_rows} == {
+        original["metadata"]["uid"], "source-replica-uid"}
+    runtime.validate_boundary_sources(rows, manifest["runtime_images"], tmp_path)
+    mounted_path = ("/run/relay/relay.py" if component == "analytics-relay"
+                    else "/run/omnia-boundary/server.py")
+    assert len([call for call in kube.calls if call[-2:] == ("cat", mounted_path)]) == 1
+    with pytest.raises(ValueError):
+        runtime.validate_boundary_sources([row for row in rows if row is not source_rows[0]],
+                                          manifest["runtime_images"], tmp_path)
+
+
+@pytest.mark.parametrize("component", ["guard", "analytics-relay"])
+def test_source_replica_with_changed_bytes_blocks_all_dumps(tmp_path, monkeypatch, component):
+    kube = RelayKube()
+    original = (kube.relay if component == "analytics-relay" else next(
+        pod for pod in kube.resources if pod["metadata"]["name"] == "boundary-pod"))
+    replica = copy.deepcopy(original)
+    # Sort the good original first, so checking only the archived copy misses this Pod.
+    replica["metadata"].update(name=original["metadata"]["name"] + "-replica", uid="zz-replica-uid")
+    replica["status"]["containerStatuses"][0]["containerID"] = "containerd://source-replica"
+    kube.resources.append(replica)
+    kube.mounted_sources[replica["metadata"]["name"]] = b"uncovered replica source"
+    monkeypatch.setattr(cells, "DockerRunner", lambda *_: kube)
+    with pytest.raises(ValueError):
+        runtime.kube_backup(
+            cells, {"kubectl": "kubectl", "context": "default", "postgres_image": IMAGE}, tmp_path)
+    assert kube.dumps == 0
+    assert not (tmp_path / "MANIFEST.json").exists()
+
+
+@pytest.mark.parametrize("component", ["guard", "analytics-relay"])
+def test_existing_source_artifact_is_never_overwritten(tmp_path, monkeypatch, component):
+    kube = RelayKube()
+    suffix = "-analytics-relay.py" if component == "analytics-relay" else "-boundary-server.py"
+    path = tmp_path / (PROJECT + suffix)
+    path.write_bytes(b"retained private evidence")
+    monkeypatch.setattr(cells, "DockerRunner", lambda *_: kube)
+    with pytest.raises(cells.BackupError, match="FileExistsError"):
+        runtime.kube_backup(
+            cells, {"kubectl": "kubectl", "context": "default", "postgres_image": IMAGE}, tmp_path)
+    assert path.read_bytes() == b"retained private evidence"
+
+
+@pytest.mark.parametrize("fault", [
+    "missing", "corrupt", "omitted", "duplicate", "foreign_pod", "missing_binding"])
+def test_relay_offline_preflight_requires_every_bound_source(tmp_path, monkeypatch, fault):
+    kube = RelayKube()
+    monkeypatch.setattr(cells, "DockerRunner", lambda *_: kube)
+    manifest, _ = runtime.kube_backup(
+        cells, {"kubectl": "kubectl", "context": "default", "postgres_image": IMAGE}, tmp_path
+    )
+    row = next(item for item in manifest["boundary_sources"]
+               if item.get("component") == "analytics-relay")
+    if fault == "missing":
+        (tmp_path / row["file"]).unlink()
+    elif fault == "corrupt":
+        (tmp_path / row["file"]).write_bytes(b"untrusted source")
+    elif fault == "omitted":
+        manifest["boundary_sources"].remove(row)
+    elif fault == "duplicate":
+        manifest["boundary_sources"].append(copy.deepcopy(row))
+    elif fault == "foreign_pod":
+        row["pod_uid"] = "unrelated-pod"
+    else:
+        row.pop("pod_binding_sha256")
+    cells._write_private_json(tmp_path / "MANIFEST.json", manifest)
+    with pytest.raises(ValueError):
+        runtime.validate_local(cells, tmp_path)
+
+
+@pytest.mark.parametrize("fault", [
+    "cm_version", "cm_bytes", "controller", "command", "mounted_bytes"])
+def test_relay_drift_during_database_dump_refuses_completion(tmp_path, monkeypatch, fault):
+    kube = RelayKube()
+    original = kube.run_to_file
+
+    def drift(args, **kwargs):
+        result = original(args, **kwargs)
+        if "pg_dumpall" in args:
+            if fault == "cm_version":
+                kube.relay_configmap["metadata"]["resourceVersion"] = "8"
+            elif fault == "cm_bytes":
+                kube.relay_configmap["data"]["relay.py"] = "changed source"
+            elif fault == "controller":
+                kube.relay["metadata"]["ownerReferences"][0]["uid"] = "replacement-controller"
+            elif fault == "command":
+                kube.relay["spec"]["containers"][0]["command"][-1] = "https://other.example"
+            else:
+                kube.relay_source = b"mounted bytes differ from ConfigMap"
+        return result
+
+    monkeypatch.setattr(kube, "run_to_file", drift)
+    monkeypatch.setattr(cells, "DockerRunner", lambda *_: kube)
+    with pytest.raises(ValueError):
+        runtime.kube_backup(
+            cells, {"kubectl": "kubectl", "context": "default", "postgres_image": IMAGE}, tmp_path)
+    assert not (tmp_path / "MANIFEST.json").exists()
+
+
+@pytest.mark.parametrize("fault", [None, "cm", "controller", "command", "mounted_bytes"])
+def test_final_images_probe_rechecks_relay_source(tmp_path, monkeypatch, capsys, fault):
+    kube = RelayKube()
+    facts = runtime.kube_runtime_images(kube, kube, "default")
+    expected = runtime.boundary_snapshot(kube, "default", facts)
+    if fault == "cm":
+        kube.relay_configmap["metadata"]["resourceVersion"] = "8"
+    elif fault == "controller":
+        kube.relay["metadata"]["ownerReferences"][0]["uid"] = "replacement-controller"
+    elif fault == "command":
+        kube.relay["spec"]["containers"][0]["command"][-1] = "https://other.example"
+    elif fault == "mounted_bytes":
+        kube.relay_source = b"unexpected mounted bytes"
+    monkeypatch.setattr(cells, "DockerRunner", lambda *_: kube)
+    payload = {"spec": {
+        "mode": "images-only", "provider": "kubernetes", "kubectl": "kubectl", "context": "default",
+        "producer_sha256": {}, "expected_boundary_sources": expected,
+        "temp_root": str(tmp_path / "not-created"),
+    }}
+    if fault:
+        with pytest.raises(ValueError):
+            runtime.dispatch_peer(cells, payload)
+    else:
+        assert runtime.dispatch_peer(cells, payload) == 0
+        assert len(json.loads(capsys.readouterr().out)["runtime_images"]) == 5
+    assert kube.dumps == 0 and not (tmp_path / "not-created").exists()

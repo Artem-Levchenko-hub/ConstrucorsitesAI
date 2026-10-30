@@ -32,6 +32,12 @@ PART = "app.kubernetes.io/part-of"
 MANAGED = "app.kubernetes.io/managed-by"
 COMPONENT = "app.kubernetes.io/component"
 PROJECT = "omnia.project-id"
+SOURCE_LAYOUTS = {
+    "guard": {"component": "boundary", "configmap": "boundary-server", "key": "server.py",
+              "path": "/run/omnia-boundary/server.py", "suffix": "-boundary-server.py"},
+    "analytics-relay": {"component": "analytics-relay", "configmap": "analytics-relay", "key": "relay.py",
+                        "path": "/run/relay/relay.py", "suffix": "-analytics-relay.py"},
+}
 PGOPTIONS = " ".join(
     "-c " + setting
     for setting in (
@@ -133,7 +139,7 @@ def validate_runtime_images(facts: list[dict]) -> dict:
     for fact in facts:
         project = str(UUID(fact["project_id"]))
         need(project == fact["project_id"] and fact["namespace"] == "app-" + project)
-        need(fact["component"] in {"app", "core", "guard", "redis"})
+        need(fact["component"] in {"app", "core", "guard", "redis", "analytics-relay"})
         need(all(type(fact.get(key)) is str and fact[key] for key in
                  ("namespace_uid", "pod", "pod_uid", "container", "container_id", "reference", "runtime_image_id")))
         need(re.fullmatch(r"sha256:[0-9a-f]{64}", fact["config_id"]))
@@ -176,7 +182,7 @@ def kube_runtime_images(runner, cri_runner, context: str) -> list[dict]:
             if component in COMPONENTS:
                 continue
             role = "guard" if component == "boundary" else component
-            need(role in {"app", "core", "guard", "redis"})
+            need(role in {"app", "core", "guard", "redis", "analytics-relay"})
             need(all(labels.get(key) == value for key, value in
                      {PART: "max-app", MANAGED: "omnia-orchestrator", PROJECT: project}.items()))
             need(not metadata.get("deletionTimestamp") and status.get("phase") == "Running")
@@ -205,7 +211,7 @@ def kube_runtime_images(runner, cri_runner, context: str) -> list[dict]:
                           "reference": container["image"], "runtime_image_id": state["imageID"],
                           **images[resolved]})
             found.add(role)
-        need(found == {"app", "core", "guard", "redis"})
+        need(found - {"analytics-relay"} == {"app", "core", "guard", "redis"})
     facts.sort(key=lambda row: (row["project_id"], row["component"], row["pod_uid"], row["container"]))
     validate_runtime_images(facts)
     return facts
@@ -418,77 +424,185 @@ def _boundary_source_mount(container: dict, volumes: list[dict]) -> dict:
     return boundary[0]
 
 
+def _relay_source_mount(pod: dict, fact: dict) -> dict:
+    """Accept only the owned, stateless receipt relay and its public source."""
+    metadata, spec = pod["metadata"], pod["spec"]
+    need(metadata.get("namespace") == fact["namespace"])
+    owners = metadata.get("ownerReferences", [])
+    need(type(owners) is list and len(owners) == 1)
+    owner = owners[0]
+    need(owner.get("apiVersion") == "apps/v1" and owner.get("kind") == "ReplicaSet"
+         and owner.get("controller") is True
+         and type(owner.get("uid")) is str and owner["uid"]
+         and type(owner.get("name")) is str
+         and re.fullmatch(r"analytics-relay-[a-z0-9]+", owner["name"]))
+    need(not any(spec.get(key) for key in
+                 ("initContainers", "ephemeralContainers", "hostNetwork", "hostPID", "hostIPC")))
+    container = spec["containers"][0]
+    command = container.get("command")
+    need(container["name"] == "relay" and type(command) is list and len(command) == 9
+         and command[:8] == ["python3", "/run/relay/relay.py", "--bind", "0.0.0.0",
+                             "--relay-only", "--analytics-project", fact["project_id"],
+                             "--analytics-origin"]
+         and type(command[8]) is str and 0 < len(command[8]) <= 2048)
+    need(not any(container.get(key) for key in
+                 ("args", "env", "envFrom", "volumeDevices", "lifecycle")))
+    security = container.get("securityContext", {})
+    need(security.get("readOnlyRootFilesystem") is True
+         and security.get("allowPrivilegeEscalation") is False
+         and not security.get("privileged")
+         and security.get("runAsUser") == security.get("runAsGroup") == 65534
+         and security.get("capabilities", {}).get("drop") == ["ALL"]
+         and not security.get("capabilities", {}).get("add"))
+    mounts, volumes = container.get("volumeMounts", []), spec.get("volumes", [])
+    need(type(mounts) is list and 1 <= len(mounts) <= 2 and type(volumes) is list)
+    source = [mount for mount in mounts if mount.get("mountPath") == "/run/relay"]
+    need(source == [{"name": "relay", "mountPath": "/run/relay", "readOnly": True}])
+    need(len(volumes) == len(mounts)
+         and len({volume.get("name") for volume in volumes}) == len(volumes)
+         and {volume.get("name") for volume in volumes} == {mount.get("name") for mount in mounts})
+    for mount in mounts:
+        if mount is not source[0]:
+            _service_account_mount(mount, volumes)
+    volume = next(volume for volume in volumes if volume.get("name") == "relay")
+    need(set(volume) == {"name", "configMap"})
+    reference = volume["configMap"]
+    need(type(reference) is dict and set(reference) <= {"name", "defaultMode", "optional", "items"}
+         and reference.get("name") == "analytics-relay" and not reference.get("optional")
+         and reference.get("defaultMode", 420) == 420
+         and reference.get("items", [{"key": "relay.py", "path": "relay.py"}])
+         == [{"key": "relay.py", "path": "relay.py"}])
+    return source[0]
+
+
 def boundary_snapshot(runner, context: str, images: list[dict]) -> list[dict]:
-    """Bind only the public source key to its actual running Pod mount."""
+    """Bind public executable sources to every actual guard/relay Pod mount."""
     rows = []
     for fact in images:
-        if fact["component"] != "guard":
+        role = fact["component"]
+        if role not in SOURCE_LAYOUTS:
             continue
+        layout = SOURCE_LAYOUTS[role]
         namespace = fact["namespace"]
         pods = kube_json(runner, context, "get", "pods", "--namespace", namespace)["items"]
         matches = [pod for pod in pods if pod.get("kind") == "Pod"
                    and pod["metadata"]["uid"] == fact["pod_uid"]]
         need(len(matches) == 1)
         pod = matches[0]
+        metadata, status = pod["metadata"], pod["status"]
+        need(metadata["name"] == fact["pod"] and not metadata.get("deletionTimestamp")
+             and status.get("phase") == "Running")
+        need(all(metadata.get("labels", {}).get(key) == value for key, value in
+                 {PART: "max-app", MANAGED: "omnia-orchestrator", PROJECT: fact["project_id"],
+                  COMPONENT: layout["component"]}.items()))
         containers = pod["spec"]["containers"]
         need(len(containers) == 1 and containers[0]["name"] == fact["container"])
         container = containers[0]
-        need(container.get("command") == ["python3", "/run/omnia-boundary/server.py"])
-        mount = _boundary_source_mount(container, pod["spec"].get("volumes", []))
-        volumes = [item for item in pod["spec"].get("volumes", [])
-                   if item.get("name") == mount["name"]]
-        need(len(volumes) == 1)
-        sources = volumes[0].get("projected", {}).get("sources", [])
-        need(all(not any(key.get("path") == "server.py" for key in
-                         source.get("secret", {}).get("items", [])) for source in sources))
-        refs = [item["configMap"] for item in sources if "configMap" in item
-                and any(key.get("path") == "server.py" for key in item["configMap"].get("items", []))]
-        need(len(refs) == 1 and refs[0].get("name") == "boundary-server"
-             and refs[0].get("items") == [{"key": "server.py", "path": "server.py"}]
-             and not refs[0].get("optional"))
-        maps = kube_json(runner, context, "get", "configmaps", "--field-selector", "metadata.name=boundary-server",
+        states = status.get("containerStatuses", [])
+        need(len(states) == 1 and states[0]["name"] == fact["container"]
+             and states[0].get("ready") is True and "running" in states[0].get("state", {})
+             and states[0].get("containerID") == fact["container_id"]
+             and states[0].get("imageID") == fact["runtime_image_id"]
+             and container.get("image") == fact["reference"])
+        if role == "analytics-relay":
+            mount = _relay_source_mount(pod, fact)
+        else:
+            need(container.get("command") == ["python3", layout["path"]])
+            mount = _boundary_source_mount(container, pod["spec"].get("volumes", []))
+            volumes = [item for item in pod["spec"].get("volumes", [])
+                       if item.get("name") == mount["name"]]
+            need(len(volumes) == 1)
+            sources = volumes[0].get("projected", {}).get("sources", [])
+            need(all(not any(key.get("path") == layout["key"] for key in
+                             source.get("secret", {}).get("items", [])) for source in sources))
+            refs = [item["configMap"] for item in sources if "configMap" in item
+                    and any(key.get("path") == layout["key"] for key in item["configMap"].get("items", []))]
+            need(len(refs) == 1 and refs[0].get("name") == layout["configmap"]
+                 and refs[0].get("items") == [{"key": layout["key"], "path": layout["key"]}]
+                 and not refs[0].get("optional"))
+        maps = kube_json(runner, context, "get", "configmaps", "--field-selector", "metadata.name=" + layout["configmap"],
                          "--namespace", namespace)["items"]
         need(len(maps) == 1)
         config = maps[0]
         metadata = config["metadata"]
-        need(metadata.get("name") == "boundary-server" and not metadata.get("deletionTimestamp"))
+        need(metadata.get("name") == layout["configmap"] and not metadata.get("deletionTimestamp"))
         need(all(metadata.get("labels", {}).get(key) == value for key, value in
                  {PART: "max-app", MANAGED: "omnia-orchestrator", PROJECT: fact["project_id"],
-                  COMPONENT: "boundary"}.items()))
-        source = config.get("data", {}).get("server.py")
+                  COMPONENT: layout["component"]}.items()))
+        if role == "analytics-relay":
+            need(metadata.get("namespace") == namespace
+                 and set(config.get("data", {})) == {layout["key"]} and not config.get("binaryData"))
+        source = config.get("data", {}).get(layout["key"])
         need(type(source) is str and 0 < len(source.encode("utf-8")) <= 1024 * 1024)
         payload = source.encode("utf-8")
-        rows.append({**{key: fact[key] for key in
-                       ("project_id", "namespace", "namespace_uid", "pod", "pod_uid", "container", "container_id")},
-                     "configmap_name": "boundary-server", "configmap_uid": metadata["uid"],
-                     "configmap_resource_version": metadata["resourceVersion"],
-                     "volume": mount["name"], "key": "server.py",
-                     "mounted_path": "/run/omnia-boundary/server.py",
-                     "file": fact["project_id"] + "-boundary-server.py",
-                     "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()})
-    return sorted(rows, key=lambda item: item["project_id"])
+        row = {**{key: fact[key] for key in
+                  ("project_id", "namespace", "namespace_uid", "pod", "pod_uid", "container", "container_id")},
+               "configmap_name": layout["configmap"], "configmap_uid": metadata["uid"],
+               "configmap_resource_version": metadata["resourceVersion"],
+               "volume": mount["name"], "key": layout["key"], "mounted_path": layout["path"],
+               "file": fact["project_id"] + layout["suffix"],
+               "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+        if role == "analytics-relay":
+            row.update(component=role, pod_binding_sha256=digest({
+                "spec": pod["spec"], "ownerReferences": pod["metadata"]["ownerReferences"]}))
+        rows.append(row)
+    return sorted(rows, key=lambda row: (row["project_id"], row.get("component", "guard"),
+                                         row["pod_uid"], row["container"]))
 
 
 def validate_boundary_sources(rows, images, directory=None):
+    """Old guard-only bundles remain valid; every observed relay needs evidence."""
     need(type(rows) is list)
-    guards = {item["project_id"]: item for item in images if item["component"] == "guard"}
-    need(len(rows) == len(guards) and {row["project_id"] for row in rows} == set(guards))
+    sources = {}
+    for fact in images:
+        if fact["component"] not in SOURCE_LAYOUTS:
+            continue
+        key = (fact["project_id"], fact["component"], fact["pod_uid"], fact["container"])
+        need(key not in sources)
+        sources[key] = fact
+    need(len(rows) == len(sources))
+    seen, shared = set(), {}
     for row in rows:
-        fact = guards[row["project_id"]]
+        role = row.get("component", "guard")
+        key = (row["project_id"], role, row["pod_uid"], row["container"])
+        need(key in sources and key not in seen)
+        seen.add(key)
+        fact, layout = sources[key], SOURCE_LAYOUTS[role]
         need(all(row.get(key) == fact[key] for key in
                  ("namespace", "namespace_uid", "pod", "pod_uid", "container", "container_id")))
-        need(row.get("file") == row["project_id"] + "-boundary-server.py"
-             and row.get("configmap_name") == "boundary-server" and row.get("key") == "server.py"
-             and row.get("mounted_path") == "/run/omnia-boundary/server.py"
+        need(row.get("file") == row["project_id"] + layout["suffix"]
+             and row.get("configmap_name") == layout["configmap"] and row.get("key") == layout["key"]
+             and row.get("mounted_path") == layout["path"]
              and all(type(row.get(key)) is str and row[key] for key in
                      ("configmap_uid", "configmap_resource_version", "volume"))
              and type(row.get("bytes")) is int and 0 < row["bytes"] <= 1024 * 1024
              and type(row.get("sha256")) is str and re.fullmatch(r"[0-9a-f]{64}", row["sha256"]))
+        if role == "analytics-relay":
+            need(type(row.get("pod_binding_sha256")) is str
+                 and re.fullmatch(r"[0-9a-f]{64}", row["pod_binding_sha256"]))
+        source = (row["project_id"], role)
+        identity = tuple(row[field] for field in
+                         ("configmap_uid", "configmap_resource_version", "bytes", "sha256"))
+        need(source not in shared or shared[source] == identity)
+        shared[source] = identity
         if directory is not None:
             path = directory / row["file"]
             need(path.is_file() and not path.is_symlink())
             sha, size = hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_size
             need(sha == row["sha256"] and size == row["bytes"])
+
+
+def validate_mounted_sources(runner, context: str, rows: list[dict]) -> None:
+    """Rehash mounted bytes without copying secrets or creating a backup stage."""
+    probe = ("import hashlib,json,sys; "
+             "p=open(sys.argv[1],'rb').read(1048577); "
+             "print(json.dumps({'bytes':len(p),'sha256':hashlib.sha256(p).hexdigest()}))")
+    for row in rows:
+        result = runner.run(
+            ["--context", context, "exec", "--namespace", row["namespace"], row["pod"],
+             "--container", row["container"], "--", "python3", "-c", probe, row["mounted_path"]],
+            timeout=60)
+        need(result.ok and json.loads(result.stdout) == {"bytes": row["bytes"], "sha256": row["sha256"]})
 
 
 def kube_backup(cells, spec: dict, out: Path) -> tuple[dict, int]:
@@ -497,14 +611,19 @@ def kube_backup(cells, spec: dict, out: Path) -> tuple[dict, int]:
     images = kube_runtime_images(runner, cri, spec["context"])
     boundaries = boundary_snapshot(runner, spec["context"], images)
     validate_boundary_sources(boundaries, images)
+    captured = set()
     for row in boundaries:
+        if row["file"] in captured:
+            continue  # Replica source identity was checked above; never overwrite.
         result = runner.run_to_file(
             ["--context", spec["context"], "exec", "--namespace", row["namespace"], row["pod"],
              "--container", row["container"], "--", "cat", row["mounted_path"]],
             path=out / row["file"], timeout=60)
         need(result.ok and result.size_bytes == row["bytes"] and result.sha256 == row["sha256"])
         os.chmod(out / row["file"], 0o600)
+        captured.add(row["file"])
     validate_boundary_sources(boundaries, images, out)
+    validate_mounted_sources(runner, spec["context"], boundaries)
     before = kube_census(runner, spec["context"], spec["postgres_image"])
     authorities = spec.get("cold_authorities", [])
     need(type(authorities) is list)
@@ -596,6 +715,7 @@ def kube_backup(cells, spec: dict, out: Path) -> tuple[dict, int]:
     need(kube_census(runner, spec["context"], spec["postgres_image"]) == before)
     need(kube_runtime_images(runner, cri, spec["context"]) == images)
     need(boundary_snapshot(runner, spec["context"], images) == boundaries)
+    validate_mounted_sources(runner, spec["context"], boundaries)
     inventory = out / "runtime-inventory.json"
     cells._write_private_json(inventory, before)
     with tarfile.open(out / "state.tar.gz", "w:gz") as archive:
@@ -711,11 +831,14 @@ def dispatch_peer(cells, payload: dict) -> int:
     spec = payload["spec"]
     if spec.get("mode") == "images-only":
         need(spec["provider"] == "kubernetes")
-        facts = kube_runtime_images(cells.DockerRunner(spec["kubectl"]),
+        runner = cells.DockerRunner(spec["kubectl"])
+        facts = kube_runtime_images(runner,
                                     cells.DockerRunner("/usr/local/bin/k3s"), spec["context"])
+        sources = boundary_snapshot(runner, spec["context"], facts)
+        validate_boundary_sources(sources, facts)
         if "expected_boundary_sources" in spec:
-            need(boundary_snapshot(cells.DockerRunner(spec["kubectl"]), spec["context"], facts)
-                 == spec["expected_boundary_sources"])
+            need(sources == spec["expected_boundary_sources"])
+        validate_mounted_sources(runner, spec["context"], sources)
         print(json.dumps({"runtime_images": facts, "producer_sha256": spec["producer_sha256"]}))
         return 0
     need(spec.get("mode") is None)

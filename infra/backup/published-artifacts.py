@@ -430,15 +430,17 @@ def _resolve_source_image(root, payload, request, image):
 
 
 def _runtime_facts(runtime_images, projects):
-    """Allow identical replicas; reject ambiguous/partial facts for active roles."""
+    """Require four primary images; the stateless relay must reuse the guard."""
     need(isinstance(runtime_images, list), "runtime_witness_required")
     records = {project: {} for project in projects}
+    auxiliaries = []
     for fact in runtime_images:
         project = fact["project_id"]
         if project not in records:
             continue  # Each peer receives the complete census, owns its subset.
         role = "guard" if fact["component"] == "boundary" else fact["component"]
-        need(role in ROLES and fact.get("ready", True) is True, "runtime_component_invalid")
+        need(role in ROLES | {"analytics-relay"} and fact.get("ready", True) is True,
+             "runtime_component_invalid")
         resolved = canonical_digest(fact["runtime_image_id"].removeprefix("docker-pullable://"))
         need(isinstance(fact["repo_digests"], list)
              and resolved in {canonical_digest(ref) for ref in fact["repo_digests"]},
@@ -446,9 +448,15 @@ def _runtime_facts(runtime_images, projects):
         value = {"reference": fact["reference"], "config_id": fact["config_id"],
                  "repo_digest": resolved, "runtime_image_id": fact["runtime_image_id"],
                  "platform": {key: fact["platform"].get(key) or "" for key in ("os", "architecture", "variant")}}
-        need(role not in records[project] or records[project][role] == value, "runtime_replicas_disagree")
-        records[project][role] = value
+        if role == "analytics-relay":
+            auxiliaries.append((project, value))
+        else:
+            need(role not in records[project] or records[project][role] == value,
+                 "runtime_replicas_disagree")
+            records[project][role] = value
     need(all(set(images) == ROLES for images in records.values()), "runtime_witness_images_missing")
+    need(all(value == records[project]["guard"] for project, value in auxiliaries),
+         "runtime_auxiliary_image_mismatch")
     return records
 
 
@@ -456,7 +464,8 @@ def resolve_witness(cells, runner, state_root, state_archive, runtime_images):
     """Resolve nightly active closures without hardcoded project/archive mappings.
 
     runtime_images is a list of externally observed facts: project_id,
-    component (app/core/guard/redis; boundary aliases guard), reference,
+    component (app/core/guard/redis; boundary aliases guard; analytics-relay
+    reuses the exact guard image), reference,
     runtime_image_id, config_id, repo_digests, platform. Primary filters PG and
     initcontainers and provides actual CRI evidence. No Config.Env is read.
     This helper emits no files and uses only local Docker image inspect.
