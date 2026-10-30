@@ -182,8 +182,9 @@ def _scripted(replies):
     return _complete
 
 
-def _ok_executor(record):
-    state = {}
+def _ok_executor(record, state=None):
+    if state is None:
+        state = {}
 
     async def _execute(action: ab.Action):
         record.append((action.name, action.path))
@@ -872,6 +873,181 @@ def test_coordinator_handoff_does_not_require_the_runtime_it_owns():
         ]), max_steps=4, require_green_before_done=True, coordinator_handoff=True,
     ))
     assert result.done and result.needs_finalization and result.steps == 4
+
+
+@pytest.mark.parametrize("feedback", ["management_gap", "exception", "invalid_type"])
+def test_source_completion_failure_cannot_be_rescued_by_green_abort(feedback):
+    events = []
+    state = {}
+
+    async def snapshot():
+        return dict(state)
+
+    async def emit(event, payload):
+        events.append((event, payload))
+
+    def check(_files, _evidence):
+        if feedback == "exception":
+            raise RuntimeError("PRIVATE_SENTINEL must not enter observations")
+        if feedback == "invalid_type":
+            return False
+        return "Connect useYleumAppProfile to a rendered app name/settings field."
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m", execute=_ok_executor([], state),
+        snapshot_files=snapshot,
+        complete=_scripted([
+            '<omnia:action name="write_file">'
+            '{"path":"src/app/page.tsx","content":"thin"}</omnia:action>',
+            '<omnia:action name="build">{}</omnia:action>',
+            '<omnia:action name="done">{"summary":"premature"}</omnia:action>',
+        ]), max_steps=3, coordinator_handoff=True, completion_check=check, emit=emit,
+        ship_green_on_abort=True,
+    ))
+
+    assert not result.done and not result.needs_finalization
+    assert result.stop_reason == "max_steps"
+    done_steps = [payload for event, payload in events
+                  if event == "agent.step" and payload.get("action") == "done"]
+    assert len(done_steps) == 1 and done_steps[0]["ok"] is False
+    assert done_steps[0]["detail"]
+    assert "PRIVATE_SENTINEL" not in str(events) + str(result.transcript)
+
+
+def test_source_completion_callback_waits_for_fresh_green_build():
+    checked = []
+    state = {}
+
+    async def snapshot():
+        return dict(state)
+
+    def check(files, _evidence):
+        checked.append(dict(files))
+        return None
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m", execute=_ok_executor([], state),
+        snapshot_files=snapshot,
+        complete=_scripted([
+            '<omnia:action name="done">{"summary":"no build"}</omnia:action>',
+            '<omnia:action name="build">{}</omnia:action>',
+            '<omnia:action name="write_file">'
+            '{"path":"src/app/page.tsx","content":"changed"}</omnia:action>',
+            '<omnia:action name="done">{"summary":"stale build"}</omnia:action>',
+            '<omnia:action name="build">{}</omnia:action>',
+            '<omnia:action name="done">{"summary":"checked"}</omnia:action>',
+        ]), max_steps=6, coordinator_handoff=True, completion_check=check,
+    ))
+
+    assert result.done and result.needs_finalization and result.summary == "checked"
+    assert checked == [{"src/app/page.tsx": "changed"}]
+
+
+def test_source_completion_cancellation_propagates_without_handoff():
+    async def snapshot():
+        return {}
+
+    def check(_files, _evidence):
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(ab.run_agent_build(
+            system_prompt="s", user_prompt="x", model="m", execute=_ok_executor([]),
+            complete=_scripted([
+                '<omnia:action name="build">{}</omnia:action>',
+                '<omnia:action name="done">{"summary":"cancelled"}</omnia:action>',
+            ]), max_steps=2, coordinator_handoff=True, completion_check=check,
+            snapshot_files=snapshot,
+        ))
+
+
+@pytest.mark.parametrize(("before", "after", "accepted"), [
+    ("thin", "complete", True), ("complete", "thin", False),
+])
+@pytest.mark.parametrize("call_done", [True, False])
+def test_source_completion_uses_post_build_inventory(before, after, accepted, call_done):
+    state = {}
+    checked = []
+    snapshots = 0
+
+    async def snapshot():
+        nonlocal snapshots
+        snapshots += 1
+        return dict(state)
+
+    async def execute(action):
+        if action.name == "write_file":
+            state[action.path] = action.args["content"]
+            return {"ok": True, "content": state[action.path]}
+        state["src/app/page.tsx"] = after
+        return {"ok": True, "detail": "clean", "environment_mutated": True}
+
+    def check(files, _evidence):
+        checked.append(dict(files))
+        return None if files.get("src/app/page.tsx") == "complete" else "source gap"
+
+    replies = [
+        '<omnia:action name="write_file">'
+        f'{{"path":"src/app/page.tsx","content":"{before}"}}</omnia:action>',
+        '<omnia:action name="build">{}</omnia:action>',
+    ]
+    if call_done:
+        replies.append('<omnia:action name="done">{"summary":"candidate"}</omnia:action>')
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m", execute=execute,
+        complete=_scripted(replies), snapshot_files=snapshot, completion_check=check,
+        coordinator_handoff=True, ship_green_on_abort=True, max_steps=len(replies),
+    ))
+
+    assert result.done is accepted and result.needs_finalization is accepted
+    assert checked and all(files == {"src/app/page.tsx": after} for files in checked)
+    assert snapshots == 4  # Reuse the existing before/after reads of write + build.
+
+
+@pytest.mark.parametrize("inventory", [None, {"src/app/page.tsx": None}])
+def test_source_completion_inventory_unavailable_fails_closed(inventory):
+    checked = []
+
+    async def snapshot():
+        return inventory
+
+    def check(files, _evidence):
+        checked.append(files)
+        return None
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m", execute=_ok_executor([]),
+        complete=_scripted([
+            '<omnia:action name="build">{}</omnia:action>',
+            '<omnia:action name="done">{"summary":"unverified"}</omnia:action>',
+        ]), snapshot_files=snapshot if inventory is not None else None,
+        completion_check=check, coordinator_handoff=True, max_steps=2,
+    ))
+
+    assert not result.done and not result.needs_finalization
+    assert checked == []
+
+
+def test_source_completion_snapshot_cancellation_is_not_a_missing_inventory():
+    built = False
+
+    async def snapshot():
+        if built:
+            raise asyncio.CancelledError
+        return {}
+
+    async def execute(_action):
+        nonlocal built
+        built = True
+        return {"ok": True}
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(ab.run_agent_build(
+            system_prompt="s", user_prompt="x", model="m", execute=execute,
+            complete=_scripted(['<omnia:action name="build">{}</omnia:action>']),
+            snapshot_files=snapshot, completion_check=lambda *_: None,
+            coordinator_handoff=True, max_steps=1,
+        ))
 
 
 @pytest.mark.parametrize("mutation", ["write_file", "edit_file", "bash", "probe"])

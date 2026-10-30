@@ -791,7 +791,16 @@ def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
 
 
 def management_source_gap(files: Mapping[str, str]) -> str | None:
-    return _admission(files)[0]
+    gap = _admission(files)[0]
+    if gap is not None and gap.startswith("Connect "):
+        return (
+            gap + " The bounded source verifier cannot prove this connection. "
+            "Use direct JSX from the live SDK hook/result and a real event handler "
+            "with an explicit input object. Keep SDK rows out of useMemo, pre-filters "
+            "and helper projections; apply category conditions inside the JSX map. "
+            "This is a supported source shape, not a request for static or mock data."
+        )
+    return gap
 
 
 def management_implemented_capabilities(files: Mapping[str, str]) -> frozenset[str]:

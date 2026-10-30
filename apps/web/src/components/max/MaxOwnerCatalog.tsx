@@ -70,7 +70,13 @@ export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDi
   const items = draft?.content ?? content.data?.content ?? [];
   // The displayed form and its baseline must describe the same snapshot.
   const selected = editor ? draft?.content.find(item => item.id === editor.id) ?? editor.initial : null;
-  const conflict = save.error instanceof ApiError && save.error.status === 409;
+  const saveError = save.error instanceof ApiError ? save.error : null;
+  const conflict = saveError?.status === 409 && saveError.code === "conflict" && saveError.details?.reason === "config_version_conflict";
+  const busy = saveError?.status === 409 && (saveError.code === "generation_active"
+    || (saveError.code === "operation_conflict" && saveError.details?.reason === "publication_active"));
+  const saveErrorCopy = busy && draft
+    ? `${errorCopy(save.error)}. Черновик сохранён в форме. После завершения повторите сохранение в этом окне.`
+    : errorCopy(save.error);
   const deliveryPending = content.data && [content.data.public.state, content.data.preview.state].some(state => state === "pending" || state === "unknown");
   const categories = [...new Set(items.map(item => item.category).filter(Boolean))].sort();
   if (category && !categories.includes(category)) setCategory("");
@@ -159,7 +165,7 @@ export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDi
           <Button disabled={save.isPending || items.length >= 100} onClick={() => { const item = newMaxContentItem(); editItem(item); }}><Plus className="size-4" />Добавить позицию</Button>
         </div>
         {reviewed && <p className="max-catalog-notice" role="status">Актуальные данные загружены, ваши правки перенесены поверх них. Если одно поле меняли одновременно, оставлен ваш вариант. Проверьте карточки перед сохранением.</p>}
-        {save.error && <div className="max-catalog-notice max-catalog-error" role="alert"><div><strong>{conflict ? "Каталог изменился в другой вкладке" : save.variables?.reapply ? "Не удалось повторить применение" : "Не удалось сохранить"}</strong><p>{conflict ? draft ? "Ваш черновик остался в форме. Загрузите актуальные данные и перенесите свои правки, затем проверьте карточки." : "Данные в Yleum сохранены. Обновите каталог перед повторным применением." : errorCopy(save.error)}</p></div>{conflict && <Button variant="outline" disabled={content.isFetching || uploading || save.isPending} onClick={() => void reviewLatest()}><RefreshCw className="size-4" />{draft ? "Перенести мои правки" : "Обновить каталог"}</Button>}</div>}
+        {save.error && <div className="max-catalog-notice max-catalog-error" role="alert"><div><strong>{conflict ? "Каталог изменился в другой вкладке" : save.variables?.reapply ? "Не удалось повторить применение" : "Не удалось сохранить"}</strong><p>{conflict ? draft ? "Ваш черновик остался в форме. Загрузите актуальные данные и перенесите свои правки, затем проверьте карточки." : "Данные в Yleum сохранены. Обновите каталог перед повторным применением." : saveErrorCopy}</p></div>{conflict && <Button variant="outline" disabled={content.isFetching || uploading || save.isPending} onClick={() => void reviewLatest()}><RefreshCw className="size-4" />{draft ? "Перенести мои правки" : "Обновить каталог"}</Button>}</div>}
         {filtered.length ? <div className="max-catalog-grid">{filtered.map(item => <article className="max-catalog-card" key={item.id} data-hidden={!item.active}>
           <button type="button" className="max-catalog-photo-button" disabled={save.isPending}
             aria-label={`${item.image_url ? "Изменить" : "Добавить"} фото: ${item.title || "Новая позиция"}`} aria-haspopup="dialog" onClick={() => editItem(item, "photo")}>
@@ -180,7 +186,7 @@ export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDi
       <DialogContent ref={editorDialog} data-product-shell data-max-studio className={`max-catalog-dialog max-project-setup${editorView === "photo" ? " max-catalog-photo-dialog" : ""}`} overlayClassName="max-catalog-overlay">
         <DialogHeader className="max-catalog-dialog-header"><DialogTitle>{editorView === "photo" ? `Фото позиции${selected?.title ? ` «${selected.title}»` : ""}` : editor && editor.baseline.content.some(item => item.id === editor.id) ? "Изменить позицию" : "Новая позиция"}</DialogTitle><DialogDescription>{editorView === "photo" ? "Загрузите файл или укажите ссылку на изображение. Фото применится после сохранения позиции." : "Сохранение обновляет данные каталога без запуска ИИ."}</DialogDescription></DialogHeader>
         {editor && selected && <><fieldset disabled={save.isPending} className="max-catalog-fields"><MaxContentItemFields key={editor.id} projectId={projectId} index={0} item={selected} onPatch={patchItem} onUploadingChange={setUploading} imageOnly={editorView === "photo"} /></fieldset>
-          {save.error && <p role="alert" className="max-catalog-error">{conflict ? "Каталог изменился. Черновик сохранён в форме. Закройте окно и перенесите правки к актуальной версии." : errorCopy(save.error)}</p>}
+          {save.error && <p role="alert" className="max-catalog-error">{conflict ? "Каталог изменился. Черновик сохранён в форме. Закройте окно и перенесите правки к актуальной версии." : saveErrorCopy}</p>}
           <div className="max-catalog-dialog-footer">{editorView === "photo" && <Button className="max-catalog-all-fields" variant="ghost" disabled={save.isPending || uploading} onClick={() => setEditor(current => current ? { ...current, view: "details" } : null)}>Все поля позиции</Button>}{!editor.baseline.base.some(item => item.id === editor.id) && <Button variant="ghost" disabled={save.isPending || uploading} onClick={cancelNewItem}>Отменить добавление</Button>}<Button variant="outline" disabled={save.isPending || uploading} onClick={() => setEditor(null)}>К списку</Button><Button disabled={!draft || !selected.title.trim() || items.some(item => !item.title.trim()) || save.isPending || uploading} onClick={() => void persist()}>{save.isPending && <Loader2 className="size-4 animate-spin" />}Сохранить позицию</Button></div></>}
       </DialogContent>
     </Dialog>

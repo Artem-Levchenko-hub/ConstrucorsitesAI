@@ -531,6 +531,7 @@ export type ApiErrorCode =
   | "model_unavailable"
   | "internal_error"
   | "conflict"
+  | "operation_conflict"
   // Why a prompt was refused with 409. Only `generation_active` means "a build
   // is already running"; the rest are ordinary refusals with their own text.
   | "generation_active"

@@ -46,7 +46,7 @@ import asyncio
 import hashlib
 import json
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -321,6 +321,7 @@ def _format_observation(action: Action, obs: dict[str, Any]) -> str:
 # full before_sha256/after_sha256 (None before means the file did not exist).
 Executor = Callable[[Action], Awaitable[dict[str, Any]]]
 Emit = Callable[[str, dict[str, Any]], Awaitable[None]]
+CompletionCheck = Callable[[Mapping[str, str], Mapping[str, int]], str | None]
 
 
 def _safe_file_path(path: str) -> str | None:
@@ -347,6 +348,7 @@ async def run_agent_build(
     max_tokens: int | None = None,
     require_green_before_done: bool = False,
     coordinator_handoff: bool = False,
+    completion_check: CompletionCheck | None = None,
     ship_green_on_abort: bool = True,
     edit_mode: bool = False,
     bare_mode: bool = False,
@@ -456,6 +458,7 @@ async def run_agent_build(
             user_id=user_id, project_id=project_id, max_tokens=max_tokens,
             require_green_before_done=require_green_before_done,
             coordinator_handoff=coordinator_handoff,
+            completion_check=completion_check,
             ship_green_on_abort=ship_green_on_abort,
             edit_mode=edit_mode, bare_mode=bare_mode, snapshot_files=snapshot_files,
             edit_source_changed=edit_source_changed,
@@ -540,6 +543,7 @@ async def _run_agent_segment(
     max_tokens: int | None = None,
     require_green_before_done: bool = False,
     coordinator_handoff: bool = False,
+    completion_check: CompletionCheck | None = None,
     ship_green_on_abort: bool = True,
     edit_mode: bool = False,
     bare_mode: bool = False,
@@ -647,6 +651,12 @@ async def _run_agent_segment(
             ),
         )
 
+    # The executor can synchronize physical source during build without returning
+    # obs.files. Reuse its latest post-action snapshot, never the write inventory.
+    completion_inventory = None
+    if saved_frame is not None and completion_check is not None and snapshot_files is not None:
+        completion_inventory = dict(await snapshot_files())
+
     async def _step_result(
         action: Action,
         step: int,
@@ -688,6 +698,28 @@ async def _run_agent_segment(
 
     def _source_change_pending() -> bool:
         return edit_source_changed is not None and not edit_source_changed()
+
+    def _source_completion_gap() -> str | None:
+        if completion_check is None:
+            return None
+        if completion_inventory is None:
+            return "Current source inventory is unavailable; completion cannot be verified."
+        if any(
+            not isinstance(path, str) or _safe_file_path(path) != path
+            or not isinstance(content, str)
+            for path, content in completion_inventory.items()
+        ):
+            return "Current source inventory is invalid; completion cannot be verified."
+        try:
+            # Legacy source admission earns no native runtime/tool proof counters.
+            gap = completion_check(dict(completion_inventory), {})
+        except Exception as exc:
+            return f"Product acceptance check failed: {type(exc).__name__}."
+        if gap is None:
+            return None
+        if not isinstance(gap, str) or not gap.strip():
+            return "Product acceptance check returned invalid feedback."
+        return bounded_redacted_diagnostic(gap, max_bytes=_MAX_OBS_CHARS)
 
     async def _nudge_exploration(step: int) -> None:
         green = (
@@ -752,6 +784,8 @@ async def _run_agent_segment(
             coordinator_handoff or not require_green_before_done
             or (last_runtime_ok is True and not wrote_since_check)
         ):
+            if _source_completion_gap() is not None:
+                return fallback
             print(
                 f"[AGENT] step={step_no} SHIP-GREEN-ON-{reason} "
                 f"(build clean → ship instead of {fallback.stop_reason})",
@@ -1105,8 +1139,8 @@ async def _run_agent_segment(
             # broken-at-runtime app ships. Require last build clean + a
             # runtime_check AFTER the last write. The segment budget bounds
             # rejected claims; insistence cannot replace real proof.
+            gap = None
             if coordinator_handoff or require_green_before_done:
-                gap = None
                 if not fast_check_fresh:
                     gap = "run `build` after the latest changes until FAST_CHECK is CLEAN"
                 elif last_build_ok is not True:
@@ -1121,14 +1155,21 @@ async def _run_agent_segment(
                         'runtime_check the main route(s) (e.g. {"path":"/"}), '
                         "fix any 5xx, THEN done"
                     )
-                if gap is not None:
+            source_feedback = False
+            if gap is None:
+                gap = _source_completion_gap()
+                source_feedback = gap is not None
+            if gap is not None:
+                if source_feedback:
+                    await _step_result(action, step, {"ok": False, "detail": gap})
+                else:
                     await _step_result(action, step, skipped=gap)
-                    if emit:
-                        await emit("agent.stalled", {"step": step})
-                    convo.append({"role": "user", "content": (
-                        "NOT DONE YET — " + gap + "."
-                    )})
-                    continue
+                if emit:
+                    await emit("agent.stalled", {"step": step})
+                convo.append({"role": "user", "content": (
+                    "NOT DONE YET — " + gap + "."
+                )})
+                continue
             await _step_result(action, step, {"ok": True, "detail": action.args.get("summary", "")})
             return AgentResult(
                 done=True, summary=str(action.args.get("summary", "")),
@@ -1344,6 +1385,8 @@ async def _run_agent_segment(
             if tool is not None else await execute(action)
         )
         source_after = dict(await snapshot_files()) if snapshot_files is not None else None
+        if completion_check is not None:
+            completion_inventory = source_after
         await _step_result(action, step, obs)
         after_content = obs.get("content")
         receipt = obs.get("content_change")

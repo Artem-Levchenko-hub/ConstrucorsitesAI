@@ -62,6 +62,10 @@ def legacy_workspace(monkeypatch):
         }
     )
     monkeypatch.setattr(agent_generation, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        "yleum_api.services.max_generation_contract.max_source_completion_gap",
+        lambda *_args, **_kwargs: None,
+    )
 
     async def freeze(*args, **kwargs):
         return None
@@ -82,12 +86,21 @@ def legacy_workspace(monkeypatch):
             tree["src/app/sever.css"] = "shell edit"
         return {"ok": True, "detail": "clean", "content": tree.get(tool.path, "")}
 
-    async def run(replies, prompt="Используй референс для дизайна этот", is_edit=False):
+    async def run(
+        replies, prompt="Используй референс для дизайна этот", is_edit=False,
+        after_build=None, seed_files=None,
+    ):
         scripted = iter(replies)
 
         async def complete(conversation, *args, **kwargs):
             messages.append(conversation)
             return next(scripted, action("done", summary="claimed done"))
+
+        async def execute_current(tool):
+            result = await execute(tool)
+            if tool.name == "build" and after_build is not None:
+                after_build(tree)
+            return result
 
         monkeypatch.setattr(agent_builder.llm_client, "complete_chat", complete)
         handle = SimpleNamespace(
@@ -100,7 +113,7 @@ def legacy_workspace(monkeypatch):
             _agent_res=None,
             _is_edit=is_edit,
             _max_has_generated_snapshot=True,
-            _max_seed_files={},
+            _max_seed_files=seed_files or {},
             _max_shell_enabled=True,
             baseline=SourceBaseline(uuid4(), "a" * 40, initial),
             ids=GenerationIds(*(uuid4() for _ in range(5))),
@@ -117,7 +130,7 @@ def legacy_workspace(monkeypatch):
                 bare_stack=False,
             ),
             operations=SimpleNamespace(
-                execute=execute,
+                execute=execute_current,
                 emit=None,
                 snapshot_files=snapshot,
                 edit_deadline=datetime.now(UTC) + timedelta(minutes=10),
@@ -125,6 +138,63 @@ def legacy_workspace(monkeypatch):
         )
 
     return run, initial, tree, executed, messages
+
+
+async def test_legacy_done_repairs_management_gap_after_green_build(
+    legacy_workspace, monkeypatch,
+):
+    run, _, tree, executed, messages = legacy_workspace
+    gap = "Connect useYleumAppProfile to a rendered app name/settings field."
+
+    def source_gap(_prompt, files, *, portable):
+        assert portable
+        return None if files.get("src/app/sever.css") == "profile rendered" else gap
+
+    monkeypatch.setattr(
+        "yleum_api.services.max_generation_contract.max_source_completion_gap", source_gap,
+    )
+    result, failure = await run([
+        action("write_file", path="src/app/sever.css", content="thin product"),
+        action("build"),
+        action("done", summary="premature claim"),
+        action("write_file", path="src/app/sever.css", content="profile rendered"),
+        action("build"),
+        action("done", summary="source complete"),
+    ])
+
+    assert result.summary == "source complete"
+    assert result.done and result.needs_finalization and failure is None
+    assert tree["src/app/sever.css"] == "profile rendered"
+    assert executed == ["write_file", "build", "write_file", "build"]
+    assert gap in str(messages)
+
+
+@pytest.mark.parametrize("origin", ["baseline", "seed"])
+async def test_legacy_done_does_not_resurrect_deleted_snapshot_source(
+    legacy_workspace, monkeypatch, origin,
+):
+    run, initial, tree, _, _ = legacy_workspace
+    path = "src/lib/obsolete-sdk.ts"
+    tree[path] = "obsolete"
+    if origin == "baseline":
+        initial[path] = "obsolete"
+
+    def source_gap(_prompt, files, *, portable):
+        assert portable
+        return "Remove obsolete SDK source." if path in files else None
+
+    monkeypatch.setattr(
+        "yleum_api.services.max_generation_contract.max_source_completion_gap", source_gap,
+    )
+    result, failure = await run([
+        action("write_file", path="src/app/sever.css", content="real edit"),
+        action("build"), action("done", summary="source complete"),
+    ], after_build=lambda files: files.pop(path),
+        seed_files={path: "obsolete"} if origin == "seed" else None)
+
+    assert result.done and result.needs_finalization and failure is None
+    assert result.summary == "source complete"
+    assert path not in result.files and path not in tree
 
 
 async def test_exact_sever_reads_and_green_old_build_cannot_finish_required_edit(legacy_workspace):

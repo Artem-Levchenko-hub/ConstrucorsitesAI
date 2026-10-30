@@ -460,6 +460,53 @@ Handle intent_storage_unavailable honestly: no submission was sent.
 History reads
 getManagedRecords(resource,{limit,cursor}) and renders result.records; show only
 the current customer's records and the server-returned status.
+SUPPORTED MANAGEMENT CONNECTION SHAPE (projects with .omnia/management.json):
+the bounded source verifier is not a general JavaScript interpreter.
+Keep the selected SDK connections direct, even
+when other UI code uses React abstractions. Do not put SDK profile/catalog/history
+rows behind useMemo, a pre-filter, a toDrink/helper projection or a copied constant.
+Render profile fields directly; map current SDK rows directly to visible JSX.
+For catalog categories, keep the condition INSIDE that JSX map:
+```tsx
+const {profile} = useYleumAppProfile();
+const catalog = useYleumCatalog();
+const selection = useYleumCatalogSelection(catalog.items);
+const ready = catalog.status === "ready" && catalog.configVersion !== null;
+// Inside the real component's returned JSX:
+<h1>{profile?.app_name}</h1>
+{catalog.items.map(item => item.active &&
+  (selection.category === null || item.category === selection.category) ?
+  <article key={item.id}><h2>{item.title}</h2><span>{item.price}</span></article> : null)}
+```
+This is a connection fragment, not a complete page: implement the real product,
+forms, loading/empty/error states and the intent/quote/retry rules above.
+Disable NEW add-to-cart/order submissions until ready, an in-stock numeric price
+and any required deliberate option selection. Non-numeric prices keep the enquiry
+path, not a guessed checkout price. Keep loading/error messages visible even when
+the cart is empty; never silently ignore an apparently enabled first tap.
+Keep cart/history navigation and recovery of an existing frozen intent available;
+do not make that recovery depend on today's catalog or a nonempty cart.
+Bind category/option controls to selection.setCategory/selection.selectOption and
+read selection.getOption(item) for the CURRENT item, not a stale local selection.
+For each selected business module use a literal resource, its own state and a
+direct records.map in visible JSX. For example, load orders in a useEffect:
+`const response = await getManagedRecords("orders", {limit: 50});`
+`setOrders(response.records);`
+then render `orders.map(record => <p key={record.id}>{record.customer_name} {record.status}</p>)`.
+Connect a real form onSubmit/button onClick to a handler that directly calls
+`await createManagedOrder({...orderInput, operationKey: orderInput.operationKey})`.
+orderInput means the typed, verified/frozen REAL form input described above:
+do not fabricate a name/items/key, drop optional fields or rebuild an ambiguous retry.
+Use `Parameters<typeof createManagedOrder>[0]` for its type. The same direct pattern
+for leads is createManagedLead + getManagedRecords("leads") + leads.map;
+for bookings it is createManagedBooking + getManagedRecords("bookings") + bookings.map.
+Use each method's actual Parameters type. With multiple selected modules implement
+EVERY pair separately; with no selected modules in that manifest, the live
+rendered profile is still mandatory. Without that manifest, preserve the existing
+legacy contract/data; do not invent or silently enable owner-managed modules.
+Only implement modules selected by the locked manifest. An unsupported source
+shape can be rejected despite compiling: rewrite its connections into this direct
+form in the SAME run, preserving data/intent state, then build and call done.
 Bookings take serviceId and requestedFor (timezone-bearing ISO); they are requests
 until the owner confirms them. Do not invent free slots, capacity or payment.
 Private/personal features outside these selected modules keep their existing

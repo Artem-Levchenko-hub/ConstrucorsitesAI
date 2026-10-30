@@ -13,12 +13,13 @@ vi.mock("@/lib/api/owner-profile", () => ({ getOwnerProfile: async () => ({ id: 
 
 const item: MaxContentItem = { id: "historical-id", title: "Консультация", category: "Услуги", description: "Подробное описание", price: "По запросу", availability: "on_request", options: ["30 минут"], image_url: "", action_label: "Записаться", active: true };
 const status = { state: "applied" as const, desired_config_version: 7, confirmed_config_version: 7, controller_config_version: 7, checked_at: null, reason: null };
+const versionConflict = { code: "conflict", message: "Версия устарела", details: { reason: "config_version_conflict" } };
 let data: MaxProjectContent;
 let requests: Array<{ url: string; init: RequestInit }>;
 let root: Root;
 let client: QueryClient;
 let node: HTMLDivElement;
-let patchError: boolean;
+let patchError: { code: string; message: string; details?: Record<string, unknown> } | null;
 let holdPatch: ((response: Response) => void) | null;
 let pendingPatch: boolean;
 let holdImage: ((response: Response) => void) | null;
@@ -29,7 +30,7 @@ let retryApplies: boolean;
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   data = { project_id: "owned", config_version: 7, content: [{ ...item }], saved: { state: "saved", config_version: 7 }, public: { ...status }, preview: { ...status } };
-  requests = []; patchError = false; pendingPatch = false; holdPatch = null; holdImage = null; pendingGet = false; holdGet = null; retryApplies = false;
+  requests = []; patchError = null; pendingPatch = false; holdPatch = null; holdImage = null; pendingGet = false; holdGet = null; retryApplies = false;
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   node = document.createElement("div"); document.body.append(node); root = createRoot(node);
   vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit = {}) => {
@@ -39,7 +40,7 @@ beforeEach(() => {
     if (url === "/api/auth/me") return Response.json({ id: "owner", user_chat_messages_limit: 1, user_chat_messages_remaining: 0 });
     if (!init.method && pendingGet) return new Promise<Response>(resolve => { holdGet = resolve; });
     if (init.method === "PATCH") {
-      if (patchError) return Response.json({ error: { code: "conflict", message: "Версия устарела" } }, { status: 409 });
+      if (patchError) return Response.json({ error: patchError }, { status: 409 });
       if (pendingPatch) return new Promise<Response>(resolve => { holdPatch = resolve; });
       const body = JSON.parse(init.body as string);
       const changed = JSON.stringify(body.content) !== JSON.stringify(data.content);
@@ -146,17 +147,56 @@ it("does not advance a dirty baseline on a background GET or lose a draft after 
   expect(document.querySelector<HTMLInputElement>('input[aria-label="Название элемента 1"]')!.value).toBe(item.title);
   await input("Цена или подпись элемента 1", "3 000 ₽");
   await act(async () => { client.setQueryData(["max-content", "owned"], { ...data }); });
-  patchError = true; await click("Сохранить позицию");
+  patchError = versionConflict; await click("Сохранить позицию");
   expect(JSON.parse(patches()[0].init.body as string).expected_config_version).toBe(7);
   expect(document.querySelector<HTMLInputElement>('input[aria-label="Цена или подпись элемента 1"]')!.value).toBe("3 000 ₽");
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Каталог изменился. Черновик сохранён в форме.");
   await click("Сохранить позицию");
   expect(JSON.parse(patches()[1].init.body as string).expected_config_version).toBe(7);
   await click("К списку"); await click("Перенести мои правки");
   expect(node.textContent).toContain("Название из другой вкладки");
   expect(node.textContent).toContain("3 000 ₽");
   expect(patches()).toHaveLength(2);
-  patchError = false; await click("Сохранить изменения");
+  patchError = null; await click("Сохранить изменения");
   expect(JSON.parse(patches()[2].init.body as string)).toMatchObject({ expected_config_version: 8, content: [{ ...item, title: "Название из другой вкладки", price: "3 000 ₽" }] });
+});
+
+it.each([
+  { code: "generation_active", message: "Дождитесь завершения сборки и сохраните каталог ещё раз" },
+  { code: "operation_conflict", message: "Дождитесь завершения публикации", details: { reason: "publication_active" } },
+])("retains a new item and retries the same form after $code without a catalog rebase", async error => {
+  await mount(); await click("Добавить позицию");
+  await input("Название элемента 1", "Новая услуга");
+  await input("Цена или подпись элемента 1", "3 000 ₽");
+  patchError = error; await click("Сохранить позицию");
+  const first = JSON.parse(patches()[0].init.body as string);
+  expect(first.expected_config_version).toBe(7);
+  expect(data.content).toEqual([item]);
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(dialog.textContent).toContain(error.message);
+  expect(dialog.textContent).toContain("Черновик сохранён в форме");
+  expect(dialog.textContent).not.toContain("Каталог изменился");
+  expect(button("Перенести мои правки")).toBeUndefined();
+  expect(button("Сохранить позицию").disabled).toBe(false);
+  expect(document.querySelector<HTMLInputElement>('input[aria-label="Название элемента 1"]')!.value).toBe("Новая услуга");
+  expect(document.querySelector<HTMLInputElement>('input[aria-label="Цена или подпись элемента 1"]')!.value).toBe("3 000 ₽");
+  patchError = null; await click("Сохранить позицию");
+  expect(JSON.parse(patches()[1].init.body as string)).toEqual(first);
+  expect(data.config_version).toBe(8);
+  expect(data.content).toHaveLength(2);
+  expect(data.content[1]).toMatchObject({ title: "Новая услуга", price: "3 000 ₽" });
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(node.textContent).not.toContain("Есть несохранённые правки");
+});
+
+it("shows an unrelated 409 honestly without claiming that the catalog changed", async () => {
+  await mount(); await click("Изменить"); await input("Название элемента 1", "Мой черновик");
+  patchError = { code: "project_empty", message: "У проекта нет исходного снимка" };
+  await click("Сохранить позицию");
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(patchError.message);
+  expect(document.body.textContent).not.toContain("Каталог изменился");
+  expect(button("Перенести мои правки")).toBeUndefined();
+  expect(document.querySelector<HTMLInputElement>('input[aria-label="Название элемента 1"]')!.value).toBe("Мой черновик");
 });
 
 it("shows pending save, prevents duplicate submission, then restores honest delivery states after remount", async () => {
@@ -192,7 +232,7 @@ it("keeps saved data and local drafts safe when an explicit reapply meets a newe
   data.public = { ...status, state: "unknown" };
   await mount();
   data = { ...data, config_version: 8, content: [{ ...item, title: "Изменено в другой вкладке" }], saved: { state: "saved", config_version: 8 } };
-  patchError = true; await click("Повторить применение");
+  patchError = versionConflict; await click("Повторить применение");
   expect(JSON.parse(patches()[0].init.body as string)).toEqual({ expected_config_version: 7, content: [item] });
   expect(data.content[0].title).toBe("Изменено в другой вкладке");
   expect(data.config_version).toBe(8);

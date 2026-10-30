@@ -357,7 +357,7 @@ async def _put_max_config(
     ).scalar_one_or_none()
     if active_generation is not None:
         raise ApiError(
-            "conflict",
+            "generation_active",
             "Дождитесь завершения текущей сборки и сохраните настройки ещё раз",
             status.HTTP_409_CONFLICT,
         )
@@ -367,9 +367,10 @@ async def _put_max_config(
         deployment = {}
     if deployment.get("phase") in {"building", "pushing", "swapping", "cancelling"}:
         raise ApiError(
-            "conflict",
+            "operation_conflict",
             "Дождитесь завершения публикации и сохраните настройки ещё раз",
             status.HTTP_409_CONFLICT,
+            details={"reason": "publication_active"},
         )
     if project.current_snapshot_id is None:
         raise ApiError("project_empty", "У проекта нет исходного снимка", status.HTTP_409_CONFLICT)
@@ -449,7 +450,9 @@ async def _save_cell_business_config(
 ) -> MaxProjectConfigPublic:
     """Metadata has its own version, not a generation or source/build snapshot."""
     if await project_cell_runtime._active_generation(session, project.id) is not None:
-        raise ApiError("conflict", "Дождитесь завершения сборки и сохраните данные ещё раз", 409)
+        raise ApiError(
+            "generation_active", "Дождитесь завершения сборки и сохраните данные ещё раз", 409,
+        )
     config_data = payload.model_dump(mode="json")
     record = await _persist_business_config(project, payload, session)
     version = record.config_version
@@ -471,9 +474,15 @@ async def _save_cell_business_config(
             await project_cell_runtime._try_preview_project_lock(session, project.id)
             await session.refresh(record)
             if record.config_version != version or record.config != config_data:
-                raise ApiError("conflict", "Данные изменены в другом окне. Обновите вкладку", 409)
+                raise ApiError(
+                    "conflict", "Данные изменены в другом окне. Обновите вкладку", 409,
+                    details={"reason": "config_version_conflict"},
+                )
             if await project_cell_runtime._active_generation(session, project.id) is not None:
-                raise ApiError("conflict", "Данные сохранены. Примените их после сборки", 409)
+                raise ApiError(
+                    "generation_active", "Данные сохранены. Примените их после сборки", 409,
+                    details={"saved": True},
+                )
             applied = await orchestrator_client.project_cell_apply_business_config(
                 selection.workspace.id,
                 project_id=project.id,
@@ -715,18 +724,21 @@ async def patch_max_content(
 ) -> MaxContentPublic:
     if current_user.is_anon:
         raise ApiError("forbidden", "Войдите в аккаунт владельца проекта", 403)
-    await _owned_max_project(session, project_id, current_user.id)
-    await project_cell_runtime._try_preview_project_lock(session, project_id)
-    project = await _owned_max_project(session, project_id, current_user.id, lock=True)
+    project = await _lock_owned_max_project(session, project_id, current_user.id)
     selection = await _content_selection(project, session, current_user)
     if await project_cell_runtime._active_generation(session, project.id) is not None:
-        raise ApiError("conflict", "Дождитесь завершения сборки и сохраните каталог ещё раз", 409)
+        raise ApiError(
+            "generation_active", "Дождитесь завершения сборки и сохраните каталог ещё раз", 409,
+        )
     try:
         deployment = await orchestrator_client.get_deploy(project.id)
     except Exception:
         deployment = {}
     if deployment.get("phase") in {"building", "pushing", "swapping", "cancelling"}:
-        raise ApiError("conflict", "Дождитесь завершения публикации", 409)
+        raise ApiError(
+            "operation_conflict", "Дождитесь завершения публикации", 409,
+            details={"reason": "publication_active"},
+        )
     record = await session.get(MaxProjectConfig, project.id)
     current_payload = _config_payload(project, record)
     current_version = record.config_version if record else 0

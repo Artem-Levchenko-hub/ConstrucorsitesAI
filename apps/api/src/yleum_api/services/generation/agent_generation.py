@@ -369,7 +369,52 @@ async def execute_agent_turn(
                     orchestrator_template(project_info.template) == "max-miniapp-nextjs"
                 ),
             )
-    if _agent_res is None and get_settings().use_native_agent:
+    _native_agent = get_settings().use_native_agent
+    _completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = (
+        None
+    )
+    if _agent_res is None and not _is_edit and (
+        _native_agent or runtime.legacy_coordinator_handoff()
+    ):
+        from yleum_api.services.max_generation_contract import (
+            max_completion_gap,
+            max_source_completion_gap,
+        )
+
+        # A service/config snapshot may predate the first real product
+        # and can contain the retired UI canvas. It is not product input
+        # and must never satisfy the completion contract.
+        _max_baseline_files = (
+            dict(current_source)
+            if _max_has_generated_snapshot or workspace_context_files is not None else {}
+        )
+
+        def _max_completion_check(
+            written: Mapping[str, str], evidence: Mapping[str, int]
+        ) -> str | None:
+            # Native supplies accumulated writes; legacy supplies an authoritative
+            # full snapshot. Do not resurrect its deleted baseline/seed paths.
+            effective_files = {
+                **_max_baseline_files,
+                **_max_seed_files,
+                **written,
+            } if _native_agent else dict(written)
+            if runtime.coordinator is not None:
+                return max_source_completion_gap(
+                    prompt_text,
+                    effective_files,
+                    portable=True,
+                )
+            return max_completion_gap(
+                prompt_text,
+                effective_files,
+                evidence,
+                portable=(runtime.handle is not None and runtime.handle.is_portable()),
+            )
+
+        _completion_check = _max_completion_check
+
+    if _agent_res is None and _native_agent:
         # Native tool-use path (owner «как Claude Code, только на сервере»): one
         # GenerationRun/Project Cell, with bounded fresh provider segments
         # while verified product progress continues. Each segment preserves
@@ -382,46 +427,6 @@ async def execute_agent_turn(
         # infra circuit breaker (container dead → abort in ~3 turns) —
         # see agent_native._NO_WRITE_*/_INFRA_DEAD_ABORT_AT.
         from yleum_api.services import agent_native
-
-        _completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = (
-            None
-        )
-        if not _is_edit:
-            from yleum_api.services.max_generation_contract import (
-                max_completion_gap,
-                max_source_completion_gap,
-            )
-
-            # A service/config snapshot may predate the first real product
-            # and can contain the retired UI canvas. It is not product input
-            # and must never satisfy the completion contract.
-            _max_baseline_files = (
-                dict(current_source)
-                if _max_has_generated_snapshot or workspace_context_files is not None else {}
-            )
-
-            def _max_completion_check(
-                written: Mapping[str, str], evidence: Mapping[str, int]
-            ) -> str | None:
-                effective_files = {
-                    **_max_baseline_files,
-                    **_max_seed_files,
-                    **written,
-                }
-                if runtime.coordinator is not None:
-                    return max_source_completion_gap(
-                        prompt_text,
-                        effective_files,
-                        portable=True,
-                    )
-                return max_completion_gap(
-                    prompt_text,
-                    effective_files,
-                    evidence,
-                    portable=(runtime.handle is not None and runtime.handle.is_portable()),
-                )
-
-            _completion_check = _max_completion_check
 
         _native_execute = observed_execute
         if edit_source_changed is not None:
@@ -542,6 +547,7 @@ async def execute_agent_turn(
                 False if plan.bare_stack else get_settings().agent_require_green_before_done
             ),
             coordinator_handoff=runtime.legacy_coordinator_handoff(),
+            completion_check=_completion_check,
             ship_green_on_abort=get_settings().agent_ship_green_on_abort,
             edit_mode=_is_edit,
             bare_mode=plan.bare_stack,
@@ -568,7 +574,7 @@ async def execute_agent_turn(
             ),
         )
     if (
-        get_settings().use_native_agent and source_checkpoint is not None
+        _native_agent and source_checkpoint is not None
         and _agent_res.stop_reason != "checkpoint_error"
     ):
         try:
