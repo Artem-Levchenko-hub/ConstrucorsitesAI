@@ -572,7 +572,7 @@ def test_peer_source_wire_is_exact_compressed_and_preserves_child_exit():
         "sources": {
             "cells": "from dataclasses import dataclass\n@dataclass\nclass Item:\n    x: int\n",
             "runtime": (
-                "def dispatch_peer(c,p):\n    assert c.Item(7).x == 7\n"
+                "def peer_main(c,p):\n    assert c.Item(7).x == 7\n"
                 "    assert p['spec']['quoted'] == \"spaces 'quotes' Ядро\"\n    return 75\n"
             ),
         },
@@ -584,6 +584,166 @@ def test_peer_source_wire_is_exact_compressed_and_preserves_child_exit():
         [sys.executable, "-c", runtime.peer_program(), wire], capture_output=True, timeout=10
     )
     assert result.returncode == 75 and result.stdout == b"" and result.stderr == b""
+
+
+def test_peer_cli_emits_safe_phase_failure_and_preserves_failed_stage(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(signal, "SIGALRM", 14, raising=False)
+    monkeypatch.setattr(signal, "signal", lambda *_: None)
+    monkeypatch.setattr(signal, "alarm", lambda *_: None, raising=False)
+
+    def backup(**kwargs):
+        (kwargs["out_dir"] / "partial.dump").write_bytes(b"private backup evidence")
+        return {}, 0
+
+    def fail_publication(*_args):
+        runtime.need(False)
+
+    monkeypatch.setattr(cells, "run_backup", backup)
+    monkeypatch.setattr(runtime, "add_published", fail_publication)
+    root = tmp_path / "peer-stage"
+    code = runtime.peer_main(cells, {"spec": {
+        "name": "commerce", "provider": "docker", "as_owner": True,
+        "temp_root": str(root), "state_root": str(tmp_path / "private-state"),
+        "postgres_image": IMAGE, "helper_image": IMAGE,
+        "platform_census": platform_census(),
+    }})
+    output = capsys.readouterr()
+    assert code == 1 and output.out == ""
+    assert json.loads(output.err) == {
+        "version": 1, "node": "commerce", "phase": "published_artifacts",
+        "error_class": "ValueError", "guard_code": "coverage_unconfirmed", "exit_code": 1,
+    }
+    stages = list(root.iterdir())
+    assert len(stages) == 1
+    assert (stages[0] / "partial.dump").read_bytes() == b"private backup evidence"
+    assert not (stages[0] / "MANIFEST.json").exists()
+
+
+@pytest.mark.parametrize("exception_definition,error_class", [
+    ("raise ValueError('PRIVATE-EXCEPTION-TOKEN')", "ValueError"),
+    ("class PRIVATE_CUSTOM_ERROR(Exception): pass\n"
+     "    raise PRIVATE_CUSTOM_ERROR('PRIVATE-EXCEPTION-TOKEN')", "Exception"),
+])
+def test_peer_program_failure_never_emits_exception_text_or_traceback(
+    exception_definition, error_class
+):
+    payload = {
+        "sources": {
+            "cells": "",
+            "runtime": SOURCE.read_text(encoding="utf-8") + (
+                "\ndef dispatch_peer(c,p):\n"
+                f"    {exception_definition}\n"
+            ),
+        },
+        "spec": {"name": "commerce"},
+    }
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", runtime.peer_program(), runtime.encode_peer(payload)],
+        capture_output=True, timeout=10,
+    )
+    assert result.returncode == 1 and result.stdout == b""
+    assert b"PRIVATE" not in result.stderr and b"Traceback" not in result.stderr
+    assert json.loads(result.stderr) == {
+        "version": 1, "node": "commerce", "phase": "peer_dispatch",
+        "error_class": error_class, "guard_code": "peer_exception", "exit_code": 1,
+    }
+
+
+def _fetch_failure_cli(tmp_path, monkeypatch, capsys, stderr, *, exit_code=1):
+    runner_type = cells.DockerRunner
+
+    def local_runner(_binary):
+        runner = runner_type("python")
+        runner.binary = sys.executable
+        return runner
+
+    monkeypatch.setattr(cells, "DockerRunner", local_runner)
+    monkeypatch.setattr(runtime, "_peer_command", lambda *_: [
+        "-I", "-c", "import os; os.write(1,b'partial-tar'); "
+        f"os.write(2,{stderr!r}); raise SystemExit({exit_code})",
+    ])
+    monkeypatch.setattr(runtime, "unpack", lambda *_: pytest.fail("failed peer was extracted"))
+    monkeypatch.setattr(runtime, "load_cells", lambda *_: cells)
+    monkeypatch.setattr(runtime, "collect", lambda *_: runtime._fetch_peer(
+        cells, tmp_path, {}, {"name": "commerce"},
+    ))
+    monkeypatch.setattr(sys, "argv", [
+        "runtime-backup", "collect", "--cells-script", "unused",
+        "--core-cells", "unused", "--postgres-image", IMAGE,
+        "--topology", "unused", "--out", str(tmp_path),
+    ])
+    assert runtime.main() == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "PRIVATE" not in output.err and "Traceback" not in output.err
+    assert (tmp_path / "commerce.tgz").read_bytes() == b"partial-tar"
+    assert not (tmp_path / "COVERAGE.json").exists()
+    return json.loads(output.err)
+
+
+def test_parent_reports_only_validated_final_peer_record(tmp_path, monkeypatch, capsys):
+    record = {
+        "version": 1, "node": "commerce", "phase": "published_artifacts",
+        "error_class": "ValueError", "guard_code": "coverage_unconfirmed", "exit_code": 1,
+    }
+    stderr = b"PRIVATE-RAW-STDERR" + b"x" * 5000 + b"\n" + json.dumps(record).encode() + b"\n"
+    result = _fetch_failure_cli(tmp_path, monkeypatch, capsys, stderr)
+    assert result == {
+        "coverage_complete": False, "error_class": "PeerCommandError", "peer_error": record,
+    }
+
+
+@pytest.mark.parametrize("fault", [
+    "malformed", "oversized", "unknown-code", "unknown-class", "unknown-phase", "wrong-node",
+    "extra-field", "wrong-version", "bool-version", "wrong-exit", "bool-exit", "large-exit",
+    "zero-exit", "negative-exit",
+    "missing-field", "duplicate-field", "invalid-utf8", "not-final", "not-object",
+    "unhashable-class", "wrong-code-class",
+])
+def test_parent_rejects_untrusted_peer_records_without_leaking(
+    tmp_path, monkeypatch, capsys, fault
+):
+    record = {
+        "version": 1, "node": "commerce", "phase": "published_artifacts",
+        "error_class": "ValueError", "guard_code": "coverage_unconfirmed", "exit_code": 1,
+    }
+    edits = {
+        "unknown-code": {"guard_code": "PRIVATE-CODE"},
+        "unknown-class": {"error_class": "PRIVATE-CLASS"},
+        "unknown-phase": {"phase": "PRIVATE-PHASE"},
+        "wrong-node": {"node": "runtime"},
+        "extra-field": {"private": "PRIVATE-PAYLOAD"},
+        "wrong-version": {"version": 2}, "bool-version": {"version": True},
+        "wrong-exit": {"exit_code": 2}, "bool-exit": {"exit_code": True},
+        "large-exit": {"exit_code": 256}, "zero-exit": {"exit_code": 0},
+        "negative-exit": {"exit_code": -1}, "unhashable-class": {"error_class": []},
+        "wrong-code-class": {"error_class": "OSError"},
+    }
+    record.update(edits.get(fault, {}))
+    if fault == "missing-field":
+        del record["guard_code"]
+    line = json.dumps(record).encode()
+    if fault == "malformed":
+        line = b'{"PRIVATE":'
+    elif fault == "oversized":
+        line = b" " * 1100 + line
+    elif fault == "duplicate-field":
+        line = line.replace(b'"node":', b'"node":"PRIVATE-NODE","node":')
+    elif fault == "invalid-utf8":
+        line += b"\xff"
+    elif fault == "not-final":
+        line += b"\nPRIVATE-TRAILING-TEXT"
+    elif fault == "not-object":
+        line = b'["PRIVATE-ARRAY"]'
+    result = _fetch_failure_cli(
+        tmp_path, monkeypatch, capsys, b"PRIVATE-RAW-STDERR\n" + line + b"\n",
+    )
+    assert result == {
+        "coverage_complete": False, "error_class": "PeerCommandError",
+        "peer_error": {"node": "commerce", "guard_code": "peer_command_failed", "exit_code": 1},
+    }
 
 
 def platform_census():
@@ -706,7 +866,9 @@ def test_peer_payload_binds_all_four_sources_and_only_shared_platform_census(
     assert len(wire) < 100000
 
 
-def test_controller_child_gets_exact_census_env_and_no_automatic_replay(tmp_path, monkeypatch):
+def test_controller_child_gets_exact_census_env_and_no_automatic_replay(
+    tmp_path, monkeypatch, capsys
+):
     calls = []
     monkeypatch.setitem(
         sys.modules,
@@ -717,12 +879,15 @@ def test_controller_child_gets_exact_census_env_and_no_automatic_replay(tmp_path
 
     def launch(argv, **kwargs):
         calls.append((argv, kwargs))
+        print('{"version":1,"node":"commerce","phase":"database_backup",'
+              '"error_class":"NonzeroExit","guard_code":"backup_exit_nonzero",'
+              '"exit_code":75}', file=sys.stderr)
         return SimpleNamespace(returncode=75)
 
     monkeypatch.setattr(runtime.subprocess, "run", launch)
     census = cells.parse_platform_census(json.dumps(platform_census()))
     before = dict(runtime.os.environ)
-    result = runtime.dispatch_peer(
+    result = runtime.peer_main(
         cells,
         {
             "sources": {"cells": "", "runtime": "", "cold": ""},
@@ -730,6 +895,10 @@ def test_controller_child_gets_exact_census_env_and_no_automatic_replay(tmp_path
         },
     )
     assert result == 75 and len(calls) == 1
+    assert json.loads(capsys.readouterr().err) == {
+        "version": 1, "node": "commerce", "phase": "database_backup",
+        "error_class": "NonzeroExit", "guard_code": "backup_exit_nonzero", "exit_code": 75,
+    }
     environment = calls[0][1]["env"]
     assert environment == {**before, "BACKUP_PLATFORM_CENSUS_JSON": json.dumps(census)}
     assert dict(runtime.os.environ) == before
@@ -738,7 +907,7 @@ def test_controller_child_gets_exact_census_env_and_no_automatic_replay(tmp_path
 
 @pytest.mark.parametrize("project_exists", [False, True])
 def test_owner_peer_export_passes_census_into_real_backup_and_archive(
-    tmp_path, monkeypatch, project_exists
+    tmp_path, monkeypatch, capsys, project_exists
 ):
     from tests.test_backup_cells import (
         GENERATING,
@@ -783,6 +952,14 @@ def test_owner_peer_export_passes_census_into_real_backup_and_archive(
         },
     )
     assert result == (2 if project_exists else 0)
+    stderr = capsys.readouterr().err
+    if project_exists:
+        assert json.loads(stderr.splitlines()[-1]) == {
+            "version": 1, "node": "commerce", "phase": "database_backup",
+            "error_class": "NonzeroExit", "guard_code": "backup_exit_nonzero", "exit_code": 2,
+        }
+    else:
+        assert "guard_code" not in stderr
     archive_path = tmp_path / "peer.tar.gz"
     archive_path.write_bytes(wire.getvalue())
     extracted = tmp_path / "extracted"

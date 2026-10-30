@@ -229,6 +229,27 @@ def test_ordinary_stream_keeps_raw_bytes_without_protocol(tmp_path):
     assert result.ok and path.read_bytes() == b"ordinary-no-frame"
 
 
+def test_ordinary_stream_retains_actual_bounded_stderr_tail_and_failed_output(tmp_path):
+    runner = cells.DockerRunner("python")
+    runner.binary = sys.executable
+    path = tmp_path / "failed-stream"
+    diagnostic = b'{"version":1,"node":"commerce","guard_code":"coverage_unconfirmed"}\n'
+    stderr = b"PRIVATE-SECRET-AT-START" + b"x" * 5000 + b"\n" + diagnostic
+    result = runner.run_to_file(
+        ["-I", "-c", "import os; os.write(1, b'partial-tar'); "
+         f"os.write(2, {stderr!r}); raise SystemExit(7)"],
+        path=path,
+        timeout=3,
+    )
+    assert result.exit_code == 7 and not result.ok
+    assert result.stderr == stderr[-4096:]
+    assert result.stderr.endswith(diagnostic)
+    assert b"PRIVATE-SECRET" not in result.stderr
+    assert path.read_bytes() == b"partial-tar"
+    assert result.size_bytes == 11
+    assert result.sha256 == hashlib.sha256(b"partial-tar").hexdigest()
+
+
 @pytest.mark.skipif(os.name != "posix", reason="real Linux pipefail/fd3 producer fixture")
 @pytest.mark.parametrize("fault", ["", "tar", "tee", "sha256sum"])
 def test_linux_tar_pipeline_waits_for_ack_and_propagates_each_stage_failure(tmp_path, fault):

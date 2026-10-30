@@ -250,7 +250,8 @@ class DockerRunner:
                 exit_code = process.wait()
             finally:
                 _close_stream_process(process, watchdog)
-            errors.seek(0)
+            errors.seek(0, os.SEEK_END)
+            errors.seek(max(0, errors.tell() - _STDERR_TAIL_BYTES))
             stderr = errors.read(_STDERR_TAIL_BYTES)
         return StreamResult(argv, exit_code, size, digest.hexdigest(), stderr)
 

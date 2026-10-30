@@ -53,6 +53,92 @@ PGOPTIONS = " ".join(
         "default_transaction_read_only=on",
     )
 )
+_PEER_ERROR_MAX_BYTES = 1024
+_PEER_ERROR_FIELDS = {"version", "node", "phase", "error_class", "guard_code", "exit_code"}
+_PEER_PHASES = {
+    "peer_dispatch", "peer_prepare", "database_backup", "published_artifacts",
+    "manifest_write", "archive_stream",
+}
+_PEER_EXCEPTION_CLASSES = {
+    "Exception", "ValueError", "TypeError", "KeyError", "OSError", "PermissionError",
+    "FileNotFoundError", "TimeoutError", "BackupError", "PublishedError", "TarError",
+    "ReadError", "WriteError", "StreamError", "CalledProcessError", "TimeoutExpired",
+    "JSONDecodeError",
+}
+_PEER_GUARD_CLASSES = {
+    "peer_exception": _PEER_EXCEPTION_CLASSES,
+    "coverage_unconfirmed": {"ValueError"},
+    "backup_exit_nonzero": {"NonzeroExit"},
+}
+
+
+class PeerCommandError(ValueError):
+    """Only fixed, validated diagnostic fields cross the peer command boundary."""
+
+    def __init__(self, diagnostic: dict) -> None:
+        super().__init__("peer command failed")
+        self.diagnostic = diagnostic
+
+
+def _peer_error_record(node, phase, error=None, *, exit_code=1):
+    error_class, guard_code = "NonzeroExit", "backup_exit_nonzero"
+    if error is not None:
+        name = type(error).__name__
+        error_class = name if name in _PEER_EXCEPTION_CLASSES else "Exception"
+        guard_code = (
+            "coverage_unconfirmed"
+            if (
+                type(error) is ValueError
+                and error.args == ("backup runtime coverage is unconfirmed",)
+            )
+            else "peer_exception"
+        )
+    return {
+        "version": 1, "node": node if type(node) is str and node in NODES else "unknown",
+        "phase": phase, "error_class": error_class, "guard_code": guard_code,
+        "exit_code": exit_code,
+    }
+
+
+def _emit_peer_error(record):
+    # A preceding command may have left stderr without a final newline.
+    # No argv, exception text, stderr, environment or payload is serialized.
+    print("\n" + json.dumps(record, separators=(",", ":")), file=sys.stderr, flush=True)
+
+
+def _unique_peer_fields(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate peer diagnostic field")
+        value[key] = item
+    return value
+
+
+def _peer_failure(result, node):
+    fallback = {"node": node, "guard_code": "peer_command_failed", "exit_code": result.exit_code}
+    # Read only the final bounded line. Earlier stderr is untrusted and can
+    # include SQL data, credentials or arbitrary SSH/sudo diagnostics.
+    line = result.stderr.removesuffix(b"\n").rsplit(b"\n", 1)[-1]
+    if not 0 < len(line) <= _PEER_ERROR_MAX_BYTES:
+        return PeerCommandError(fallback)
+    try:
+        value = json.loads(line.decode("utf-8"), object_pairs_hook=_unique_peer_fields)
+        if (
+            type(value) is dict and set(value) == _PEER_ERROR_FIELDS
+            and type(value["version"]) is int and value["version"] == 1
+            and type(value["node"]) is str and value["node"] == node
+            and type(value["phase"]) is str and value["phase"] in _PEER_PHASES
+            and type(value["guard_code"]) is str and value["guard_code"] in _PEER_GUARD_CLASSES
+            and type(value["error_class"]) is str
+            and value["error_class"] in _PEER_GUARD_CLASSES[value["guard_code"]]
+            and type(value["exit_code"]) is int and 1 <= value["exit_code"] <= 255
+            and value["exit_code"] == result.exit_code
+        ):
+            return PeerCommandError(value)
+    except (ValueError, UnicodeError):
+        pass
+    return PeerCommandError(fallback)
 
 
 def need(value: object) -> None:
@@ -764,9 +850,11 @@ def export_peer(cells, spec: dict) -> int:
     need(not root.is_symlink())
     out = Path(tempfile.mkdtemp(prefix="yleum-backup-peer-", dir=root))
     succeeded = False
+    phase = "peer_prepare"
     try:
         os.chmod(out, 0o700)
         with redirect_stdout(sys.stderr):
+            phase = "database_backup"
             if spec["provider"] == "docker":
                 census = cells.parse_platform_census(
                     json.dumps(spec["platform_census"])
@@ -782,19 +870,26 @@ def export_peer(cells, spec: dict) -> int:
                     resolve_docker_sources_with_sudo=True,
                 )
                 if code == 0:
+                    phase = "published_artifacts"
                     add_published(cells, manifest, Path(spec["state_root"]), out,
                                   spec.get("runtime_images", []))
             else:
                 manifest, code = kube_backup(cells, spec, out)
+            phase = "manifest_write"
             manifest["node"] = spec["name"]
             manifest["producer_sha256"] = spec["producer_sha256"]
             cells._write_private_json(out / "MANIFEST.json", manifest)
+        phase = "archive_stream"
         with tarfile.open(fileobj=sys.stdout.buffer, mode="w|gz") as archive:
             for item in sorted(out.iterdir()):
                 need(item.is_file() and not item.is_symlink())
                 archive.add(item, arcname=item.name)
         succeeded = code == 0
+        if not succeeded:
+            _emit_peer_error(_peer_error_record(spec["name"], "database_backup", exit_code=code))
         return code
+    except Exception as error:  # Typed metadata only; failure stays fatal.
+        raise PeerCommandError(_peer_error_record(spec.get("name"), phase, error)) from None
     finally:
         if succeeded:
             # Only this fresh flat stage. Failed/uncertain helper intent evidence
@@ -817,7 +912,7 @@ def peer_program() -> str:
         "exec(compile(p['sources'].get('published',''),'backup_published_peer','exec'),a.__dict__); "
         "r=types.ModuleType('runtime_backup_peer'); "
         "exec(compile(p['sources']['runtime'],'runtime_backup_peer','exec'),r.__dict__); "
-        "raise SystemExit(r.dispatch_peer(c,p))"
+        "raise SystemExit(r.peer_main(c,p))"
     )
 
 
@@ -825,6 +920,19 @@ def encode_peer(payload: dict) -> str:
     value = base64.b64encode(zlib.compress(json.dumps(payload).encode(), 9)).decode()
     need(len(value) < 100000)
     return value
+
+
+def peer_main(cells, payload: dict) -> int:
+    try:
+        # The root dispatcher preserves the owner child's final record and exit.
+        return dispatch_peer(cells, payload)
+    except Exception as error:  # Secret-safe peer CLI boundary.
+        record = (
+            error.diagnostic if isinstance(error, PeerCommandError)
+            else _peer_error_record(payload.get("spec", {}).get("name"), "peer_dispatch", error)
+        )
+        _emit_peer_error(record)
+        return 1
 
 
 def dispatch_peer(cells, payload: dict) -> int:
@@ -1094,7 +1202,8 @@ def _peer_command(sources, spec):
 def _fetch_peer(cells, out, sources, spec):
     archive = out / (spec["name"] + ".tgz")
     result = cells.DockerRunner("ssh").run_to_file(_peer_command(sources, spec), path=archive, timeout=7200)
-    need(result.ok)
+    if not result.ok:
+        raise _peer_failure(result, spec["name"])
     with tempfile.TemporaryDirectory(prefix="verify-peer-", dir=out) as temp:
         directory = Path(temp) / spec["name"]
         unpack(archive, directory)
@@ -1175,10 +1284,11 @@ def main() -> int:
         return 0
     except Exception as error:  # noqa: BLE001 -- secret-safe outer command boundary
         # SQL, kubectl and peer stderr can contain retained secrets or row data.
+        failure = {"coverage_complete": False, "error_class": type(error).__name__}
+        if isinstance(error, PeerCommandError):
+            failure["peer_error"] = error.diagnostic
         print(
-            json.dumps(
-                {"coverage_complete": False, "error_class": type(error).__name__}
-            ),
+            json.dumps(failure),
             file=sys.stderr,
         )
         return 1
