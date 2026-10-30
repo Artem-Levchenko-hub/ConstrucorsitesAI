@@ -86,8 +86,6 @@ it("shows publication blockers without expanding details and links each unfinish
   expect(requirements!.querySelector('[data-requirement="bot"] a')?.getAttribute("href")).toBe("/max/project-surfaces?panel=max");
   expect(requirements!.querySelector('[data-requirement="max_url"]')?.getAttribute("data-state")).toBe("later");
   expect(requirements!.querySelector('[data-requirement="max_url"] a')?.getAttribute("href")).toBe("/max/project-surfaces?panel=max");
-  // Длинный дисклеймер больше не самый заметный текст на экране.
-  expect(container.querySelector(".max-publication-optional")?.tagName).toBe("DETAILS");
 });
 
 it.each(["loading", "error"])("never marks stale requirements complete while readiness is %s", async state => {

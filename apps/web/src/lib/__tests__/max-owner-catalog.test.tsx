@@ -218,14 +218,62 @@ it("never opens generation automatically for a legacy integration or an ordinary
   expect(requests.filter(request => request.init.method === "POST")).toHaveLength(0);
 });
 
+it.each(["", "https://images.example/current.png"])("offers file upload and a URL from the card photo without opening a picker or saving (%s)", async imageUrl => {
+  data.content = [{ ...item, image_url: imageUrl }];
+  const filePicker = vi.spyOn(HTMLInputElement.prototype, "click").mockImplementation(() => {});
+  await mount();
+  const photo = node.querySelector<HTMLButtonElement>(`button[aria-label="${imageUrl ? "Изменить" : "Добавить"} фото: ${item.title}"]`);
+  expect(photo).toBeInstanceOf(HTMLButtonElement);
+  await act(async () => photo!.click()); await settle();
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Фото позиции");
+  expect(button(imageUrl ? "Заменить фото" : "Загрузить фото")).toBeDefined();
+  expect(document.querySelector<HTMLInputElement>('input[aria-label="Ссылка на фото элемента 1"]')?.value).toBe(imageUrl);
+  expect(filePicker).not.toHaveBeenCalled();
+  await click("К списку");
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(node.textContent).not.toContain("Правки ещё не сохранены");
+  expect(requests.filter(request => request.init.method)).toHaveLength(0);
+  expect(data.content).toEqual([{ ...item, image_url: imageUrl }]);
+});
+
+it("keeps photo URL edits in the ordinary draft until an explicit content save", async () => {
+  await mount();
+  await act(async () => node.querySelector<HTMLButtonElement>(`button[aria-label="Добавить фото: ${item.title}"]`)!.click()); await settle();
+  await input("Ссылка на фото элемента 1", "https://images.example/linked.png");
+  expect(requests.filter(request => request.init.method)).toHaveLength(0);
+  await click("Все поля позиции");
+  expect(document.querySelector<HTMLInputElement>('input[aria-label="Ссылка на фото элемента 1"]')!.value).toBe("https://images.example/linked.png");
+  await click("Сохранить позицию");
+  expect(JSON.parse(patches()[0].init.body as string)).toEqual({ expected_config_version: 7, content: [{ ...item, image_url: "https://images.example/linked.png" }] });
+  expect(requests.every(request => request.url.endsWith("/max/content"))).toBe(true);
+});
+
+it("discards photo edits with the existing cancel-draft action while preserving saved data", async () => {
+  await mount(); await click("Скрыть");
+  await act(async () => node.querySelector<HTMLButtonElement>(`button[aria-label="Добавить фото: ${item.title}"]`)!.click()); await settle();
+  await input("Ссылка на фото элемента 1", "https://images.example/draft.png");
+  await click("К списку");
+  expect(node.querySelector<HTMLImageElement>(".max-catalog-photo")?.src).toBe("https://images.example/draft.png");
+  expect(node.querySelector<HTMLButtonElement>(`button[aria-label="Показать ${item.title}"]`)).not.toBeNull();
+  await click("Отменить правки");
+  expect(node.querySelector("img.max-catalog-photo")).toBeNull();
+  expect(node.querySelector<HTMLButtonElement>(`button[aria-label="Скрыть ${item.title}"]`)).not.toBeNull();
+  expect(requests.filter(request => request.init.method)).toHaveLength(0);
+  expect(data.content).toEqual([item]);
+});
+
 it("keeps the item form open during photo upload and saves its returned URL", async () => {
-  await mount(); await click("Изменить");
+  await mount();
+  await act(async () => node.querySelector<HTMLButtonElement>(`button[aria-label="Добавить фото: ${item.title}"]`)!.click()); await settle();
   await act(async () => {
     const field = document.querySelector<HTMLInputElement>('input[type="file"]')!;
     Object.defineProperty(field, "files", { configurable: true, value: [new File(["photo"], "photo.png", { type: "image/png" })] });
     field.dispatchEvent(new Event("change", { bubbles: true }));
   });
   await settle(); expect(button("Сохранить позицию").disabled).toBe(true); expect(button("К списку").disabled).toBe(true);
+  expect(button("Все поля позиции").disabled).toBe(true);
+  await click("Закрыть");
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
   await act(async () => holdImage!(Response.json({ url: "https://images.example/item.png" }))); await settle();
   expect(document.querySelector<HTMLInputElement>('input[aria-label="Ссылка на фото элемента 1"]')!.value).toBe("https://images.example/item.png");
   await click("Сохранить позицию");

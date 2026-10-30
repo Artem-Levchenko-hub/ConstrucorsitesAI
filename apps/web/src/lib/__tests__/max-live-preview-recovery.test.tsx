@@ -302,6 +302,46 @@ describe("MAX live preview recovery", () => {
     });
   }
 
+  it("uses resized stage space without changing the phone viewport or replacing its running document", async () => {
+    let availableHeight = 451;
+    let notifyResize = () => {};
+    globalThis.ResizeObserver = class {
+      constructor(callback: ResizeObserverCallback) {
+        notifyResize = () => callback([], this as unknown as ResizeObserver);
+      }
+      observe(target: Element) {
+        const stage = target as HTMLElement;
+        stage.style.padding = "0px 8px";
+        vi.spyOn(stage, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, 0, 440, availableHeight));
+        notifyResize();
+      }
+      disconnect() {}
+      unobserve() {}
+    } as typeof ResizeObserver;
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://preview-1.example"));
+    renderPreview("snapshot-1");
+
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    const device = container.querySelector<HTMLElement>("[data-testid='max-live-device']")!;
+    const fittedFrame = device.parentElement!;
+    expect(device.style.transform).toBe("scale(0.5)");
+    expect(fittedFrame.style.width).toBe("205px");
+    expect(fittedFrame.style.height).toBe("451px");
+
+    availableHeight = 541.2;
+    act(() => notifyResize());
+    expect(parseFloat(fittedFrame.style.width)).toBeCloseTo(246);
+    expect(parseFloat(fittedFrame.style.height)).toBeCloseTo(541.2);
+    expect(device.style.width).toBe("410px");
+    expect(device.style.height).toBe("902px");
+    expect(frame.parentElement?.style.width).toBe("390px");
+    expect(frame.parentElement?.style.height).toBe("844px");
+    expect(container.querySelector("iframe")).toBe(frame);
+    expect(frame.getAttribute("src")).toBe("https://preview-1.example");
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the accepted iframe during recovery status updates without starting another runtime", async () => {
     const current: GenerationRun = {
       id: "pending-run", project_id: PROJECT.id, assistant_message_id: "pending-message",
@@ -653,6 +693,7 @@ describe("MAX live preview recovery", () => {
     renderPreview("snapshot-1", { showOpenSeparately: false });
     await waitForValue(() => container.querySelector("iframe"));
     expect(container.querySelector("[data-testid='max-open-preview-separate']")).toBeNull();
+    expect(container.querySelector("[data-testid='max-preview-actions']")).toBeNull();
   });
 
   it("mounts the actual owner frame and renews its session without replacing the frame or replaying application requests", async () => {

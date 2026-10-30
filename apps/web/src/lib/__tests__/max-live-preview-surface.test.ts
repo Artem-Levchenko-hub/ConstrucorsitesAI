@@ -20,9 +20,7 @@ const usageBreakdown = readFileSync(
 
 describe("MAX live preview surface", () => {
   it("keeps the phone on a transparent stage without a grey framing card", () => {
-    expect(livePreview).toContain(
-      'className="flex h-full min-h-0 flex-col bg-transparent py-3 sm:py-4"',
-    );
+    expect(livePreview).toMatch(/<aside\s+className="[^"]*\bbg-transparent\b/);
     expect(livePreview).not.toContain('bg-[#f5f3ee]');
     expect(livePreview).not.toContain("0_30px_80px");
     expect(livePreview).toContain("0_12px_28px");

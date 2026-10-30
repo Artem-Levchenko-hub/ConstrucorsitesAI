@@ -524,6 +524,7 @@ export function MaxLivePreview({
     !showPreviewError &&
     versions.length === 0 &&
     !displayPreviewUrl;
+  const showPreviewActions = viewingHistorical || showOpenSeparately;
 
   function openSeparatePreview() {
     if (!currentPreviewReady || activityBlocked()) return;
@@ -553,10 +554,10 @@ export function MaxLivePreview({
 
   return (
     <aside
-      className="flex h-full min-h-0 flex-col bg-transparent py-3 sm:py-4"
+      className="flex h-full min-h-0 flex-col bg-transparent py-1.5"
       data-testid="max-live-preview"
     >
-      <div className="flex h-16 shrink-0 items-start justify-between gap-2 px-3 sm:px-5" data-testid="max-preview-header">
+      <div className="flex min-h-11 shrink-0 items-center justify-between gap-2 px-3 sm:px-4" data-testid="max-preview-header">
         <div className="min-w-0 flex-1">
           <p className="omnia-kicker text-fg-tertiary">
             {viewingHistorical ? "История версий" : "Живое превью"}
@@ -580,7 +581,7 @@ export function MaxLivePreview({
             </div>
           ) : <h2 className="mt-1 truncate text-sm font-semibold">{viewingHistorical ? "Версия недоступна" : "Ваше приложение"}</h2>}
         </div>
-        <div className="flex h-14 shrink-0 items-center justify-end gap-1 sm:gap-1.5">
+        <div className="flex min-h-10 shrink-0 items-center justify-end gap-1 sm:gap-1.5">
           {!viewingHistorical && <span className="inline-flex items-center gap-2 text-[11px] text-fg-secondary">
             <span className={`size-1.5 rounded-full ${connected ? "bg-success" : "bg-fg-tertiary"}`} title={connectionLabel} />
             <span className="sr-only">{connectionLabel}</span>
@@ -617,7 +618,7 @@ export function MaxLivePreview({
         </div>
       </div>
 
-      <div className="mt-3 flex min-h-0 flex-1">
+      <div className="mt-1 flex min-h-0 flex-1">
         {MAX_CUSTOMER_VERSIONING && (versions.length > 0 || historyError || (snapshotsLoading && !!currentSnapshotId)) && <MaxVersionRail
           key={project.id}
           versions={historyCurrent ? versions : versions.map((version) => ({ ...version, is_current: false }))}
@@ -637,7 +638,7 @@ export function MaxLivePreview({
         />}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center">
         <p
-          className="mb-2 w-full max-w-md px-2 text-center text-xs text-fg-secondary"
+          className="mb-1 w-full max-w-md shrink-0 px-2 text-center text-xs text-fg-secondary"
           data-testid="max-accepted-preview-status"
           role="status"
           aria-live="polite"
@@ -647,7 +648,7 @@ export function MaxLivePreview({
         </p>
         <div
           ref={deviceStage}
-          className="flex min-h-[340px] w-full flex-1 items-center justify-center overflow-hidden px-1.5 sm:px-2"
+          className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden px-1.5 sm:px-2"
           data-testid="max-live-device-stage"
         >
           {historyUnavailable ? <section className="max-history-unavailable" data-testid="max-history-unavailable" aria-live="polite">
@@ -823,9 +824,9 @@ export function MaxLivePreview({
             </div>
           </div>}
         </div>
-        <div className="mt-1 flex h-12 shrink-0 items-center justify-center text-center" data-testid="max-preview-actions">
+        {showPreviewActions && <div className="mt-1 flex min-h-9 shrink-0 items-center justify-center text-center" data-testid="max-preview-actions">
           {viewingHistorical ? (
-            <div className="flex h-12 items-center justify-center gap-1.5 px-2">
+            <div className="flex min-h-11 flex-wrap items-center justify-center gap-1.5 px-2">
               <button
                 type="button"
                 onClick={() => onSelectVersion(null)}
@@ -854,20 +855,20 @@ export function MaxLivePreview({
                 Восстановить v{selectedVersion}
               </button>}
             </div>
-          ) : showOpenSeparately ? (
+          ) : (
             <button
               type="button"
               onClick={openSeparatePreview}
               disabled={!currentPreviewReady}
-              className="mt-1 inline-flex min-h-9 items-center gap-1.5 text-[11px] font-medium text-fg-tertiary transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
+              className="inline-flex min-h-9 items-center gap-1.5 text-[11px] font-medium text-fg-tertiary transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
               data-testid="max-open-preview-separate"
               title={currentPreviewReady ? undefined : "Сначала дождитесь запуска предпросмотра"}
             >
               <ExternalLink className="size-3" />
               Открыть отдельно
             </button>
-          ) : null}
-        </div>
+          )}
+        </div>}
         </div>
       </div>
       {MAX_CUSTOMER_VERSIONING && <><Dialog open={promptOpen} onOpenChange={(open) => { if (!open) setPromptTargetId(null); }}>

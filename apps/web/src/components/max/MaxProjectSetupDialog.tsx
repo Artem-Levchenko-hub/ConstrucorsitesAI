@@ -40,6 +40,11 @@ function errorMessage(error: unknown) {
   return error instanceof ApiError ? error.message : "Попробуйте ещё раз";
 }
 
+function screenConfig(config: MaxProjectConfigPayload) {
+  const { app_name, app_type, summary, audience, primary_action, features, style, brand_colors } = config;
+  return { app_name, app_type, summary, audience, primary_action, features, style, brand_colors };
+}
+
 export function MaxProjectSetupDialog({
   projectId,
   display = "panel",
@@ -66,19 +71,19 @@ export function MaxProjectSetupDialog({
   const setOpen = (next: boolean) => { setLocalOpen(next); onOpenChange?.(next); };
   const [draft, setDraft] = useState<MaxProjectConfigPayload | null>(null);
   const draftVersion = useRef<number | undefined>(undefined);
-  const [applyConfig, setApplyConfig] = useState<MaxProjectConfig | null>(null);
-  const applyAfterSave = useRef(false);
+  const [aiConfig, setAiConfig] = useState<MaxProjectConfig | null>(null);
+  const openAiAfterSave = useRef(false);
   const [section, setSection] = useState<SetupSection>(initialSection);
   const [entry, setEntry] = useState({ open, initialSection, projectId });
   if (entry.open !== open || entry.initialSection !== initialSection || entry.projectId !== projectId) {
     setEntry({ open, initialSection, projectId });
     if (entry.projectId !== projectId) {
       setDraft(null);
-      setApplyConfig(null);
+      setAiConfig(null);
     }
     if (open) {
       setSection(initialSection);
-      setApplyConfig(null);
+      setAiConfig(null);
     }
     else if (entry.open) setDraft(null);
   }
@@ -105,17 +110,17 @@ export function MaxProjectSetupDialog({
         id: `max-config-save-${projectId}`,
         description: data.application_mode === "runtime"
           ? (data.synced_snapshot_id
-            ? "Конфигурация, поддержка и документы обновлены. Для изменения экранов нажмите «Применить к приложению»."
-            : "Данные сохранены и будут использованы при следующем запуске приложения. Для изменения экранов нажмите «Применить к приложению».")
-          : "Настройки и документы сохранены. Для изменения экранов используйте «Применить к приложению», затем опубликуйте результат.",
+            ? "Данные и документы обновлены. Подключённый каталог подхватит изменения автоматически. ИИ не запускался."
+            : "Данные сохранены. Обновление рабочей сборки ещё не подтверждено; статус можно проверить в разделе «Каталог». ИИ не запускался.")
+          : "Настройки и документы сохранены. ИИ не запускался. Для изменения экранов есть отдельная кнопка «Изменить экраны с ИИ».",
       });
-      if (applyAfterSave.current) setApplyConfig(data);
-      applyAfterSave.current = false;
+      if (openAiAfterSave.current) setAiConfig(data);
+      openAiAfterSave.current = false;
       setOpen(false);
       setDraft(null);
     },
     onError: (error) => {
-      applyAfterSave.current = false;
+      openAiAfterSave.current = false;
       if (error instanceof ApiError && error.code === "generation_draining") {
         toast.info("Сервис обновляется", { id: `max-config-save-${projectId}`, description: "Подождите несколько минут и повторите сохранение. Введённые данные останутся в форме.", duration: 8000 });
         return;
@@ -132,26 +137,7 @@ export function MaxProjectSetupDialog({
   const saved = config.data?.config;
   const changedSections = current && saved
     ? [
-        JSON.stringify({
-          app_name: current.app_name,
-          app_type: current.app_type,
-          summary: current.summary,
-          audience: current.audience,
-          primary_action: current.primary_action,
-          features: current.features,
-          style: current.style,
-          brand_colors: current.brand_colors,
-        }) !==
-          JSON.stringify({
-            app_name: saved.app_name,
-            app_type: saved.app_type,
-            summary: saved.summary,
-            audience: saved.audience,
-            primary_action: saved.primary_action,
-            features: saved.features,
-            style: saved.style,
-            brand_colors: saved.brand_colors,
-          }),
+        JSON.stringify(screenConfig(current)) !== JSON.stringify(screenConfig(saved)),
         JSON.stringify(current.content) !== JSON.stringify(saved.content),
         JSON.stringify({ operator: current.operator, support: current.support }) !==
           JSON.stringify({ operator: saved.operator, support: saved.support }),
@@ -167,6 +153,15 @@ export function MaxProjectSetupDialog({
   const selectSection = (next: SetupSection) => {
     setSection(next);
     if (scrollRegion.current) scrollRegion.current.scrollTop = 0;
+  };
+  const requestScreenChanges = (payload: MaxProjectConfigPayload) => {
+    if (changedSections || pendingApplication || !config.data?.config_version || config.data.application_mode !== "runtime") {
+      openAiAfterSave.current = true;
+      save.mutate(payload);
+    } else if (config.data) {
+      setOpen(false);
+      setAiConfig(config.data);
+    }
   };
 
   return (
@@ -291,7 +286,7 @@ export function MaxProjectSetupDialog({
                   {saveIssue ? <CircleAlert aria-hidden="true" /> : changedSections ? <Circle aria-hidden="true" /> : <Check aria-hidden="true" />}
                   <span>{saveIssue ?? (save.isPending ? "Сохраняем изменения…" : changedSections > 0
                     ? `Есть несохранённые изменения · разделов: ${changedSections}`
-                    : pendingApplication ? "Настройки сохранены. Их можно применить к приложению." : "Все изменения сохранены")}</span>
+                    : pendingApplication ? "Данные сохранены. Обновление рабочей сборки ещё не подтверждено." : "Все изменения сохранены")}</span>
                 </p>
                 <Button
                   className="max-setup-save"
@@ -301,28 +296,20 @@ export function MaxProjectSetupDialog({
                     (changedSections === 0 && !pendingApplication) ||
                     Boolean(saveIssue)
                   }
-                  onClick={() => { applyAfterSave.current = false; save.mutate(current); }}
+                  onClick={() => { openAiAfterSave.current = false; save.mutate(current); }}
                 >
                   {save.isPending && (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   )}
-                  Сохранить и проверить
+                  Сохранить изменения
                 </Button>
-                {(section === "details" || section === "content") && <Button variant="outline" className="max-setup-save" disabled={save.isPending || Boolean(saveIssue)} onClick={() => {
-                  if (changedSections || pendingApplication || !config.data?.config_version || config.data.application_mode !== "runtime") {
-                    applyAfterSave.current = true;
-                    save.mutate(current);
-                  } else if (config.data) {
-                    setOpen(false);
-                    setApplyConfig(config.data);
-                  }
-                }}>{changedSections ? "Сохранить и применить" : "Применить к приложению"}</Button>}
+                {(section === "details" || section === "content") && <Button variant="outline" className="max-setup-save" disabled={save.isPending || Boolean(saveIssue)} onClick={() => requestScreenChanges(current)}>Изменить экраны с ИИ</Button>}
               </div>
             </>
           )}
         </DialogContent>
       </Dialog>
-      {applyConfig && <MaxProjectDataApplyDialog config={applyConfig} onClose={() => setApplyConfig(null)} onReturnFocus={() => trigger.current?.focus()} />}
+      {aiConfig && <MaxProjectDataApplyDialog config={aiConfig} onClose={() => setAiConfig(null)} onReturnFocus={() => trigger.current?.focus()} />}
     </>
   );
 }

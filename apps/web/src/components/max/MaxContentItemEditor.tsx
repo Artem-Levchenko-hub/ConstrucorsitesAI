@@ -50,12 +50,13 @@ export function MaxContentCardPreview({ item }: { item: MaxContentItem }) {
 }
 
 /** Одна позиция каталога: поля слева, живое превью карточки справа. */
-export function MaxContentItemFields({ projectId, index, item, onPatch, onUploadingChange }: {
+export function MaxContentItemFields({ projectId, index, item, onPatch, onUploadingChange, imageOnly = false }: {
   projectId: string;
   index: number;
   item: MaxContentItem;
   onPatch: (patch: Partial<MaxContentItem>) => void;
   onUploadingChange?: (uploading: boolean) => void;
+  imageOnly?: boolean;
 }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -87,6 +88,31 @@ export function MaxContentItemFields({ projectId, index, item, onPatch, onUpload
     }
   }
 
+  const photoField = <div className="max-setup-field max-setup-wide">
+    <span className="max-content-label">Фото позиции</span>
+    <div className="max-content-photo">
+      <button type="button" className="max-content-upload" disabled={uploading}
+        onClick={() => fileInput.current?.click()}>
+        {uploading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <ImagePlus className="h-4 w-4" aria-hidden="true" />}
+        {uploading ? "Загружаем…" : item.image_url ? "Заменить фото" : "Загрузить фото"}
+      </button>
+      {item.image_url && <button type="button" className="max-setup-delete" onClick={() => onPatch({ image_url: "" })}>
+        <Trash2 className="h-4 w-4" aria-hidden="true" /><span>Убрать фото</span>
+      </button>}
+      <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="sr-only"
+        aria-label={`Фото элемента ${index + 1}`}
+        onChange={event => { const file = event.target.files?.[0]; if (file) void upload(file); }} />
+    </div>
+    <p className="max-setup-hint" data-invalid={Boolean(uploadError)} role={uploadError ? "alert" : undefined}>
+      {uploadError ?? "JPG, PNG, WebP или GIF до 8 МБ."}
+    </p>
+    <Label htmlFor={`${fieldId}-image`}>Или ссылка на фото</Label>
+    <Input id={`${fieldId}-image`} aria-label={`Ссылка на фото элемента ${index + 1}`} value={item.image_url} maxLength={500}
+      inputMode="url" placeholder="https://..." onChange={event => onPatch({ image_url: event.target.value })} />
+  </div>;
+
+  if (imageOnly) return <div className="max-content-item-layout"><div className="max-setup-grid">{photoField}</div></div>;
+
   return (
     <div className="max-content-item-layout">
       <div className="max-setup-grid">
@@ -96,28 +122,7 @@ export function MaxContentItemFields({ projectId, index, item, onPatch, onUpload
             placeholder="Например, Худи оверсайз" onChange={event => onPatch({ title: event.target.value })} />
         </div>
 
-        <div className="max-setup-field max-setup-wide">
-          <span className="max-content-label">Фото позиции</span>
-          <div className="max-content-photo">
-            <button type="button" className="max-content-upload" disabled={uploading}
-              onClick={() => fileInput.current?.click()}>
-              {uploading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <ImagePlus className="h-4 w-4" aria-hidden="true" />}
-              {uploading ? "Загружаем…" : item.image_url ? "Заменить фото" : "Загрузить фото"}
-            </button>
-            {item.image_url && <button type="button" className="max-setup-delete" onClick={() => onPatch({ image_url: "" })}>
-              <Trash2 className="h-4 w-4" aria-hidden="true" /><span>Убрать фото</span>
-            </button>}
-            <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="sr-only"
-              aria-label={`Фото элемента ${index + 1}`}
-              onChange={event => { const file = event.target.files?.[0]; if (file) void upload(file); }} />
-          </div>
-          <p className="max-setup-hint" data-invalid={Boolean(uploadError)} role={uploadError ? "alert" : undefined}>
-            {uploadError ?? "JPG, PNG, WebP или GIF до 8 МБ."}
-          </p>
-          <Label htmlFor={`${fieldId}-image`}>Или ссылка на фото</Label>
-          <Input id={`${fieldId}-image`} aria-label={`Ссылка на фото элемента ${index + 1}`} value={item.image_url} maxLength={500}
-            inputMode="url" placeholder="https://..." onChange={event => onPatch({ image_url: event.target.value })} />
-        </div>
+        {photoField}
 
         <div className="max-setup-field">
           <Label htmlFor={`${fieldId}-category`}>Раздел каталога</Label>

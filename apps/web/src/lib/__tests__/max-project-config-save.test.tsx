@@ -49,7 +49,7 @@ it("captures the full-config baseline on first edit and keeps it after backgroun
     });
     await act(async () => { client.setQueryData(["max-config", "qa"], { ...record, config_version: 2, config: { ...record.config, app_name: "Другая вкладка" } }); });
     for (let attempt = 0; attempt < 2; attempt++) {
-      await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Сохранить и проверить")!.click());
+      await act(async () => [...document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Сохранить изменения")!.click());
       await act(async () => { await vi.waitFor(() => expect(mocks.save).toHaveBeenCalledTimes(attempt + 1)); });
       expect(mocks.save.mock.calls[attempt]).toEqual(["qa", { ...record.config, app_name: "Мой черновик" }, 1]);
       expect(document.querySelector<HTMLInputElement>("#max-config-name")!.value).toBe("Мой черновик");
@@ -181,7 +181,7 @@ it("keeps owner/support and policy choices distinguishable without changing cons
     }
     expect(document.querySelector("#max-inn")).toBeNull();
     expect(document.querySelector("#max-support-phone")).toBeNull();
-    expect([...document.querySelectorAll('[data-testid="max-settings-footer"] button')].map(button => button.textContent)).not.toContain("Применить к приложению");
+    expect([...document.querySelectorAll('[data-testid="max-settings-footer"] button')].map(button => button.textContent)).not.toContain("Изменить экраны с ИИ");
     expect(document.querySelector("#max-legal-name")?.closest("fieldset")?.querySelector("legend")?.textContent).toBe("Владелец в документах");
     expect(document.querySelector("#max-support-email")?.closest("fieldset")?.querySelector("legend")?.textContent).toBe("Связь с поддержкой");
     await act(async () => tabs[3].click());
@@ -276,11 +276,12 @@ it.each([false, true])("saves/retries the owner tab and refreshes preview withou
       });
     }
     await act(async () => {
-      [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes("Сохранить и проверить"))!.click();
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes("Сохранить изменения"))!.click();
     });
     await wait(() => expect(mocks.success).toHaveBeenCalled());
     expect(mocks.save).toHaveBeenCalledWith("qa", updated.config, 1);
-    expect(mocks.success.mock.calls[0][1].description).toContain("Конфигурация, поддержка и документы обновлены");
+    expect(mocks.success.mock.calls[0][1].description).toContain("Данные и документы обновлены");
+    expect(mocks.success.mock.calls[0][1].description).toContain("ИИ не запускался");
     expect(mocks.send).not.toHaveBeenCalled();
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["max-preview-session", "qa"] });
     await act(async () => { container.querySelector<HTMLButtonElement>("button")!.click(); });
@@ -312,7 +313,7 @@ it.each(["я".repeat(19_992) + "КОНЕЦ ТЗ", "я".repeat(20_001)])("keeps t
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     expect(input.value).toBe(brief);
-    const save = [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes("Сохранить и проверить"))!;
+    const save = [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes("Сохранить изменения"))!;
     expect(save.disabled).toBe(brief.length > 20_000);
     await act(async () => { save.click(); });
     if (brief.length > 20_000) expect(mocks.save).not.toHaveBeenCalled();
@@ -327,7 +328,7 @@ it.each(["я".repeat(19_992) + "КОНЕЦ ТЗ", "я".repeat(20_001)])("keeps t
 });
 
 
-it("saves content before showing an explicit, version-bound AI application action", async () => {
+it("saves content before showing the separately named, version-bound AI screen action", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   mocks.get.mockResolvedValue(record);
   let finishSave!: (value: MaxProjectConfig) => void;
@@ -344,7 +345,7 @@ it("saves content before showing an explicit, version-bound AI application actio
     await act(async () => { await vi.waitFor(() => expect(document.querySelector("#max-config-name")).not.toBeNull()); });
     await click("Контент");
     await click("Добавить позицию");
-    await click("Сохранить и применить");
+    await click("Изменить экраны с ИИ");
     expect(mocks.send).not.toHaveBeenCalled();
     expect(mocks.push).not.toHaveBeenCalled();
     expect(button("Запустить доработку")).toBeUndefined();
@@ -363,6 +364,39 @@ it("saves content before showing an explicit, version-bound AI application actio
   } finally {
     await act(async () => root.unmount()); container.remove(); client.clear();
   }
+});
+
+it("saves an ordinary new catalog item without offering or starting an AI refinement", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  mocks.get.mockResolvedValue(record);
+  mocks.save.mockImplementation(async (_project: string, config: MaxProjectConfig["config"]) => ({ ...record, config_version: 2, config }));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find(value => value.textContent?.trim() === label);
+  try {
+    await act(async () => root.render(<QueryClientProvider client={client}><MaxProjectSetupDialog projectId="qa" /></QueryClientProvider>));
+    await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+    await act(async () => { await vi.waitFor(() => expect(document.querySelector("#max-config-name")).not.toBeNull()); });
+    await act(async () => button("Контент")!.click());
+    await act(async () => button("Добавить позицию")!.click());
+    const title = document.querySelector<HTMLInputElement>('[aria-label="Название элемента 1"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(title, "Мокко");
+      title.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(button("Сохранить изменения")).toBeDefined();
+    expect(button("Изменить экраны с ИИ")).toBeDefined();
+    expect(button("Сохранить и применить")).toBeUndefined();
+    await act(async () => button("Сохранить изменения")!.click());
+    await act(async () => { await vi.waitFor(() => expect(mocks.success).toHaveBeenCalledOnce()); });
+    expect(mocks.save).toHaveBeenCalledOnce();
+    expect(mocks.save.mock.calls[0][1].content[0].title).toBe("Мокко");
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(mocks.push).not.toHaveBeenCalled();
+    expect(button("Запустить доработку")).toBeUndefined();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  } finally { await act(async () => root.unmount()); container.remove(); client.clear(); }
 });
 
 it("показывает снаружи, какая вкладка блокирует публикацию", async () => {
@@ -422,7 +456,7 @@ it.each([
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Несохранённая QA позиция");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    await act(async () => button("Сохранить и проверить").click());
+    await act(async () => button("Сохранить изменения").click());
     expect(mocks.save).toHaveBeenCalledTimes(1);
     const submitted = JSON.stringify(mocks.save.mock.calls[0][1]);
     expect(mocks.save.mock.calls[0][1].content[0].title).toBe("Несохранённая QA позиция");
@@ -435,7 +469,7 @@ it.each([
     expect(document.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')?.textContent).toContain("Контент");
     expect(input.value).toBe("Несохранённая QA позиция");
     expect(changedOpen).not.toHaveBeenCalledWith(false);
-    await act(async () => { await vi.waitFor(() => expect(button("Сохранить и проверить").disabled).toBe(false)); });
+    await act(async () => { await vi.waitFor(() => expect(button("Сохранить изменения").disabled).toBe(false)); });
     await act(async () => { root.render(render()); await new Promise(resolve => setTimeout(resolve, 1100)); });
     expect(mocks.save).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(mocks.save.mock.calls[0][1])).toBe(submitted);
@@ -453,11 +487,11 @@ it.each(["fresh-Free0","saved-Free0","paid"])("saved data refinement quota keeps
  try {
   await act(async()=>root.render(<QueryClientProvider client={client}><MaxProjectDataApplyDialog config={record} onClose={close}/></QueryClientProvider>));
   await act(async()=>{await vi.waitFor(()=>expect(mocks.profile).toHaveBeenCalled());await new Promise(resolve=>setTimeout(resolve,0));});
-  expect(button("Пока только сохранить").disabled).toBe(false);
+  expect(button("Не запускать ИИ").disabled).toBe(false);
   const launch=button("Запустить доработку");expect(launch.disabled).toBe(mode==="fresh-Free0");
   if(mode==="fresh-Free0"){
    expect(document.body.textContent).toContain("Осталось сообщений: 0 из 1 на весь аккаунт");
-   await act(async()=>launch.click());expect(mocks.send).not.toHaveBeenCalled();await act(async()=>button("Пока только сохранить").click());expect(close).toHaveBeenCalledOnce();
+   await act(async()=>launch.click());expect(mocks.send).not.toHaveBeenCalled();await act(async()=>button("Не запускать ИИ").click());expect(close).toHaveBeenCalledOnce();
   }else{
    await act(async()=>launch.click());await act(async()=>{await vi.waitFor(()=>expect(mocks.send).toHaveBeenCalledOnce());});
    if(mode==="saved-Free0")expect(mocks.send.mock.calls[0][4].idempotencyKey).toBe("existing-saved-key");

@@ -34,7 +34,7 @@ function CatalogShell({ embedded, children, ...props }: ComponentProps<typeof Ma
 export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDirtyChange }: { projectId: string; projectName: string; embedded?: boolean; onDirtyChange?: (dirty: boolean) => void }) {
   const qc = useQueryClient();
   const [draft, setDraft] = useState<MaxCatalogDraft | null>(null);
-  const [editor, setEditor] = useState<{ id: string; initial: MaxContentItem; baseline: MaxCatalogDraft } | null>(null);
+  const [editor, setEditor] = useState<{ id: string; initial: MaxContentItem; baseline: MaxCatalogDraft; view: "details" | "photo" } | null>(null);
   const [query, setQuery] = useState("");
   const [visibility, setVisibility] = useState("all");
   const [category, setCategory] = useState("");
@@ -46,6 +46,11 @@ export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDi
   useEffect(() => { onDirtyChange?.(Boolean(draft) || Boolean(editor) || uploading); return () => onDirtyChange?.(false); }, [onDirtyChange, draft, editor, uploading]);
   const saving = useRef(false);
   const connectTrigger = useRef<HTMLButtonElement>(null);
+  const editorDialog = useRef<HTMLDivElement>(null);
+  const editorView = editor?.view;
+  useEffect(() => {
+    if (editorView === "details") editorDialog.current?.querySelector<HTMLInputElement>('input[aria-label="Название элемента 1"]')?.focus();
+  }, [editorView]);
   const save = useMutation({
     onMutate: () => qc.cancelQueries({ queryKey: ["max-content", projectId] }),
     mutationFn: (value: CatalogSave) => saveMaxProjectContent(projectId, value.version, value.content),
@@ -73,9 +78,9 @@ export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDi
     && (!category || item.category === category)
     && `${item.title} ${item.description} ${item.category}`.toLocaleLowerCase("ru").includes(query.toLocaleLowerCase("ru")));
 
-  function editItem(item: MaxContentItem) {
+  function editItem(item: MaxContentItem, view: "details" | "photo" = "details") {
     if (!content.data) return;
-    setEditor({ id: item.id, initial: item, baseline: draft ?? catalogDraft(content.data) });
+    setEditor({ id: item.id, initial: item, baseline: draft ?? catalogDraft(content.data), view });
   }
   function patchItem(patch: Partial<MaxContentItem>) {
     if (!editor) return;
@@ -146,7 +151,7 @@ export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDi
       {connectError && <p role="alert" className="max-catalog-error">{connectError}</p>}
       {content.isError && <div role="alert" className="max-catalog-notice"><p>{content.data ? "Не удалось проверить актуальный каталог. Показаны последние полученные данные." : "Не удалось загрузить каталог."}</p><Button variant="outline" onClick={() => void content.refetch()}>Повторить</Button></div>}
       {content.isPending ? <p className="max-catalog-empty" role="status"><Loader2 className="size-5 animate-spin" />Загружаем каталог…</p> : content.data && <>
-        <p className="text-xs text-fg-secondary">{items.length} из 100 позиций, включая скрытые</p>
+        <p className="max-catalog-count">{items.length} из 100 позиций, включая скрытые</p>
         <div className="max-catalog-toolbar">
           <label className="max-catalog-search"><Search className="size-4" aria-hidden="true" /><Input aria-label="Поиск по каталогу" placeholder="Найти товар или услугу" value={query} onChange={event => setQuery(event.target.value)} /></label>
           <select aria-label="Видимость позиций" value={visibility} onChange={event => setVisibility(event.target.value)}><option value="all">Все позиции</option><option value="visible">Видимые</option><option value="hidden">Скрытые</option></select>
@@ -156,11 +161,15 @@ export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDi
         {reviewed && <p className="max-catalog-notice" role="status">Актуальные данные загружены, ваши правки перенесены поверх них. Если одно поле меняли одновременно, оставлен ваш вариант. Проверьте карточки перед сохранением.</p>}
         {save.error && <div className="max-catalog-notice max-catalog-error" role="alert"><div><strong>{conflict ? "Каталог изменился в другой вкладке" : save.variables?.reapply ? "Не удалось повторить применение" : "Не удалось сохранить"}</strong><p>{conflict ? draft ? "Ваш черновик остался в форме. Загрузите актуальные данные и перенесите свои правки, затем проверьте карточки." : "Данные в Yleum сохранены. Обновите каталог перед повторным применением." : errorCopy(save.error)}</p></div>{conflict && <Button variant="outline" disabled={content.isFetching || uploading || save.isPending} onClick={() => void reviewLatest()}><RefreshCw className="size-4" />{draft ? "Перенести мои правки" : "Обновить каталог"}</Button>}</div>}
         {filtered.length ? <div className="max-catalog-grid">{filtered.map(item => <article className="max-catalog-card" key={item.id} data-hidden={!item.active}>
-          {item.image_url ? (
-            // Owner uploads have arbitrary public hosts; keep the native image loader.
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={item.image_url} alt="" loading="lazy" className="max-catalog-photo" />
-          ) : <div className="max-catalog-photo max-catalog-photo-empty"><ImagePlus aria-hidden="true" /></div>}
+          <button type="button" className="max-catalog-photo-button" disabled={save.isPending}
+            aria-label={`${item.image_url ? "Изменить" : "Добавить"} фото: ${item.title || "Новая позиция"}`} aria-haspopup="dialog" onClick={() => editItem(item, "photo")}>
+            {item.image_url ? <>
+              {/* Owner uploads have arbitrary public hosts; keep the native image loader. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={item.image_url} alt="" loading="lazy" className="max-catalog-photo" />
+              <span className="max-catalog-photo-edit"><Pencil aria-hidden="true" />Изменить фото</span>
+            </> : <span className="max-catalog-photo max-catalog-photo-empty"><ImagePlus aria-hidden="true" /><span>Добавить фото<small>Файл или ссылка</small></span></span>}
+          </button>
           <div className="max-catalog-card-body"><div className="max-catalog-meta"><span>{item.category || "Без раздела"}</span><span>{item.active ? availability[item.availability] : "Скрыто"}</span></div><h2>{item.title || "Новая позиция"}</h2>{item.description && <p>{item.description}</p>}<strong className="max-catalog-price">{item.price || "Цена не указана"}</strong>
           <div className="max-catalog-card-actions"><Button variant="outline" disabled={save.isPending} onClick={() => editItem(item)}><Pencil className="size-4" />Изменить</Button><Button variant="ghost" disabled={save.isPending} aria-label={`${item.active ? "Скрыть" : "Показать"} ${item.title}`} onClick={() => toggleVisibility(item)}>{item.active ? <EyeOff className="size-4" /> : <Eye className="size-4" />}{item.active ? "Скрыть" : "Показать"}</Button></div></div>
         </article>)}</div> : <div className="max-catalog-empty"><PackageOpen aria-hidden="true" /><h2>{items.length ? "Ничего не найдено" : "Добавьте первый товар или услугу"}</h2><p>{items.length ? "Попробуйте другой запрос или фильтр." : "Название, фото, цена и наличие — всё в одной карточке."}</p></div>}
@@ -168,11 +177,11 @@ export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDi
       </>}
     </section>
     <Dialog open={Boolean(editor)} onOpenChange={open => { if (!open && !save.isPending && !uploading) setEditor(null); }}>
-      <DialogContent data-product-shell data-max-studio className="max-catalog-dialog max-project-setup" overlayClassName="max-catalog-overlay">
-        <DialogHeader className="max-catalog-dialog-header"><DialogTitle>{editor && editor.baseline.content.some(item => item.id === editor.id) ? "Изменить позицию" : "Новая позиция"}</DialogTitle><DialogDescription>Сохранение обновляет данные каталога без запуска ИИ.</DialogDescription></DialogHeader>
-        {editor && selected && <><fieldset disabled={save.isPending} className="max-catalog-fields"><MaxContentItemFields key={editor.id} projectId={projectId} index={0} item={selected} onPatch={patchItem} onUploadingChange={setUploading} /></fieldset>
+      <DialogContent ref={editorDialog} data-product-shell data-max-studio className={`max-catalog-dialog max-project-setup${editorView === "photo" ? " max-catalog-photo-dialog" : ""}`} overlayClassName="max-catalog-overlay">
+        <DialogHeader className="max-catalog-dialog-header"><DialogTitle>{editorView === "photo" ? `Фото позиции${selected?.title ? ` «${selected.title}»` : ""}` : editor && editor.baseline.content.some(item => item.id === editor.id) ? "Изменить позицию" : "Новая позиция"}</DialogTitle><DialogDescription>{editorView === "photo" ? "Загрузите файл или укажите ссылку на изображение. Фото применится после сохранения позиции." : "Сохранение обновляет данные каталога без запуска ИИ."}</DialogDescription></DialogHeader>
+        {editor && selected && <><fieldset disabled={save.isPending} className="max-catalog-fields"><MaxContentItemFields key={editor.id} projectId={projectId} index={0} item={selected} onPatch={patchItem} onUploadingChange={setUploading} imageOnly={editorView === "photo"} /></fieldset>
           {save.error && <p role="alert" className="max-catalog-error">{conflict ? "Каталог изменился. Черновик сохранён в форме. Закройте окно и перенесите правки к актуальной версии." : errorCopy(save.error)}</p>}
-          <div className="max-catalog-dialog-footer">{!editor.baseline.base.some(item => item.id === editor.id) && <Button variant="ghost" disabled={save.isPending || uploading} onClick={cancelNewItem}>Отменить добавление</Button>}<Button variant="outline" disabled={save.isPending || uploading} onClick={() => setEditor(null)}>К списку</Button><Button disabled={!draft || !selected.title.trim() || items.some(item => !item.title.trim()) || save.isPending || uploading} onClick={() => void persist()}>{save.isPending && <Loader2 className="size-4 animate-spin" />}Сохранить позицию</Button></div></>}
+          <div className="max-catalog-dialog-footer">{editorView === "photo" && <Button className="max-catalog-all-fields" variant="ghost" disabled={save.isPending || uploading} onClick={() => setEditor(current => current ? { ...current, view: "details" } : null)}>Все поля позиции</Button>}{!editor.baseline.base.some(item => item.id === editor.id) && <Button variant="ghost" disabled={save.isPending || uploading} onClick={cancelNewItem}>Отменить добавление</Button>}<Button variant="outline" disabled={save.isPending || uploading} onClick={() => setEditor(null)}>К списку</Button><Button disabled={!draft || !selected.title.trim() || items.some(item => !item.title.trim()) || save.isPending || uploading} onClick={() => void persist()}>{save.isPending && <Loader2 className="size-4 animate-spin" />}Сохранить позицию</Button></div></>}
       </DialogContent>
     </Dialog>
     {applyConfig && <MaxProjectDataApplyDialog config={applyConfig} catalogIntegration onClose={() => setApplyConfig(null)} onReturnFocus={() => connectTrigger.current?.focus()} />}

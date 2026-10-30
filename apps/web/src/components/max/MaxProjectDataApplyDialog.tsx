@@ -93,18 +93,18 @@ export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus, cata
       if (onReturnFocus) { event.preventDefault(); onReturnFocus(); }
     }}>
       <DialogHeader>
-        <DialogTitle>{catalogIntegration ? "Подключить каталог к приложению" : "Применить данные к приложению"}</DialogTitle>
+        <DialogTitle>{catalogIntegration ? "Подключить каталог к приложению" : "Изменить экраны с ИИ"}</DialogTitle>
         <DialogDescription>
-          {catalogIntegration ? "ИИ подключит чтение каталога и проверку заказов. После доработки проверьте результат и опубликуйте приложение." : "Данные сохранены. ИИ доработает экраны: название, содержание, оформление и пользовательские сценарии."}
+          {catalogIntegration ? "ИИ подключит чтение каталога и проверку заказов. После доработки проверьте результат и опубликуйте приложение." : "Данные уже сохранены. Этот шаг нужен для изменения экранов, дизайна или функций приложения."}
         </DialogDescription>
       </DialogHeader>
       <p className="text-sm text-fg-secondary">Доработка расходует баланс владельца. Результат появится в редакторе; для опубликованного приложения затем потребуется публикация.</p>
-      <p className="text-sm text-fg-secondary">После привязки названия и каталог смогут обновляться из настроек. Изменение функций и дизайна каждый раз требует запуска доработки.</p>
+      <p className="text-sm text-fg-secondary">Добавление позиций, изменение названий, фото и цен в подключённом каталоге работают без ИИ и повторной публикации.</p>
       <OwnerChatQuotaNotice {...quota} />
       {start.error && <p role="alert" className="text-sm text-danger-fg">{describeApiError(start.error, "Не удалось передать задание. Повторите попытку.")}</p>}
       {terminalFailure && <p role="alert" className="text-sm text-danger-fg">Предыдущая доработка завершилась без результата. Можно запустить новую попытку по этим же данным; она расходует баланс.</p>}
       <div className="flex flex-wrap justify-end gap-3">
-        <Button variant="secondary" disabled={start.isPending} onClick={onClose}>Пока только сохранить</Button>
+        <Button variant="secondary" disabled={start.isPending} onClick={onClose}>Не запускать ИИ</Button>
         <Button disabled={start.isPending || quotaBlocksNewAttempt} onClick={() => {
           if (submitting.current) return;
           submitting.current = true;

@@ -67,6 +67,7 @@ import { containsChatSecret } from "@/lib/max-chat-credentials";
 import { cn } from "@/lib/utils";
 import { getBuiltinIntegrationRequest, recognizeBuiltinIntegrationRequest } from "@/lib/builtin-integration-prompts";
 import { IntegrationRequestCard } from "@/components/workspace/IntegrationRequestCard";
+import "./max-integration-catalog.css";
 
 const categories: Record<IntegrationCategory | "all", { label: string; icon: LucideIcon }> = {
   all: { label: "Все сервисы", icon: Plug },
@@ -671,13 +672,13 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
         </div>
       </section>
 
-      <section className="mt-6">
+      <section className="max-integration-catalog mt-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap gap-2">
             {(Object.keys(categories) as Array<IntegrationCategory | "all">).filter(key => key === "all" || offeredProviders.some(provider => provider.category === key)).map((key) => {
               const item = categories[key];
               return (
-                <button key={key} aria-pressed={category === key} onClick={() => setCategory(key)} className={cn("inline-flex h-11 shrink-0 items-center gap-2 rounded-[8px] border px-3 text-xs sm:h-9", category === key ? "border-accent bg-accent-subtle text-accent-secondary" : "border-border-default bg-surface text-fg-secondary")}>
+                <button key={key} aria-pressed={category === key} onClick={() => setCategory(key)} className={cn("inline-flex h-11 shrink-0 items-center gap-2 rounded-[10px] border px-3 text-xs", category === key ? "border-accent bg-accent-subtle text-accent-secondary" : "border-border-default bg-surface text-fg-secondary")}>
                   <item.icon className="size-3.5" />{item.label}
                 </button>
               );
@@ -685,14 +686,15 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
           </div>
           <label className="relative block w-full lg:w-[280px]">
             <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-fg-tertiary" />
-            <Input aria-label="Найти сервис" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти сервис" className="h-11 border-border-default bg-surface pl-9 sm:h-9" />
+            <Input aria-label="Найти сервис" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти сервис" className="h-11 rounded-[10px] border-border-default bg-surface pl-9" />
           </label>
         </div>
 
-        <div className="mt-5 overflow-hidden rounded-[12px] border border-border-default bg-surface">
-          <div className="hidden grid-cols-[1.3fr_.8fr_130px_190px] border-b border-border-default px-5 py-3 font-mono text-[11px] uppercase tracking-[.1em] text-fg-tertiary lg:grid">
-            <span>Сервис</span><span>Возможности</span><span>Статус</span><span />
-          </div>
+        <div className="max-integration-service-list">
+          <header className="max-integration-list-heading">
+            <h2>Сервисы для приложения</h2>
+            <p>Подключайте нужные сервисы или используйте доступ, который уже есть у бизнеса.</p>
+          </header>
           {catalog.isLoading ? (
             <div className="grid min-h-[260px] place-items-center"><Loader2 className="size-5 animate-spin text-accent" /></div>
           ) : catalog.isError ? (
@@ -721,53 +723,56 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
                 const needsSetup = connection?.bound_to_project && !connected;
                 const reusable = connection?.status === "active" && !connection.bound_to_project;
                 const Icon = providerIcons[provider.key] ?? CloudCog;
+                const description = provider.description.replace(/^\s*Доступно:\s*/iu, "").trim();
+                const textKey = (value: string) => value.toLocaleLowerCase("ru-RU").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+                const descriptionKey = ` ${textKey(description)} `;
+                const extraCapabilities = [...new Set(provider.capabilities.filter(capability => capability.trim()))].filter(capability => {
+                  const key = textKey(capability);
+                  return !key || !descriptionKey.includes(` ${key} `);
+                });
                 return (
-                  <article key={provider.key} className="grid gap-4 p-5 lg:grid-cols-[minmax(0,1fr)_200px] lg:items-center">
-                    <div className="flex items-start gap-3">
-                      <span className="grid size-10 shrink-0 place-items-center rounded-[6px] border border-border-default bg-surface text-accent"><Icon className="size-4" /></span>
-                      <div className="min-w-0">
-                        <h3 className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+                  <article key={provider.key} className="max-integration-provider">
+                    <div className="max-integration-provider-identity">
+                      <span className="max-integration-provider-icon"><Icon className="size-5" aria-hidden="true" /></span>
+                      <div className="max-integration-provider-copy">
+                        <h3>
                           {provider.name}
-                          {/* Состояние — значком у названия: колонка со словом
-                              «Не подключено» повторяла кнопку в той же строке. */}
-                          {connected ? <span className="inline-flex items-center gap-1 text-xs font-medium text-success-fg"><Check className="size-3.5" />{platform ? "Встроено" : "Подключено"}</span>
-                            : needsSetup ? <span className="text-xs font-medium text-danger-fg">Требуется настройка</span>
-                            : reusable ? <span className="text-xs font-medium text-accent-secondary">Есть у бизнеса</span>
-                            : !provider.available ? <span className="text-xs font-medium text-fg-tertiary">Готовим</span>
+                          {connected ? <span className="max-integration-provider-state" data-state="connected"><Check className="size-3" aria-hidden="true" />{platform ? "Встроено" : "Подключено"}</span>
+                            : needsSetup ? <span className="max-integration-provider-state" data-state="needs-setup">Требуется настройка</span>
+                            : reusable ? <span className="max-integration-provider-state" data-state="reusable">Есть у бизнеса</span>
+                            : !provider.available ? <span className="max-integration-provider-state">Готовим</span>
                             : null}
                         </h3>
-                        <p className="mt-1 text-xs leading-5 text-fg-tertiary">{provider.key === "llmgw" ? "Работает через LLMGW; расходы с баланса владельца" : provider.description}</p>
-                        {provider.capabilities.length > 0 && (
-                          <p className="mt-1 text-xs text-fg-tertiary">{provider.capabilities.slice(0, 3).join(" · ")}</p>
-                        )}
+                        {description && <p>{description}</p>}
+                        {extraCapabilities.length > 0 && <p className="max-integration-provider-capabilities">{extraCapabilities.join(" · ")}</p>}
                       </div>
                     </div>
-                    <div className="flex flex-wrap justify-end gap-1">
+                    <div className="max-integration-provider-actions">
                       {platform ? (
                         provider.key === "llmgw" && provider.available ? (
                           <>
-                            {connected && getBuiltinIntegrationRequest(provider.key) && <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openImplementation(provider.key)}>Добавить в приложение</Button>}
-                            <Button size="sm" variant="outline" className="h-11 sm:h-8" disabled={platformAi.isPending} onClick={() => platformAi.mutate(!connected)}>{connected ? "Выключить ИИ" : "Включить ИИ"}</Button>
+                            {connected && getBuiltinIntegrationRequest(provider.key) && <Button size="sm" variant="outline" className="max-integration-provider-action" onClick={() => openImplementation(provider.key)}>Добавить в приложение</Button>}
+                            <Button size="sm" variant="outline" className="max-integration-provider-action" disabled={platformAi.isPending} onClick={() => platformAi.mutate(!connected)}>{connected ? "Выключить ИИ" : "Включить ИИ"}</Button>
                           </>
                         ) : null
                       ) : connected ? (
                         <>
-                          {getBuiltinIntegrationRequest(provider.key) && <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openImplementation(provider.key)}>Добавить в приложение</Button>}
-                          <button onClick={() => verify.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-fg-secondary hover:bg-surface-base sm:size-8" aria-label={`Проверить ${provider.name}`}><RefreshCw className="size-3.5" /></button>
-                          <button onClick={() => disconnect.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-fg-tertiary hover:bg-danger/10 hover:text-danger-fg sm:size-8" aria-label={`Отключить ${provider.name}`}><Trash2 className="size-3.5" /></button>
-                          <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openProvider(provider)}>Настроить</Button>
+                          {getBuiltinIntegrationRequest(provider.key) && <Button size="sm" variant="outline" className="max-integration-provider-action" onClick={() => openImplementation(provider.key)}>Добавить в приложение</Button>}
+                          <button onClick={() => verify.mutate(provider.key)} className="max-integration-provider-icon-action" aria-label={`Проверить ${provider.name}`}><RefreshCw className="size-3.5" /></button>
+                          <button onClick={() => disconnect.mutate(provider.key)} className="max-integration-provider-icon-action max-integration-provider-disconnect" aria-label={`Отключить ${provider.name}`}><Trash2 className="size-3.5" /></button>
+                          <Button size="sm" variant="outline" className="max-integration-provider-action" onClick={() => openProvider(provider)}>Настроить</Button>
                         </>
                       ) : connection?.status === "error" ? (
                         <>
-                          <Button size="sm" variant="outline" className="h-11 sm:h-8" disabled={verify.isPending} onClick={() => verify.mutate(provider.key)} aria-label={`Проверить ${provider.name}`}>Проверить снова</Button>
-                          <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openProvider(provider)}>Переподключить</Button>
+                          <Button size="sm" variant="outline" className="max-integration-provider-action" disabled={verify.isPending} onClick={() => verify.mutate(provider.key)} aria-label={`Проверить ${provider.name}`}>Проверить снова</Button>
+                          <Button size="sm" variant="outline" className="max-integration-provider-action" onClick={() => openProvider(provider)}>Переподключить</Button>
                         </>
                       ) : reusable ? (
-                        <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => bind.mutate(provider.key)}>Использовать</Button>
+                        <Button size="sm" variant="outline" className="max-integration-provider-action" onClick={() => bind.mutate(provider.key)}>Использовать</Button>
                       ) : provider.available ? (
-                        <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openProvider(provider)}>Подключить <ChevronRight className="size-3.5" /></Button>
+                        <Button size="sm" variant="outline" className="max-integration-provider-action" onClick={() => openProvider(provider)}>Подключить <ChevronRight className="size-3.5" /></Button>
                       ) : (
-                        <a href={provider.docs_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-fg-tertiary">Требования <ExternalLink className="size-3" /></a>
+                        <a href={provider.docs_url} target="_blank" rel="noreferrer" className="max-integration-provider-docs">Требования <ExternalLink className="size-3" /></a>
                       )}
                     </div>
                   </article>

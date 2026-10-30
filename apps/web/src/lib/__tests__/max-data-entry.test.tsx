@@ -97,7 +97,7 @@ it.each(["details", "owner", "policies"])("opens %s directly over the editor and
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     await act(async () => { window.history.forward(); await new Promise(resolve => setTimeout(resolve, 50)); });
     expect(document.querySelector<HTMLInputElement>("#max-config-name")?.value).toBe("Калькулятор");
-    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button => button.textContent === "Применить к приложению")!.click());
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button => button.textContent === "Изменить экраны с ИИ")!.click());
     await act(async () => { await vi.waitFor(() => expect(window.location.search).toBe("?starter=1")); });
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
     await act(async () => { window.history.forward(); await new Promise(resolve => setTimeout(resolve, 50)); });

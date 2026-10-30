@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { Check, PackageOpen, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,8 @@ import { MaxContentItemFields } from "./MaxContentItemEditor";
 import { newMaxContentItem } from "@/lib/max-catalog";
 
 export type SetupSection = "details" | "content" | "owner" | "policies";
+
+const MAX_CONTENT_ITEMS = 100;
 
 const CHECKS = [
   { key: "has_sales", label: "Продажи или оплата", description: "Условия заказа, цены, отмены и возврата." },
@@ -37,6 +39,8 @@ export function MaxProjectSetupSections({ section, projectId, current, onChange 
   current: MaxProjectConfigPayload;
   onChange: (value: MaxProjectConfigPayload) => void;
 }) {
+  const contentList = useRef<HTMLDivElement>(null);
+  const pendingContentFocus = useRef<string | null>(null);
   const summaryLength = Array.from(current.summary.trim()).length;
   // Функции, введённые раньше руками или агентом, словарю не принадлежат —
   // показываем их отдельной строкой, а не теряем при переключении карточек.
@@ -48,6 +52,28 @@ export function MaxProjectSetupSections({ section, projectId, current, onChange 
     content[index] = { ...content[index], ...patch };
     onChange({ ...current, content });
   };
+
+  useEffect(() => {
+    if (section !== "content") {
+      pendingContentFocus.current = null;
+      return;
+    }
+    const itemId = pendingContentFocus.current;
+    if (!itemId) return;
+    const fieldset = [...(contentList.current?.querySelectorAll<HTMLFieldSetElement>("[data-content-item-id]") ?? [])]
+      .find(element => element.dataset.contentItemId === itemId);
+    if (!fieldset) return;
+    pendingContentFocus.current = null;
+    fieldset.scrollIntoView?.({ behavior: "auto", block: "start", inline: "nearest" });
+    fieldset.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
+  }, [current.content, section]);
+
+  function addContentItem() {
+    if (current.content.length >= MAX_CONTENT_ITEMS) return;
+    const item = newMaxContentItem();
+    pendingContentFocus.current = item.id;
+    onChange({ ...current, content: [item, ...current.content] });
+  }
 
   if (section === "details") return <section className="max-setup-section">
     <Intro title="Описание и оформление">Здесь сохранена идея вашего приложения — заполнять её заново не нужно. Уточняйте аудиторию, функции и стиль только если хотите изменить результат.</Intro>
@@ -134,27 +160,27 @@ export function MaxProjectSetupSections({ section, projectId, current, onChange 
     return <section className="max-setup-section">
       <div className="max-setup-content-heading">
         <Intro title="Каталог и контент">Товары, услуги, сеансы или уроки — то, что пользователь увидит списком и сможет открыть. Заполнять необязательно: без каталога приложение тоже работает.</Intro>
-        <Button size="sm" className="max-setup-add" onClick={() => onChange({ ...current, content: [...current.content, newMaxContentItem()] })}>
+        <Button type="button" size="sm" className="max-setup-add" disabled={current.content.length >= MAX_CONTENT_ITEMS} onClick={addContentItem}>
           <Plus aria-hidden="true" className="h-4 w-4" />Добавить позицию
         </Button>
       </div>
 
       <ol className="max-content-steps">
-        <li><span aria-hidden="true">1</span><span><b>«Сохранить и проверить»</b> — позиции уезжают в приложение как данные. ИИ не запускается, баланс не расходуется.</span></li>
-        <li><span aria-hidden="true">2</span><span><b>«Применить к приложению»</b> — разовая доработка: ИИ выводит каталог на экраны и учит их читать эти данные. Расходует баланс.</span></li>
-        <li><span aria-hidden="true">3</span><span>После этого правки позиций видны в приложении <b>без новой сборки</b> — достаточно сохранить.</span></li>
+        <li><span aria-hidden="true">1</span><span><b>«Сохранить изменения»</b> — обновить данные уже подключённого каталога. ИИ не запускается, баланс не расходуется.</span></li>
+        <li><span aria-hidden="true">2</span><span><b>«Изменить экраны с ИИ»</b> — подключить каталог впервые или изменить экраны и функции. Это отдельное действие с расходом баланса.</span></li>
+        <li><span aria-hidden="true">3</span><span>Когда каталог подключён, новые позиции и дальнейшие правки появляются в приложении после сохранения — <b>без новой сборки</b>.</span></li>
       </ol>
 
       {current.content.length === 0 ? <div className="max-setup-empty">
         <PackageOpen aria-hidden="true" />
         <h4>Пока нет позиций</h4>
         <p>Добавьте первый товар, услугу или урок: фото, название, раздел, цену, наличие и варианты. Если каталог не нужен, оставьте раздел пустым.</p>
-      </div> : <div className="max-setup-content-list">
+      </div> : <div ref={contentList} className="max-setup-content-list">
         <p className="max-setup-hint">
-          Позиций: {current.content.length} · показываем в приложении: {shown}
+          Позиций: {current.content.length} из {MAX_CONTENT_ITEMS} · показываем в приложении: {shown}
           {sections.length > 0 && ` · разделов: ${sections.length} (${sections.join(", ")})`}
         </p>
-        {current.content.map((item, index) => <fieldset key={item.id} className="max-setup-content-item">
+        {current.content.map((item, index) => <fieldset key={item.id} data-content-item-id={item.id} className="max-setup-content-item">
           <legend>{item.title.trim() || `Позиция ${index + 1}`}</legend>
           <div className="max-setup-item-toolbar">
             <button type="button" role="switch" aria-checked={item.active} aria-label={`Показывать элемент ${index + 1}`}
@@ -167,7 +193,7 @@ export function MaxProjectSetupSections({ section, projectId, current, onChange 
             onPatch={patch => updateContent(index, patch)} />
         </fieldset>)}
       </div>}
-      <p className="max-setup-footnote">Цену, наличие и состав каталога приложение перечитывает при каждом открытии экрана. Если приложение собиралось раньше, чем у позиций появились фото и разделы, на экранах они покажутся после следующего «Применить к приложению».</p>
+      <p className="max-setup-footnote">Сохранение обновляет данные уже подключённого каталога. Если экраны ещё не поддерживают каталог, фото или разделы, добавьте эту возможность отдельной командой «Изменить экраны с ИИ».</p>
     </section>;
   }
 
@@ -226,7 +252,7 @@ export function MaxProjectSetupSections({ section, projectId, current, onChange 
       </label>
       <label className="max-setup-consent max-setup-wide">
         <input type="checkbox" checked={current.legal.personal_data_consent} onChange={event => onChange({ ...current, legal: { ...current.legal, personal_data_consent: event.target.checked } })} />
-        <span><span>Требуется согласие на обработку персональных данных</span><small>Если приложение получает имя, телефон, email, адрес или другие данные пользователя. Для добавления запроса согласия в экраны используйте «Применить к приложению».</small></span>
+        <span><span>Требуется согласие на обработку персональных данных</span><small>Если приложение получает имя, телефон, email, адрес или другие данные пользователя. Чтобы добавить запрос согласия на экраны, откройте «Основное» и выберите «Изменить экраны с ИИ».</small></span>
       </label>
     </Group>
     <p className="max-setup-footnote">Автоматический комплект документов — основа. Проверьте его перед публикацией.</p>

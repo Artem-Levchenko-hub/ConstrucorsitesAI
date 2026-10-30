@@ -30,13 +30,16 @@
 
 - [x] Refine support controls/cards in AdminSupportPanel and scoped CSS; run existing support/admin behavior tests.
 - [x] Refine AccountBilling, balance and usage CSS; retain all copy/data flow and run existing billing suites.
-- [ ] Add motion regressions, observe a failing transition assertion, implement stable account transition surface and integrate AccountShell/admin tabs.
-- [ ] Compact shared account spacing and unify control/panel tokens; preserve checkbox/radio sizing.
-- [ ] Review combined diff; run focused/full web tests, full typecheck/lint and CSS syntax checks.
-- [ ] Commit/push, verify exact main CI, deploy through documented web-only path, confirm fresh health and retained orders; update report with actual evidence and remaining browser limitation.
+- [x] Add motion regressions, observe a failing transition assertion, implement stable account transition surface and integrate AccountShell/admin tabs.
+- [x] Compact shared account spacing and unify control/panel tokens; preserve checkbox/radio sizing.
+- [x] Review combined diff; run focused/full web tests, full typecheck/lint and CSS syntax checks.
+- [x] Commit/push, verify exact main CI, deploy through documented web-only path, confirm fresh health and retained orders; record delivery evidence and remaining browser limitation.
 
 ## Verification ledger
 
 - Initial transition assertions: 3 failed / 1 passed against a pass-through surface; implementation then passed 131 focused checks.
 - Independent review identified Framer Motion's mount-only preference snapshot. A real media-event regression failed (1 failed / 4 passed); replace it with useSyncExternalStore rather than mock the hook.
 - Ruling: use two local Vitest workers. Concurrent full and focused runs produced timeouts and an UNKNOWN dependency lstat error on Windows; stopped only the verified owned test process tree. Exact-revision Linux CI remains the release gate.
+- Final local baseline: 155 files / 1,530 tests passed with two workers; focused account 9 files / 133 tests passed. Full typecheck/lint passed (one existing apple-icon img warning).
+- Delivered `897791b704faa17ab93d3e09f3d7965470383efc`: all 13 CI jobs ([41038358524](https://github.com/Artem-Levchenko-hub/ConstrucorsitesAI/actions/runs/41038358524)), canonical web-only exit 0, fresh API/web/controllers HTTP 200, open generation admission, original registry configuration restored. Backend remains the unchanged `694c8163` source image.
+- Production smoke [41040779324](https://github.com/Artem-Levchenko-hub/ConstrucorsitesAI/actions/runs/41040779324) passed; all previous 15 orders retained, checked 30 October at 13:29 MSK. Authenticated browser screenshots remain unavailable.

@@ -127,7 +127,7 @@
 .max-history-activity time { display: block; color: var(--color-fg-secondary); font-size: 12px; margin-bottom: 8px; }
 .max-history-original-prompt { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; }
 .max-history-activity [data-retry-image] { margin-top: 10px; }
-[data-max-editor] [data-testid=max-preview-header] { height: auto; min-height: 68px; padding-inline: 20px; }
+[data-max-editor] [data-testid=max-preview-header] { height: auto; min-height: 44px; padding-inline: 16px; }
 [data-max-editor] [data-testid=max-preview-header] button { min-height: 36px; border-radius: 6px; }
 [data-max-editor] [data-testid=max-preview-header] .omnia-kicker { font-size: 12px; text-transform: none; letter-spacing: 0; }
 [data-max-editor] .max-editor-advice { margin: 8px 28px 16px; }
