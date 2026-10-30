@@ -16,6 +16,7 @@ SDK_PATH = "src/lib/omnia/integration-client.ts"
 LEGACY_CLIENT_PATH = "src/lib/omnia/client.ts"
 ACTIVITY_PATH = "src/lib/omnia/activity.ts"
 ANALYTICS_PATH = "src/lib/omnia/analytics.ts"
+TELEMETRY_PATH = "src/app/api/omnia/telemetry/route.ts"
 CATALOG_SERVER_PATH = "src/lib/omnia/catalog-server.ts"
 CATALOG_ACTIONS_PATH = "src/lib/omnia/catalog-actions.ts"
 CATALOG_CLIENT_PATH = "src/lib/omnia/catalog-client.ts"
@@ -156,8 +157,10 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
         PROVIDER_PATH: "old session bootstrap",
         SUPPORT_PATH: "old support without contact",
         "src/app/page.tsx": "existing product",
+        "src/app/api/omnia/events/route.ts": "existing product DB handler",
         ".omnia/cell.json": '{"project":"existing"}',
     }
+    assert TELEMETRY_PATH not in tree
     writes = []
     seed_reads = []
 
@@ -172,6 +175,7 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
         seed_reads.append(args)
         assert tree[SDK_PATH] == _template_file(SDK_PATH)
         assert tree[LEGACY_CLIENT_PATH] == _template_file(LEGACY_CLIENT_PATH)
+        assert tree[TELEMETRY_PATH] == _template_file(TELEMETRY_PATH)
         assert tree[PROVIDER_PATH] == _template_file(PROVIDER_PATH)
         assert tree.get(RENEWAL_PATH) == _template_file(RENEWAL_PATH)
         assert tree[SUPPORT_PATH] == _template_file(SUPPORT_PATH)
@@ -192,6 +196,7 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
         assert tree[LEGACY_CLIENT_PATH] == "old legacy SDK"
         assert tree[PROVIDER_PATH] == "old session bootstrap"
         assert RENEWAL_PATH not in tree
+        assert TELEMETRY_PATH not in tree
         return
     for _ in range(2):
         await runtime._build_agent_seed_parts(handle, refresh_managed_sdk=True)
@@ -199,14 +204,22 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
         path: _template_file(path)
         for path in (
             *MAX_MANAGEMENT_RUNTIME_FILES, "next.config.ts",
-            SDK_PATH, LEGACY_CLIENT_PATH, ACTIVITY_PATH, ANALYTICS_PATH,
+            SDK_PATH, LEGACY_CLIENT_PATH, ACTIVITY_PATH, ANALYTICS_PATH, TELEMETRY_PATH,
             CATALOG_SERVER_PATH, CATALOG_ACTIONS_PATH, CATALOG_CLIENT_PATH,
             PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH
         )
         if path != "drizzle/0003_owner_management.sql"
     }
     assert writes == [(canonical, ())]
+    activity_endpoint = re.search(
+        r'export async function trackMaxActivity\([\s\S]*?await deliverActivity\("([^"]+)"',
+        tree[LEGACY_CLIENT_PATH],
+    )
+    assert activity_endpoint is not None
+    assert f"src/app{activity_endpoint[1]}/route.ts" == TELEMETRY_PATH
+    assert tree[TELEMETRY_PATH] == _template_file(TELEMETRY_PATH)
     assert tree["src/app/page.tsx"] == "existing product"
+    assert tree["src/app/api/omnia/events/route.ts"] == "existing product DB handler"
     assert tree[".omnia/cell.json"] == '{"project":"existing"}'
 
 
@@ -218,7 +231,7 @@ async def test_generation_retires_encrypted_crud_files_from_existing_projects():
         path: _template_file(path)
         for path in (
             *MAX_MANAGEMENT_RUNTIME_FILES, "next.config.ts",
-            SDK_PATH, LEGACY_CLIENT_PATH, ACTIVITY_PATH, ANALYTICS_PATH,
+            SDK_PATH, LEGACY_CLIENT_PATH, ACTIVITY_PATH, ANALYTICS_PATH, TELEMETRY_PATH,
             CATALOG_SERVER_PATH, CATALOG_ACTIONS_PATH, CATALOG_CLIENT_PATH,
             PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH
         )
@@ -319,7 +332,7 @@ async def test_sdk_delivery_uses_current_generation_revision_and_is_exported(
     canonical = {
         path: _template_file(path)
         for path in (
-            SDK_PATH, LEGACY_CLIENT_PATH, ACTIVITY_PATH, ANALYTICS_PATH,
+            SDK_PATH, LEGACY_CLIENT_PATH, ACTIVITY_PATH, ANALYTICS_PATH, TELEMETRY_PATH,
             CATALOG_SERVER_PATH, CATALOG_ACTIONS_PATH, CATALOG_CLIENT_PATH,
             PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH, "next.config.ts",
             *(path for path in MAX_MANAGEMENT_RUNTIME_FILES

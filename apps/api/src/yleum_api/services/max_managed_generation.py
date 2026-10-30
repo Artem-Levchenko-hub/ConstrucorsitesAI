@@ -32,6 +32,7 @@ MANAGED_GENERATION_PATHS = (
     "next.config.ts",
     INTEGRATION_SDK_PATH, "src/lib/omnia/client.ts",
     "src/lib/omnia/activity.ts", ANALYTICS_SDK_PATH,
+    "src/app/api/omnia/telemetry/route.ts",
     "src/lib/omnia/catalog-server.ts", "src/lib/omnia/catalog-actions.ts",
     "src/lib/omnia/catalog-client.ts",
     "src/components/MaxAppProvider.tsx", "src/components/YleumCompliance.tsx",
