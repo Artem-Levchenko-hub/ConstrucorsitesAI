@@ -170,7 +170,7 @@ export default function MaxGuidePage() {
           </div>
           <div className="flex items-center gap-2">
             <Link href="/max/product" className="hidden min-h-10 items-center rounded-md px-3 text-xs text-[#9fa1b1] hover:bg-[#121519] sm:inline-flex"><ArrowLeft className="mr-2 size-3.5" aria-hidden="true" />О продукте</Link>
-            <Link href="/login?next=/max" className="omnia-button omnia-button-secondary min-h-10 px-4 text-xs">Войти</Link>
+            <Link href="/max" className="omnia-button omnia-button-secondary min-h-10 px-4 text-xs">Открыть Yleum</Link>
             <Link href="/max/register" className="omnia-button omnia-button-primary min-h-10 px-4 text-xs">Начать</Link>
           </div>
         </div>
@@ -439,7 +439,7 @@ export default function MaxGuidePage() {
                   <h3 className="text-2xl font-semibold tracking-[-.03em]">Продолжите с нужного шага в Yleum</h3>
                   <p className="mt-3 max-w-[650px] text-sm leading-6 text-white/60">Если проект уже создан, откройте его и посмотрите, что осталось до публикации. Для ежедневной работы используйте «Управление» и «Каталог».</p>
                 </div>
-                <Link href="/login?next=/max" className="omnia-button omnia-button-primary min-h-12 px-6">Перейти в Yleum <ArrowRight className="size-4" aria-hidden="true" /></Link>
+                <Link href="/max" className="omnia-button omnia-button-primary min-h-12 px-6">Перейти в Yleum <ArrowRight className="size-4" aria-hidden="true" /></Link>
               </div>
             </div>
           </GuideSection>
