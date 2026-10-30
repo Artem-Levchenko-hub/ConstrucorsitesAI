@@ -81,6 +81,8 @@ from yleum_api.models.snapshot import Snapshot
 from yleum_api.models.support import (
     SupportAudit,
     SupportEmailOutbox,
+    SupportInboundReceipt,
+    SupportInboxCursor,
     SupportMessage,
     SupportRateBucket,
     SupportTicket,
@@ -166,6 +168,8 @@ __all__ = [
     "Subscription",
     "SupportAudit",
     "SupportEmailOutbox",
+    "SupportInboundReceipt",
+    "SupportInboxCursor",
     "SupportMessage",
     "SupportRateBucket",
     "SupportTicket",

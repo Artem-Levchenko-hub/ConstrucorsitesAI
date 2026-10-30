@@ -426,10 +426,24 @@ it.each([
   } finally { await app.close(); }
 });
 
+it.each([
+  ["qa_internal", "РўРµСЃС‚РѕРІС‹Р№ Р±РµР·Р»РёРјРёС‚", "Тестовый безлимит"],
+  ["pro", "РўРµ — персональные условия", "РўРµ — персональные условия"],
+])("uses the known %s display name consistently in usage without decoding arbitrary catalog names", async (code, name, expected) => {
+  usageResponse = { ...usage, plan: { ...freePlan, code, name } };
+  const app = await mount("billing");
+  try {
+    await wait(() => expect(document.querySelector(".usage-period")?.textContent).toContain(`тариф ${expected}`));
+    await click("Лимиты");
+    expect(document.querySelector(".usage-limits-heading > strong")?.textContent).toBe(expected);
+    expect(requests).toHaveLength(0);
+  } finally { await app.close(); }
+});
+
 it("shows the period's spend and the plan's use next to each limit", async () => {
   const app = await mount("billing");
   try {
-    const panel = () => document.querySelector('[aria-label="Расход за период"]')!;
+    const panel = () => document.querySelector(".usage-dashboard")!;
     await wait(() => expect(panel().textContent).toContain("Сборки приложений"));
     const text = panel().textContent!;
     expect(text).toContain("Текущий месяц");
@@ -439,10 +453,12 @@ it("shows the period's spend and the plan's use next to each limit", async () =>
     expect(text).toContain("Опубликовано приложений2");
     expect(text).not.toContain("Бесплатные сборки");
     await click("Лимиты");
-    const rows = [...panel().querySelectorAll("li")].map(row => row.textContent);
-    expect(rows).toContain("Приложений2 · без ограничений");
-    expect(rows).toContain("Опубликованных приложений2 из 1сверх тарифа");
-    expect(rows).toContain("Интеграцииподключено: 1");
+    const rows = [...panel().querySelectorAll("li")];
+    const values = (row: Element) => [...row.querySelectorAll("dd")].map(value => value.textContent);
+    expect(values(rows[0])).toEqual(["2", "Без ограничений"]);
+    expect(values(rows[1])).toEqual(["2", "1"]);
+    expect(rows[1].textContent).toContain("сверх тарифа");
+    expect(values(rows[2])).toEqual(["1", "входит в тариф"]);
   } finally { await app.close(); }
 });
 

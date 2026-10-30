@@ -71,16 +71,33 @@ it("distinguishes zero, unlimited, exceeded and disabled limits without invalid 
   try {
     await select(2);
     const items = [...panel().querySelectorAll("li")];
-    expect(items[0].textContent).toContain("0 из 0");
+    const values = (item: Element) => [...item.querySelectorAll("dl > div")].map(row => [row.querySelector("dt")?.textContent, row.querySelector("dd")?.textContent]);
+    expect(values(items[0])).toEqual([["Используется сейчас", "0"], ["Лимит тарифа", "0"]]);
     expect(items[0].querySelector('[role="meter"]')).toBeNull();
-    expect(items[1].textContent).toContain("без ограничений");
+    expect(values(items[1])).toEqual([["Используется сейчас", "2"], ["Лимит тарифа", "Без ограничений"]]);
     expect(items[1].querySelector('[role="meter"]')).toBeNull();
-    expect(items[2].textContent).toContain("3 из 2");
+    expect(values(items[2])).toEqual([["Используется сейчас", "3"], ["Лимит тарифа", "2"]]);
     expect(items[2].textContent).toContain("сверх тарифа");
     const meter = items[2].querySelector('[role="meter"]')!;
     expect(meter.getAttribute("aria-valuenow")).toBe("2");
-    expect(meter.getAttribute("aria-valuetext")).toContain("3 из 2");
+    expect(meter.getAttribute("aria-valuetext")).toContain("Используется сейчас: 3, лимит тарифа: 2");
     expect(items[3].textContent).toContain("не входит в тариф");
+  } finally { await app.close(); }
+});
+
+it("identifies limits as a current snapshot instead of activity in the requested period", async () => {
+  response.period = { start: "2026-09-01T00:00:00Z", end: "2026-09-02T00:00:00Z", source: "custom" };
+  const app = await mount();
+  try {
+    expect(app.container.querySelector("h2")?.textContent).toBe("Расход за период");
+    expect(app.container.querySelector(".usage-period summary")?.textContent).toBe("Выбранный период");
+    await select(2);
+    expect(app.container.querySelector("h2")?.textContent).toBe("Лимиты тарифа");
+    expect(app.container.querySelector(".usage-period")).toBeNull();
+    expect(panel().textContent).toContain("Текущее использование не зависит от выбранного периода");
+    await select(1);
+    expect(app.container.querySelector("h2")?.textContent).toBe("Расход за период");
+    expect(app.container.querySelectorAll(".usage-period time")).toHaveLength(2);
   } finally { await app.close(); }
 });
 

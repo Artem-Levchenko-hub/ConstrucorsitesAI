@@ -161,6 +161,21 @@ class Settings(BaseSettings):
     smtp_password: SecretStr | None = Field(default=None)
     smtp_from: str = Field(default="Yleum <noreply@yleum.ru>")
     smtp_starttls: bool = Field(default=True)
+    # Override only after the SMTP provider has authorized this identity.
+    support_smtp_from: str | None = Field(default=None)
+    support_imap_host: str | None = Field(default=None)
+    support_imap_port: int = Field(default=993, ge=1, le=65535)
+    support_imap_user: str | None = Field(default=None)
+    support_imap_password: SecretStr | None = Field(default=None)
+    support_imap_mailbox: str | None = Field(default=None)
+    support_imap_recipient: str | None = Field(default=None)
+    # Empty starts with future deliveries. Backfill requires an explicit first UID.
+    support_imap_start_uid: int | None = Field(default=None, ge=1)
+
+    @field_validator("support_imap_start_uid", mode="before")
+    @classmethod
+    def empty_support_start_uid_is_unconfigured(cls, value: object) -> object:
+        return None if value == "" else value
 
     # Explicit rollout policy. Missing credentials never turn an enabled gate off.
     phone_verification_enabled: bool = Field(default=False)

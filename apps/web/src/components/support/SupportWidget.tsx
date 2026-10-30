@@ -10,6 +10,7 @@ import { SupportThread } from "./SupportThread";
 import { SupportAssistant } from "./SupportAssistant";
 import { useSupportAssistant } from "@/hooks/useSupportAssistant";
 import { YleumMark } from "@/components/brand/YleumMark";
+import { supportHours, supportPromise, takeSupportRecovery } from "@/lib/api/support";
 import "@/components/max/max-studio.css";
 import "./support.css";
 
@@ -48,8 +49,48 @@ export function SupportWidget() {
   const adminCount = useQuery({ queryKey: ["support", context.data?.user_id, "new-count"], queryFn: ({ signal }) => listSupport("status=new&archived=false&limit=1", true, signal), enabled: !!context.data?.is_admin && !context.isError, retry: false, refetchInterval: 30_000 });
   const [open, setOpen] = useState(false);
   const [checking, setChecking] = useState(false);
-  const previous = useRef<string | undefined>(undefined);
   const identity = context.data ? `${context.data.user_id ?? "guest"}:${context.data.is_admin}` : undefined;
+  const [entry, setEntry] = useState<{ principal: string; recovery: GuestTicket | null; requested: string | null } | null>(null);
+  const pendingNavigation = useRef<{ principal: string | null; recovery: GuestTicket | null; requested: string | null } | null>(null);
+  // A previous principal's explicit capability must never reach a newly mounted thread.
+  const recovery = entry && entry.principal === identity ? entry.recovery : null;
+  const requested = entry && entry.principal === identity ? entry.requested : null;
+  useEffect(() => client.getQueryCache().subscribe(event => {
+    if (event.query.queryKey[0] !== "support-context" || event.type !== "updated" || event.action.type !== "success") return;
+    const current = event.query.state.data as SupportContext | undefined;
+    if (!current) return;
+    const principal = `${current.user_id ?? "guest"}:${current.is_admin}`;
+    setEntry(value => value && value.principal !== principal ? null : value);
+    const navigation = pendingNavigation.current;
+    if (!navigation) return;
+    pendingNavigation.current = null;
+    if (navigation.principal && navigation.principal !== principal) return;
+    if (navigation.recovery && !current.user_id) saveGuestTickets([...readGuestTickets().filter(item => item.id !== navigation.recovery!.id), navigation.recovery]);
+    setEntry({ principal, recovery: navigation.recovery, requested: navigation.requested }); setOpen(true);
+  }), [client]);
+  useEffect(() => {
+    let active = true;
+    const readNavigation = async () => {
+      if (!active) return;
+      const recovered = takeSupportRecovery();
+      const url = new URL(window.location.href), candidate = url.searchParams.get("support_ticket");
+      const requested = candidate && /^[0-9a-f-]{36}$/.test(candidate) ? candidate : null;
+      if (requested) {
+        url.searchParams.delete("support_ticket");
+        window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+      }
+      if (!recovered && !requested) return;
+      const known = client.getQueryData<SupportContext>(supportContextOptions.queryKey);
+      pendingNavigation.current = { principal: known ? `${known.user_id ?? "guest"}:${known.is_admin}` : null, recovery: recovered, requested };
+      // Keep the unbound link for Retry; only a successful context event may activate it.
+      await client.fetchQuery({ ...supportContextOptions, staleTime: 0 });
+    };
+    const restoreNavigation = () => { void readNavigation().catch(() => { if (active) setOpen(true); }); };
+    queueMicrotask(restoreNavigation);
+    window.addEventListener("hashchange", restoreNavigation);
+    return () => { active = false; window.removeEventListener("hashchange", restoreNavigation); };
+  }, [client]);
+  const previous = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (identity === undefined) return;
     if (previous.current !== undefined && previous.current !== identity) {
@@ -69,20 +110,20 @@ export function SupportWidget() {
   }, [pathname, client]);
   return <Dialog open={open} onOpenChange={setOpen}>
     <DialogTrigger asChild><button type="button" className="support-launcher" data-max-studio aria-label="Открыть поддержку" title="Поддержка Yleum"><MessageCircleQuestion size={24} aria-hidden="true" />{context.data?.is_admin && !context.isError && !context.isFetching && !!adminCount.data?.new_count && <span className="support-badge" aria-label={`${adminCount.data.new_count} новых обращений`}>{adminCount.data.new_count}</span>}</button></DialogTrigger>
-    {context.data && <SupportSession key={identity} context={context.data} available={!context.isError} open={open} checking={checking} newCount={adminCount.data?.new_count ?? 0} />}
+    {context.data && <SupportSession key={`${identity}:${recovery?.id ?? requested ?? ""}`} context={context.data} recovery={recovery} requested={requested} available={!context.isError} open={open} checking={checking} newCount={adminCount.data?.new_count ?? 0} />}
     {open && (context.isError || !context.data) && <DialogContent data-max-studio className="support-dialog" overlayClassName="support-overlay"><SupportHeader />{context.isError ? <p role="alert">Не удалось подключиться. <button onClick={() => void context.refetch()}>Повторить</button></p> : <p role="status">Подключаем поддержку…</p>}</DialogContent>}
   </Dialog>;
 }
 
-function SupportSession({ context, available, open, checking, newCount }: { context: SupportContext; available: boolean; open: boolean; checking: boolean; newCount: number }) {
+function SupportSession({ context, available, open, checking, newCount, recovery, requested }: { context: SupportContext; available: boolean; open: boolean; checking: boolean; newCount: number; recovery: GuestTicket | null; requested: string | null }) {
   const client = useQueryClient();
   const scope = context.user_id ?? "guest";
   const [draft] = useState(() => readSupportDraft(scope));
-  const [view, setView] = useState<"help" | "contact" | "history">(() => draft ? "contact" : "help");
+  const [view, setView] = useState<"help" | "contact" | "history">(() => recovery || requested ? "history" : draft ? "contact" : "help");
   const assistant = useSupportAssistant();
   const viewport = useSupportViewport();
   const [guests, setGuests] = useState<GuestTicket[]>(() => context.user_id ? [] : readGuestTickets());
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(recovery?.id ?? requested);
   const [subject, setSubject] = useState(draft?.subject ?? "");
   const [message, setMessage] = useState(draft?.message ?? "");
   const [email, setEmail] = useState(draft?.email ?? "");
@@ -96,7 +137,7 @@ function SupportSession({ context, available, open, checking, newCount }: { cont
   const busy = useRef(false);
   const active = useRef(true);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
-  const selectedGuest = guests.find(item => item.id === selected);
+  const selectedGuest = recovery?.id === selected ? recovery : guests.find(item => item.id === selected);
   // Keep unsent form state through transient context failures, but grant no UI or live access.
   useSupportEvents(available ? context.user_id : null, available && context.is_admin, available ? selectedGuest : undefined);
   const history = useQuery({ queryKey: ["support", scope, "history", offset], queryFn: ({ signal }) => listSupport(`limit=50&offset=${offset}`, false, signal), enabled: available && open && !!context.user_id && !checking, retry: false });
@@ -144,11 +185,11 @@ function SupportSession({ context, available, open, checking, newCount }: { cont
         {selected ? <div className="support-thread-view"><button className="support-back" type="button" onClick={() => { setSelected(null); setReceipt(""); setView("history"); }}>← Все обращения</button>{receipt && <p role="status" className="support-receipt">Обращение {receipt} принято. Переписка сохранена.</p>}<SupportThread key={selected} id={selected} scope={scope} token={selectedGuest?.token} /></div> : <>
           <div hidden={view !== "help"} className="support-help-panel"><SupportAssistant session={assistant} onContact={contactOperator} /></div>
           <div hidden={view !== "contact"} className="support-contact-panel support-scroll">
-            <div className="support-panel-heading"><span className="support-panel-icon"><Headphones size={22} aria-hidden="true" /></span><h3>Давайте поможем лично</h3><p>Опишите вопрос. Ответим здесь и уведомим по email.</p></div>
+            <div className="support-panel-heading"><span className="support-panel-icon"><Headphones size={22} aria-hidden="true" /></span><h3>Давайте поможем лично</h3><p>Опишите вопрос. Ответим здесь и уведомим по email.</p><p>{supportHours}. {supportPromise}. Это срок первого ответа, а не решения вопроса.</p></div>
             <form hidden={view !== "contact"} className="support-form" onSubmit={event => { event.preventDefault(); void submit(); }}>
               <label>Тема<input aria-label="Тема обращения" maxLength={160} required value={subject} disabled={pending} onChange={event => setSubject(event.target.value)} placeholder="Коротко о вашем вопросе" /></label>
               <label>Сообщение<textarea aria-label="Сообщение" maxLength={8000} required rows={4} value={message} disabled={pending} onChange={event => setMessage(event.target.value)} placeholder="Что вы делали и какая помощь нужна?" /></label>
-              {!context.user_id && <><label>Email для ответа<input aria-label="Ваш email" type="email" autoComplete="email" maxLength={254} required value={email} disabled={pending} onChange={event => setEmail(event.target.value)} placeholder="you@example.com" /></label><label className="support-consent"><input type="checkbox" required checked={consent} disabled={pending} onChange={event => setConsent(event.target.checked)} /><span>Согласен на обработку данных обращения для ответа службы поддержки. <a href="/legal/privacy" target="_blank" rel="noreferrer">Политика конфиденциальности</a></span></label><p className="support-meta">История доступна в этом браузере. Не очищайте данные сайта, чтобы продолжить переписку.</p></>}
+              {!context.user_id && <><label>Email для ответа<input aria-label="Ваш email" type="email" autoComplete="email" maxLength={254} required value={email} disabled={pending} onChange={event => setEmail(event.target.value)} placeholder="you@example.com" /></label><label className="support-consent"><input type="checkbox" required checked={consent} disabled={pending} onChange={event => setConsent(event.target.checked)} /><span>Согласен на обработку данных обращения для ответа службы поддержки. <a href="/legal/privacy" target="_blank" rel="noreferrer">Политика конфиденциальности</a></span></label><p className="support-meta">История доступна в этом браузере и по личной ссылке из письма с подтверждением. Сохраните письмо и не передавайте ссылку другим людям.</p></>}
               <label className="support-trap" aria-hidden="true">Сайт<input name="website" tabIndex={-1} autoComplete="off" value={website} onChange={event => setWebsite(event.target.value)} /></label>
               {error && <p role="alert" className="support-error">{error}</p>}
               <button className="support-primary" type="submit" disabled={pending}>{pending ? "Отправляем…" : "Отправить обращение"}</button>

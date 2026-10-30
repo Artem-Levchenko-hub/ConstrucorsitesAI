@@ -38,7 +38,11 @@ from uuid import uuid4
 import httpx
 
 from yleum_gateway.core.config import get_settings
-from yleum_gateway.core.errors import UpstreamProviderError, ValidationFailedError
+from yleum_gateway.core.errors import (
+    DispatchDeadlineError,
+    UpstreamProviderError,
+    ValidationFailedError,
+)
 from yleum_gateway.providers import native_stream
 from yleum_gateway.providers.rate_limit import bounded_error_body, refusal_retry_candidate
 from yleum_gateway.services.output_budget import output_tokens, uses_provider_output_default
@@ -318,9 +322,7 @@ async def astream(
     headers and request identity. Only connection establishment is retried.
     """
     if timeout <= 0:
-        raise UpstreamProviderError("Provider budget exhausted before dispatch", details={
-            "provider_charge_ambiguous": False, "provider_failure_kind": "deadline_before_dispatch",
-        })
+        raise DispatchDeadlineError()
     slug = _MODEL_SLUG.get(model)
     if slug is None:
         raise ValidationFailedError(f"unsupported llmgw model: {model}")

@@ -146,6 +146,13 @@ def sanitize_agent_step(step: dict[str, Any]) -> dict[str, Any]:
                 PROVIDER_ERROR_DETAILS.get(category, PROVIDER_ERROR_DETAIL)
                 if isinstance(category, str) else PROVIDER_ERROR_DETAIL
             )
+            if (safe.get("error_code") == "deadline_before_dispatch"
+                    and safe.get("error_origin") == "gateway"
+                    and safe.get("provider_charge_ambiguous") is False):
+                safe["action"] = "Время запроса истекло"
+                safe["detail"] = (
+                    "Новый запрос к модели не отправлен: недостаточно оставшегося времени."
+                )
         reason = step.get("reason")
         if isinstance(reason, str) and reason in {
             "output_limit", "invalid_tool_arguments", "missing_tool_arguments",

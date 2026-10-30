@@ -24,9 +24,9 @@ from sse_starlette.sse import EventSourceResponse
 
 from yleum_gateway.core.errors import (
     BillingReconciliationRequiredError,
+    DispatchDeadlineError,
     GatewayError,
     ModelNotFoundError,
-    UpstreamProviderError,
     WalletEmptyError,
 )
 from yleum_gateway.providers import llmgw
@@ -143,9 +143,7 @@ def _remaining_provider_budget(request: Request, received_at: float, *, reserve:
         seconds = 270.0
     remaining = min(seconds, 1500.0) - (asyncio.get_running_loop().time() - received_at) - reserve
     if remaining <= 0:
-        raise UpstreamProviderError("Provider budget exhausted before dispatch", details={
-            "provider_charge_ambiguous": False, "provider_failure_kind": "deadline_before_dispatch",
-        })
+        raise DispatchDeadlineError()
     return remaining
 
 
@@ -227,7 +225,11 @@ async def _dispatch_chat_provider(
                 refusal = text_failover.ProviderRefusedError("Primary provider refused the request", details=overload)
                 raise _gateway_error_to_http(refusal) from exc
             if isinstance(exc, GatewayError):
-                if status == "failed" and (isinstance(retry_candidate, dict) or details.get("provider_failure_kind") == "preconnect"):
+                if status == "failed" and (
+                    isinstance(retry_candidate, dict)
+                    or details.get("provider_failure_kind") == "preconnect"
+                    or isinstance(exc, DispatchDeadlineError)
+                ):
                     from yleum_gateway.services.generation_response_capture import (
                         confirm_response_accounting,
                     )

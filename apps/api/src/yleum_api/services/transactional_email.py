@@ -80,6 +80,11 @@ async def send_transactional_email(
     text: str,
     html: str | None = None,
     message_id: UUID | None = None,
+    sender: str | None = None,
+    reply_to: str | None = None,
+    inline_logo: bool = True,
+    auto_submitted: bool = False,
+    message_id_suffix: str | None = None,
 ) -> None:
     settings = get_settings()
     smtp_host = settings.smtp_host
@@ -88,15 +93,22 @@ async def send_transactional_email(
         raise EmailDeliveryNotConfigured("SMTP delivery is not configured")
 
     message = EmailMessage()
-    message["From"] = settings.smtp_from
+    message["From"] = sender or settings.smtp_from
+    if reply_to:
+        message["Reply-To"] = reply_to
+    if auto_submitted:
+        message["Auto-Submitted"] = "auto-generated"
+        message["X-Auto-Response-Suppress"] = "All"
     message["To"] = recipient
     message["Subject"] = subject
     message["Date"] = format_datetime(datetime.now(UTC))
     # Public namespace; never derive the ID from hostnames, users or auth tokens.
-    message["Message-ID"] = f"<{(message_id or uuid4()).hex}@yleum.ru>"
+    suffix = f".{message_id_suffix}" if message_id_suffix else ""
+    message["Message-ID"] = f"<{(message_id or uuid4()).hex}{suffix}@yleum.ru>"
     message.set_content(text)
     if html is not None:
         message.add_alternative(html, subtype="html")
+    if html is not None and inline_logo:
         logo = Path(__file__).parent.parent / "assets" / "email" / "technical-logo.png"
         body = message.get_body(preferencelist=("html",))
         assert body is not None

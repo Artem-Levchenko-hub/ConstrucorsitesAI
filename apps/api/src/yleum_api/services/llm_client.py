@@ -325,6 +325,20 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
     code = raw_code if isinstance(raw_code, str) and raw_code in _GATEWAY_ERROR_CODES else None
     details = error.get("details")
     details = details if isinstance(details, dict) else {}
+    if (
+        response.status_code == 504 and len(response.content) <= 16_384
+        and raw_code == "deadline_before_dispatch"
+        and set(error) <= {"code", "message", "details"}
+        and set(details) == {"provider_failure_kind", "provider_charge_ambiguous", "retry_safe"}
+        and details.get("provider_failure_kind") == "deadline_before_dispatch"
+        and details.get("provider_charge_ambiguous") is False
+        and details.get("retry_safe") is False
+    ):
+        return LLMError(
+            "Время запроса истекло до отправки провайдеру; новый запрос не отправлен.",
+            code="deadline_before_dispatch", http_status=504,
+            provider_charge_ambiguous=False, retry_safe=False,
+        )
     raw_status = details.get("upstream_http_status")
     upstream = raw_status if type(raw_status) is int and 400 <= raw_status <= 599 else None
     raw_ambiguity = details.get("provider_charge_ambiguous")

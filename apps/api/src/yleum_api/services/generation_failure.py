@@ -9,6 +9,7 @@ from yleum_api.models.snapshot import Snapshot
 from yleum_api.schemas.message import GenerationFailure, GenerationFailureDiagnostics
 
 NO_TERMINAL_EVENTS = object()
+_LOCAL_DISPATCH_DEADLINE = "generation deadline exceeded before provider dispatch:"
 _EVENT_IDENTITIES = (
     "run_id", "generation_run_id", "project_id", "message_id", "assistant_message_id",
     "snapshot_id",
@@ -26,15 +27,30 @@ def public_generation_failure(
     if run is None or run.status != "failed":
         return None
     state = run.agent_state if isinstance(run.agent_state, dict) else {}
+    restoration = isinstance(state.get("restoration_adaptation"), dict)
     failure = failure_for_error(
         run.error or "",
-        restoration=isinstance(state.get("restoration_adaptation"), dict),
+        restoration=restoration,
     )
     if terminal_events is not NO_TERMINAL_EVENTS:
         # An explicitly loaded, malformed/empty journal is a barrier, not a
         # reason to borrow a provider error from the capped UI transcript.
         agent_steps = _terminal_provider_steps(run, terminal_events, snapshot)
     failure.diagnostics = _provider_diagnostics(run.error, agent_steps)
+    if not restoration and str(run.error or "").startswith(_LOCAL_DISPATCH_DEADLINE):
+        checkpoint = state.get("source_checkpoint")
+        if (isinstance(checkpoint, dict)
+                and isinstance(checkpoint.get("digest"), str)
+                and re.fullmatch(r"[a-f0-9]{64}", checkpoint["digest"])
+                and "baseline_sha" in checkpoint
+                and (checkpoint["baseline_sha"] is None or (
+                    isinstance(checkpoint["baseline_sha"], str)
+                    and re.fullmatch(r"[a-f0-9]{40}", checkpoint["baseline_sha"])
+                ))):
+            failure.message += (
+                " Черновик сохранён, но ещё не прошёл все проверки. "
+                "Для продолжения напишите «Продолжи сборку»."
+            )
     return failure
 
 
@@ -142,6 +158,13 @@ def _provider_diagnostics(
     marker establishes that link; numeric fallback supports historical runs.
     """
     error = raw_error if isinstance(raw_error, str) else ""
+    if error.startswith(_LOCAL_DISPATCH_DEADLINE):
+        # This exact internal marker is emitted only for the closed gateway
+        # pre-dispatch contract, not inferred from earlier provider observations.
+        return GenerationFailureDiagnostics(
+            error_code="deadline_before_dispatch", error_origin="gateway", http_status=504,
+            provider_charge_ambiguous=False, retry_safe=False,
+        )
     marker = re.match(r"\Aprovider_http_([45]\d\d):", error, re.IGNORECASE)
     if marker is None and re.match(
         r"\A(?:provider_request_failed|provider_timeout|provider_unavailable|"
@@ -194,7 +217,13 @@ def failure_for_error(raw_error: object, *, restoration: bool = False) -> Genera
     # The gateway category reaches terminal/history errors as an internal marker.
     # Exact prefixes prevent arbitrary provider text from claiming a category.
     refusal = re.match(r"\Aprovider_refusal_(access|funds|rate_limit):", error)
-    if error.startswith("platform_wallet_empty:"):
+    if error.startswith(_LOCAL_DISPATCH_DEADLINE):
+        code = "deadline"
+        message = (
+            "Для следующего запроса к модели не осталось времени. "
+            "Новый запрос не отправлен, автоматический повтор остановлен."
+        )
+    elif error.startswith("platform_wallet_empty:"):
         code = "wallet_empty"
         retryable = False
         message = (

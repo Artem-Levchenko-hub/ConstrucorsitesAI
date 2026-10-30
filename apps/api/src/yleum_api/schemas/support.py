@@ -76,6 +76,10 @@ class Ticket(BaseModel):
     created_at: datetime
     updated_at: datetime
     resolved_at: datetime | None
+    first_response_due_at: datetime | None = None
+    first_responded_at: datetime | None = None
+    first_response_overdue: bool = False
+    support_hours: str = "Пн–пт, 10:00–19:00 МСК"
     archived: bool
     source_path: str | None
     assigned_admin_email: str | None

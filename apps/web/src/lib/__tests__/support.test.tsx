@@ -19,6 +19,58 @@ let identity: { user_id: string | null; email: string | null; is_admin: boolean 
 let posts: Record<string, unknown>[], failPost: boolean, paths: string[];
 let patches: Record<string, unknown>[], conflict: boolean, newCount: number, failContext: boolean;
 
+it("shows operator hours and promises a first human response before sending", async () => {
+  await open();
+  expect(document.body.textContent).toContain("Пн–пт, 10:00–19:00 МСК");
+  expect(document.body.textContent).toContain("Первый ответ оператора — в течение одного рабочего дня");
+  expect(document.body.textContent).toContain("ссылке из письма");
+});
+
+it("restores only the capability in a recovery fragment and removes it from the address", async () => {
+  window.history.replaceState({}, "", `/max#support=${ticket.id}&token=${"c".repeat(64)}`);
+  await mount();
+  await wait(() => expect(document.querySelector(".support-thread")).not.toBeNull());
+  expect(window.location.hash).toBe("");
+  expect(JSON.parse(localStorage.getItem("yleum-support-guests") || "[]")).toEqual([
+    { id: ticket.id, reference: "Обращение", token: "c".repeat(64) },
+  ]);
+});
+
+it("revokes a recovered guest capability immediately when the principal changes", async () => {
+  window.history.replaceState({}, "", `/max#support=${ticket.id}&token=${"c".repeat(64)}`);
+  await mount();
+  await wait(() => expect(document.querySelector(".support-thread")).not.toBeNull());
+  const priorFetch = globalThis.fetch;
+  const requests: { url: string; token: string | null }[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    requests.push({ url: String(url), token: new Headers(init?.headers).get("X-Support-Token") });
+    return priorFetch(url, init);
+  }));
+  identity = { user_id: "owner2", email: "second@example.test", is_admin: false };
+  await act(async () => { await client.invalidateQueries({ queryKey: ["support-context"] }); });
+  await wait(() => expect(client.getQueryData(["support-context"])).toEqual(identity));
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
+  expect(document.querySelector(".support-thread")).toBeNull();
+  expect(requests.filter(item => item.token)).toEqual([]);
+  expect(localStorage.getItem("yleum-support-guests")).toBeNull();
+  window.history.replaceState({}, "", `/max#support=${ticket.id}&token=${"d".repeat(64)}`);
+  await act(async () => window.dispatchEvent(new HashChangeEvent("hashchange")));
+  await wait(() => expect(document.querySelector(".support-thread")).not.toBeNull());
+  expect(requests.filter(item => item.token).map(item => item.token)).toContain("d".repeat(64));
+  expect(requests.filter(item => item.token).map(item => item.token)).not.toContain("c".repeat(64));
+});
+
+it("retains an unverified recovery link through a failed context refresh until retry succeeds", async () => {
+  failContext = true;
+  window.history.replaceState({}, "", `/max#support=${ticket.id}&token=${"c".repeat(64)}`);
+  await mount();
+  await wait(() => expect(document.body.textContent).toContain("Не удалось подключиться"));
+  expect(document.querySelector(".support-thread")).toBeNull();
+  failContext = false; await click("Повторить");
+  await wait(() => expect(document.querySelector(".support-thread")).not.toBeNull());
+  expect(window.location.hash).toBe("");
+});
+
 it("retains the assistant conversation and unsent question when closed and reopened", async () => {
   await mount(); await click("Открыть поддержку");
   await fill("Вопрос автопомощнику", "Не приходит код");

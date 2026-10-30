@@ -48,3 +48,16 @@ class ModelUnavailableError(GatewayError):
 class UpstreamProviderError(GatewayError):
     code = "model_unavailable"
     http_status = 502
+
+
+class DispatchDeadlineError(GatewayError):
+    """The local request budget ended before any upstream request was sent."""
+
+    code = "deadline_before_dispatch"
+    http_status = 504
+
+    def __init__(self) -> None:
+        super().__init__("Request budget exhausted before provider dispatch", details={
+            "provider_charge_ambiguous": False,
+            "provider_failure_kind": "deadline_before_dispatch", "retry_safe": False,
+        })

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Literal, cast
 from uuid import UUID
 
@@ -14,6 +14,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yleum_api.core.config import get_settings
+from yleum_api.core.crypto import decrypt_strong, encrypt_strong
 from yleum_api.core.errors import ApiError
 from yleum_api.models.support import (
     SupportAudit,
@@ -31,6 +32,48 @@ from yleum_api.schemas.support import (
     Ticket,
     TicketDetail,
 )
+
+MOSCOW = timezone(timedelta(hours=3))
+SUPPORT_HOURS = "Пн–пт, 10:00–19:00 МСК"
+
+
+def first_response_deadline(created_at: datetime) -> datetime:
+    """One working day is nine business hours, excluding evenings and weekends."""
+    if created_at.tzinfo is None:
+        raise ValueError("Support timestamps must have a timezone")
+    cursor = created_at.astimezone(MOSCOW)
+    remaining = timedelta(hours=9)
+    while True:
+        opening = cursor.replace(hour=10, minute=0, second=0, microsecond=0)
+        closing = opening.replace(hour=19)
+        if cursor.weekday() >= 5 or cursor >= closing:
+            cursor = opening + timedelta(days=1)
+            continue
+        cursor = max(cursor, opening)
+        available = closing - cursor
+        if remaining <= available:
+            return (cursor + remaining).astimezone(UTC)
+        remaining -= available
+        cursor = opening + timedelta(days=1)
+
+
+def seal_guest_delivery(ticket_id: UUID, token: str) -> str:
+    return encrypt_strong(
+        json.dumps({"purpose": "support-guest", "ticket": str(ticket_id), "token": token})
+    )
+
+
+def open_guest_delivery(ticket_id: UUID, payload: str) -> str:
+    value = json.loads(decrypt_strong(payload))
+    token = value.get("token", "")
+    if (
+        value.get("purpose") != "support-guest"
+        or value.get("ticket") != str(ticket_id)
+        or len(token) != 64
+        or any(c not in "0123456789abcdef" for c in token)
+    ):
+        raise ValueError("Invalid support delivery scope")
+    return cast(str, token)
 
 
 def registered(user: User | None) -> User | None:
@@ -111,6 +154,13 @@ async def _serialize(
             created_at=t.created_at,
             updated_at=t.updated_at,
             resolved_at=t.resolved_at,
+            first_response_due_at=t.first_response_due_at,
+            first_responded_at=t.first_responded_at,
+            first_response_overdue=bool(
+                t.first_response_due_at
+                and not t.first_responded_at
+                and t.first_response_due_at < datetime.now(UTC)
+            ),
             archived=archived(t),
             source_path=t.source_path,
             assigned_admin_email=admins.get(t.assigned_admin_id) if t.assigned_admin_id else None,
@@ -174,6 +224,7 @@ async def list_tickets(
     staff: bool = False,
     status: SupportStatus | None = None,
     archive: bool = False,
+    overdue: bool = False,
     search: str = "",
     limit: int = 25,
     offset: int = 0,
@@ -185,6 +236,11 @@ async def list_tickets(
             SupportTicket.resolved_at <= datetime.now(UTC) - timedelta(hours=24),
         )
         query = query.where(is_archived if archive else ~is_archived)
+        if overdue:
+            query = query.where(
+                SupportTicket.first_response_due_at < datetime.now(UTC),
+                SupportTicket.first_responded_at.is_(None),
+            )
         if status:
             query = query.where(SupportTicket.status == status)
         if search.strip():
@@ -265,12 +321,29 @@ async def _admit(session: AsyncSession, *, actor: str, contact: str, ip: str, re
             raise ApiError("rate_limited", "Слишком много сообщений. Попробуйте позже.", 429)
 
 
+async def guest_delivery_payload(session: AsyncSession, ticket_id: UUID) -> str | None:
+    """Reuse the original encrypted recovery scope for later customer deliveries."""
+    return await session.scalar(
+        select(SupportEmailOutbox.delivery_payload_encrypted)
+        .join(SupportMessage, SupportMessage.id == SupportEmailOutbox.message_id)
+        .where(SupportMessage.ticket_id == ticket_id, SupportEmailOutbox.kind == "acknowledgement")
+        .limit(1)
+    )
+
+
 async def _enqueue(
     session: AsyncSession, ticket: SupportTicket, message: SupportMessage, *, staff: bool
 ) -> None:
     if staff:
+        payload = (
+            await guest_delivery_payload(session, ticket.id) if ticket.owner_id is None else None
+        )
         session.add(
-            SupportEmailOutbox(message_id=message.id, recipient_email=ticket.requester_email)
+            SupportEmailOutbox(
+                message_id=message.id,
+                recipient_email=ticket.requester_email,
+                delivery_payload_encrypted=payload,
+            )
         )
         return
     recipients = (
@@ -298,7 +371,7 @@ async def _enqueue(
 
 
 async def create_ticket(
-    session: AsyncSession, data: CreateTicket, *, user: User | None, ip: str
+    session: AsyncSession, data: CreateTicket, *, user: User | None, ip: str, commit: bool = True
 ) -> tuple[SupportTicket, bool]:
     user = registered(user)
     if data.website:
@@ -322,6 +395,7 @@ async def create_ticket(
             raise ApiError("conflict", "Этот запрос уже использован с другим содержимым", 409)
         return existing, False
     await _admit(session, actor=actor, contact=email, ip=ip, reply=False)
+    now = datetime.now(UTC)
     ticket = SupportTicket(
         owner_id=user.id if user else None,
         guest_token_hash=digest(data.guest_token or "") if user is None else None,
@@ -330,6 +404,9 @@ async def create_ticket(
         create_request_key=key,
         create_payload_hash=payload,
         source_path=data.source_path,
+        created_at=now,
+        updated_at=now,
+        first_response_due_at=first_response_deadline(now),
     )
     session.add(ticket)
     await session.flush()
@@ -344,7 +421,22 @@ async def create_ticket(
     session.add(message)
     await session.flush()
     await _enqueue(session, ticket, message, staff=False)
-    await session.commit()
+    session.add(
+        SupportEmailOutbox(
+            message_id=message.id,
+            recipient_email=email.lower(),
+            kind="acknowledgement",
+            delivery_payload_encrypted=(
+                seal_guest_delivery(ticket.id, data.guest_token)
+                if user is None and data.guest_token
+                else None
+            ),
+        )
+    )
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     return ticket, True
 
 
@@ -377,6 +469,7 @@ async def add_message(
     token: str | None,
     ip: str,
     staff: bool = False,
+    commit: bool = True,
 ) -> tuple[SupportTicket, bool]:
     ticket = await get_ticket(session, ticket_id, user=user, token=token, staff=staff, lock=True)
     actor = actor_key(user, token)
@@ -405,13 +498,18 @@ async def add_message(
     session.add(message)
     ticket.version += 1
     ticket.updated_at = datetime.now(UTC)
+    if staff and ticket.first_responded_at is None:
+        ticket.first_responded_at = ticket.updated_at
     if staff and ticket.status == "new":
         _transition(session, ticket, "in_progress", user)
     elif not staff and ticket.status == "done":
         _transition(session, ticket, "new", None)
     await session.flush()
     await _enqueue(session, ticket, message, staff=staff)
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     return ticket, True
 
 

@@ -40,6 +40,8 @@ class SupportTicket(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    first_response_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    first_responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         CheckConstraint("status IN ('new', 'in_progress', 'done')", name="status"),
         CheckConstraint("version > 0", name="version"),
@@ -52,6 +54,7 @@ class SupportTicket(Base):
         Index("ix_support_tickets_owner_updated", "owner_id", "updated_at"),
         Index("ix_support_tickets_status_updated", "status", "updated_at"),
         Index("ix_support_tickets_resolved", "resolved_at"),
+        Index("ix_support_tickets_first_response", "first_response_due_at", "first_responded_at"),
     )
 
 
@@ -83,6 +86,8 @@ class SupportEmailOutbox(Base):
         ForeignKey("support_messages.id", ondelete="CASCADE")
     )
     recipient_email: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(Text, default="message", server_default="message")
+    delivery_payload_encrypted: Mapped[str | None] = mapped_column(Text)
     recipient_admin_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE")
     )
@@ -95,7 +100,10 @@ class SupportEmailOutbox(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     __table_args__ = (
-        UniqueConstraint("message_id", "recipient_email", name="uq_support_email_recipient"),
+        UniqueConstraint(
+            "message_id", "recipient_email", "kind", name="uq_support_email_recipient"
+        ),
+        CheckConstraint("kind IN ('message', 'acknowledgement')", name="kind"),
         CheckConstraint(
             "status IN ('pending', 'sending', 'sent', 'uncertain', 'cancelled', 'failed')",
             name="status",
@@ -110,6 +118,24 @@ class SupportRateBucket(Base):
     window: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
     count: Mapped[int] = mapped_column(Integer)
     __table_args__ = (Index("ix_support_rate_window", "window"),)
+
+
+class SupportInboundReceipt(Base):
+    """Durable inbox delivery/message dedup; stores no raw MIME or capabilities."""
+
+    __tablename__ = "support_inbound_receipts"
+    delivery_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    message_key: Mapped[str] = mapped_column(Text, unique=True)
+    ticket_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("support_tickets.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SupportInboxCursor(Base):
+    __tablename__ = "support_inbox_cursors"
+    mailbox_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    last_uid: Mapped[int] = mapped_column(BigInteger)
 
 
 class SupportAudit(Base):

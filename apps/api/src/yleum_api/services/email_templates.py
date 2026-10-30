@@ -177,21 +177,59 @@ def reminder_email(
 
 
 def support_email(
-    *, reference: str, subject: str, body: str, url: str, staff: bool
+    *,
+    reference: str,
+    subject: str,
+    body: str,
+    url: str,
+    staff: bool,
+    acknowledgement: bool = False,
+    created_at: datetime | None = None,
+    first_response_due_at: datetime | None = None,
+    first_responded_at: datetime | None = None,
+    email_replies: bool = False,
+    logo_url: str = "https://yleum.ru/brand/logo-mark.svg",
 ) -> EmailContent:
     """Render untrusted support text as escaped text inside the shared brand shell."""
-    title = "Сообщение в поддержку" if staff else "Ответ поддержки Yleum"
-    return _content(
+    title = (
+        "Обращение принято"
+        if acknowledgement
+        else "Сообщение в поддержку"
+        if staff
+        else "Ответ поддержки Yleum"
+    )
+    timing = "Пн–пт, 10:00–19:00 МСК. Первый ответ оператора — в течение одного рабочего дня."
+    if acknowledgement and created_at:
+        timing += f" Получено: {period_label(created_at)}."
+    if first_response_due_at:
+        timing += f" Первый ответ оператора до: {period_label(first_response_due_at)}."
+    if first_responded_at:
+        timing += f" Оператор впервые ответил: {period_label(first_responded_at)}."
+    timing += " Это срок первого ответа, а не решения вопроса."
+    instructions = (
+        "Можно ответить на это письмо или продолжить переписку на сайте."
+        if email_replies and not staff
+        else "Продолжить переписку можно на сайте."
+    )
+    if acknowledgement:
+        instructions += " Это автоматическое подтверждение, а не ответ оператора."
+    content = _content(
         subject=f"Yleum · {reference} · {title}",
         eyebrow=f"ПОДДЕРЖКА · {reference}",
         title=title,
         lead=subject,
         panel=f'<div style="white-space:pre-wrap;overflow-wrap:anywhere">{escape(body)}</div>',
-        panel_text=body,
-        button="Открыть обращение" if staff else "Открыть Yleum",
+        panel_text=f"{reference}\n{body}",
+        button="Открыть обращение",
         url=url,
-        note="Ответьте в чате поддержки на сайте. Ответы на это письмо не обрабатываются.",
-        footer="Вы получили это письмо по обращению в поддержку Yleum.",
+        note=f"{timing} {instructions}",
+        footer="Вы получили это письмо по обращению в поддержку Yleum. "
+        "Сохраните ссылку на свою переписку и не передавайте её другим людям.",
+    )
+    return EmailContent(
+        content.subject,
+        content.text,
+        content.html.replace("cid:yleum-logo", escape(logo_url, quote=True)),
     )
 
 

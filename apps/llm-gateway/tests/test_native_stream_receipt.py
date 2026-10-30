@@ -312,10 +312,11 @@ def test_exhausted_receipt_reserve_never_dispatches_or_creates_ambiguous_charge(
             headers={"x-yleum-provider-timeout-seconds": "10"},
             json={"model": "claude-sonnet-5.5",
                   "messages": [{"role": "user", "content": "synthetic"}]})
-    assert result.status_code == 502
+    assert result.status_code == 504
+    assert result.json()["detail"]["error"]["code"] == "deadline_before_dispatch"
     details = result.json()["detail"]["error"]["details"]
     assert details["provider_charge_ambiguous"] is False
-    assert "retry_safe" not in details and "retry_policy" not in details
+    assert details["retry_safe"] is False and "retry_policy" not in details
     assert provider.await_count == 0
     receipt = chat.provider_calls.finish_call.await_args.kwargs
     assert receipt["status"] == "failed"

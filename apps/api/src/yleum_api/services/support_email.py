@@ -19,6 +19,12 @@ from yleum_api.models.support import (
 )
 from yleum_api.models.user import User
 from yleum_api.services.email_templates import support_email
+from yleum_api.services.support_inbox import (
+    customer_thread_reference,
+    import_support_inbox,
+    inbox_configured,
+)
+from yleum_api.services.support_tickets import digest, open_guest_delivery
 from yleum_api.services.transactional_email import (
     EmailDeliveryFailed,
     EmailDeliveryNotConfigured,
@@ -100,14 +106,31 @@ async def deliver_one_support_email(factory: async_sessionmaker[AsyncSession]) -
         if staff:
             url += f"/admin/max?tab=support&ticket={ticket.id}"
         else:
-            url += "/max"
+            url += f"/max?support_ticket={ticket.id}"
+            if item.delivery_payload_encrypted and ticket.owner_id is None:
+                token = open_guest_delivery(ticket.id, item.delivery_payload_encrypted)
+                if digest(token) != ticket.guest_token_hash:
+                    item.status = "cancelled"
+                    await session.commit()
+                    return True
+                url = get_settings().web_base_url.rstrip("/")
+                url += f"/max#support={ticket.id}&token={token}"
+        replies_enabled = inbox_configured()
         content = support_email(
             reference=f"SUP-{ticket.number}",
             subject=ticket.subject,
             body=message.body,
             url=url,
             staff=staff,
+            acknowledgement=item.kind == "acknowledgement",
+            created_at=ticket.created_at,
+            first_response_due_at=ticket.first_response_due_at,
+            first_responded_at=ticket.first_responded_at,
+            email_replies=replies_enabled,
+            logo_url=get_settings().web_base_url.rstrip("/") + "/brand/logo-mark.svg",
         )
+        # Stable across safe retries and later inbox enablement; staff notices carry no capability.
+        suffix = customer_thread_reference(ticket) if not staff else None
         recipient, attempts = item.recipient_email, item.attempts
         # Release the read transaction and connection while SMTP performs network IO.
         await session.rollback()
@@ -120,6 +143,11 @@ async def deliver_one_support_email(factory: async_sessionmaker[AsyncSession]) -
             text=content.text,
             html=content.html,
             message_id=item_id,
+            sender=get_settings().support_smtp_from,
+            reply_to=get_settings().legal_support_email,
+            inline_logo=False,
+            auto_submitted=True,
+            message_id_suffix=suffix,
         )
     except EmailDeliveryNotConfigured:
         next_status, retry_at = "pending", datetime.now(UTC) + timedelta(minutes=5)
@@ -170,6 +198,7 @@ async def run_support_email_forever() -> None:
                 processed = 0
                 while processed < 50 and await deliver_one_support_email(factory):
                     processed += 1
+                await import_support_inbox(factory)
             except Exception:
                 # Fixed diagnostic only: exception strings can contain SQL values/contacts.
                 log.warning("support_email_tick_failed")

@@ -359,6 +359,16 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-Yleum <noreply@yleum.ru>}
       SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      # Explicit inbox configuration; mail import runs in the general worker.
+      SUPPORT_SMTP_FROM: ${SUPPORT_SMTP_FROM:-}
+      SUPPORT_IMAP_HOST: ${SUPPORT_IMAP_HOST:-}
+      SUPPORT_IMAP_PORT: ${SUPPORT_IMAP_PORT:-993}
+      SUPPORT_IMAP_USER: ${SUPPORT_IMAP_USER:-}
+      SUPPORT_IMAP_PASSWORD: ${SUPPORT_IMAP_PASSWORD:-}
+      SUPPORT_IMAP_MAILBOX: ${SUPPORT_IMAP_MAILBOX:-INBOX}
+      SUPPORT_IMAP_RECIPIENT: ${SUPPORT_IMAP_RECIPIENT:-support@yleum.ru}
+      # Empty means first enablement starts with new mail, never an implicit backfill.
+      SUPPORT_IMAP_START_UID: ${SUPPORT_IMAP_START_UID:-}
       # Enable mandatory phone proof only after the SMS channel passes acceptance.
       PHONE_VERIFICATION_ENABLED: ${PHONE_VERIFICATION_ENABLED:-false}
       SMS_PROVIDER: ${SMS_PROVIDER:-greensms}
@@ -495,6 +505,14 @@ services:
     environment:
       <<: *api_environment
       GENERATION_RECOVERY_READER_ROLE: generation-worker
+      # The inbox consumer is the general worker, never the generation worker.
+      SUPPORT_SMTP_FROM: ""
+      SUPPORT_IMAP_HOST: ""
+      SUPPORT_IMAP_USER: ""
+      SUPPORT_IMAP_PASSWORD: ""
+      SUPPORT_IMAP_MAILBOX: ""
+      SUPPORT_IMAP_RECIPIENT: ""
+      SUPPORT_IMAP_START_UID: ""
       # SMS authentication secrets belong to the HTTP API only.
       GREENSMS_TOKEN: ""
       SMSAERO_EMAIL: ""
@@ -611,6 +629,15 @@ services:
       SMTP_FROM: ${SMTP_FROM:-Yleum <noreply@yleum.ru>}
       SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
       LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-10-27}
+      SUPPORT_SMTP_FROM: ${SUPPORT_SMTP_FROM:-}
+      SUPPORT_IMAP_HOST: ${SUPPORT_IMAP_HOST:-}
+      SUPPORT_IMAP_PORT: ${SUPPORT_IMAP_PORT:-993}
+      SUPPORT_IMAP_USER: ${SUPPORT_IMAP_USER:-}
+      SUPPORT_IMAP_PASSWORD: ${SUPPORT_IMAP_PASSWORD:-}
+      SUPPORT_IMAP_MAILBOX: ${SUPPORT_IMAP_MAILBOX:-INBOX}
+      SUPPORT_IMAP_RECIPIENT: ${SUPPORT_IMAP_RECIPIENT:-support@yleum.ru}
+      SUPPORT_IMAP_START_UID: ${SUPPORT_IMAP_START_UID:-}
+      LEGAL_SUPPORT_EMAIL: ${LEGAL_SUPPORT_EMAIL:-support@yleum.ru}
       YOOKASSA_SHOP_ID: ${YOOKASSA_SHOP_ID:-}
       YOOKASSA_SECRET_KEY: ${YOOKASSA_SECRET_KEY:-}
       YOOKASSA_VAT_CODE: ${YOOKASSA_VAT_CODE:-1}

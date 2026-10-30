@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+export const planDisplayName = (plan: { code: string; name: string }) => plan.code === "qa_internal" ? "Тестовый безлимит" : plan.name;
 export const money = (value: string | number) => `${Number(value).toLocaleString("ru-RU")} ₽`;
 export const date = (value: string | null) => value ? new Date(value).toLocaleString("ru-RU", { dateStyle: "medium", timeStyle: "short" }) : "—";
 export function QueryError({ error, retry }: { error: Error | null; retry?: () => void }) {

@@ -8,11 +8,32 @@ export type SupportTicket = {
   requester_email: string; created_at: string; updated_at: string; resolved_at: string | null;
   archived: boolean; source_path: string | null; assigned_admin_email: string | null;
   message_count: number; last_message_preview: string;
+  first_response_due_at?: string | null; first_responded_at?: string | null;
+  first_response_overdue?: boolean; support_hours?: string;
 };
 export type SupportDetail = SupportTicket & { messages: SupportMessage[] };
 export type SupportList = { items: SupportTicket[]; total: number; new_count?: number };
 export type SupportCreate = { request_id: string; subject: string; message: string; email?: string; privacy_accepted?: boolean; guest_token?: string; source_path: string; website: string };
 export type GuestTicket = { id: string; reference: string; token: string };
+export const supportHours = "Пн–пт, 10:00–19:00 МСК";
+export const supportPromise = "Первый ответ оператора — в течение одного рабочего дня";
+export function supportTiming(ticket: SupportTicket, now: number): string {
+  if (ticket.first_responded_at) return `Первый ответ оператора: ${new Date(ticket.first_responded_at).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })} МСК`;
+  if (!ticket.first_response_due_at) return "Срок первого ответа для этого обращения не установлен";
+  const deadline = new Date(ticket.first_response_due_at);
+  const minutes = Math.max(0, Math.ceil(Math.abs(deadline.getTime() - now) / 60_000));
+  const duration = `${Math.floor(minutes / 60)} ч ${minutes % 60} мин`;
+  return `Первый ответ оператора до ${deadline.toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })} МСК · ${deadline.getTime() < now ? "Просрочено на" : "Осталось"} ${duration}`;
+}
+/** A fragment never reaches HTTP logs/referrers; remove it before any API request. */
+export function takeSupportRecovery(): GuestTicket | null {
+  const fragment = new URLSearchParams(window.location.hash.slice(1));
+  const id = fragment.get("support"), token = fragment.get("token");
+  if (!id || !token) return null;
+  window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id) || !/^[0-9a-f]{64}$/.test(token)) return null;
+  return { id, reference: "Обращение", token };
+}
 export const supportStatus: Record<SupportStatus, string> = { new: "Новые", in_progress: "В работе", done: "Готово" };
 export const supportContextOptions = { queryKey: ["support-context"], queryFn: ({ signal }: { signal: AbortSignal }) => apiFetch<SupportContext>("/api/support/context", { signal, cache: "no-store", timeoutMs: 10_000 }), staleTime: 0, refetchInterval: 15_000, retry: false };
 const path = (admin: boolean) => admin ? "/api/admin/support/tickets" : "/api/support/tickets";

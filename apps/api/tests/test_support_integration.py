@@ -126,12 +126,13 @@ async def test_all_active_persisted_admins_receive_once_and_retry_conflicts(
         "one@example.com",
         "two@example.com",
         "bootstrap@example.com",
+        "guest@example.com",
     }
     body["message"] = "Different payload"
     assert (
         await client.post("/api/support/tickets", json=body, headers=headers())
     ).status_code == 409
-    assert (await db_session.scalar(select(func.count()).select_from(SupportEmailOutbox))) == 3
+    assert (await db_session.scalar(select(func.count()).select_from(SupportEmailOutbox))) == 4
 
 
 async def test_archive_boundary_reopen_assignment_conflict_and_reply_mail(client, db_session):
@@ -182,7 +183,7 @@ async def test_archive_boundary_reopen_assignment_conflict_and_reply_mail(client
     assert reopened.json()["resolved_at"] is None
     assert reopened.json()["assigned_admin_email"] is None
     rows = (await db_session.scalars(select(SupportEmailOutbox))).all()
-    assert [row.recipient_email for row in rows].count("guest@example.com") == 1
+    assert [row.recipient_email for row in rows].count("guest@example.com") == 2
     assert [row.recipient_email for row in rows].count("staff@example.com") == 2
 
 
@@ -292,10 +293,15 @@ async def test_smtp_failures_keep_committed_ticket_and_safe_delivery_state(
 
     monkeypatch.setattr(support_email, "send_transactional_email", fail)
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
-    assert await support_email.deliver_one_support_email(factory)
+    while await support_email.deliver_one_support_email(factory):
+        pass
     await db_session.rollback()
     assert await db_session.get(SupportTicket, ticket_id) is not None
-    row = (await db_session.scalars(select(SupportEmailOutbox))).one()
+    row = (
+        await db_session.scalars(
+            select(SupportEmailOutbox).where(SupportEmailOutbox.kind == "acknowledgement")
+        )
+    ).one()
     assert row.status == expected and row.attempts == 1
     assert not await support_email.deliver_one_support_email(factory)
 
@@ -319,10 +325,10 @@ async def test_parallel_delivery_claims_each_recipient_once_and_rechecks_role(
     monkeypatch.setattr(support_email, "send_transactional_email", capture)
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     await asyncio.gather(*(support_email.deliver_one_support_email(factory) for _ in range(4)))
-    assert [mail["recipient"] for mail in deliveries] == [second.email]
+    assert sorted(mail["recipient"] for mail in deliveries) == ["guest@example.com", second.email]
     await db_session.rollback()
     rows = (await db_session.scalars(select(SupportEmailOutbox))).all()
-    assert sorted(row.status for row in rows) == ["cancelled", "sent"]
+    assert sorted(row.status for row in rows) == ["cancelled", "sent", "sent"]
     assert deliveries[0]["message_id"] in {row.id for row in rows}
 
 
@@ -331,7 +337,11 @@ async def test_stale_sending_is_uncertain_and_old_rate_buckets_are_bounded(db_se
     await support_tickets.create_ticket(
         db_session, CreateTicket(**guest_payload()), user=None, ip="192.0.2.5"
     )
-    row = (await db_session.scalars(select(SupportEmailOutbox))).one()
+    row = (
+        await db_session.scalars(
+            select(SupportEmailOutbox).where(SupportEmailOutbox.kind == "acknowledgement")
+        )
+    ).one()
     row.status = "sending"
     row.claimed_at = datetime.now(UTC) - timedelta(minutes=11)
     db_session.add_all(
@@ -421,7 +431,7 @@ async def test_safe_retry_keeps_message_id_and_contact_address(
     owner.email = "changed@example.com"
     rows = (await db_session.scalars(select(SupportEmailOutbox))).all()
     for row in rows:
-        if row.recipient_admin_id:
+        if row.recipient_admin_id or row.kind == "acknowledgement":
             row.status = "cancelled"
     await db_session.commit()
     deliveries = []
@@ -437,7 +447,10 @@ async def test_safe_retry_keeps_message_id_and_contact_address(
     await db_session.rollback()
     item = (
         await db_session.scalars(
-            select(SupportEmailOutbox).where(SupportEmailOutbox.recipient_admin_id.is_(None))
+            select(SupportEmailOutbox).where(
+                SupportEmailOutbox.recipient_admin_id.is_(None),
+                SupportEmailOutbox.kind == "message",
+            )
         )
     ).one()
     item.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)

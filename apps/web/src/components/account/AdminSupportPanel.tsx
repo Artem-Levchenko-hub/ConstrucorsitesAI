@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { listSupport, supportContextOptions, supportStatus, type SupportStatus } from "@/lib/api/support";
+import { listSupport, supportContextOptions, supportStatus, supportTiming, type SupportStatus } from "@/lib/api/support";
+import { useSupportClock } from "@/hooks/useSupportClock";
 import { SupportThread } from "@/components/support/SupportThread";
 import "@/components/support/support.css";
 
@@ -14,22 +15,26 @@ export function AdminSupportPanel({ archived = false, ticketId, onSelect }: { ar
 }
 
 function AdminSupportQueue({ scope, archived, ticketId, onSelect }: { scope: string; archived: boolean; ticketId: string | null; onSelect: (id: string | null) => void }) {
+  const now = useSupportClock();
   const [status, setStatus] = useState<SupportStatus>("new");
+  const [overdue, setOverdue] = useState(false);
   const [search, setSearch] = useState("");
   const [term, setTerm] = useState("");
   const [offset, setOffset] = useState(0);
   useEffect(() => { const timer = setTimeout(() => { setTerm(search.trim()); setOffset(0); }, 300); return () => clearTimeout(timer); }, [search]);
   const params = new URLSearchParams({ archived: String(archived), limit: "25", offset: String(offset), search: term });
-  if (!archived) params.set("status", status);
-  const query = useQuery({ queryKey: ["support", scope, "admin-list", archived, status, term, offset], queryFn: ({ signal }) => listSupport(params.toString(), true, signal), retry: false, staleTime: 0, refetchInterval: 30_000 });
+  if (!archived && !overdue) params.set("status", status);
+  if (overdue) params.set("overdue", "true");
+  const query = useQuery({ queryKey: ["support", scope, "admin-list", archived, status, overdue, term, offset], queryFn: ({ signal }) => listSupport(params.toString(), true, signal), retry: false, staleTime: 0, refetchInterval: 30_000 });
   return <div className="admin-support">
     <header><h2>{archived ? "Архив поддержки" : "Поддержка"}</h2><p className="support-meta">{archived ? "Завершённые более суток назад обращения. История переписки сохранена." : "Обращения пользователей и гостей. Ответы сохраняются в переписке и отправляются по email."}</p></header>
     {ticketId ? <><button type="button" className="support-back" onClick={() => onSelect(null)}>← К списку обращений</button><SupportThread key={ticketId} id={ticketId} scope={scope} admin /></> : <>
       {!archived && <div className="support-actions" aria-label="Фильтр статуса">{(Object.keys(supportStatus) as SupportStatus[]).map(value => <button key={value} type="button" aria-pressed={status === value} onClick={() => { setStatus(value); setOffset(0); }}>{supportStatus[value]}{value === "new" && query.data?.new_count ? ` · ${query.data.new_count}` : ""}</button>)}</div>}
+      {!archived && <label className="support-consent"><input type="checkbox" checked={overdue} onChange={event => { setOverdue(event.target.checked); setOffset(0); }} />Просрочен первый ответ</label>}
       <input className="support-search" aria-label="Поиск обращений" placeholder="Тема, номер или email" value={search} onChange={event => setSearch(event.target.value)} />
       {query.isPending && <p role="status">Загружаем обращения…</p>}
       {query.isError && <p role="alert">Не удалось загрузить обращения. <button type="button" onClick={() => void query.refetch()}>Повторить</button></p>}
-      {query.data && <><p className="support-meta">Всего: {query.data.total}</p><div className="support-queue">{query.data.items.map(ticket => <button type="button" className="support-ticket" key={ticket.id} onClick={() => onSelect(ticket.id)}><span className="support-meta">{ticket.reference} · {supportStatus[ticket.status]} · {new Date(ticket.updated_at).toLocaleString("ru-RU")}</span><strong>{ticket.subject}</strong><span className="support-meta">{ticket.requester_email}</span><p>{ticket.last_message_preview}</p><span className="support-meta">Сообщений: {ticket.message_count}{ticket.assigned_admin_email ? ` · ${ticket.assigned_admin_email}` : ""}</span></button>)}</div>{query.data.items.length === 0 && <p>Обращений пока нет.</p>}
+      {query.data && <><p className="support-meta">Всего: {query.data.total}</p><div className="support-queue">{query.data.items.map(ticket => <button type="button" className="support-ticket" key={ticket.id} onClick={() => onSelect(ticket.id)}><span className="support-meta">{ticket.reference} · {supportStatus[ticket.status]} · {new Date(ticket.updated_at).toLocaleString("ru-RU")}</span><strong>{ticket.subject}</strong><span className={ticket.first_response_overdue ? "support-error" : "support-meta"}>{supportTiming(ticket, now)}</span>{!ticket.first_responded_at && ticket.first_response_due_at && <span className="support-meta">Ожидание: {Math.max(0, Math.floor((now - new Date(ticket.created_at).getTime()) / 60_000))} мин</span>}<span className="support-meta">{ticket.requester_email}</span><p>{ticket.last_message_preview}</p><span className="support-meta">Сообщений: {ticket.message_count}{ticket.assigned_admin_email ? ` · ${ticket.assigned_admin_email}` : ""}</span></button>)}</div>{query.data.items.length === 0 && <p>Обращений пока нет.</p>}
         <div className="support-pagination support-actions"><button type="button" disabled={offset === 0} onClick={() => setOffset(value => Math.max(0, value - 25))}>Назад</button><span>{query.data.total ? offset + 1 : 0}–{Math.min(offset + 25, query.data.total)} из {query.data.total}</span><button type="button" disabled={offset + 25 >= query.data.total} onClick={() => setOffset(value => value + 25)}>Далее</button></div></>}
     </>}
   </div>;

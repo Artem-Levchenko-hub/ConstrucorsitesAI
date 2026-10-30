@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { getBillingPurchaseOffer, getSubscription, listBillingPlans, manageSubscription } from "@/lib/api/account";
 import type { PaymentJourney } from "./PaymentCheckout";
-import { date, money, QueryError } from "./account-presentation";
+import { date, money, planDisplayName, QueryError } from "./account-presentation";
 import { planAllowanceDescription, planAllowanceRows, planPeriodDescription } from "@/lib/billing-allowances";
 // Historical plans can store `null` for "no limit"; a missing key is unknown.
 const limit = (value: unknown) => value === null ? "Без ограничений" : value === undefined ? "—" : String(value);
@@ -23,7 +23,7 @@ export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
     {current && <section className="account-plan-current">
       <div>
         <p>Текущий тариф</p>
-        <h2>{String(current.plan.code) === "qa_internal" ? "Тестовый безлимит" : current.plan.name}</h2>
+        <h2>{planDisplayName(current.plan)}</h2>
         <strong>{money(current.plan.price_rub)} / месяц</strong>
         <p>{current.current_period_end ? `Оплачен до ${date(current.current_period_end)}` : "Нет оплаченного периода"}</p>
         {historical && <p>У вас сохранены условия прежней версии тарифа. Стоимость действующей подписки указана выше; новые тарифы — ниже.</p>}

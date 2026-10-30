@@ -31,6 +31,7 @@ class GenerationFailureDiagnostics(BaseModel):
         "model_unavailable", "model_not_found", "validation_failed", "wallet_empty",
         "billing_reconciliation_required", "provider_output_truncated",
         "provider_output_invalid", "provider_output_filtered",
+        "deadline_before_dispatch",
         "unknown",
     ] | None = None
     error_origin: Literal["provider", "gateway", "platform", "unknown"] = "unknown"

@@ -984,6 +984,9 @@ async def _run_agent_segment(
                     ),
                     "completion_tokens": failure.completion_tokens if failure is not None else None,
                 }
+                local_deadline = failure is not None and failure.code == "deadline_before_dispatch"
+                if local_deadline:
+                    diagnostic["error_origin"] = "gateway"
                 if emit:
                     await emit("agent.provider_error", diagnostic)
                 if not will_retry:
@@ -998,7 +1001,9 @@ async def _run_agent_segment(
                         if failure is not None and failure.upstream_http_status is not None
                         else "provider_request_failed"
                     )
-                    if (
+                    if local_deadline:
+                        classification = "generation deadline exceeded before provider dispatch"
+                    elif (
                         failure is not None and failure.code == "wallet_empty"
                         and failure.http_status == 402
                     ):

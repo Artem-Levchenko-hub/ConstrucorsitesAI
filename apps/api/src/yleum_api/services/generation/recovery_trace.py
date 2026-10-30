@@ -33,6 +33,7 @@ _ENUMS = {
         "model_unavailable", "model_not_found", "validation_failed", "wallet_empty",
         "billing_reconciliation_required", "provider_output_truncated",
         "provider_output_invalid", "provider_output_filtered", "unknown",
+        "deadline_before_dispatch",
     },
     "provider_refusal_category": {"access", "funds", "rate_limit", "unknown"},
 }
