@@ -4,6 +4,8 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { safeReturnPath } from "@/lib/auth-return";
 import type { AuthFormState } from "@/lib/auth-action-recovery";
+import { oauthTicketBinding } from "@/lib/oauth-browser-binding-server";
+import { publicOrigin } from "@/lib/public-origin";
 
 import {
   sanitizeReferrerProjectId,
@@ -74,6 +76,11 @@ async function callAuth(
   const url = `${apiBaseUrl()}/api/auth/${endpoint}`;
   const cookieStore = await cookies();
   const existingSession = endpoint === "login" ? cookieStore.get(COOKIE_NAME)?.value : undefined;
+  const binding = endpoint === "oauth/complete" && typeof body.ticket === "string"
+    ? oauthTicketBinding(body.ticket, cookieStore) : null;
+  if (endpoint === "oauth/complete" && !binding) {
+    return "Ссылка на подтверждение устарела. Войдите через провайдера ещё раз";
+  }
   const browserHeaders = await headers();
   const userAgent = browserHeaders.get("user-agent");
   // The edge overwrites X-Real-IP. Do not relay the client's X-Forwarded-For chain.
@@ -84,7 +91,9 @@ async function callAuth(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        Origin: publicOrigin(),
         ...(existingSession ? { Cookie: `${COOKIE_NAME}=${existingSession}` } : {}),
+        ...(binding ? { Cookie: `${binding.name}=${binding.value}` } : {}),
         ...(userAgent ? { "User-Agent": userAgent } : {}),
         ...(clientIp ? { "X-Forwarded-For": clientIp } : {}),
       },
@@ -154,6 +163,10 @@ async function callAuth(
     // host is used.
     domain: sessionCookieDomain(),
   });
+  if (binding) {
+    cookieStore.set({ name: binding.name, value: "", maxAge: 0, path: "/",
+      secure: binding.secure, httpOnly: true, sameSite: "lax" });
+  }
   return null;
 }
 
@@ -279,7 +292,7 @@ export async function logoutAction() {
     if (session) {
       await fetch(url, {
         method: "POST",
-        headers: { Cookie: `${COOKIE_NAME}=${session}` },
+        headers: { Cookie: `${COOKIE_NAME}=${session}`, Origin: publicOrigin() },
         cache: "no-store",
       }).catch(() => undefined);
     }

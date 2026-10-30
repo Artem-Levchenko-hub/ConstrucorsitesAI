@@ -11,6 +11,7 @@ import hashlib
 import json
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from http.cookies import SimpleCookie
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -137,6 +138,159 @@ async def _callback(
 
 async def _state_rows(db_session: AsyncSession) -> list[OAuthLoginState]:
     return list((await db_session.execute(select(OAuthLoginState))).scalars())
+
+
+def _other_browser(client: httpx.AsyncClient) -> httpx.AsyncClient:
+    """Independent cookie jar against the same isolated ASGI app/session fixture."""
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=client._transport.app),
+        base_url=str(client.base_url),
+        headers={"Origin": WEB},
+    )
+
+
+async def test_oauth_proofs_stay_in_secure_host_only_cookies(
+    client: httpx.AsyncClient, providers_configured: None, provider: Provider,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("JWT_COOKIE_SECURE", "true")
+    monkeypatch.setenv("JWT_COOKIE_DOMAIN", ".example.test")
+    get_settings.cache_clear()
+    client.base_url = "https://testserver"
+    start = await client.get("/api/auth/oauth/vk/start")
+    state = _query(start.json()["authorization_url"])["state"]
+    state_cookie = next(iter(start.cookies.items()))
+    callback = await _callback(client, "vk", state=state, code="c", device_id="d")
+    ticket = _query(callback.headers["location"])["ticket"]
+    ticket_name, proof = next((name, value) for name, value in callback.cookies.items() if value)
+    assert state_cookie[0].startswith("__Host-yleum-oauth-state-")
+    assert ticket_name.startswith("__Host-yleum-oauth-ticket-")
+    assert proof != state_cookie[1]
+    assert state_cookie[1] not in start.text
+    assert proof not in callback.headers["location"]
+    assert state_cookie[0] not in dict(client.cookies)
+    for response, name in ((start, state_cookie[0]), (callback, ticket_name)):
+        morsels: SimpleCookie[str] = SimpleCookie()
+        for raw in response.headers.get_list("set-cookie"):
+            morsels.load(raw)
+        cookie = morsels[name]
+        assert cookie["secure"] and cookie["httponly"]
+        assert cookie["samesite"].lower() == "lax" and cookie["path"] == "/"
+        assert cookie["domain"] == ""
+        assert int(cookie["max-age"]) > 0
+        assert response.headers["cache-control"] == "no-store"
+    pending = await client.get("/api/auth/oauth/pending", params={"ticket": ticket})
+    assert pending.status_code == 200
+
+
+async def test_independent_oauth_tabs_keep_their_own_state_and_ticket(
+    client: httpx.AsyncClient, providers_configured: None, provider: Provider,
+) -> None:
+    first = await _start(client, "vk")
+    second = await _start(client, "vk")
+    tickets = []
+    for flow in (first, second):
+        callback = await _callback(client, "vk", state=flow["state"], code="c", device_id="d")
+        tickets.append(_query(callback.headers["location"])["ticket"])
+    assert tickets[0] != tickets[1]
+    for ticket in tickets:
+        pending = await client.get("/api/auth/oauth/pending", params={"ticket": ticket})
+        assert pending.status_code == 200
+        assert pending.json()["email"] == "owner@example.com"
+
+
+async def test_returning_last_of_eight_oauth_tabs_preserves_the_first_tab(
+    client: httpx.AsyncClient, providers_configured: None, provider: Provider,
+) -> None:
+    flows = [await _start(client, "vk") for _ in range(8)]
+    for flow in (flows[-1], flows[0]):
+        callback = await _callback(client, "vk", state=flow["state"], code="c", device_id="d")
+        assert "/oauth/complete?ticket=" in callback.headers["location"]
+
+
+async def test_state_proof_cannot_replace_registration_proof(
+    client: httpx.AsyncClient, providers_configured: None, provider: Provider,
+) -> None:
+    start = await client.get("/api/auth/oauth/vk/start")
+    state = _query(start.json()["authorization_url"])["state"]
+    state_proof = next(iter(start.cookies.values()))
+    callback = await _callback(client, "vk", state=state, code="c", device_id="d")
+    ticket = _query(callback.headers["location"])["ticket"]
+    ticket_name = next(name for name, value in callback.cookies.items() if value)
+    refused = await client.get(
+        "/api/auth/oauth/pending", params={"ticket": ticket},
+        headers={"Cookie": f"{ticket_name}={state_proof}"},
+    )
+    assert refused.status_code == 400
+    pending = await client.get("/api/auth/oauth/pending", params={"ticket": ticket})
+    assert pending.status_code == 200
+
+
+@pytest.mark.parametrize("provider_name", ["vk", "yandex"])
+async def test_callback_from_another_browser_does_not_exchange_or_consume_state(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    providers_configured: None,
+    provider: Provider,
+    provider_name: str,
+) -> None:
+    params = await _start(client, provider_name)
+    async with _other_browser(client) as stranger:
+        refused = await _callback(
+            stranger, provider_name, state=params["state"], code="c", device_id="d"
+        )
+    assert "oauth_state_invalid" in refused.headers["location"]
+    assert "omnia_session" not in refused.cookies
+    assert provider.requests == []
+    (row,) = await _state_rows(db_session)
+    await db_session.refresh(row)
+    assert row.used_at is None
+
+    own = await _callback(client, provider_name, state=params["state"], code="c", device_id="d")
+    assert "/oauth/complete?ticket=" in own.headers["location"]
+    assert provider.requests
+
+
+async def test_pending_identity_cannot_be_read_from_another_browser(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    providers_configured: None,
+    provider: Provider,
+) -> None:
+    params = await _start(client, "vk")
+    callback = await _callback(client, "vk", state=params["state"], code="c", device_id="d")
+    ticket = _query(callback.headers["location"])["ticket"]
+    async with _other_browser(client) as stranger:
+        refused = await stranger.get("/api/auth/oauth/pending", params={"ticket": ticket})
+    assert refused.status_code == 400
+    assert refused.json()["error"]["code"] == "oauth_ticket_invalid"
+    assert "owner@example.com" not in refused.text
+    assert (await db_session.execute(select(User))).scalars().all() == []
+    own = await client.get("/api/auth/oauth/pending", params={"ticket": ticket})
+    assert own.status_code == 200 and own.json()["email"] == "owner@example.com"
+
+
+async def test_another_browser_cannot_spend_a_valid_registration_ticket(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    providers_configured: None,
+    provider: Provider,
+) -> None:
+    params = await _start(client, "vk")
+    callback = await _callback(client, "vk", state=params["state"], code="c", device_id="d")
+    ticket = _query(callback.headers["location"])["ticket"]
+    async with _other_browser(client) as stranger:
+        refused = await stranger.post(
+            "/api/auth/oauth/complete", json={"ticket": ticket, **CONSENT}
+        )
+    assert refused.status_code == 400
+    assert refused.json()["error"]["code"] == "oauth_ticket_invalid"
+    assert (await db_session.execute(select(User))).scalars().all() == []
+    assert (await db_session.execute(select(AuthSession))).scalars().all() == []
+    own = await client.post(
+        "/api/auth/oauth/complete", headers={"Origin": WEB}, json={"ticket": ticket, **CONSENT}
+    )
+    assert own.status_code == 201 and "omnia_session" in own.cookies
 
 
 # ── чистые функции ────────────────────────────────────────────────────────

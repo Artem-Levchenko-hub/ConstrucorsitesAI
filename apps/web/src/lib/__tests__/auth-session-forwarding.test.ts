@@ -12,9 +12,10 @@ vi.mock("next/headers", () => ({
 }));
 vi.mock("next/navigation", () => ({ redirect: (url: string) => { throw new Error(`redirect:${url}`); } }));
 
-afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.clearAllMocks(); });
 
 it.each(["existing-signed-session", undefined])("forwards only the existing platform session on relogin (%s)", async (token) => {
+  vi.stubEnv("PUBLIC_ORIGIN", "https://yleum.ru");
   cookieGet.mockImplementation((name: string) => name === "omnia_session" && token ? { value: token } : undefined);
   const fetcher = vi.fn().mockResolvedValue(new Response("{}", {
     headers: { "set-cookie": "omnia_session=renewed-session; Path=/; HttpOnly" },
@@ -28,6 +29,7 @@ it.each(["existing-signed-session", undefined])("forwards only the existing plat
   const headers = new Headers(fetcher.mock.calls[0][1].headers);
   expect(headers.get("cookie")).toBe(token ? `omnia_session=${token}` : null);
   expect(headers.get("authorization")).toBeNull();
+  expect(headers.get("origin")).toBe("https://yleum.ru");
   expect(headers.get("user-agent")).toBe("Browser under test");
   expect(headers.get("x-forwarded-for")).toBe("192.0.2.10");
   expect(cookieSet).toHaveBeenCalledWith(expect.objectContaining({ value: "renewed-session" }));

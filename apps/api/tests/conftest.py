@@ -190,6 +190,10 @@ async def client(db_session: AsyncSession) -> AsyncIterator[httpx.AsyncClient]:
 
     app.dependency_overrides[get_session] = _override_session
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers={"Origin": get_settings().web_base_url.rstrip("/")},
+    ) as c:
         yield c
     app.dependency_overrides.clear()

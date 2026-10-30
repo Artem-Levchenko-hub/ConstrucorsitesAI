@@ -9,6 +9,11 @@ import {
 } from "@/lib/oauth-login";
 import { getOAuthPending, listOAuthProviders } from "@/lib/oauth-login-server";
 
+vi.mock("next/headers", () => ({ cookies: async () => ({
+  get: (name: string) => name.startsWith("__Host-yleum-oauth-ticket-")
+    ? { value: "p".repeat(43) } : undefined,
+}) }));
+
 /**
  * Вход через VK ID / Яндекс ID: кнопки рисуются только для настроенных
  * провайдеров, любой сбой api = кнопок нет (а не сломанная страница входа),

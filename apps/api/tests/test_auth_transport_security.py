@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import json
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -32,6 +31,8 @@ from yleum_api.models.project import Project
 from yleum_api.models.user import User
 from yleum_api.routers import app_integrations, auth, projects, ws
 from yleum_api.services.ws_hub import WebSocketHub
+
+_DEFAULT_SOCKET_ORIGIN = object()
 
 
 @pytest.fixture
@@ -278,8 +279,18 @@ async def test_me_exposes_canonical_rollout_reason_without_inventing_email_proof
 
 
 class Socket:
-    def __init__(self, app, project, token, transport="cookie", *, run_id=None):
+    def __init__(
+        self, app, project, token, transport="cookie", *, run_id=None,
+        origin=_DEFAULT_SOCKET_ORIGIN,
+    ):
         self.app = app
+        if origin is _DEFAULT_SOCKET_ORIGIN:
+            origin = get_settings().web_base_url.rstrip("/")
+        headers = []
+        if transport in {"cookie", "cookie+query"}:
+            headers.append((b"cookie", f"omnia_session={token}".encode()))
+        if origin is not None:
+            headers.append((b"origin", origin.encode()))
         self.scope = {
             "type": "websocket",
             "asgi": {"version": "3.0"},
@@ -288,10 +299,10 @@ class Socket:
             "scheme": "ws",
             "server": ("testserver", 80),
             "client": ("127.0.0.1", 1),
-            "query_string": f"token={token}".encode() if transport == "query" else b"",
-            "headers": [(b"cookie", f"omnia_session={token}".encode())]
-            if transport == "cookie"
-            else [],
+            "query_string": f"token={token}".encode()
+            if transport in {"query", "cookie+query"}
+            else b"",
+            "headers": headers,
             "subprotocols": [],
         }
         if run_id:
@@ -446,7 +457,9 @@ async def test_revocation_supervises_stalled_setup_and_replay_without_releasing_
     replay = stage in {"initial-replay", "generation-resync"}
     run_id = app.state.qa_run.id if replay else None
     monkeypatch.setattr(
-        ws, "get_settings", lambda: SimpleNamespace(use_generation_event_replay=replay)
+        ws, "get_settings", lambda: get_settings().model_copy(
+            update={"use_generation_event_replay": replay},
+        ),
     )
     calls = 0
 

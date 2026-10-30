@@ -21,6 +21,7 @@ from yleum_api.core.errors import (
 from yleum_api.core.minio import reconcile_public_bucket_policies
 from yleum_api.core.redis import dispose_redis
 from yleum_api.core.release import normalize_release_sha
+from yleum_api.core.request_origin import CookieOriginMiddleware
 from yleum_api.routers import account as account_router
 from yleum_api.routers import account_credentials as account_credentials_router
 from yleum_api.routers import admin as admin_router
@@ -238,6 +239,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title="Yleum Backend", version="0.0.1", lifespan=lifespan)
 
+    app.add_middleware(CookieOriginMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins_list,

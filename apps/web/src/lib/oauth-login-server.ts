@@ -1,4 +1,6 @@
 import "server-only";
+import { cookies } from "next/headers";
+import { oauthTicketBinding } from "@/lib/oauth-browser-binding-server";
 
 import {
   isOAuthProviderKey,
@@ -55,9 +57,11 @@ export type OAuthPending = {
 export async function getOAuthPending(ticket: string): Promise<OAuthPending | null> {
   if (!ticket || mocksEnabled()) return null;
   try {
+    const binding = oauthTicketBinding(ticket, await cookies());
+    if (!binding) return null;
     const response = await fetch(
       `${apiBaseUrl()}/api/auth/oauth/pending?ticket=${encodeURIComponent(ticket)}`,
-      { cache: "no-store" },
+      { cache: "no-store", headers: { Cookie: `${binding.name}=${binding.value}` } },
     );
     if (!response.ok) return null;
     const body = (await response.json()) as Partial<OAuthPending>;

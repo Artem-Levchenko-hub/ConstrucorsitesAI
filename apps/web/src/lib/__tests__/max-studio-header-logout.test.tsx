@@ -30,6 +30,7 @@ describe("MAX studio header logout submission", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     vi.stubEnv("INTERNAL_API_URL", "https://api.example.test");
+    vi.stubEnv("PUBLIC_ORIGIN", "https://app.example.test");
     vi.stubEnv("COOKIE_DOMAIN", ".example.test");
     boundary.getCookie.mockReturnValue({ value: "current-session" });
     boundary.fetch.mockResolvedValue(new Response(null, { status: 204 }));
@@ -92,7 +93,7 @@ describe("MAX studio header logout submission", () => {
     expect(submitted).toBe(1);
     expect(boundary.fetch).toHaveBeenCalledExactlyOnceWith("https://api.example.test/api/auth/logout", {
       method: "POST",
-      headers: { Cookie: "omnia_session=current-session" },
+      headers: { Cookie: "omnia_session=current-session", Origin: "https://app.example.test" },
       cache: "no-store",
     });
     expect(boundary.setCookie).toHaveBeenCalledExactlyOnceWith({

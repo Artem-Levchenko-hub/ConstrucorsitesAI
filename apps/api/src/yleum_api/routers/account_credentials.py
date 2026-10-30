@@ -4,6 +4,7 @@ from yleum_api.core.config import get_settings
 from yleum_api.core.deps import CurrentUserDep, OptionalUserDep, SessionDep
 from yleum_api.core.errors import ApiError
 from yleum_api.core.ratelimit import rate_limit_auth, rate_limit_email
+from yleum_api.core.request_origin import require_origin
 from yleum_api.schemas.account_credentials import (
     ConfirmationSent,
     CredentialInfo,
@@ -30,16 +31,6 @@ def clear_session(response: Response) -> None:
         key=settings.jwt_cookie_name, path="/", domain=settings.jwt_cookie_domain
     )
     response.headers["Cache-Control"] = "no-store"
-
-
-def require_origin(request: Request) -> None:
-    settings = get_settings()
-    allowed = {
-        settings.web_base_url.rstrip("/"),
-        *(value.rstrip("/") for value in settings.cors_origins_list),
-    }
-    if request.headers.get("origin") not in allowed:
-        raise ApiError("forbidden", "Недопустимый источник запроса", 403)
 
 
 @router.get("", response_model=CredentialInfo)

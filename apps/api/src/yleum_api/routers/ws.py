@@ -12,6 +12,7 @@ from yleum_api.core.config import get_settings
 from yleum_api.core.db import get_engine
 from yleum_api.core.deps import resolve_session_user
 from yleum_api.core.redis import get_active_stream, get_stream_state
+from yleum_api.core.request_origin import has_session_cookie, request_origin_allowed
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.project import Project
 from yleum_api.services.generation_events import (
@@ -161,6 +162,10 @@ async def project_socket(
     run_id: Annotated[UUID | None, Query()] = None,
     after_seq: Annotated[int, Query(ge=0)] = 0,
 ) -> None:
+    cookie_auth = bool(omnia_session) or has_session_cookie(ws.headers)
+    if (cookie_auth or "origin" in ws.headers) and not request_origin_allowed(ws.headers):
+        await ws.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
     auth_token = omnia_session or token
     if not auth_token:
         await ws.close(code=status.WS_1008_POLICY_VIOLATION)

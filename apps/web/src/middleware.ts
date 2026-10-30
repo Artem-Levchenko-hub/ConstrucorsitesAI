@@ -5,6 +5,30 @@ import { isMaxOwnerPreviewPath } from "@/lib/max-owner-preview-path";
 // the layout calls /api/auth/me to validate the token).
 const AUTH_COOKIE = "omnia_session";
 
+/** Host-only OAuth proofs must start and finish on the configured browser origin. */
+function canonicalAuthNavigation(req: NextRequest): NextResponse | null {
+  if (req.method !== "GET" && req.method !== "HEAD") return null;
+  const raw = process.env.PUBLIC_ORIGIN?.trim();
+  if (!raw) return null;
+  let canonical: URL;
+  try {
+    canonical = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (!['http:', 'https:'].includes(canonical.protocol) || canonical.username || canonical.password) return null;
+  // Standalone Next exposes its internal listen URL here (0.0.0.0:3000).
+  // The edge preserves Host; redirect destinations still come only from config.
+  const browserHost = (req.headers.get("host") || req.nextUrl.host).toLowerCase();
+  if (canonical.host.toLowerCase() === browserHost) return null;
+  const destination = new URL(`${req.nextUrl.pathname}${req.nextUrl.search}`, canonical.origin);
+  const response = NextResponse.redirect(destination);
+  response.headers.set("Cache-Control", "no-store");
+  response.headers.set("Referrer-Policy", "no-referrer");
+  if (req.nextUrl.pathname === "/login") response.headers.set("Clear-Site-Data", '"cache"');
+  return response;
+}
+
 export function middleware(req: NextRequest) {
   // Dev mock mode (NEXT_PUBLIC_USE_MOCKS !== "false"): no backend exists to set
   // the auth cookie, so let every route through — the layout's getSession()
@@ -16,6 +40,11 @@ export function middleware(req: NextRequest) {
 
   const session = req.cookies.get(AUTH_COOKIE);
   const path = req.nextUrl.pathname;
+  const isGeneralAuthRoute = path === "/login" || path === "/register";
+  if (isGeneralAuthRoute || path === "/max/register" || path === "/oauth/complete") {
+    const canonicalResponse = canonicalAuthNavigation(req);
+    if (canonicalResponse) return canonicalResponse;
+  }
   if (path === "/") {
     const response = NextResponse.next();
     if (req.method === "GET" && !session?.value) {
@@ -27,7 +56,6 @@ export function middleware(req: NextRequest) {
     return response;
   }
 
-  const isGeneralAuthRoute = path === "/login" || path === "/register";
   const isPublicMaxRoute =
     path === "/max/product" ||
     path === "/max/guide" ||
@@ -75,5 +103,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/", "/account/:path*", "/billing/:path*", "/admin/:path*", "/max/:path*", "/login", "/register"],
+  matcher: ["/", "/account/:path*", "/billing/:path*", "/admin/:path*", "/max/:path*", "/login", "/register", "/oauth/complete"],
 };

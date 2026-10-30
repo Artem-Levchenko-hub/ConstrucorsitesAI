@@ -16,6 +16,8 @@ from yleum_api.core.db import get_engine
 from yleum_api.core.deps import AdminUserDep, OptionalUserDep, SessionDep, resolve_session_user
 from yleum_api.core.errors import ApiError
 from yleum_api.core.ratelimit import _client_ip
+from yleum_api.core.request_origin import allowed_origin as allowed_origin
+from yleum_api.core.request_origin import request_origin_allowed, require_origin
 from yleum_api.models.support import SupportTicket
 from yleum_api.schemas.support import (
     AdminTicketList,
@@ -33,20 +35,6 @@ from yleum_api.services.support_realtime import publish_support_change, support_
 router = APIRouter(prefix="/api", tags=["support"])
 _AUTH_RECHECK_SECONDS = 15.0
 SupportToken = Annotated[str | None, Header(alias="X-Support-Token", max_length=64)]
-
-
-def allowed_origin(origin: str | None) -> bool:
-    settings = get_settings()
-    allowed = {
-        settings.web_base_url.rstrip("/"),
-        *(item.rstrip("/") for item in settings.cors_origins_list),
-    }
-    return origin is not None and origin != "null" and origin in allowed
-
-
-def require_origin(request: Request) -> None:
-    if not allowed_origin(request.headers.get("origin")):
-        raise ApiError("forbidden", "Недопустимый источник запроса", 403)
 
 
 async def _result(
@@ -193,7 +181,7 @@ async def _socket_identity(
 
 @router.websocket("/ws/support")
 async def support_socket(ws: WebSocket) -> None:
-    if not allowed_origin(ws.headers.get("origin")):
+    if not request_origin_allowed(ws.headers):
         await ws.close(code=1008)
         return
     await ws.accept()

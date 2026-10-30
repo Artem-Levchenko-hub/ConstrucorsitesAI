@@ -30,6 +30,7 @@ from sqlalchemy.exc import IntegrityError
 from yleum_api.core.config import get_settings
 from yleum_api.core.deps import SessionDep
 from yleum_api.core.errors import ApiError
+from yleum_api.core.oauth_browser_binding import clear_binding, has_binding, set_binding
 from yleum_api.core.ratelimit import rate_limit_auth
 from yleum_api.models.oauth_login import OAuthLoginState, UserIdentity
 from yleum_api.models.user import User
@@ -83,13 +84,18 @@ def _web_url(path: str) -> str:
     return f"{get_settings().web_base_url.rstrip('/')}{path}"
 
 
-def _login_redirect(code: str, next_path: str | None) -> RedirectResponse:
+def _login_redirect(
+    code: str, next_path: str | None, raw_state: str | None = None
+) -> RedirectResponse:
     query: dict[str, str] = {"oauth_error": code}
     if next_path and next_path != DEFAULT_NEXT:
         query["next"] = next_path
-    return RedirectResponse(
+    response = RedirectResponse(
         _web_url(f"/login?{urlencode(query)}"), status_code=status.HTTP_303_SEE_OTHER
     )
+    if raw_state is not None:
+        clear_binding(response, "state", raw_state)
+    return response
 
 
 def _require_provider(provider: str) -> OAuthProvider:
@@ -154,7 +160,9 @@ async def _sign_in(
     attach_session_cookie(response, user, auth_session)
 
 
-async def _pending_record(session: SessionDep, raw_ticket: str, now: datetime) -> OAuthLoginState:
+async def _pending_record(
+    session: SessionDep, raw_ticket: str, now: datetime, request: Request
+) -> OAuthLoginState:
     record = (
         await session.execute(
             select(OAuthLoginState)
@@ -169,6 +177,7 @@ async def _pending_record(session: SessionDep, raw_ticket: str, now: datetime) -
         or record.ticket_expires_at <= now
         or record.pending_provider_user_id is None
         or record.pending_email is None
+        or not has_binding(request, "ticket", record.provider, raw_ticket)
     ):
         raise ApiError(
             "oauth_ticket_invalid",
@@ -197,10 +206,13 @@ async def list_providers() -> OAuthProvidersPublic:
 @router.get("/pending", response_model=OAuthPendingPublic)
 async def pending_registration(
     session: SessionDep,
+    request: Request,
+    response: Response,
     ticket: str = Query(min_length=32, max_length=512),
 ) -> OAuthPendingPublic:
     """Что показать на экране подтверждения документов (билет не тратится)."""
-    record = await _pending_record(session, ticket, datetime.now(UTC))
+    record = await _pending_record(session, ticket, datetime.now(UTC), request)
+    response.headers["Cache-Control"] = "no-store"
     return OAuthPendingPublic(
         provider=cast(OAuthProvider, record.provider),
         label=oauth_login.provider_label(record.provider),
@@ -218,6 +230,8 @@ async def pending_registration(
 async def start_login(
     provider: str,
     session: SessionDep,
+    request: Request,
+    response: Response,
     next_path: str | None = Query(default=None, alias="next", max_length=512),
 ) -> OAuthStartPublic:
     provider_key = _require_provider(provider)
@@ -246,6 +260,7 @@ async def start_login(
         )
     )
     await session.commit()
+    set_binding(request, response, "state", provider_key, raw_state, int(STATE_TTL.total_seconds()))
     return OAuthStartPublic(
         authorization_url=oauth_login.authorization_url(
             provider_key, state=raw_state, code_challenge=code_challenge
@@ -265,6 +280,8 @@ async def finish_login(
     device_id: str | None = Query(default=None, max_length=512),
     error: str | None = Query(default=None, max_length=256),
 ) -> RedirectResponse:
+    if not has_binding(request, "state", provider, state):
+        return _login_redirect("oauth_state_invalid", None)
     now = datetime.now(UTC)
     record = (
         await session.execute(
@@ -279,15 +296,15 @@ async def finish_login(
         or record.used_at is not None
         or record.expires_at <= now
     ):
-        return _login_redirect("oauth_state_invalid", None)
+        return _login_redirect("oauth_state_invalid", None, state)
     record.used_at = now
     next_path = record.next_path or DEFAULT_NEXT
     if error or not code:
         await session.commit()
-        return _login_redirect("oauth_cancelled", next_path)
+        return _login_redirect("oauth_cancelled", next_path, state)
     if not oauth_login.is_configured(provider):
         await session.commit()
-        return _login_redirect("oauth_provider_unavailable", next_path)
+        return _login_redirect("oauth_provider_unavailable", next_path, state)
     try:
         identity = await oauth_login.fetch_identity(
             provider,
@@ -299,10 +316,10 @@ async def finish_login(
     except OAuthLoginError as exc:
         log.warning("oauth login: %s exchange failed: %s", provider, exc)
         await session.commit()
-        return _login_redirect("oauth_exchange_failed", next_path)
+        return _login_redirect("oauth_exchange_failed", next_path, state)
     if identity.email is None:
         await session.commit()
-        return _login_redirect("oauth_email_required", next_path)
+        return _login_redirect("oauth_email_required", next_path, state)
 
     user = await _resolve_user(session, identity, now)
     if user is None:
@@ -312,14 +329,20 @@ async def finish_login(
         record.pending_provider_user_id = identity.provider_user_id
         record.pending_email = identity.email
         await session.commit()
-        return RedirectResponse(
+        response = RedirectResponse(
             _web_url(f"/oauth/complete?{urlencode({'ticket': raw_ticket})}"),
             status_code=status.HTTP_303_SEE_OTHER,
         )
+        set_binding(
+            request, response, "ticket", provider, raw_ticket, int(TICKET_TTL.total_seconds()),
+            replacing=("state", state),
+        )
+        return response
     if user.status != "active":
         await session.commit()
-        return _login_redirect("account_unavailable", next_path)
+        return _login_redirect("account_unavailable", next_path, state)
     response = RedirectResponse(_web_url(next_path), status_code=status.HTTP_303_SEE_OTHER)
+    clear_binding(response, "state", state)
     await _sign_in(session, user, request, response, now)
     return response
 
@@ -351,7 +374,7 @@ async def complete_registration(
             status.HTTP_409_CONFLICT,
         )
     now = datetime.now(UTC)
-    record = await _pending_record(session, payload.ticket, now)
+    record = await _pending_record(session, payload.ticket, now, request)
     identity = ProviderIdentity(
         provider=record.provider,
         provider_user_id=cast(str, record.pending_provider_user_id),
@@ -396,4 +419,5 @@ async def complete_registration(
         ) from exc
     from yleum_api.routers.auth import _public_user
 
+    clear_binding(response, "ticket", payload.ticket)
     return await _public_user(session, user)

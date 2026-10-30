@@ -11,7 +11,11 @@ const redirect = vi.fn((target: string) => {
 });
 const cookieSet = vi.fn();
 vi.mock("next/navigation", () => ({ redirect }));
-vi.mock("next/headers", () => ({ cookies: async () => ({ set: cookieSet }), headers: async () => new Headers() }));
+vi.mock("next/headers", () => ({ cookies: async () => ({
+  set: cookieSet,
+  get: (name: string) => name.startsWith("__Host-yleum-oauth-ticket-")
+    ? { value: "p".repeat(43) } : undefined,
+}), headers: async () => new Headers() }));
 
 function form(fields: Record<string, string>): FormData {
   const data = new FormData();
