@@ -166,9 +166,13 @@ verifiable.
 The 2026-10-30 security repair rotates the recipient for future copies only.
 The matching private key stays offline; all previous keys and ciphertext remain
 preserved. Recipient SPKI SHA-256:
-`986a485ad840952369642e3f8cde74d234eb102af54ba7165143252b8d976325`.
+`8aec853dd33161c823548c4d80f988087c2ebf2a02dc045641348e74e190a115`.
 
-After the pushed revision has passed CI and canonical deployment, on Core:
+After the exact pushed revision has passed CI, update the canonical `/opt/omnia`
+checkout and install its backup hooks on Core. This delivers backup tooling only;
+keep application runtimes on their current revision until the full backup,
+off-host decryption and isolated restore have passed. Then use the canonical
+application deployment path.
 
 1. Confirm the exact delivered `/opt/omnia` revision and that
    `yleum-platform-backup.service` is inactive. Preserve the current two hook
@@ -205,7 +209,7 @@ Exact hook installation (root maintenance shell, after replacing the revision):
 
 ```sh
 set -euo pipefail
-expected_revision='<full pushed and deployed 40-character revision>'
+expected_revision='<full pushed 40-character backup-source revision>'
 test "$(git -C /opt/omnia rev-parse HEAD)" = "$expected_revision"
 ! systemctl is-active --quiet yleum-platform-backup.service
 preserved=$(mktemp -d /opt/omnia-runtime/backups/.hook-preservation.XXXXXX)
