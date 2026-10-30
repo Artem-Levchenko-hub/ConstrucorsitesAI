@@ -1,3 +1,7 @@
+import json
+import re
+from pathlib import Path
+from subprocess import run
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -11,6 +15,7 @@ from yleum_api.services.max_project_kit import MAX_MANAGEMENT_RUNTIME_FILES, _te
 SDK_PATH = "src/lib/omnia/integration-client.ts"
 LEGACY_CLIENT_PATH = "src/lib/omnia/client.ts"
 ACTIVITY_PATH = "src/lib/omnia/activity.ts"
+ANALYTICS_PATH = "src/lib/omnia/analytics.ts"
 CATALOG_SERVER_PATH = "src/lib/omnia/catalog-server.ts"
 CATALOG_ACTIONS_PATH = "src/lib/omnia/catalog-actions.ts"
 CATALOG_CLIENT_PATH = "src/lib/omnia/catalog-client.ts"
@@ -19,6 +24,128 @@ RENEWAL_PATH = "src/lib/max/owner-preview-renewal.ts"
 FOOTER_PATH = "src/components/YleumCompliance.tsx"
 SUPPORT_PATH = "src/app/support/page.tsx"
 CONFIG_PATH = "src/lib/omnia/max-config.ts"
+WEB_NODE_MODULES = Path(__file__).resolve().parents[2] / "web/node_modules"
+
+
+def legacy_analytics(project_expression):
+    return (
+        "export async function forwardMaxAnalytics(\n"
+        '  actor: string, eventId: string, kind: "open" | "action" | "event",\n'
+        "): Promise<boolean> {\n"
+        f"  const project = {project_expression};\n"
+        "  return Boolean(project);\n}\n"
+    )
+
+
+@pytest.mark.parametrize("binding", ["missing", "environment", "literal", "unbound"])
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n"], ids=["lf", "crlf"])
+async def test_sdk_refresh_upgrades_analytics_without_losing_project_binding(binding, line_ending):
+    from yleum_api.schemas.max_studio import MaxProjectConfigPayload
+    from yleum_api.services.max_managed_generation import refresh_integration_sdk
+    from yleum_api.services.max_project_kit import render_max_managed_files
+
+    project_id = uuid4()
+    expected = _template_file(ANALYTICS_PATH)
+    tree = {"src/app/page.tsx": "owner product"}
+    if binding in {"literal", "unbound"}:
+        project_id = project_id if binding == "literal" else None
+        expected = render_max_managed_files(
+            MaxProjectConfigPayload.default_for("Owner app"), project_id,
+        )[ANALYTICS_PATH]
+        tree[ANALYTICS_PATH] = legacy_analytics(json.dumps(str(project_id) if project_id else ""))
+    elif binding == "environment":
+        tree[ANALYTICS_PATH] = legacy_analytics(
+            'process.env.OMNIA_PROJECT_ID || process.env.YLEUM_OWNER_PROJECT_ID || ""',
+        )
+    if ANALYTICS_PATH in tree:
+        tree[ANALYTICS_PATH] = tree[ANALYTICS_PATH].replace("\n", line_ending)
+    writes = []
+
+    async def stage(files, deletes):
+        writes.append((files, deletes))
+        tree.update(files)
+
+    handle = SimpleNamespace(snapshot_files=AsyncMock(side_effect=lambda: dict(tree)),
+                             stage_patch=stage)
+    await refresh_integration_sdk(handle)
+    await refresh_integration_sdk(handle)
+    assert tree[ANALYTICS_PATH] == expected
+    assert tree[ACTIVITY_PATH] == _template_file(ACTIVITY_PATH)
+    assert tree["src/lib/omnia/business-server.ts"] == _template_file(
+        "src/lib/omnia/business-server.ts",
+    )
+    assert tree["src/app/page.tsx"] == "owner product"
+    assert len(writes) == 1 and writes[0][1] == ()
+
+
+@pytest.mark.parametrize("source", [
+    legacy_analytics('"not-a-project-uuid"'),
+    legacy_analytics("unknownProject()"),
+    legacy_analytics('"00000000-0000-4000-8000-000000000001"')
+    + 'const project = "00000000-0000-4000-8000-000000000002";\n',
+    "export const other = true;",
+    "",
+])
+async def test_sdk_refresh_rejects_unknown_analytics_identity_before_writing(source):
+    from yleum_api.core.errors import ApiError
+    from yleum_api.services.max_managed_generation import refresh_integration_sdk
+
+    handle = SimpleNamespace(snapshot_files=AsyncMock(return_value={ANALYTICS_PATH: source}),
+                             stage_patch=AsyncMock())
+    with pytest.raises(ApiError, match="MAX analytics project binding"):
+        await refresh_integration_sdk(handle)
+    handle.stage_patch.assert_not_awaited()
+
+
+async def test_refreshed_analytics_typechecks_the_real_managed_business_call(tmp_path):
+    from yleum_api.services.max_managed_generation import refresh_integration_sdk
+
+    modules = WEB_NODE_MODULES
+    compiler = modules / "typescript/lib/tsc.js"
+    if not compiler.is_file():
+        pytest.skip("TypeScript compiler is not installed")
+    business = _template_file("src/lib/omnia/business-server.ts")
+    call = re.search(
+        r'const \{ forwardMaxAnalytics \} = await import\("@/lib/omnia/analytics"\);'
+        r"\s*await forwardMaxAnalytics\([\s\S]*?\n      \);",
+        business,
+    )
+    assert call is not None, "managed business must import and call analytics"
+    (tmp_path / "probe.ts").write_text(
+        'declare const resource: "orders" | "leads" | "bookings";\n'
+        "declare const actor: string;\n"
+        "declare const result: {record: {id: string}};\n"
+        "async function probe() {\n" + call[0] + "\n}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "tsconfig.json").write_text(json.dumps({"compilerOptions": {
+        "strict": True, "target": "ES2022", "module": "ESNext",
+        "moduleResolution": "Bundler", "noEmit": True, "skipLibCheck": True,
+        "baseUrl": str(tmp_path), "paths": {"@/*": ["src/*"]},
+        "typeRoots": [str(modules / "@types")], "types": ["node"],
+    }}), encoding="utf-8")
+    tree = {ANALYTICS_PATH: legacy_analytics(json.dumps(str(uuid4())))}
+
+    def typecheck():
+        for path in (ANALYTICS_PATH, ACTIVITY_PATH):
+            target = tmp_path / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(tree.get(path, _template_file(path)), encoding="utf-8")
+        return run(["node", str(compiler), "--project", str(tmp_path)],
+                   capture_output=True, text=True, check=False, timeout=30)
+
+    before = typecheck()
+    assert before.returncode != 0 and "TS2554" in before.stdout
+
+    async def stage(files, deletes):
+        assert deletes == ()
+        tree.update(files)
+
+    await refresh_integration_sdk(SimpleNamespace(
+        snapshot_files=AsyncMock(return_value=dict(tree)), stage_patch=stage,
+    ))
+    after = typecheck()
+    assert after.returncode == 0, after.stdout + after.stderr
 
 
 @pytest.mark.parametrize("fail_delivery", [False, True])
@@ -72,7 +199,7 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
         path: _template_file(path)
         for path in (
             *MAX_MANAGEMENT_RUNTIME_FILES, "next.config.ts",
-            SDK_PATH, LEGACY_CLIENT_PATH, ACTIVITY_PATH,
+            SDK_PATH, LEGACY_CLIENT_PATH, ACTIVITY_PATH, ANALYTICS_PATH,
             CATALOG_SERVER_PATH, CATALOG_ACTIONS_PATH, CATALOG_CLIENT_PATH,
             PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH
         )
@@ -91,7 +218,7 @@ async def test_generation_retires_encrypted_crud_files_from_existing_projects():
         path: _template_file(path)
         for path in (
             *MAX_MANAGEMENT_RUNTIME_FILES, "next.config.ts",
-            SDK_PATH, LEGACY_CLIENT_PATH, ACTIVITY_PATH,
+            SDK_PATH, LEGACY_CLIENT_PATH, ACTIVITY_PATH, ANALYTICS_PATH,
             CATALOG_SERVER_PATH, CATALOG_ACTIONS_PATH, CATALOG_CLIENT_PATH,
             PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH
         )
@@ -130,8 +257,6 @@ async def test_generation_retires_encrypted_crud_files_from_existing_projects():
 
 @pytest.mark.parametrize("protocol", [None, 1, 2, True])
 async def test_catalog_manifest_upgrade_is_explicit_atomic_and_preserves_product(protocol):
-    import json
-
     from yleum_api.services.max_managed_generation import refresh_integration_sdk
 
     marker = {"version": 1, "services": [{"name": "app", "port": 3000}],
@@ -194,7 +319,7 @@ async def test_sdk_delivery_uses_current_generation_revision_and_is_exported(
     canonical = {
         path: _template_file(path)
         for path in (
-            SDK_PATH, LEGACY_CLIENT_PATH, ACTIVITY_PATH,
+            SDK_PATH, LEGACY_CLIENT_PATH, ACTIVITY_PATH, ANALYTICS_PATH,
             CATALOG_SERVER_PATH, CATALOG_ACTIONS_PATH, CATALOG_CLIENT_PATH,
             PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH, "next.config.ts",
             *(path for path in MAX_MANAGEMENT_RUNTIME_FILES

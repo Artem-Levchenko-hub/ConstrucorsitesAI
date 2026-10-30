@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -22,11 +23,15 @@ if TYPE_CHECKING:
     from yleum_api.services.project_cell_executor import ProjectCellExecutorHandle
 
 INTEGRATION_SDK_PATH = "src/lib/omnia/integration-client.ts"
+ANALYTICS_SDK_PATH = "src/lib/omnia/analytics.ts"
+_ANALYTICS_PROJECT_ENV = (
+    'process.env.OMNIA_PROJECT_ID || process.env.YLEUM_OWNER_PROJECT_ID || ""'
+)
 MANAGED_GENERATION_PATHS = (
     *MAX_MANAGEMENT_RUNTIME_FILES,
     "next.config.ts",
     INTEGRATION_SDK_PATH, "src/lib/omnia/client.ts",
-    "src/lib/omnia/activity.ts",
+    "src/lib/omnia/activity.ts", ANALYTICS_SDK_PATH,
     "src/lib/omnia/catalog-server.ts", "src/lib/omnia/catalog-actions.ts",
     "src/lib/omnia/catalog-client.ts",
     "src/components/MaxAppProvider.tsx", "src/components/YleumCompliance.tsx",
@@ -54,8 +59,38 @@ async def load_saved_business_config(
     return MaxProjectConfigPayload.model_validate(record.config), record.config_version
 
 
-def managed_generation_files(max_config_source: str | None = None) -> dict[str, str]:
+def _analytics_with_existing_project(canonical: str, existing: str | None) -> str:
+    """Replace the SDK body, retaining only a canonical managed project binding."""
+    if existing is None:
+        return canonical
+    bindings = re.findall(r"^[ \t]*const project = ([^\r\n]+);[ \t]*\r?$", existing, re.MULTILINE)
+    if len(bindings) == 1:
+        expression = bindings[0]
+        if expression == _ANALYTICS_PROJECT_ENV:
+            return canonical
+        try:
+            project_id = json.loads(expression)
+            if (
+                isinstance(project_id, str)
+                and (project_id == "" or str(UUID(project_id)) == project_id)
+                and canonical.count(_ANALYTICS_PROJECT_ENV) == 1
+            ):
+                return canonical.replace(_ANALYTICS_PROJECT_ENV, json.dumps(project_id), 1)
+        except (ValueError, TypeError):
+            pass
+    raise ApiError(
+        "conflict", "MAX analytics project binding is not canonical", 409,
+        details={"reason": "managed_analytics_project_binding"},
+    )
+
+
+def managed_generation_files(
+    max_config_source: str | None = None, *, analytics_source: str | None = None,
+) -> dict[str, str]:
     files = {path: _template_file(path) for path in MANAGED_GENERATION_PATHS}
+    files[ANALYTICS_SDK_PATH] = _analytics_with_existing_project(
+        files[ANALYTICS_SDK_PATH], analytics_source,
+    )
     if max_config_source is not None:
         files["src/lib/omnia/max-config.ts"] = max_config_source
     return files
@@ -73,7 +108,9 @@ async def refresh_integration_sdk(
     management_enabled = bool(
         raw_management and parse_management_contract(json.loads(raw_management)).resources
     )
-    files = managed_generation_files(max_config_source)
+    files = managed_generation_files(
+        max_config_source, analytics_source=current.get(ANALYTICS_SDK_PATH),
+    )
     migration_path = "drizzle/0003_owner_management.sql"
     if migration_path in current and current[migration_path] != files[migration_path]:
         raise ApiError(

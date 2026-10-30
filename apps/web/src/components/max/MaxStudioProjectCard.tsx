@@ -15,6 +15,17 @@ import { maxProjectStateView } from "@/lib/max-project-state";
 import { relativeDateLabel } from "@/lib/relative-date";
 import { toast } from "sonner";
 
+const PUBLISHED_FOLLOWUP = {
+  app: {
+    title: "Опубликовано, остались документы",
+    hint: "Подтвердите документы приложения перед следующей публикацией",
+  },
+  bot: {
+    title: "Опубликовано, осталось подключить бота",
+    hint: "Подключите бота, чтобы пользователи могли открыть приложение в MAX",
+  },
+};
+
 /** Полоса пройденного пути: шесть делений вместо мелкой подписи «1 из 6». */
 function JourneyProgress({ done, total }: { done: number; total: number }) {
   return (
@@ -67,22 +78,27 @@ function MaxProjectArtwork({ project }: { project: Project }) {
 export function MaxStudioProjectCard({ project }: { project: Project }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const readiness = useQuery({ queryKey: ["max-readiness", project.id], queryFn: () => getMaxReadiness(project.id), retry: false, staleTime: 20_000 });
-  const journey = getMaxJourney(project.id, readiness.data?.items ?? []);
+  const items = readiness.data?.items ?? [];
+  const publishedCurrent = readiness.isSuccess && items.some(item => item.id === "publish" && item.done);
+  // The card describes the accepted release. A new draft can be ineligible for
+  // publication without undoing that release; keep server/wizard readiness intact.
+  const cardItems = publishedCurrent ? items.map(item => item.id === "build" ? { ...item, done: true } : item) : items;
+  const journey = getMaxJourney(project.id, cardItems);
   const nextStage = readiness.isSuccess ? journey.currentStage : undefined;
   const nextHref = nextStage?.href ?? `/max/${project.id}/dashboard`;
   const status = readiness.isError ? "error" : readiness.isSuccess ? "ready" : "loading";
-  const state = maxProjectStateView(nextStage, status);
-  const live = status === "ready" && !nextStage;
-  // Адрес запрашиваем только у работающих приложений: у остальных его ещё нет,
-  // и лишний запрос на каждую строку списка ничего бы не показал.
+  const publishedFollowup = publishedCurrent && (nextStage?.id === "app" || nextStage?.id === "bot")
+    ? PUBLISHED_FOLLOWUP[nextStage.id] : undefined;
+  const state = { ...maxProjectStateView(nextStage, status), ...publishedFollowup };
+  // A confirmed public URL remains useful while documents or MAX setup are pending.
   const integration = useQuery({
     queryKey: ["max-integration", project.id],
     queryFn: () => getMaxIntegration(project.id),
-    enabled: live,
+    enabled: publishedCurrent,
     retry: false,
     staleTime: 60_000,
   });
-  const appUrl = live ? integration.data?.app_url ?? null : null;
+  const appUrl = publishedCurrent ? integration.data?.app_url ?? null : null;
   const changed = relativeDateLabel(project.updated_at);
 
   return (
@@ -91,7 +107,7 @@ export function MaxStudioProjectCard({ project }: { project: Project }) {
         <MaxProjectArtwork key={safeProjectPreviewUrl(project.preview_url) ?? "fallback"} project={project} />
         <div className="min-w-0">
           <h2><Link href={`/max/${project.id}`} className="max-project-editor-link" aria-label={`Открыть редактор приложения ${project.name}`}>{project.name}</Link></h2>
-          {changed && <p>{live ? "Опубликован" : "Изменён"} {changed}</p>}
+          {changed && <p>Изменён {changed}</p>}
           {appUrl && (
             <button
               type="button"
@@ -114,7 +130,7 @@ export function MaxStudioProjectCard({ project }: { project: Project }) {
         <small>{state.hint}</small>
       </div>
       <div className="max-project-actions">
-        <Link href={nextHref} className="max-project-next">{nextStage?.actionLabel ?? (live ? "Статистика" : "Открыть проект")}<ArrowRight className="size-4 shrink-0" /></Link>
+        <Link href={nextHref} className="max-project-next">{nextStage?.actionLabel ?? (publishedCurrent ? "Статистика" : "Открыть проект")}<ArrowRight className="size-4 shrink-0" /></Link>
         <DropdownMenu>
           <DropdownMenuTrigger asChild><Button type="button" variant="ghost" size="icon" aria-label={`Действия с проектом ${project.name}`} className="size-11 shrink-0"><MoreVertical className="size-4" /></Button></DropdownMenuTrigger>
           <DropdownMenuContent data-max-studio align="end">

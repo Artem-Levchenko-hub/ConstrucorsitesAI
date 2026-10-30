@@ -9,11 +9,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MaxStudioProjectCard } from "@/components/max/MaxStudioProjectCard";
 import type { MaxReadiness, Project } from "@/lib/api/types";
 
-const mocks = vi.hoisted(() => ({ readiness: vi.fn() }));
+const mocks = vi.hoisted(() => ({ readiness: vi.fn(), integration: vi.fn() }));
 
 vi.mock("@/lib/api/max-studio", () => ({
   getMaxReadiness: mocks.readiness,
 }));
+vi.mock("@/lib/api/max-integration", () => ({ getMaxIntegration: mocks.integration }));
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
@@ -56,6 +57,7 @@ describe("Yleum project card", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.integration.mockResolvedValue({ app_url: "https://synthetic.example.test/app" });
     document.head.replaceChildren();
     document.body.replaceChildren();
     const style = document.createElement("style");
@@ -156,5 +158,38 @@ describe("Yleum project card", () => {
     await renderProject({ ...baseProject, id: "absent", preview_url: null });
     expect(container.querySelector(".max-project-thumbnail")).toBeNull();
     expect(container.querySelector(".max-project-monogram")?.textContent).toBe("К");
+  });
+
+  it.each([
+    { done: ["legal", "bot", "publish"], title: "Опубликовано, остался адрес в MAX", action: "Подключить в MAX", href: "/max/coffee?panel=max", tone: "connect" },
+    { done: ["legal", "publish", "max_url"], title: "Опубликовано, осталось подключить бота", action: "Подключить бота", href: "/max/coffee?panel=max", tone: "connect" },
+    { done: ["bot", "publish", "max_url"], title: "Опубликовано, остались документы", action: "Проверить документы", href: "/max/coffee?data=policies", tone: "connect" },
+    { done: ["legal", "bot", "publish", "max_url"], title: "Работает у пользователей", action: "Статистика", href: "/max/coffee/dashboard", tone: "live" },
+  ])("preserves a published release during a new build while retaining $action", async ({ done, title, action, href, tone }) => {
+    const response = readiness(done);
+    mocks.readiness.mockResolvedValue(response);
+    await renderProject(baseProject);
+    const status = await waitForStatus(tone);
+    expect(status.querySelector("strong")?.textContent).toBe(title);
+    expect(container.textContent).not.toContain("Приложение ещё не собрано");
+    const next = container.querySelector<HTMLAnchorElement>(".max-project-next")!;
+    expect(next.textContent).toBe(action);
+    expect(next.getAttribute("href")).toBe(href);
+    await act(async () => { await vi.waitFor(() => expect(container.querySelector(".max-project-url")?.textContent).toContain("synthetic.example.test/app")); });
+    expect(mocks.integration).toHaveBeenCalledWith(baseProject.id);
+    expect(container.querySelector(".max-project-identity p")?.textContent).toMatch(/^Изменён /);
+    // Presentation must not turn draft publication permission into server truth.
+    expect(response.items.find(item => item.id === "build")?.done).toBe(false);
+    expect(client.getQueryData(["max-readiness", baseProject.id])).toEqual(response);
+  });
+
+  it("does not infer publication from a saved snapshot or an unfinished first build", async () => {
+    mocks.readiness.mockResolvedValue(readiness(["legal", "bot"]));
+    await renderProject(baseProject);
+    const status = await waitForStatus("build");
+    expect(status.textContent).toContain("Приложение ещё не собрано");
+    expect(container.querySelector(".max-project-next")?.textContent).toBe("Продолжить сборку");
+    expect(container.querySelector(".max-project-url")).toBeNull();
+    expect(mocks.integration).not.toHaveBeenCalled();
   });
 });
