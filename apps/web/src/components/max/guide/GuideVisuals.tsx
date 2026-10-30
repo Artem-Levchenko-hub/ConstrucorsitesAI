@@ -139,6 +139,7 @@ export function GuideScreenshot({ id }: { id: string }) {
         <p className="guide-screenshot__source">
           Источник: <a href={screenshot.sourceUrl} target="_blank" rel="noopener noreferrer">{screenshot.sourceLabel}</a>
           {" · Снято "}<time dateTime={screenshot.capturedAt}>{capturedDate}</time>
+          {" · Реальные данные скрыты"}
         </p>
       </figcaption>
     </figure>

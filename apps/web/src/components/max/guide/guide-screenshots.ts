@@ -4,10 +4,11 @@ export type GuideScreenshotData = {
   sourceLabel: string; sourceUrl: string; capturedAt: string; callouts: GuideCallout[];
 };
 
-// Original browser captures; coordinates are percentages of each saved image.
+// Genuine browser captures with opaque data redactions flattened into the PNG files.
+// Coordinates are percentages of each saved image; no raw capture is publicly served.
 export const guideScreenshots: Record<string, GuideScreenshotData> = {
   "projects": {
-    "src": "/guide/2026-10-30/projects.jpg",
+    "src": "/guide/2026-10-30-redacted/projects.png",
     "width": 870,
     "height": 668,
     "alt": "Страница Yleum со списком тестовых приложений и кнопкой создания",
@@ -28,12 +29,12 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
         "y": 73,
         "targetX": 27,
         "targetY": 76,
-        "text": "Нажмите название своего приложения, чтобы открыть редактор. На снимке — наши тестовые проекты; у вас будут свои названия."
+        "text": "Нажмите название своего приложения, чтобы открыть редактор. Названия и данные проектов на снимке скрыты; у вас будут свои названия."
       }
     ]
   },
   "create": {
-    "src": "/guide/2026-10-30/create.jpg",
+    "src": "/guide/2026-10-30-redacted/create.png",
     "width": 870,
     "height": 668,
     "alt": "Настоящий мастер Yleum: название, описание и выбранный тип Каталог",
@@ -73,10 +74,10 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
     ]
   },
   "create-audience": {
-    "src": "/guide/2026-10-30/create-audience.jpg",
+    "src": "/guide/2026-10-30-redacted/create-audience.png",
     "width": 870,
     "height": 668,
-    "alt": "Шаг аудитории мастера с примером кофейни",
+    "alt": "Шаг мастера с полями аудитории и главного действия; введённые данные скрыты",
     "title": "Шаг 2 · Для кого и зачем",
     "sourceLabel": "Yleum",
     "sourceUrl": "https://yleum.ru/max",
@@ -94,7 +95,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
         "y": 57,
         "targetX": 48,
         "targetY": 63,
-        "text": "Назовите одно главное действие. В примере — заказать напиток к выдаче."
+        "text": "Назовите одно главное действие, которое пользователь должен выполнить в приложении."
       },
       {
         "x": 68,
@@ -106,7 +107,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
     ]
   },
   "create-functions": {
-    "src": "/guide/2026-10-30/create-functions.jpg",
+    "src": "/guide/2026-10-30-redacted/create-functions.png",
     "width": 870,
     "height": 668,
     "alt": "Реальный выбор разделов кабинета и функций будущего мини-приложения",
@@ -139,7 +140,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
     ]
   },
   "create-review": {
-    "src": "/guide/2026-10-30/create-review.jpg",
+    "src": "/guide/2026-10-30-redacted/create-review.png",
     "width": 870,
     "height": 668,
     "alt": "Итоговый обзор настоящего мастера Yleum, проект ещё не создан",
@@ -165,7 +166,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
     ]
   },
   "builder": {
-    "src": "/guide/2026-10-30/builder.jpg",
+    "src": "/guide/2026-10-30-redacted/builder.png",
     "width": 870,
     "height": 668,
     "alt": "Действующий редактор тестового приложения с принятыми изменениями",
@@ -205,7 +206,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
     ]
   },
   "policies": {
-    "src": "/guide/2026-10-30/policies.jpg",
+    "src": "/guide/2026-10-30-redacted/policies.png",
     "width": 870,
     "height": 668,
     "alt": "Реальный раздел политик с уже подтверждёнными документами",
@@ -238,7 +239,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
     ]
   },
   "catalog": {
-    "src": "/guide/2026-10-30/catalog.jpg",
+    "src": "/guide/2026-10-30-redacted/catalog.png",
     "width": 870,
     "height": 668,
     "alt": "Настоящий каталог владельца с поиском, фильтрами, добавлением позиции и фото",
@@ -278,7 +279,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
     ]
   },
   "catalog-edit": {
-    "src": "/guide/2026-10-30/catalog-edit.jpg",
+    "src": "/guide/2026-10-30-redacted/catalog-edit.png",
     "width": 870,
     "height": 668,
     "alt": "Реальная форма редактирования товара с названием, фото, ценой и наличием",
@@ -311,7 +312,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
     ]
   },
   "catalog-photo": {
-    "src": "/guide/2026-10-30/catalog-photo.jpg",
+    "src": "/guide/2026-10-30-redacted/catalog-photo.png",
     "width": 870,
     "height": 668,
     "alt": "Настоящее окно добавления фотографии к позиции каталога",
@@ -344,7 +345,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
     ]
   },
   "integrations": {
-    "src": "/guide/2026-10-30/integrations.jpg",
+    "src": "/guide/2026-10-30-redacted/integrations.png",
     "width": 870,
     "height": 668,
     "alt": "Текущий список ЮKassa, МойСклад, Яндекс Метрика и amoCRM в Yleum",
@@ -377,7 +378,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
     ]
   },
   "max-bots": {
-    "src": "/guide/2026-10-30/max-bots.jpg",
+    "src": "/guide/2026-10-30-redacted/max-bots.png",
     "width": 1028,
     "height": 464,
     "alt": "Реальный список чат-ботов MAX с раскрытым меню Настройки",
@@ -391,7 +392,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
         "y": 31,
         "targetX": 90,
         "targetY": 44,
-        "text": "Откройте меню ⋮ у нужного бота. На снимке показан наш тестовый бот."
+        "text": "Откройте меню ⋮ у нужного бота. Имя, адрес и изображение бота на снимке скрыты."
       },
       {
         "x": 68,
@@ -403,7 +404,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
     ]
   },
   "max-connection": {
-    "src": "/guide/2026-10-30/max-connection.jpg",
+    "src": "/guide/2026-10-30-redacted/max-connection.png",
     "width": 1280,
     "height": 720,
     "alt": "Реальный четырёхшаговый мастер Yleum на шаге Публикация после подключения бота",
@@ -429,7 +430,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
     ]
   },
   "publish": {
-    "src": "/guide/2026-10-30/publish.jpg",
+    "src": "/guide/2026-10-30-redacted/publish.png",
     "width": 870,
     "height": 668,
     "alt": "Реальное опубликованное состояние тестового приложения Yleum",
@@ -462,7 +463,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
     ]
   },
   "max-address": {
-    "src": "/guide/2026-10-30/max-address.jpg",
+    "src": "/guide/2026-10-30-redacted/max-address.png",
     "width": 710,
     "height": 180,
     "alt": "Фрагмент реального мастера: флажок сохранения адреса и кнопка подтверждения",
@@ -488,7 +489,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
     ]
   },
   "max-settings": {
-    "src": "/guide/2026-10-30/max-settings.jpg",
+    "src": "/guide/2026-10-30-redacted/max-settings.png",
     "width": 1158,
     "height": 668,
     "alt": "Настоящие настройки бота MAX со ссылкой, выбором кнопки запуска и сохранением",
@@ -521,7 +522,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
     ]
   },
   "management": {
-    "src": "/guide/2026-10-30/management.jpg",
+    "src": "/guide/2026-10-30-redacted/management.png",
     "width": 870,
     "height": 668,
     "alt": "Реальный кабинет старого приложения с каталогом и предложением подключить управление обращениями",
@@ -547,7 +548,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
     ]
   },
   "billing": {
-    "src": "/guide/2026-10-30/billing.jpg",
+    "src": "/guide/2026-10-30-redacted/billing.png",
     "width": 1045,
     "height": 610,
     "alt": "Фрагмент настоящего кабинета Yleum без адреса почты и персональных реквизитов",
@@ -575,12 +576,12 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
         "y": 45,
         "targetX": 23,
         "targetY": 52,
-        "text": "Здесь переключаются сборки, списания и лимиты. Числа на снимке относятся только к нашему тестовому аккаунту; актуальные цены и остатки смотрите в своём кабинете."
+        "text": "Здесь переключаются сборки, списания и лимиты. Показатели аккаунта на снимке скрыты; актуальные цены и остатки смотрите в своём кабинете."
       }
     ]
   },
   "support": {
-    "src": "/guide/2026-10-30/support.jpg",
+    "src": "/guide/2026-10-30-redacted/support.png",
     "width": 440,
     "height": 608,
     "alt": "Реальный виджет Yleum с графиком поддержки, темой и полем сообщения",

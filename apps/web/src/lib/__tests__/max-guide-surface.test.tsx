@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -40,15 +40,19 @@ describe("MAX guide screenshots", () => {
     expect(document.body.textContent).not.toContain("Расширенные настройки → Настроить");
   });
 
-  it("uses curated JPEG files rather than fabricated interface controls", () => {
+  it("publishes only flattened redacted PNG files rather than raw captures or fabricated controls", () => {
     expect(Object.keys(guideScreenshots).length).toBeGreaterThan(0);
+    const publicRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../public");
+    expect(existsSync(resolve(publicRoot, "guide/2026-10-30"))).toBe(false);
 
     for (const [id, screenshot] of Object.entries(guideScreenshots)) {
-      expect(screenshot.src).toMatch(/^\/guide\/2026-10-30\/[^/]+\.jpg$/);
-      const imagePath = resolve(dirname(fileURLToPath(import.meta.url)), "../../../public", screenshot.src.slice(1));
+      expect(screenshot.src).toMatch(/^\/guide\/2026-10-30-redacted\/[^/]+\.png$/);
+      const imagePath = resolve(publicRoot, screenshot.src.slice(1));
       const imageBytes = readFileSync(imagePath);
       expect(imageBytes.length).toBeGreaterThan(1_000);
-      expect([...imageBytes.subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+      expect([...imageBytes.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+      expect(imageBytes.readUInt32BE(16)).toBe(screenshot.width);
+      expect(imageBytes.readUInt32BE(20)).toBe(screenshot.height);
 
       const document = renderScreenshot(id);
       const image = document.querySelector("figure img");
@@ -56,6 +60,7 @@ describe("MAX guide screenshots", () => {
       expect(image?.getAttribute("width")).toBe(String(screenshot.width));
       expect(image?.getAttribute("height")).toBe(String(screenshot.height));
       expect(image?.getAttribute("alt")).toBe(screenshot.alt);
+      expect(document.querySelector("figcaption")?.textContent).toContain("Реальные данные скрыты");
       expect(document.querySelectorAll('button, input, select, textarea, [role="button"]')).toHaveLength(0);
     }
   });
