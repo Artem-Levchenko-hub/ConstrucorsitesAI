@@ -70,11 +70,15 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
         self.owner = json.loads(
             (Path(__file__).parent / "fixtures/owner-management-quiescence-sources.json").read_text()
         )
+        self.connect = json.loads(
+            (Path(__file__).parent / "fixtures/connect-startup-quiescence-sources.json").read_text()
+        )
         self.legacy_catalog = json.loads(
             (Path(__file__).parent / "fixtures/legacy-catalog-quiescence-sources.json").read_text()
         )
         self.reviewed = (
             self.old, self.new, self.snapshot, self.catalog, self.legacy_catalog, self.owner,
+            self.connect,
         )
 
     def test_live_and_reviewed_successor_are_complete_supported_bundles(self):
@@ -185,9 +189,20 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             with self.assertRaisesRegex(self.checker.PhysicalDrainError, "quiescence_unsupported_source"):
                 self.checker._require_reviewed_portable_sources(mixed)
 
-    def test_owner_bundle_matches_exact_current_source(self):
+    def test_connect_successor_preserves_historical_owner_and_changes_only_egress(self):
+        self.assertEqual(len(self.connect), 14)
+        self.assertEqual(self.checker._PORTABLE_QUIESCENCE_CONNECT_SOURCES, self.connect)
+        self.assertEqual(set(self.connect), set(self.owner))
+        self.assertEqual(
+            {name for name in self.connect if self.connect[name] != self.owner[name]},
+            {"services.machine_egress"},
+        )
+        self.checker._require_reviewed_portable_sources(self.connect)
+        self.checker._require_reviewed_portable_sources(self.owner)
+
+    def test_connect_bundle_matches_exact_current_source(self):
         root = Path(__file__).resolve().parents[2] / "apps/orchestrator/src/yleum_orchestrator"
-        for name, expected in self.owner.items():
+        for name, expected in self.connect.items():
             source = root.joinpath(*name.split(".")).with_suffix(".py").read_bytes()
             # Git checkouts on Windows may materialize CRLF; live Linux bytes
             # and the authority table remain exact LF source, never normalized.
@@ -266,13 +281,13 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2] / "apps/orchestrator/src/yleum_orchestrator"
         with tempfile.TemporaryDirectory() as temporary:
             origins = {}
-            for name in self.owner:
+            for name in self.connect:
                 source = root.joinpath(*name.split(".")).with_suffix(".py").read_bytes()
                 path = Path(temporary) / (name + ".py")
                 path.write_bytes(source.replace(b"\r\n", b"\n"))
                 origins["yleum_orchestrator." + name] = SimpleNamespace(origin=str(path))
             with patch.object(importlib.util, "find_spec", side_effect=origins.get):
-                self.assertEqual(self.checker._portable_quiescence_sources(), self.owner)
+                self.assertEqual(self.checker._portable_quiescence_sources(), self.connect)
                 helper = origins.pop("yleum_orchestrator.services.app_business_config")
                 with self.assertRaisesRegex(
                     self.checker.PhysicalDrainError, "quiescence_unsupported_source"

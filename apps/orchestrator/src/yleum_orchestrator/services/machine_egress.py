@@ -18,6 +18,7 @@ import socket
 import socketserver
 import ssl
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import cast
 from urllib.parse import urlsplit
@@ -135,7 +136,95 @@ class _Proxy(socketserver.ThreadingTCPServer):
     relay_only: bool = False
 
 
+class _ConnectWriter:
+    """Pace a small opaque prefix on the observed packetization-sensitive path.
+
+    No TLS inspection or crypto policy changes. Budgets span all client reads,
+    while each original write retains a single timeout, including its bulk tail.
+    """
+
+    def __init__(self, remote: socket.socket) -> None:
+        self.remote = remote
+        self.remaining = 2048
+        self.pause_budget = 0.072
+        self.last_write: float | None = None
+        self.nodelay = remote.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY)
+        self.changed_nodelay = False
+
+    def _finish_prefix(self) -> None:
+        if self.changed_nodelay:
+            self.remote.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, self.nodelay)
+            self.changed_nodelay = False
+
+    def _send_before(self, data: bytes, deadline: float) -> None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("CONNECT startup write deadline elapsed")
+        self.remote.settimeout(remaining)
+        self.remote.sendall(data)
+
+    def _pace(self, deadline: float) -> None:
+        now = time.monotonic()
+        if self.last_write is None or self.pause_budget <= 0:
+            return
+        delay = min(0.012 - (now - self.last_write), self.pause_budget, deadline - now)
+        if delay > 0:
+            time.sleep(delay)
+            self.pause_budget = max(
+                0.0, self.pause_budget - max(delay, time.monotonic() - now),
+            )
+
+    def sendall(self, data: bytes) -> None:
+        if not data:
+            return
+        if not self.remaining:
+            self.remote.sendall(data)
+            return
+        original_timeout = self.remote.gettimeout()
+        deadline = time.monotonic() + (
+            original_timeout if original_timeout is not None else 20.0
+        )
+        try:
+            if not self.changed_nodelay:
+                self.remote.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                self.changed_nodelay = True
+            offset = 0
+            while offset < len(data) and self.remaining:
+                length = min(384, self.remaining, len(data) - offset)
+                self._pace(deadline)
+                self._send_before(data[offset:offset + length], deadline)
+                self.last_write = time.monotonic()
+                self.remaining -= length
+                offset += length
+            if not self.remaining:
+                self._finish_prefix()
+            if offset < len(data):
+                self._send_before(data[offset:], deadline)
+        except BaseException:
+            self._finish_prefix()
+            raise
+        finally:
+            self.remote.settimeout(original_timeout)
+
+
 class _Handler(socketserver.BaseRequestHandler):
+    def relay(self, remote: socket.socket, send_upstream: Callable[[bytes], None]) -> None:
+        count = 0
+        started = time.monotonic()
+        while time.monotonic() - started < 900 and count < 512 * 1024 * 1024:
+            readable, _, _ = select.select([self.request, remote], [], [], 30)
+            if not readable:
+                break
+            for source in readable:
+                data = source.recv(65536)
+                if not data:
+                    return
+                count += len(data)
+                if source is self.request:
+                    send_upstream(data)
+                else:
+                    self.request.sendall(data)
+
     def business_receipt(self, lines: list[str], body: bytes) -> None:
         server = cast(_Proxy, self.server)
         headers: dict[str, str] = {}
@@ -244,20 +333,12 @@ class _Handler(socketserver.BaseRequestHandler):
                 raise OSError("public destination unavailable") from last_error
             if method == "CONNECT":
                 self.request.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            send_upstream = (
+                _ConnectWriter(remote).sendall if method == "CONNECT" else remote.sendall
+            )
             if request_data:
-                remote.sendall(request_data)
-            count = 0
-            started = time.monotonic()
-            while time.monotonic() - started < 900 and count < 512 * 1024 * 1024:
-                readable, _, _ = select.select([self.request, remote], [], [], 30)
-                if not readable:
-                    break
-                for source in readable:
-                    data = source.recv(65536)
-                    if not data:
-                        return
-                    count += len(data)
-                    (remote if source is self.request else self.request).sendall(data)
+                send_upstream(request_data)
+            self.relay(remote, send_upstream)
         except (OSError, ValueError):
             try:
                 self.request.sendall(

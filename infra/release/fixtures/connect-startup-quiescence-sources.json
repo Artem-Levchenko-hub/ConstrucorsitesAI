@@ -1,0 +1,16 @@
+{
+  "routers.workspace": "a32fedaf6bb0bca42950a8f1f777937314154ef6d93436b4a0d7610423dc769a",
+  "services.app_business_config": "2e6a05f2b43773fbb8ae5b0fcdf9effdb1ace86782592fa74d2dba363cd85601",
+  "services.cell_lock": "1bf272c831eec8446270adf098de101db2aac6e02b5f18ea86ff43c81bfb39b3",
+  "services.cell_state": "c506c7071f9b067f7819745c104d207dc496209c576bce3179f505516f2a1d42",
+  "services.docker_cell_resources": "6a7f931d4a17bc4517137de069186eb6bb4434e65ce32429de3ac46b3ff52710",
+  "services.docker_machine_backend": "74caba16187c229a257e66ccedf18c4ee17c07ed2612411b8eef68f19b697138",
+  "services.generation_reader_inventory": "119a83b06d26c2936d1fdf6140c824cb53fee761d7f0d4fe5b8465f34ed04a6e",
+  "services.machine_adapter": "80b8a8033be6c314ffcd0bba93c027cce6b50b68a7197ed93078d115254cb661",
+  "services.machine_egress": "60ed890167ed85c5e326dfdc09cf10a139be0cd74bf90ed027470b2f38adf627",
+  "services.owner_management_identity": "589baa7e32e61432e36cfab21efd69602170cb79a1bf24471af4a375a50a8104",
+  "services.project_machine": "c265481789481f8b4f3f486f4f44345cdf835759204f44b1c7d5667373f171b3",
+  "services.published_machine_backend": "3316b751db9d424cd139758b3c0784c052fb32f1db67fe52c5710b25948e1805",
+  "services.studio_origins": "2f6a5f03ede22d8e72f453f5ebde2c7a0e28f7b31a5037565d88beab38cb3a45",
+  "services.workspace_provider_factory": "5fc8c2f122c00f9da29439467849b94bcf4eaf3dad11a7d7f04111cc592b7a9d"
+}

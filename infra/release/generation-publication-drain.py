@@ -126,6 +126,15 @@ _PORTABLE_QUIESCENCE_OWNER_SOURCES = {
     "services.machine_egress": "78dceaba28d412f9dbb2c590ec955d51a9b7c47df0d4a342fdcc0e6111ad8db1",
     "services.studio_origins": "2f6a5f03ede22d8e72f453f5ebde2c7a0e28f7b31a5037565d88beab38cb3a45",
 }
+# CONNECT startup successor: only opaque proxy stream pacing changes. It adds no
+# Docker/process producer or dependency, preserves pins/denials and cancellation
+# boundaries, and bounds its per-connection pacing and per-write deadline. Keep
+# historical owner14 authority intact; admit this complete successor, not mixed
+# per-module alternatives.
+_PORTABLE_QUIESCENCE_CONNECT_SOURCES = {
+    **_PORTABLE_QUIESCENCE_OWNER_SOURCES,
+    "services.machine_egress": "60ed890167ed85c5e326dfdc09cf10a139be0cd74bf90ed027470b2f38adf627",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -136,6 +145,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_CATALOG_SOURCES,
     _PORTABLE_QUIESCENCE_LEGACY_CATALOG_SOURCES,
     _PORTABLE_QUIESCENCE_OWNER_SOURCES,
+    _PORTABLE_QUIESCENCE_CONNECT_SOURCES,
 )
 _PORTABLE_QUIESCENCE_SOURCE_NAMES = tuple(
     sorted({name for bundle in _PORTABLE_QUIESCENCE_SOURCE_BUNDLES for name in bundle})
