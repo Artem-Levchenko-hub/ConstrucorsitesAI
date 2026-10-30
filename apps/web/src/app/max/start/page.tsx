@@ -81,7 +81,7 @@ export default function MaxQuickStartPage() {
             <Link href="/max/guide" className="hidden min-h-11 items-center px-3 text-xs text-[#9fa1b1] hover:text-white sm:inline-flex">
               Полное руководство
             </Link>
-            <Link href="/login?next=/max" className="inline-flex min-h-11 items-center rounded-[8px] bg-accent px-4 text-xs font-semibold text-[#121519] hover:bg-[#6a95fa]">
+            <Link href="/max" className="inline-flex min-h-11 items-center rounded-[8px] bg-accent px-4 text-xs font-semibold text-[#121519] hover:bg-[#6a95fa]">
               Открыть Yleum
             </Link>
           </div>
