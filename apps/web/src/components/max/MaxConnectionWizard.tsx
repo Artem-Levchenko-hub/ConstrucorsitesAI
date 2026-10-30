@@ -183,7 +183,7 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
           }}><Copy aria-hidden="true" />Скопировать адрес</Button></div>
           {copyNotice && <p className="max-connect-hint" role="status">{copyNotice}</p>}
           <p>В кабинете MAX откройте бота и пройдите по шагам:</p>
-          <p className="max-connect-path">Чат-боты → Перейти → Расширенные настройки → Настроить → URL → Сохранить</p>
+          <p className="max-connect-path">Чат-боты → ⋮ у нужного бота → Настройки → Мини-приложение → Введите ссылку → Сохранить</p>
           {cabinetLink}
           <label className="max-connect-acknowledgement"><input type="checkbox" checked={acknowledged} disabled={busy} onChange={event => { setAcknowledgedUrl(event.target.checked ? productionUrl : null); confirmUrl.reset(); }} /><span>Я вставил адрес и сохранил настройки в MAX</span></label>
           {confirmUrl.isError && <p role="alert" className="max-connect-error">Не удалось сохранить подтверждение. Проверьте адрес и соединение, затем повторите попытку.</p>}

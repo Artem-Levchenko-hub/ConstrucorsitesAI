@@ -5,69 +5,42 @@ import {
   ArrowLeft,
   ArrowRight,
   BookOpenText,
-  Bot,
   Check,
   CheckCircle2,
   CircleHelp,
-  CreditCard,
   ExternalLink,
-  KeyRound,
   LifeBuoy,
-  Link2,
-  LockKeyhole,
-  MailCheck,
-  MessageSquareText,
-  RefreshCw,
-  Rocket,
-  ShieldCheck,
-  Smartphone,
-  Sparkles,
-  UserRoundCheck,
-  Users,
-  Webhook,
 } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { BrandMark } from "@/components/marketing/BrandMark";
+import { GuideScreenshot } from "@/components/max/guide/GuideVisuals";
 import "@/components/max/max-studio.css";
 import "@/components/marketing/max-public.css";
-import {
-  BuilderVisual,
-  DashboardVisual,
-  GoldenPathVisual,
-  IntegrationVisual,
-  LaunchVisual,
-  PartnerVisual,
-  ProjectCreationVisual,
-} from "@/components/max/guide/GuideVisuals";
 
 export const metadata: Metadata = {
   title: "Полное руководство Yleum",
   description:
-    "Пошаговые сценарии Yleum: аккаунт, проект, сборка, публикация по URL, запуск в MAX и сопровождение.",
+    "Как создать приложение в Yleum, наполнить каталог, подключить сервисы, опубликовать и запустить в MAX. Пошаговое руководство с реальными снимками экранов.",
 };
 
 const chapters = [
   ["start", "Перед началом", "00"],
-  ["account", "Аккаунт", "01"],
-  ["project", "Создание проекта", "02"],
-  ["builder", "Работа с агентом", "03"],
-  ["settings", "Данные приложения", "04"],
-  ["integrations", "Интеграции", "05"],
-  ["amocrm", "amoCRM", "05.1"],
-  ["max-bot", "Подготовка в MAX", "06"],
-  ["publish", "Публикация", "07"],
-  ["partner", "URL в MAX Partner", "08"],
-  ["acceptance", "Приёмка в MAX", "09"],
-  ["operations", "После запуска", "10"],
-  ["billing", "Подписка и биллинг", "11"],
-  ["errors", "Ошибки и решения", "12"],
-  ["checklists", "Контрольные списки", "13"],
+  ["account", "Регистрация и вход", "01"],
+  ["project", "Создание приложения", "02"],
+  ["builder", "Редактор и проверка", "03"],
+  ["settings", "Документы и каталог", "04"],
+  ["integrations", "Подключение сервисов", "05"],
+  ["amocrm", "Заявки в amoCRM", "05.1"],
+  ["max-bot", "Бот и подключение MAX", "06"],
+  ["publish", "Публикация приложения", "07"],
+  ["partner", "Адрес приложения в MAX", "08"],
+  ["acceptance", "Проверка в MAX", "09"],
+  ["operations", "Ежедневная работа", "10"],
+  ["billing", "Баланс и тариф", "11"],
+  ["errors", "Если что-то не работает", "12"],
+  ["checklists", "Списки для запуска", "13"],
 ] as const;
-
-function Kicker({ children }: { children: ReactNode }) {
-  return <p className="omnia-kicker text-accent">{children}</p>;
-}
 
 function GuideSection({
   id,
@@ -85,25 +58,17 @@ function GuideSection({
   children: ReactNode;
 }) {
   return (
-    <section id={id} className="scroll-mt-24 border-t border-[#2b2d32] py-16 sm:py-20 lg:py-24">
-      <div className="grid gap-6 lg:grid-cols-[120px_minmax(0,1fr)]">
-        <p className="font-mono text-[12px] text-[#828491]">{number}</p>
+    <section id={id} className="scroll-mt-24 border-t border-[#2b2d32] py-14 sm:py-18 lg:py-20">
+      <div className="grid gap-5 lg:grid-cols-[70px_minmax(0,1fr)]">
+        <p className="font-mono text-xs text-[#828491]">{number}</p>
         <div className="min-w-0">
-          <Kicker>{eyebrow}</Kicker>
-          <h2 className="mt-3 max-w-[850px] text-[34px] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[48px]">{title}</h2>
-          <p className="mt-5 max-w-[780px] text-[15px] leading-7 text-[#9fa1b1]">{lead}</p>
-          <div className="mt-10">{children}</div>
+          <p className="omnia-kicker text-accent">{eyebrow}</p>
+          <h2 className="mt-3 max-w-[850px] text-[30px] font-semibold leading-[1.1] tracking-[-.04em] sm:text-[44px]">{title}</h2>
+          <p className="mt-5 max-w-[800px] text-[15px] leading-7 text-[#9fa1b1]">{lead}</p>
+          <div className="mt-8 space-y-7">{children}</div>
         </div>
       </div>
     </section>
-  );
-}
-
-function Route({ children }: { children: ReactNode }) {
-  return (
-    <span className="inline-flex items-center rounded-md border border-[#2b2d32] bg-[#191b20] px-2 py-1 font-mono text-[11px] text-[#9fa1b1]">
-      {children}
-    </span>
   );
 }
 
@@ -113,18 +78,18 @@ function StepList({
   steps: Array<{ title: string; text: ReactNode; result?: string }>;
 }) {
   return (
-    <ol className="divide-y divide-[#25272b] overflow-hidden rounded-[12px] border border-[#2b2d32] bg-[#191b20]">
+    <ol className="divide-y divide-[#25272b] overflow-hidden rounded-xl border border-[#2b2d32] bg-[#191b20]">
       {steps.map((step, index) => (
-        <li key={step.title} className="grid gap-4 p-5 sm:grid-cols-[44px_minmax(0,1fr)] sm:p-6">
-          <span className="grid size-8 place-items-center rounded-full border border-accent/40 bg-accent/[.06] font-mono text-[10px] font-semibold text-[#6a95fa]">
-            {String(index + 1).padStart(2, "0")}
+        <li key={step.title} className="grid gap-3 p-5 sm:grid-cols-[36px_minmax(0,1fr)] sm:p-6">
+          <span className="grid size-8 place-items-center rounded-full border border-accent/40 bg-accent/[.06] text-xs font-semibold text-[#6a95fa]" aria-hidden="true">
+            {index + 1}
           </span>
-          <div>
+          <div className="min-w-0">
             <h3 className="text-sm font-semibold">{step.title}</h3>
             <div className="mt-2 text-sm leading-6 text-[#9fa1b1]">{step.text}</div>
             {step.result && (
               <p className="mt-3 flex items-start gap-2 text-xs leading-5 text-success-fg">
-                <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" />
+                <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
                 <span><strong>Результат:</strong> {step.result}</span>
               </p>
             )}
@@ -150,55 +115,45 @@ function Note({
     success: "border-success/35 bg-success/[.06] text-success-fg",
   }[tone];
   const Icon = tone === "warning" ? AlertTriangle : tone === "success" ? CheckCircle2 : CircleHelp;
+
   return (
-    <aside className={`rounded-[12px] border p-5 ${styles}`}>
+    <aside className={`rounded-xl border p-5 ${styles}`}>
       <div className="flex gap-3">
-        <Icon className="mt-0.5 size-5 shrink-0" />
-        <div><p className="text-sm font-semibold">{title}</p><div className="mt-2 text-sm leading-6 opacity-80">{children}</div></div>
+        <Icon className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
+        <div className="min-w-0">
+          <p className="text-sm font-semibold">{title}</p>
+          <div className="mt-2 text-sm leading-6 opacity-80">{children}</div>
+        </div>
       </div>
     </aside>
   );
 }
 
-function NumberedLegend({ items }: { items: string[] }) {
-  return (
-    <div className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-      {items.map((item, index) => (
-        <div key={item} className="flex gap-3 rounded-[10px] border border-[#2b2d32] bg-[#191b20] p-4 text-xs leading-5 text-[#9fa1b1]">
-          <span className="grid size-6 shrink-0 place-items-center rounded-full bg-accent text-[10px] font-semibold text-[#121519]">{index + 1}</span>
-          {item}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function StatusTable({ rows }: { rows: Array<[string, string, string]> }) {
-  return (
-    <div className="overflow-x-auto rounded-[12px] border border-[#2b2d32] bg-[#191b20]">
-      <table className="w-full min-w-[680px] border-collapse text-left text-sm">
-        <thead className="bg-[#2b2d32] text-[10px] uppercase tracking-[.12em] text-[#9fa1b1]">
-          <tr><th className="p-4 font-medium">Статус</th><th className="p-4 font-medium">Что означает</th><th className="p-4 font-medium">Что делать</th></tr>
-        </thead>
-        <tbody className="divide-y divide-[#25272b]">
-          {rows.map(([status, meaning, action]) => (
-            <tr key={status} className="align-top"><td className="p-4 font-medium text-white">{status}</td><td className="p-4 leading-6 text-[#9fa1b1]">{meaning}</td><td className="p-4 leading-6 text-[#9fa1b1]">{action}</td></tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 function Checklist({ title, items }: { title: string; items: string[] }) {
   return (
-    <div className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-5 sm:p-6">
+    <div className="rounded-xl border border-[#2b2d32] bg-[#191b20] p-5 sm:p-6">
       <h3 className="text-base font-semibold">{title}</h3>
       <ul className="mt-5 space-y-3">
-        {items.map((item) => (
-          <li key={item} className="flex gap-3 text-sm leading-6 text-[#9fa1b1]"><span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded border border-[#2b2d32] bg-[#191b20]"><Check className="size-3 text-success-fg" /></span>{item}</li>
+        {items.map(item => (
+          <li key={item} className="flex gap-3 text-sm leading-6 text-[#9fa1b1]">
+            <Check className="mt-1 size-4 shrink-0 text-success-fg" aria-hidden="true" />
+            {item}
+          </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function ChapterLinks() {
+  return (
+    <div className="space-y-0.5">
+      {chapters.map(([id, label, number]) => (
+        <a key={id} href={`#${id}`} className="flex min-h-10 items-center gap-3 rounded-md px-3 py-2 text-xs text-[#9fa1b1] hover:bg-[#191b20] hover:text-white">
+          <span className="w-6 shrink-0 font-mono text-[10px] text-[#828491]">{number}</span>
+          {label}
+        </a>
+      ))}
     </div>
   );
 }
@@ -208,291 +163,284 @@ export default function MaxGuidePage() {
     <main data-max-studio className="max-docs min-h-screen">
       <header className="sticky top-0 z-50 border-b border-[#2b2d32] bg-[#191b20]/95 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between gap-4 px-4 sm:px-7">
-          <div className="flex min-w-0 items-center gap-3"><BrandMark href="/" /><span className="hidden h-5 w-px bg-[#2b2d32] sm:block" /><span className="hidden truncate text-xs font-medium text-[#9fa1b1] sm:block">Руководство Yleum</span></div>
+          <div className="flex min-w-0 items-center gap-3">
+            <BrandMark href="/" />
+            <span className="hidden h-5 w-px bg-[#2b2d32] sm:block" />
+            <span className="hidden truncate text-xs font-medium text-[#9fa1b1] sm:block">Руководство Yleum</span>
+          </div>
           <div className="flex items-center gap-2">
-            <Link href="/max/product" className="hidden min-h-10 items-center rounded-md px-3 text-xs text-[#9fa1b1] hover:bg-[#121519] sm:inline-flex"><ArrowLeft className="mr-2 size-3.5" />О продукте</Link>
+            <Link href="/max/product" className="hidden min-h-10 items-center rounded-md px-3 text-xs text-[#9fa1b1] hover:bg-[#121519] sm:inline-flex"><ArrowLeft className="mr-2 size-3.5" aria-hidden="true" />О продукте</Link>
             <Link href="/login?next=/max" className="omnia-button omnia-button-secondary min-h-10 px-4 text-xs">Войти</Link>
             <Link href="/max/register" className="omnia-button omnia-button-primary min-h-10 px-4 text-xs">Начать</Link>
           </div>
         </div>
       </header>
 
-      <section data-graphite-shell className="bg-[#121519] px-4 py-16 sm:px-7 sm:py-24 lg:py-28">
-        <div className="mx-auto grid max-w-[1320px] gap-12 lg:grid-cols-[1fr_340px] lg:items-end">
+      <section data-graphite-shell className="bg-[#121519] px-4 py-14 sm:px-7 sm:py-20 lg:py-24">
+        <div className="mx-auto grid max-w-[1320px] gap-10 lg:grid-cols-[1fr_320px] lg:items-end">
           <div>
-            <p className="omnia-kicker text-accent">Yleum / Документация</p>
-            <h1 className="mt-6 max-w-[980px] text-[46px] font-semibold leading-[.96] tracking-[-.055em] sm:text-[68px] lg:text-[84px]">От идеи до запуска в MAX — без пропущенных шагов</h1>
-            <p className="mt-7 max-w-[760px] text-base leading-7 text-white/55 sm:text-lg">Полное руководство: как создать приложение, проверить его, получить production URL, добавить его в MAX Partner и принять приложение двумя реальными пользователями.</p>
+            <p className="omnia-kicker text-accent">Yleum / Руководство</p>
+            <h1 className="mt-6 max-w-[940px] text-[42px] font-semibold leading-[1.02] tracking-[-.05em] sm:text-[62px] lg:text-[76px]">Как создать приложение и запустить его в MAX</h1>
+            <p className="mt-7 max-w-[750px] text-base leading-7 text-white/60 sm:text-lg">От регистрации и первой сборки до каталога, подключения бота и ежедневной работы. На настоящих экранах показываем, куда нажать, зачем это нужно и что проверить после.</p>
             <div className="mt-8 flex flex-wrap gap-3">
-              <Link href="/max/start" className="omnia-button omnia-button-primary min-h-11 px-5">Короткий путь: 6 этапов <ArrowRight className="size-4" /></Link>
-              <a href="#errors" className="omnia-button min-h-11 border border-white/20 px-5 text-white hover:bg-white/5">У меня ошибка <LifeBuoy className="size-4" /></a>
+              <Link href="/max/start" className="omnia-button omnia-button-primary min-h-11 px-5">Быстрый старт <ArrowRight className="size-4" aria-hidden="true" /></Link>
+              <a href="#errors" className="omnia-button min-h-11 border border-white/20 px-5 text-white hover:bg-white/5">Нужна помощь <LifeBuoy className="size-4" aria-hidden="true" /></a>
             </div>
           </div>
-          <div className="rounded-[14px] border border-white/14 bg-white/[.04] p-6">
-            <div className="flex items-center gap-3"><BookOpenText className="size-5 text-accent" /><p className="text-sm font-semibold">Как читать руководство</p></div>
-            <ul className="mt-5 space-y-3 text-xs leading-5 text-white/48">
-              <li>① Идите по главам 00–10 для первого запуска.</li>
-              <li>② Цифры на снимках показывают точные места клика.</li>
-              <li>③ Блок «Результат» — критерий завершения шага.</li>
-              <li>④ Секрет бота вводится только в защищённую форму перед production. Не передавайте его агенту.</li>
+          <div className="rounded-[14px] border border-white/15 bg-white/[.04] p-6">
+            <div className="flex items-center gap-3"><BookOpenText className="size-5 text-accent" aria-hidden="true" /><p className="text-sm font-semibold">Как пользоваться</p></div>
+            <ul className="mt-5 space-y-3 text-sm leading-6 text-white/60">
+              <li>Для первого запуска идите по главам 01–09.</li>
+              <li>Номера и стрелки на снимках указывают на нужные действия.</li>
+              <li>Снимок можно открыть крупнее по ссылке под ним.</li>
+              <li>Проверяйте результат каждого шага в своём приложении.</li>
             </ul>
-            <p className="mt-5 border-t border-white/10 pt-4 font-mono text-[9px] uppercase tracking-[.15em] text-white/28">Обновлено 31 июля 2026</p>
+            <p className="mt-5 border-t border-white/10 pt-4 text-xs leading-5 text-white/45">Обновлено 30 октября 2026. Источник и дата каждого настоящего снимка указаны под ним.</p>
           </div>
         </div>
       </section>
 
-      <div className="mx-auto grid max-w-[1440px] gap-10 px-4 sm:px-7 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-14">
+      <div className="mx-auto grid max-w-[1440px] gap-8 px-4 sm:px-7 lg:grid-cols-[225px_minmax(0,1fr)] lg:gap-10">
         <aside className="hidden lg:block">
           <nav aria-label="Оглавление" className="sticky top-24 py-10">
             <p className="omnia-kicker px-3 text-[#828491]">Оглавление</p>
-            <div className="mt-4 max-h-[calc(100dvh-150px)] space-y-0.5 overflow-y-auto pr-2">
-              {chapters.map(([id, label, number]) => (
-                <a key={id} href={`#${id}`} className="flex items-center gap-3 rounded-md px-3 py-2 text-[11px] text-[#9fa1b1] hover:bg-[#191b20] hover:text-white"><span className="font-mono text-[8px] text-[#828491]">{number}</span>{label}</a>
-              ))}
-            </div>
+            <div className="mt-4 max-h-[calc(100dvh-150px)] overflow-y-auto pr-2"><ChapterLinks /></div>
           </nav>
         </aside>
 
         <div className="min-w-0">
-          <GuideSection id="start" number="00" eyebrow="Перед началом" title="Что подготовить до первого клика" lead="Yleum выполняет сборку, backend, безопасное превью и публикацию. Для первого результата достаточно рабочей почты; MAX Partner и платёжный кабинет понадобятся только перед соответствующим запуском.">
-            <GoldenPathVisual />
-            <div className="mt-8 grid gap-4 md:grid-cols-2">
+          <details className="mt-6 rounded-xl border border-[#2b2d32] bg-[#191b20] p-4 lg:hidden">
+            <summary className="cursor-pointer text-sm font-semibold">Оглавление руководства</summary>
+            <nav aria-label="Главы руководства" className="mt-3"><ChapterLinks /></nav>
+          </details>
+
+          <GuideSection id="start" number="00" eyebrow="Перед началом" title="Подготовьте идею, почту и телефон" lead="Начать можно с простого описания: для кого приложение и что человек должен в нём сделать. Бота и внешние сервисы вы подключите, когда дойдёте до запуска.">
+            <div className="grid gap-4 sm:grid-cols-2">
               {[
-                [MailCheck, "Рабочий email", "На него придёт код подтверждения и уведомления безопасности."],
-                [UserRoundCheck, "Документы приложения", "Перед публикацией укажите название владельца и email поддержки для страниц приложения или дайте ссылку на свою политику. ИНН, ОГРН и телефон не нужны."],
-                [Bot, "Безопасный вход — перед production", "Секрет промодерированного бота нужен серверу для проверки подписанного пользователя MAX."],
-                [CreditCard, "Платёжные реквизиты", "Для платного запуска: активный магазин ЮKassa и утверждённая схема чеков."],
-              ].map(([Icon, title, text]) => {
-                const ItemIcon = Icon as typeof MailCheck;
-                return <article key={String(title)} className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-5"><ItemIcon className="size-5 text-accent" /><h3 className="mt-6 text-sm font-semibold">{String(title)}</h3><p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{String(text)}</p></article>;
-              })}
+                ["Email и телефон", "Email нужен для входа и восстановления пароля. Телефон подтверждается кодом по SMS при регистрации."],
+                ["Один понятный сценарий", "Например: выбрать услугу и оставить заявку. Сначала проверьте это действие, затем добавляйте остальные возможности."],
+                ["Данные для приложения", "Подготовьте названия, описания, цены и фотографии своих товаров или услуг. Можно добавить их позже."],
+                ["Доступ к кабинету MAX", "Перед запуском понадобится бот в MAX для бизнеса. Проверка бизнеса и модерация бота проходят на стороне MAX."],
+              ].map(([title, text]) => (
+                <article key={title} className="rounded-xl border border-[#2b2d32] bg-[#191b20] p-5">
+                  <h3 className="text-sm font-semibold">{title}</h3>
+                  <p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{text}</p>
+                </article>
+              ))}
             </div>
-            <Note tone="success" title="До production секрет не нужен">Первую генерацию и превью можно пройти без бота. Перед production секрет подключается один раз: он нужен серверу для проверки пользователя MAX, а не для самой вставки URL.</Note>
+            <Note title="Как устроен путь">Создайте проект → проверьте приложение в редакторе → подтвердите документы и подключите бота → опубликуйте → вставьте полученный адрес в MAX → проверьте приложение в самом MAX. Сервисы оплаты, CRM и аналитики добавляйте, если они нужны вашему сценарию.</Note>
           </GuideSection>
 
-          <GuideSection id="account" number="01" eyebrow="Вход в Yleum" title="Регистрация и подтверждение телефона" lead="Телефон подтверждается один раз. Затем входите по email и паролю. Верификация бизнеса проходит позже в MAX Partner.">
+          <GuideSection id="account" number="01" eyebrow="Регистрация и вход" title="Создайте аккаунт Yleum" lead="При регистрации нужны email, телефон и пароль. Номер подтверждается по SMS один раз; в дальнейшем вы входите по email и паролю.">
+            <p className="text-sm leading-6 text-[#9fa1b1]">После регистрации и входа вы попадёте к своим приложениям. На снимке ниже показан этот результат.</p>
+            <GuideScreenshot id="projects" />
             <StepList steps={[
-              { title: "Откройте регистрацию", text: <>Перейдите на <Route>/max/register</Route>. Укажите email и телефон с кодом страны, придумайте пароль от 8 символов с хотя бы одной цифрой, повторите его, примите обязательные условия и нажмите <strong>«Продолжить»</strong>.</>, result: "Аккаунт создан. Email сохранён для входа и восстановления пароля." },
-              { title: "Подтвердите телефон", text: <>Нажмите <strong>«Получить код по SMS»</strong>. Введите 6 цифр в поле <strong>«Код из SMS»</strong> и нажмите <strong>«Подтвердить телефон»</strong>. SMS может прийти с задержкой. Код действует 10 минут; повторная отправка доступна через 60 секунд.</>, result: "Телефон подтверждён. Подтверждать email необязательно." },
-              { title: "Войдите в рабочее пространство", text: <>После подтверждения откройте <Route>/max</Route>. Если вас вернуло на вход, авторизуйтесь тем же email и паролем.</>, result: "Открыта страница «Мои приложения»." },
+              { title: "Заполните форму", text: <>Откройте <Link href="/max/register" className="text-accent hover:underline">регистрацию</Link>. Укажите рабочий email и телефон с кодом страны. Придумайте пароль не короче 8 символов хотя бы с одной цифрой и повторите его.</> },
+              { title: "Прочитайте условия и продолжите", text: <>Отметьте обязательные согласия и нажмите <strong>«Продолжить»</strong>. Получение новостей выбирайте по желанию.</> },
+              { title: "Подтвердите телефон", text: <>В появившейся форме нажмите <strong>«Получить код по SMS»</strong>. Введите полученные 6 цифр в поле <strong>«Код из SMS»</strong> и нажмите <strong>«Подтвердить телефон»</strong>. Если код не пришёл, проверьте номер и воспользуйтесь повторной отправкой, когда она станет доступна.</>, result: "Открылся аккаунт Yleum; можно перейти к своим приложениям." },
+              { title: "При следующем входе используйте email и пароль", text: <>Откройте <Link href="/login?next=/max" className="text-accent hover:underline">страницу входа</Link>. Если забыли пароль, воспользуйтесь восстановлением на ней. Отдельное подтверждение email для начала работы не требуется.</> },
             ]} />
-            <div className="mt-6 grid gap-4 md:grid-cols-2"><Note title="SMS не пришло">Проверьте номер и дождитесь окончания таймера повторной отправки. При сбое доставки аккаунт сохраняется. Для восстановления пароля используйте email.</Note><Note tone="success" title="Без повторной анкеты">ИНН, ОГРН/ОГРНИП и тип бизнеса для допуска в MAX заполняются и проверяются на стороне MAX Partner.</Note></div>
           </GuideSection>
 
-          <GuideSection id="project" number="02" eyebrow="Первый проект" title="Создание MAX Mini App из короткого описания" lead="На этом шаге вы задаёте продуктовую рамку. Чем точнее главное действие и аудитория, тем меньше уточнений потребуется агенту во время первой сборки.">
-            <ProjectCreationVisual />
-            <NumberedLegend items={["Нажмите «Создать приложение» в правом верхнем углу или в пустом состоянии.", "Пройдите четыре шага: идея, аудитория, функции и оформление. Кнопки «Назад» и «Далее» сохраняют ответы.", "На финальном обзоре проверьте все данные и нажмите «Создать проект». До этого проект и генерация не запускаются."]} />
-            <div className="mt-8 grid gap-6 lg:grid-cols-2">
-              <Checklist title="Хорошее описание" items={["Одна понятная аудитория: «постоянные гости кофейни».", "Одно главное действие: «оформить заказ к выдаче».", "3–7 функций первого релиза, без списка на год вперёд.", "Конкретные брендовые цвета или разрешение подобрать стиль.", "Что должно храниться: заказы, баллы, записи, профиль."]} />
-              <Checklist title="Чего избегать" items={["«Сделай приложение как у всех» без сценария.", "Несколько несвязанных бизнесов в одном Mini App.", "Требование Telegram/VK внутри проекта MAX.", "Секретные ключи, пароли и паспортные данные в описании.", "Сразу 30 экранов и интеграции, которых нет в MVP."]} />
-            </div>
-            <Note tone="success" title="Пример брифа">«Приложение лояльности для гостей кофейни. Пользователь видит баланс баллов, выбирает награду, оформляет заказ к выдаче и смотрит историю. Главное действие — заказать кофе. Стиль — молочный фон, графит и оранжевый акцент».</Note>
-          </GuideSection>
-
-          <GuideSection id="builder" number="03" eyebrow="Работа с агентом" title="Как получить рабочую сборку и не потерять контекст" lead="Редактор состоит из трёх зон: диалог с агентом, живое мобильное превью и мастер готовности к запуску. Изменения сохраняются на сервере. Проверяйте результат перед публикацией.">
-            <BuilderVisual />
-            <NumberedLegend items={["Введите одно изменение в нижнее поле и отправьте. Для новой функции опишите ожидаемый результат и граничные случаи.", "Проверьте живое превью: навигацию, пустые состояния, ошибки формы, повторное открытие и мобильную клавиатуру.", "К публикации переходите только после чистой проверки. Кнопка откроет мастер готовности и production deploy."]} />
-            <div className="mt-8 grid gap-5 md:grid-cols-3">
-              {[
-                [MessageSquareText, "Одна задача за сообщение", "Так проще проверить результат и при необходимости уточнить запрос на правку."],
-                [Smartphone, "Проверяйте как пользователь", "Нажимайте кнопки, создавайте тестовые данные, обновляйте страницу и повторяйте сценарий."],
-                [RefreshCw, "Не перезапускайте генерацию", "При зависшем статусе сначала обновите страницу: серверная задача продолжает работать в фоне."],
-              ].map(([Icon, title, text]) => { const ItemIcon = Icon as typeof MessageSquareText; return <article key={String(title)} className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-5"><ItemIcon className="size-5 text-accent" /><h3 className="mt-6 text-sm font-semibold">{String(title)}</h3><p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{String(text)}</p></article>; })}
-            </div>
-            <h3 className="mt-10 text-lg font-semibold">Шаблоны сообщений агенту</h3>
-            <div className="mt-4 grid gap-3">
-              {[
-                ["Новая функция", "Добавь запись на услугу: выбор даты, свободного времени, подтверждение и экран «Мои записи». Не допускай двойного бронирования."],
-                ["Исправление", "На экране заказа кнопка перекрывается клавиатурой. Сохрани текущий дизайн и исправь только mobile layout и safe area."],
-                ["Проверка данных", "Проверь, что пользователь MAX видит только свои заказы. Добавь пустое состояние и понятную ошибку при недоступном сервере."],
-                ["Контент", "Замени тексты каталога на приложенный список. Не меняй backend, навигацию и визуальный стиль."],
-              ].map(([label, prompt]) => <div key={label} className="rounded-[10px] border border-[#2b2d32] bg-[#191b20] p-4"><p className="font-mono text-[9px] uppercase tracking-[.14em] text-accent">{label}</p><p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{prompt}</p></div>)}
-            </div>
-          </GuideSection>
-
-          <GuideSection id="settings" number="04" eyebrow="Управляемая конфигурация" title="Данные приложения, каталог и юридические экраны" lead="Часть информации меняется без новой генерации и без расхода баланса. Это название, описание, контент, поддержка, данные оператора, юридические признаки и подтверждение URL в MAX.">
+          <GuideSection id="project" number="02" eyebrow="Создание приложения" title="Расскажите, что вы хотите сделать" lead="Проект хранит ваше приложение, его данные и подключения. В мастере четыре шага: идея, аудитория, функции с оформлением и проверка описания.">
+            <GuideScreenshot id="create" />
             <StepList steps={[
-              { title: "Откройте данные приложения", text: <>В верхней части редактора нажмите <strong>«Данные»</strong>. Настройки откроются в окне поверх редактора — переходить на отдельную страницу не нужно.</>, result: "Открыто окно «Данные приложения»." },
-              { title: "Заполните продукт", text: <>Проверьте название, главное действие, описание, аудиторию, тип приложения, стиль и функции. Эти поля объясняют пользователю, что он может сделать.</>, result: "У приложения нет временных текстов и заглушек." },
-              { title: "Добавьте каталог или услуги", text: <>В блоке «Каталог и контент» нажмите <strong>«Добавить»</strong>. Для каждого элемента задайте название, описание, цену, подпись кнопки и активность.</>, result: "Все позиции имеют понятную цену и действие." },
-              { title: "Проверьте документы приложения", text: <>Перед публикацией укажите название владельца и email поддержки — они попадут на страницы политики и поддержки самого приложения — или вставьте ссылку на собственную политику. ИНН, ОГРН и ФИО для этого шага не нужны: право выпускать бота проверяет MAX. Телефон аккаунта подтверждается отдельно при настройке доступа.</>, result: "Посетитель приложения видит, кто его владелец и куда писать." },
-              { title: "Отметьте юридические признаки", text: <>Укажите наличие продаж, пользовательского контента и маркетинговых уведомлений. Примите условия только после проверки сгенерированных документов.</>, result: "Readiness отмечает юридические данные как готовые." },
-              { title: "Сохраните", text: <>Нажмите <strong>«Сохранить»</strong>. Yleum сохранит настройки приложения без вызова модели.</>, result: "Появилось уведомление «Настройки применены без генерации»." },
+              { title: "Нажмите «Создать приложение»", text: <>Откройте <Link href="/max" className="text-accent hover:underline">свои приложения</Link>. Укажите название и опишите, что сможет делать пользователь. Выберите подходящий тип приложения.</> },
+              { title: "Уточните аудиторию и главное действие", text: <>Например: «Гости кофейни выбирают напиток и отправляют заказ к выдаче». Это помогает ИИ понять, какие экраны и кнопки нужны.</> },
+              { title: "Выберите функции и оформление", text: <>Отметьте нужные возможности и разделы управления. Если пока не уверены в стиле или цветах, оставьте предложенные значения — их можно уточнить позже.</> },
+              { title: "Проверьте описание и создайте проект", text: <>На последнем шаге убедитесь, что главная задача описана верно, и нажмите <strong>«Создать проект»</strong>.</>, result: "Открылся редактор нового приложения." },
             ]} />
-            <Note tone="warning" title="Не отмечайте URL заранее">Флажок «URL добавлен в MAX» подтверждает реальное действие во внешнем кабинете. Ставьте его только после сохранения production URL в MAX Partner и проверки кнопки «Открыть».</Note>
-          </GuideSection>
-
-          <GuideSection id="integrations" number="05" eyebrow="Необязательно" title="Дополнительные сервисы" lead="CRM, аналитика, платежи и другие провайдеры подключаются только когда нужны сценарию. Они не блокируют первую генерацию и превью.">
-            <IntegrationVisual />
-            <NumberedLegend items={["Сначала получите и проверьте основное приложение.", "Подключайте только сервисы, для которых уже есть реальный пользовательский сценарий."]} />
-            <StepList steps={[
-              { title: "Выберите сервис", text: <>В окне публикации нажмите <strong>«Выбрать сервисы»</strong>. Каталог откроется поверх редактора и покажет возможности и статус каждого сервиса.</> },
-              { title: "Используйте OAuth, если доступен", text: <>Нажмите «Авторизовать» и подтвердите доступ в кабинете провайдера. Не копируйте пароль от самого кабинета.</>, result: "Статус подключения — «Активно»." },
-              { title: "Для ключей используйте только защищённую форму", text: <>Вставляйте API-ключ или токен в поле интеграции. Никогда не отправляйте секрет в чат агенту и не добавляйте его в файлы проекта.</>, result: "Ключ проверен у провайдера и зашифрован." },
-              { title: "Привяжите интеграцию к проекту", text: <>Если сервис подключён на уровне бизнеса, выберите нужное соединение в проекте. Один бизнес-доступ можно безопасно использовать в нескольких Mini Apps.</>, result: "Карточка проекта показывает выбранное соединение." },
-              { title: "Проверьте реальное действие", text: <>Создайте тестовую запись, лид, заказ или платёж в Mini App и убедитесь, что объект появился у провайдера.</>, result: "Интеграция подтверждена не только кнопкой, но и фактическим событием." },
-            ]} />
-          </GuideSection>
-
-          <GuideSection id="amocrm" number="05.1" eyebrow="Заявки и история" title="Как подключить amoCRM" lead="Подключите CRM к выбранному мини-приложению, настройте место для новых сделок и проверьте весь путь заявки в MAX. Подключение сервиса само по себе не добавляет форму в опубликованное приложение.">
-            <StepList steps={[
-              { title: "Выберите приложение и подключите CRM", text: <>Откройте нужное мини-приложение. В окне публикации нажмите <strong>«Выбрать сервисы»</strong>, найдите amoCRM и выберите <strong>«Подключить» → «Войти и разрешить доступ»</strong>. Если подключение уже есть, проверьте его аккаунт: повторная авторизация сейчас блокируется, чтобы сохранить другие ваши приложения. Для замены общего подключения обратитесь в поддержку.</> },
-              { title: "Разрешите доступ в amoCRM", text: <>Выберите нужный аккаунт amoCRM и подтвердите доступ, затем вернитесь в Yleum. Используйте аккаунт, для которого у вас есть право подключать интеграции. Пароль от amoCRM в поля Yleum вводить не нужно.</> },
-              { title: "Выберите воронку и этап", text: <>В карточке amoCRM нажмите <strong>«Настроить»</strong>. Выберите <strong>«Воронка»</strong> и <strong>«Этап»</strong>, затем <strong>«Сохранить этап»</strong>. Эти настройки определяют, куда поступают новые заявки выбранного приложения.</> },
-              { title: "Добавьте и проверьте форму", text: <>Если формы ещё нет, нажмите <strong>«Добавить в приложение»</strong>, проверьте задание и запустите доработку. Проверьте поля, текст согласия, ссылку на политику, ошибки отправки и историю своих заявок. До согласия данные формы не должны уходить в CRM. После проверки опубликуйте новую версию — одно подключение CRM не меняет уже опубликованные экраны.</> },
-              { title: "Отправьте тестовую заявку из MAX", text: <>Откройте опубликованное приложение через своего бота в MAX. Используйте синтетические тестовые данные, подтвердите согласие и отправьте заявку. Найдите сделку в выбранной воронке amoCRM, проверьте контакт и примечание. При проверке двойного нажатия должна появиться только одна сделка.</> },
-              { title: "Проверьте этап и повторный вход", text: <>Измените этап сделки в amoCRM. В MAX обновите историю заявок, затем закройте и снова откройте приложение. Проверьте сохранность заявки и актуальный этап. Если обновления истории в форме нет, добавьте его через доработку приложения. Стадии читаются по запросу к CRM; мгновенные push-обновления не обещаются.</> },
-            ]} />
-            <div className="mt-6 grid gap-4">
-              <Note title="Что показывает история">
-                <p>Встроенный способ чтения возвращает последние 20 собственных успешных заявок этого проекта и их текущие этапы. Это список заявок, а не журнал всех переходов между этапами. Проверьте загрузку при открытии, возвращении в приложение и ручном обновлении.</p>
-              </Note>
-              <Note tone="warning" title="Ответ не пришёл — сначала проверьте CRM">
-                <p>При неизвестном результате не создавайте новую заявку: сначала сверьте её с CRM. Если сделка создана, но передача комментария не подтверждена, не повторяйте создание сделки — обратитесь к менеджеру.</p>
-              </Note>
-            </div>
-            <h3 className="mt-10 text-lg font-semibold">Отключение приложения, общего подключения и доступа</h3>
-            <StepList steps={[
-              { title: "Отключить только это мини-приложение", text: <>В карточке сервиса используйте кнопку с корзиной <strong>«Отключить amoCRM»</strong>. Она убирает связь текущего проекта с CRM. Другие приложения, использующие общее подключение, остаются подключёнными. Отправка заявок и чтение истории через отключённый проект становятся недоступны. При повторном подключении проверьте воронку и этап заново.</> },
-              { title: "Удалить общее подключение владельца", text: <>Это отдельное действие, затрагивающее все приложения, связанные с этим подключением. Отдельной кнопки удаления общего подключения amoCRM в текущем интерфейсе нет — обратитесь в <a href="mailto:support@yleum.ru" className="text-[#6a95fa] underline underline-offset-4">support@yleum.ru</a>. Не рассчитывайте на автоматическое восстановление прежней истории после удаления и нового подключения.</> },
-              { title: "Отозвать доступ в amoCRM", text: <>Чтобы прекратить доступ со стороны CRM, отзовите его в настройках интеграции самого amoCRM. Отключение проекта или удаление подключения в Yleum не заменяет этот шаг. Ранее созданные сделки этими действиями в Yleum не удаляются.</> },
-            ]} />
-          </GuideSection>
-
-
-          <GuideSection id="max-bot" number="06" eyebrow="Внешний кабинет MAX" title="Профиль MAX и безопасный запуск Mini App" lead="Профиль бизнеса и бот проверяет MAX Partner. Yleum не спрашивает ИНН, ОГРН или ФИО вообще — аккаунт здесь это email и пароль. До production секрет не нужен; перед запуском он один раз подключается для проверки signed initData, а после публикации URL вставляется в MAX Partner.">
-            <div className="grid gap-5 lg:grid-cols-2">
-              <Checklist title="В MAX для партнёров" items={["Профиль организации/ИП/самозанятого верифицирован.", "Создан чат-бот с понятным именем, описанием и аватаром.", "Бот прошёл модерацию и имеет статус «создан».", "Открыты расширенные настройки Mini App."]} />
-              <Checklist title="В Yleum" items={["Проект создан и проверен в preview.", "Секрет бота проверен и хранится зашифрованно.", "Приложение опубликовано по HTTPS.", "URL скопирован в настройки бота MAX."]} />
-            </div>
-            <StepList steps={[
-              { title: "Создайте бота", text: <>Откройте <a className="font-medium text-[#6a95fa] underline" href="https://business.max.ru/" target="_blank" rel="noreferrer">MAX для партнёров</a>, выберите профиль, затем <strong>«Чат-боты» → «Создать»</strong>. Заполните карточку и отправьте на модерацию.</>, result: "Статус бота — «на модерации»." },
-              { title: "Дождитесь статуса «создан»", text: <>Пока бот модерируется, URL Mini App и токен могут быть недоступны. При статусе «требует исправлений» откройте причину, исправьте карточку и отправьте повторно.</>, result: "Бот находится поиском в настоящем клиенте MAX." },
-              { title: "Подключите безопасный вход", text: <>До публикации откройте настройки MAX, вставьте секрет промодерированного бота и сохраните его через защищённую форму. ИНН и ОГРН нигде не заполняются.</>, result: "Сервер может проверить подпись initData и разделить данные пользователей." },
-              { title: "Опубликуйте приложение", text: <>Доведите сборку до production. Yleum получит постоянный HTTPS-адрес и автоматически подготовит webhook.</>, result: "URL готов для поля Mini App в MAX Partner." },
-            ]} />
-            <Note title="Срок модерации и первоисточник">MAX указывает ориентир до 48 рабочих часов. Актуальные статусы, требования к карточке и доступность токена сверяйте в <a className="font-medium text-[#6a95fa] underline" href="https://dev.max.ru/docs/chatbots/bots-create/create" target="_blank" rel="noreferrer">официальной инструкции по созданию и модерации бота</a>.</Note>
-            <Note tone="warning" title="Почему секрет нельзя убрать">Для самой вставки production URL он не нужен. Но приложения Yleum используют подписанный initData, чтобы узнавать пользователя MAX и изолировать его данные, поэтому перед production секрет обязателен и хранится как пароль.</Note>
-          </GuideSection>
-
-          <GuideSection id="publish" number="07" eyebrow="Production" title="Публикация на постоянный HTTPS-адрес" lead="Публикация собирает приложение, разворачивает контейнер, проверяет работоспособность и только затем переключает постоянный адрес. Неудачная сборка не должна заменять работающее приложение.">
-            <LaunchVisual />
-            <NumberedLegend items={["Нажмите «Опубликовать», когда сборка и данные приложения проверены.", "Следуйте текущему шагу мастера. Он показывает первую незавершённую причину, а не общий список ошибок."]} />
-            <StepList steps={[
-              { title: "Откройте мастер", text: <>В верхней части редактора нажмите <strong>«Опубликовать»</strong>. Проверки, подключение MAX и публикация проходят в окнах поверх редактора.</>, result: "Виден следующий шаг. Закрытие окна возвращает к вашему чату." },
-              { title: "Закройте readiness", text: <>Проверьте сборку, данные приложения, поддержку, юридические страницы и безопасный вход MAX. Отдельно настраивать webhook не требуется.</>, result: "Следующий шаг мастера — «Опубликуйте приложение»." },
-              { title: "Запустите deploy один раз", text: <>Нажмите <strong>«Опубликовать»</strong>. Во время фаз building, pushing и swapping не нажимайте кнопку повторно и не закрывайте проект принудительно.</>, result: "Фаза публикации — done, отображается production URL." },
-              { title: "Проверьте production", text: <>Откройте полученный URL отдельно. Проверьте первый экран, основные API-действия и обновление страницы.</>, result: "HTTPS открывается без предупреждений, приложение отвечает после reload." },
-            ]} />
-            <StatusTable rows={[
-              ["building", "Собирается production-образ.", "Ждать. Не запускайте второй deploy."],
-              ["pushing", "Образ передаётся в production runtime.", "Не закрывать публикацию принудительно."],
-              ["swapping", "Приложение проходит health-check и готовится принять трафик.", "Проверить детали, если фаза длится необычно долго."],
-              ["done", "Production успешно переключён.", "Открыть URL, затем перейти к MAX Partner."],
-              ["failed", "Сборка или health-check не прошли.", "Открыть детали, исправить первопричину в редакторе и повторить."],
-            ]} />
-          </GuideSection>
-
-          <GuideSection id="partner" number="08" eyebrow="Ручной внешний шаг" title="Как вставить production URL в MAX Partner" lead="MAX пока требует сохранить ссылку мини-приложения в кабинете владельца бота. Yleum копирует точный URL и ведёт к нужному кабинету; вводить адрес вручную по памяти не нужно.">
-            <PartnerVisual />
-            <NumberedLegend items={["Скопируйте production URL из Yleum — токен для этого не нужен.", "Вставьте URL в поле «Ссылка на мини-приложение» и выберите кнопку «Открыть».", "Нажмите «Сохранить» и только потом подтвердите URL в мастере Yleum."]} />
-            <StepList steps={[
-              { title: "Скопируйте URL в Yleum", text: <>После успешной публикации нажмите ссылку production или <strong>«Открыть кабинет MAX»</strong>. Yleum предварительно копирует адрес в буфер.</>, result: "В буфере адрес вида https://… без /preview и временного параметра." },
-              { title: "Откройте настройки бота", text: <>В MAX Partner выберите правильную организацию и бота: <strong>«Чат-боты» → «Перейти» → «Расширенные настройки» → «Настроить»</strong>.</> },
-              { title: "Вставьте ссылку", text: <>В поле мини-приложения вставьте URL. Не добавляйте <code>/api/max/webhook</code>, параметры preview или ссылку на редактор.</>, result: "Поле содержит корень production Mini App." },
-              { title: "Выберите кнопку", text: <>Выберите подпись <strong>«Открыть»</strong>. Это самая понятная точка входа для универсального бизнес-приложения.</> },
-              { title: "Сохраните и проверьте кнопку", text: <>Нажмите <strong>«Сохранить»</strong> и убедитесь, что в настоящем чате бота появилась кнопка запуска Mini App.</>, result: "В настоящем чате бота появилась кнопка запуска." },
-              { title: "Подтвердите в Yleum", text: <>Вернитесь в настройки приложения и включите <strong>«URL добавлен в MAX»</strong>.</>, result: "Readiness равен 100%, приложение готово к приёмке." },
-            ]} />
-            <Note title="Официальная схема MAX">Путь к полю ссылки, варианты кнопки и формат внутреннего запуска описаны в <a className="font-medium text-[#6a95fa] underline" href="https://dev.max.ru/docs/webapps/introduction" target="_blank" rel="noreferrer">официальной справке по мини-приложениям</a>.</Note>
-            <Note tone="warning" title="Как отличить production URL">Безопасное превью открывается только внутри защищённой preview-сессии и не подходит для MAX. Production URL постоянный, начинается с HTTPS, открывается отдельно и отображается после deploy со статусом done.</Note>
-          </GuideSection>
-
-          <GuideSection id="acceptance" number="09" eyebrow="Настоящий клиент MAX" title="Приёмка двумя разными пользователями" lead="Браузерное превью проверяет интерфейс, но не доказывает интеграцию с MAX. Финальная приёмка проводится в мобильном клиенте через кнопку настоящего промодерированного бота.">
-            <div className="grid gap-4 md:grid-cols-2">
-              <Checklist title="Пользователь A — новый" items={["Открывает бота по ссылке или через поиск MAX.", "Нажимает «Открыть» и видит Mini App внутри MAX.", "Создаёт тестовую запись/заказ/действие.", "Закрывает шторку и открывает повторно.", "Видит только собственные данные и сохранённый результат."]} />
-              <Checklist title="Пользователь B — изоляция" items={["Использует другой реальный MAX-аккаунт и устройство.", "Первый экран не содержит данных пользователя A.", "Создаёт свой отдельный объект.", "После повторного запуска видит только свой объект.", "Получает сервисное сообщение, если оно входит в сценарий."]} />
-            </div>
-            <div className="mt-6 rounded-[12px] border border-[#2b2d32] bg-[#121519] p-6 text-white">
-              <p className="omnia-kicker text-accent">Протокол приёмки</p>
-              <div className="mt-6 grid gap-px overflow-hidden rounded-[10px] border border-white/12 bg-white/12 sm:grid-cols-3">
-                {[
-                  [Users, "2 разных MAX ID", "Сервер получил две независимые личности из валидированного initData."],
-                  [ShieldCheck, "Изоляция данных", "Каждый select/update/delete ограничен владельцем объекта."],
-                  [Link2, "Запуск по URL", "Кнопка в MAX открывает текущий production URL без промежуточного экрана."],
-                ].map(([Icon, title, copy]) => { const ItemIcon = Icon as typeof Users; return <div key={String(title)} className="bg-[#121519] p-5"><ItemIcon className="size-5 text-accent" /><p className="mt-7 text-sm font-semibold">{String(title)}</p><p className="mt-2 text-xs leading-5 text-white/45">{String(copy)}</p></div>; })}
+            <details className="rounded-xl border border-[#2b2d32] bg-[#191b20] p-5">
+              <summary className="cursor-pointer text-sm font-semibold">Показать остальные шаги создания</summary>
+              <div className="mt-5 space-y-7">
+                <GuideScreenshot id="create-audience" />
+                <GuideScreenshot id="create-functions" />
+                <GuideScreenshot id="create-review" />
               </div>
+            </details>
+            <Note title="Пример описания">«Приложение для кофейни. Гость видит меню с фотографиями и ценами, выбирает размер напитка и отправляет заказ к выдаче. Владелец видит заказы в Yleum». Конкретные действия полезнее общего запроса «сделай красиво».</Note>
+          </GuideSection>
+
+          <GuideSection id="builder" number="03" eyebrow="Редактор и проверка" title="Соберите приложение и проверьте его как клиент" lead="В редакторе вы общаетесь с ИИ и видите результат в предпросмотре. Изменения экранов и функций нужно проверить перед публикацией.">
+            <GuideScreenshot id="builder" />
+            <StepList steps={[
+              { title: "Дождитесь первой сборки", text: <>Следите за сообщениями редактора. Пока идёт работа, не отправляйте одно и то же задание повторно. Если редактор просит уточнение, ответьте в диалоге.</> },
+              { title: "Откройте предпросмотр", text: <>На большом экране он находится рядом с диалогом. В узком окне или на телефоне нажмите кнопку <strong>«Открыть живое превью»</strong> в верхней панели. Посмотрите первый экран, откройте карточку товара или услуги, проверьте основную кнопку.</>, result: "Вы можете пройти главный сценарий в предпросмотре." },
+              { title: "Опишите конкретную доработку", text: <>Например: «На карточке услуги добавь выбор даты перед отправкой заявки». Укажите, где изменить поведение и какой результат нужен. После завершения снова проверьте этот путь.</> },
+            ]} />
+            <Note title="Когда нужен ИИ">Новый экран, другой дизайн и новая функция — доработка с ИИ, которая расходует генерации или правки по условиям вашего тарифа. Цены, наличие и позиции уже подключённого каталога меняются обычным сохранением; для них используйте <a href="#settings" className="underline underline-offset-4">«Данные» или «Каталог»</a>.</Note>
+            <Note tone="warning" title="Предпросмотр и запущенное приложение проверяются отдельно">Работающая кнопка в предпросмотре ещё не подтверждает работу бота, оплаты или CRM. После публикации пройдите тот же сценарий внутри MAX. В диалог с ИИ не отправляйте пароли, SMS-коды и токены сервисов.</Note>
+          </GuideSection>
+
+          <GuideSection id="settings" number="04" eyebrow="Документы и каталог" title="Сохраните данные приложения" lead="Кнопка «Данные» открывает описание, контент, данные владельца и политики. Обычное сохранение этих полей не запускает ИИ и не расходует его баланс.">
+            <div>
+              <h3 className="mb-5 text-xl font-semibold">Документы перед публикацией</h3>
+              <GuideScreenshot id="policies" />
             </div>
             <StepList steps={[
-              { title: "Назначьте окно проверки", text: <>Оба пользователя должны быть доступны одновременно 15–20 минут. Используйте тестовые имена и данные, не реальные ПДн клиентов.</> },
-              { title: "Запишите начальное состояние", text: <>Production имеет done, health зелёный, URL подтверждён. Не вносите изменения во время прогона.</> },
-              { title: "Пройдите один и тот же сценарий", text: <>A проходит путь полностью, затем B повторяет его. Фиксируйте время каждого действия — так события легко найти в журнале.</> },
-              { title: "Проверьте повторный вход", text: <>Оба закрывают и повторно открывают Mini App. Сессия восстанавливается через новый валидный initData, данные не смешиваются.</> },
-              { title: "Зафиксируйте результат", text: <>Сохраните результат проверки, production URL, username бота и итог каждого пункта. Не сохраняйте initData или персональные идентификаторы в публичном отчёте.</>, result: "Два пользователя завершили путь, запуск и изоляция данных подтверждены." },
+              { title: "Откройте «Данные» → «Политики»", text: <>Прочитайте политику и условия своего приложения. Отметьте только те особенности, которые оно использует: продажи, пользовательский контент, уведомления и сбор персональных данных.</> },
+              { title: "Подтвердите документы и сохраните", text: <>Поставьте галочку <strong>«Я проверил политику и условия приложения»</strong> и нажмите <strong>«Сохранить изменения»</strong>. После успешного сохранения появляется сообщение <strong>«Данные сохранены»</strong>.</>, result: "Требование «Документы подтверждены» выполнено." },
+              { title: "При необходимости дополните данные владельца", text: <>Можно указать название владельца для документов, email поддержки и ссылку на свою политику. Это необязательные поля. Реквизиты компании для этого шага в Yleum не требуются; проверку бизнеса проводит MAX.</> },
+            ]} />
+            <Note title="Настройка и функция — разные действия">Отметка о продажах добавляет соответствующие разделы документов. Подключение оплаты выполняется отдельно. Если нужен запрос согласия на экранах приложения, добавьте его через <strong>«Изменить экраны с ИИ»</strong>, проверьте и опубликуйте результат.</Note>
+
+            <div>
+              <h3 className="mb-3 text-xl font-semibold">Товары, услуги, цены и фотографии</h3>
+              <p className="mb-5 text-sm leading-6 text-[#9fa1b1]">Для повседневной работы откройте «Каталог». Здесь можно найти позицию, изменить её, скрыть или добавить новую. Лимит — 100 позиций, включая скрытые.</p>
+              <GuideScreenshot id="catalog" />
+            </div>
+            <GuideScreenshot id="catalog-edit" />
+            <GuideScreenshot id="catalog-photo" />
+            <StepList steps={[
+              { title: "Добавьте или откройте позицию", text: <>В <strong>«Каталоге»</strong> нажмите <strong>«Добавить позицию»</strong> или <strong>«Изменить»</strong> у существующей карточки. В отдельном окне заполните название, описание, раздел, цену, наличие и варианты выбора.</> },
+              { title: "Добавьте фотографию", text: <>Нажмите на область фото карточки. Загрузите файл или укажите ссылку на изображение, затем нажмите <strong>«Сохранить позицию»</strong>. Для обычного изменения позиции или её видимости в «Каталоге» не нужен запуск ИИ. Если правите каталог во вкладке <strong>«Данные» → «Контент»</strong>, завершите редактирование её кнопкой <strong>«Сохранить изменения»</strong>.</> },
+              { title: "Проверьте доставку изменений", text: <>В каталоге отдельно показаны сохранение в Yleum, публичное приложение и предпросмотр. Если обновление ещё не подтверждено, используйте <strong>«Повторить применение»</strong>, когда кнопка доступна, и проверьте карточку в приложении.</>, result: "Правильные данные сохранены и видны в подключённом каталоге приложения." },
+            ]} />
+            <Note tone="success" title="Обычные правки каталога бесплатны">Когда каталог подключён к экранам, добавление позиций, изменение цены, фото и наличия применяются после сохранения без ИИ и новой публикации. В <strong>«Данные» → «Контент»</strong> тоже можно добавить позицию: новая карточка появляется первой, а изменения сохраняются кнопкой <strong>«Сохранить изменения»</strong>.</Note>
+            <Note title="Если каталога на экранах ещё нет">Сначала сохраните позиции. Затем используйте <strong>«Подключить каталог»</strong> в каталоге или отдельную кнопку <strong>«Изменить экраны с ИИ»</strong> в данных приложения. Проверьте задание и подтвердите запуск: эта доработка расходует баланс. После неё проверьте экраны и опубликуйте приложение. Дальнейшее обычное редактирование позиций уже не требует ИИ.</Note>
+          </GuideSection>
+
+          <GuideSection id="integrations" number="05" eyebrow="Подключение сервисов" title="Подключите оплату, CRM или аналитику" lead="Откройте «Интеграции» в редакторе и выберите нужный сервис. Разрешение доступа связывает аккаунты; для нового поведения приложения может понадобиться отдельная доработка.">
+            <GuideScreenshot id="integrations" />
+            <StepList steps={[
+              { title: "Выберите сервис и способ подключения", text: <>Если доступна кнопка <strong>«Войти и разрешить доступ»</strong>, нажмите её. В открывшемся официальном кабинете войдите в свой аккаунт и разрешите доступ. Если сервис предлагает форму ключей, вводите их только в предназначенные поля подключения.</> },
+              { title: "Убедитесь, что подключение готово", text: <>После возвращения проверьте отметку <strong>«Подключено»</strong>. Если аккаунт уже подключён и показана кнопка <strong>«Использовать»</strong>, выберите её для текущего приложения. Заполните дополнительные настройки, которые просит сервис.</>, result: "Нужный сервис подключён к этому приложению." },
+              { title: "Добавьте нужную функцию в приложение", text: <>Если показана кнопка <strong>«Добавить в приложение»</strong>, откройте её и проверьте задание для ИИ. Доработка запускается после вашего подтверждения и расходует баланс. Затем проверьте результат и опубликуйте изменения.</> },
+            ]} />
+            <Note title="Проверьте действие целиком">После подключения CRM отправьте пробную заявку и найдите её в CRM. После добавления оплаты проверьте её по правилам платёжного сервиса. Одна отметка «Подключено» не подтверждает, что нужная кнопка уже появилась и работает у клиента.</Note>
+          </GuideSection>
+
+          <GuideSection id="amocrm" number="05.1" eyebrow="Пример интеграции" title="Настройте заявки в amoCRM" lead="Этот шаг нужен, если вы хотите получать обращения из приложения в amoCRM. Если CRM пока не нужна, переходите к подключению MAX.">
+            <StepList steps={[
+              { title: "Разрешите доступ к нужному аккаунту amoCRM", text: <>В <strong>«Интеграциях»</strong> откройте amoCRM и выберите <strong>«Войти и разрешить доступ»</strong>. Проверьте, в какой аккаунт вы вошли, и подтвердите доступ.</> },
+              { title: "Выберите, куда направлять заявки", text: <>После подключения выберите <strong>«Воронку»</strong> и <strong>«Этап»</strong>, затем нажмите <strong>«Сохранить этап»</strong>. Это определяет место появления новых лидов.</> },
+              { title: "Добавьте отправку заявки и проверьте результат", text: <>Через <strong>«Добавить в приложение»</strong> задайте нужный сценарий и подтвердите доработку. После проверки и публикации отправьте одну пробную заявку из MAX. Найдите её в выбранной воронке и сверьте поля.</>, result: "Пробная заявка появилась в правильном аккаунте и на нужном этапе amoCRM." },
             ]} />
           </GuideSection>
 
-          <GuideSection id="operations" number="10" eyebrow="Эксплуатация" title="Что делать после запуска и как выпускать изменения" lead="После запуска проект остаётся управляемым: видны runtime, health и адрес опубликованного приложения. Новое изменение проходит тот же цикл — правка, превью, публикация и проверка.">
-            <DashboardVisual />
-            <NumberedLegend items={["Кнопка «Открыть приложение» ведёт на текущий production и используется для быстрой проверки.", "Статус публикации показывает результат запуска. При ошибке проверьте её причину и повторите публикацию."]} />
-            <div className="mt-8 grid gap-4 md:grid-cols-2">
-              <Checklist title="Регулярная проверка" items={["Контейнер — running.", "Health-check — отвечает.", "Production URL открывается из MAX.", "Ключевые API-действия проходят.", "Последняя публикация завершилась успешно."]} />
-              <Checklist title="Безопасный релиз изменения" items={["Одна ограниченная задача агенту.", "Проверка в безопасном превью.", "Тест существующих сценариев, не только новой функции.", "Новая публикация и зелёный health.", "Повторный запуск в настоящем MAX.", "Запись результата проверки."]} />
-            </div>
-            <Note tone="warning" title="Не исправляйте production напрямую">Ручное редактирование контейнера, базы или файлов на сервере создаёт изменения вне обычного цикла Yleum. Любая постоянная правка должна начинаться в проекте и завершаться новой публикацией.</Note>
-          </GuideSection>
-
-          <GuideSection id="billing" number="11" eyebrow="Тариф и баланс" title="Подписка, зачисление кредита и автопродление" lead="Подписка определяет лимиты проектов и ежемесячный кредит на генерации. Платёж проходит у провайдера, а ledger фиксирует каждое зачисление отдельной неизменяемой операцией.">
+          <GuideSection id="max-bot" number="06" eyebrow="Бот и подключение MAX" title="Подготовьте бота и свяжите его с Yleum" lead="Пользователь открывает приложение через вашего бота. В Yleum подключение MAX проходит четыре шага: «Бот», «Подключение», «Публикация», «Адрес в MAX».">
+            <GuideScreenshot id="max-bots" />
             <StepList steps={[
-              { title: "Откройте тарифы", text: <>В аккаунте выберите <strong>«Биллинг» → «Тариф»</strong> или откройте <Route>/billing/plan</Route>.</> },
-              { title: "Выберите план", text: <>Сравните число проектов, включённый кредит и функции. Для первого production-пути используйте минимальный план, который разрешает публикацию нужного проекта.</> },
-              { title: "Подтвердите условия", text: <>Перед оплатой проверьте цену, период, автопродление, оферту и email для чека. Автопродление включается только с явным согласием.</> },
-              { title: "Завершите оплату у ЮKassa", text: <>Yleum перенаправит на защищённую форму. Не обновляйте страницу оплаты многократно. После подтверждения вернитесь в Yleum.</>, result: "Платёж имеет статус succeeded." },
-              { title: "Проверьте ledger", text: <>В <strong>«Биллинг» → «Транзакции»</strong> должна появиться одна операция <code>subscription_credit</code>. Повторное открытие callback или webhook не должно создавать вторую.</>, result: "Баланс увеличен ровно на кредит тарифа." },
-              { title: "Управляйте продлением", text: <>Отключение автопродления не отнимает уже оплаченный период. Включить его обратно можно до конца периода, если сохранённый способ оплаты активен.</> },
+              { title: "Откройте MAX для бизнеса и выберите бота", text: <>Перейдите в <a href="https://business.max.ru/" target="_blank" rel="noreferrer" className="text-accent hover:underline">кабинет MAX для бизнеса <ExternalLink className="inline size-3" aria-hidden="true" /></a> и раздел <strong>«Чат-боты»</strong>. Создайте бота, если его ещё нет. Пройдите необходимые проверки и дождитесь модерации по подсказкам MAX.</> },
+              { title: "Откройте настройки нужного бота", text: <>В списке чат-ботов откройте меню <strong>⋮ «Действия с ботом»</strong> и выберите <strong>«Настройки»</strong>. Получите токен своего бота в кабинете MAX.</> },
+              { title: "Перейдите к подключению в Yleum", text: <>В окне публикации выберите подключение бота. На первом шаге мастера нажмите <strong>«Бот готов — далее»</strong>. На шаге <strong>«Подключение»</strong> вставьте токен в скрытое поле и нажмите <strong>«Подключить бота»</strong>.</>, result: "Бот подключён; мастер предлагает перейти к публикации." },
             ]} />
-            <div className="mt-6 grid gap-4 md:grid-cols-3">
-              {[
-                ["pending_payment", "Платёж создан, пользователь ещё не завершил форму."],
-                ["active", "Период оплачен, лимиты и кредит применены."],
-                ["cancel_at_period_end", "Продление выключено, доступ действует до даты окончания."],
-                ["past_due", "Продление не прошло, действует льготный период."],
-                ["canceled", "Подписка прекращена и больше не продлевается."],
-                ["refunded", "Возврат подтверждён провайдером и отражён в учёте."],
-              ].map(([status, copy]) => <div key={status} className="rounded-[10px] border border-[#2b2d32] bg-[#191b20] p-4"><code className="text-[11px] font-semibold text-[#6a95fa]">{status}</code><p className="mt-2 text-xs leading-5 text-[#9fa1b1]">{copy}</p></div>)}
-            </div>
+            <GuideScreenshot id="max-connection" />
+            <Note tone="warning" title="Токен — секретный ключ">Вставляйте его только в поле подключения бота. Не отправляйте токен ИИ, в поддержку или в переписку и не включайте в снимки экрана. Yleum сохраняет его зашифрованно и не показывает повторно.</Note>
+            <Note title="Четыре шага относятся к подключению MAX">Это отдельный мастер. Общая готовность приложения может показывать другой прогресс, потому что дополнительно учитывает сборку и документы. После подключения бота вам ещё нужно опубликовать приложение и добавить его адрес в кабинет MAX.</Note>
           </GuideSection>
 
-          <GuideSection id="errors" number="12" eyebrow="Диагностика" title="Что означает ошибка и куда идти" lead="Сначала зафиксируйте экран, время и действие. Затем определите слой: аккаунт, сборка, безопасное превью, production, интеграция или внешний кабинет MAX.">
-            <div className="grid gap-4 md:grid-cols-2">
+          <GuideSection id="publish" number="07" eyebrow="Публикация приложения" title="Получите постоянный адрес приложения" lead="Публикация делает проверенную сборку доступной по постоянному HTTPS-адресу. Перед ней Yleum проверяет три условия: приложение собрано, документы подтверждены и бот MAX подключён.">
+            <GuideScreenshot id="publish" />
+            <StepList steps={[
+              { title: "Откройте «Опубликовать» в редакторе", text: <>Посмотрите список готовности. Если не завершены сборка, документы или подключение бота, перейдите по предложенной кнопке и выполните этот шаг.</> },
+              { title: "Запустите публикацию", text: <>Когда три условия выполнены, нажмите <strong>«Опубликовать приложение»</strong>. Следите за ходом работы. Не запускайте ту же публикацию повторно, пока она продолжается.</> },
+              { title: "Дождитесь подтверждения и откройте приложение", text: <>После завершения появятся постоянный адрес и действие <strong>«Открыть приложение»</strong>. Проверьте, что открывается ожидаемая страница.</>, result: "Приложение опубликовано; его постоянный адрес доступен в Yleum." },
+            ]} />
+            <Note title="Можно закрыть окно публикации">Работа продолжается на сервере. Вернитесь в тот же проект и снова откройте публикацию, чтобы увидеть актуальный результат. Если соединение прервалось, сначала проверьте состояние текущей публикации.</Note>
+            <Note title="Когда публиковать ещё раз">После доработки экранов, дизайна или функций с ИИ проверьте предпросмотр и опубликуйте изменения. Обычное сохранение данных уже подключённого каталога не требует новой публикации.</Note>
+          </GuideSection>
+
+          <GuideSection id="partner" number="08" eyebrow="Адрес приложения в MAX" title="Укажите в MAX, что должен открывать бот" lead="После публикации вернитесь к подключению MAX в Yleum. На четвёртом шаге появится адрес, который нужно самостоятельно сохранить в настройках бота в кабинете MAX.">
+            <GuideScreenshot id="max-address" />
+            <GuideScreenshot id="max-settings" />
+            <StepList steps={[
+              { title: "Скопируйте адрес в Yleum", text: <>На шаге <strong>«Адрес в MAX»</strong> нажмите <strong>«Скопировать адрес»</strong>. Дождитесь сообщения об успешном копировании или выделите и скопируйте адрес вручную. Открытие ссылки само по себе не копирует её.</> },
+              { title: "Сохраните адрес в настройках нужного бота", text: <>Откройте кабинет MAX, выберите своего чат-бота и через <strong>⋮ «Действия с ботом» → «Настройки»</strong> перейдите к разделу <strong>«Мини-приложение»</strong>. Вставьте постоянный адрес из Yleum в поле <strong>«Введите ссылку»</strong>, выберите подпись кнопки, например <strong>«Открыть»</strong>, и нажмите <strong>«Сохранить»</strong>. Кнопка сохранения становится доступна после изменения адреса или подписи. На снимке уже сохранена существующая настройка.</> },
+              { title: "Вернитесь в Yleum и сохраните подтверждение", text: <>Только после сохранения в MAX отметьте <strong>«Я вставил адрес и сохранил настройки в MAX»</strong> и нажмите <strong>«Сохранить подтверждение»</strong>.</>, result: "Yleum показывает «Подтверждение сохранено»." },
+            ]} />
+            <Note title="Что означает это подтверждение">Вы вручную подтверждаете своё действие в кабинете MAX. Yleum не получает от MAX автоматическую проверку этой настройки. Чтобы убедиться, что всё работает, откройте бота в самом MAX и запустите приложение.</Note>
+          </GuideSection>
+
+          <GuideSection id="acceptance" number="09" eyebrow="Проверка в MAX" title="Пройдите путь настоящего пользователя" lead="Постоянный адрес и сохранённая настройка бота — повод начать проверку в MAX. Пройдите свой основной сценарий и убедитесь, что результат сохранился.">
+            <StepList steps={[
+              { title: "Откройте своего бота в MAX", text: <>Запустите мини-приложение доступной у бота кнопкой. Сверьте название, первый экран и каталог. Если открывается другое приложение, перепроверьте бота и адрес в его настройках.</> },
+              { title: "Создайте пробную заявку, заказ или запись", text: <>Выберите то действие, ради которого вы делали приложение. Используйте понятные тестовые данные, чтобы отличить проверку от обращений клиентов. Убедитесь, что появилась подтверждённая запись, а не только сообщение на экране.</> },
+              { title: "Закройте и снова откройте приложение", text: <>Проверьте, сохранился ли результат там, где его должен видеть пользователь. В Yleum откройте <strong>«Управление»</strong> и найдите пробное обращение, если этот раздел предусмотрен вашим приложением.</> },
+              { title: "Попросите второго пользователя повторить путь", text: <>Используйте другой аккаунт MAX. Второй человек должен видеть свои данные. Убедитесь, что личные заявки, заказы и профиль первого пользователя ему недоступны.</>, result: "Главный сценарий работает внутри MAX, результат сохраняется, личные данные пользователей разделены." },
+            ]} />
+            <Note title="Отметьте результаты в своём проекте">Эти шаги — инструкция для проверки вашего приложения. Снимки показывают интерфейс и не подтверждают прохождение всех сценариев, работу ваших платежей или разделение данных в вашем проекте.</Note>
+          </GuideSection>
+
+          <GuideSection id="operations" number="10" eyebrow="Ежедневная работа" title="Управляйте приложением из Yleum" lead="После запуска откройте «Управление». Доступные разделы зависят от функций приложения: каталог, заявки, заказы, запись, настройки и статистика.">
+            <GuideScreenshot id="management" />
+            <StepList steps={[
+              { title: "Обрабатывайте обращения", text: <>Откройте нужный раздел управления. Найдите новое обращение, проверьте его детали и измените состояние доступным действием. Раздел появится, когда соответствующая функция поддерживается опубликованным приложением.</> },
+              { title: "Поддерживайте каталог в актуальном виде", text: <>Меняйте цены и наличие, добавляйте фотографии и скрывайте недоступные позиции. Сохраняйте правки и проверяйте состояние <strong>«Публичное приложение»</strong>. Обычные изменения каталога не расходуют баланс ИИ.</> },
+              { title: "Смотрите статистику", text: <>Откройте <strong>«Статистика»</strong> в управлении. Оценивайте доступные показатели вместе с реальными обращениями: список сохранённых заказов или заявок помогает проверить, что действие завершилось.</> },
+              { title: "Добавляйте новые функции через редактор", text: <>Опишите доработку ИИ, проверьте её в предпросмотре и опубликуйте. После публикации повторно проверьте изменённый сценарий в MAX.</> },
+            ]} />
+            <Note title="Если управление пока не подключено">Прочитайте сообщение в разделе. Если предложено <strong>«Подключить управление»</strong>, это сохранит подготовленные настройки. Для появления новых функций в старом приложении может потребоваться совместимая доработка в редакторе и публикация. Не считайте сохранение настройки завершённым запуском функции.</Note>
+          </GuideSection>
+
+          <GuideSection id="billing" number="11" eyebrow="Баланс и тариф" title="Проверяйте условия перед оплатой" lead="Откройте меню аккаунта. В нём есть «Баланс», «Тариф» и «Операции». Генерации и правки нужны для работы ИИ; обычное редактирование данных каталога их не расходует.">
+            <GuideScreenshot id="billing" />
+            <StepList steps={[
+              { title: "Посмотрите доступный остаток", text: <>Откройте <Link href="/billing" className="text-accent hover:underline">«Баланс»</Link>. Проверьте, какие генерации и правки доступны, и выберите пакет пополнения, если он нужен.</> },
+              { title: "Сверьте тариф и состав пакета", text: <>В <Link href="/billing/plan" className="text-accent hover:underline">«Тарифе»</Link> посмотрите действующие условия. Перед оплатой прочитайте итоговую цену, состав, срок и условия продления в форме заказа. Актуальными считайте условия, показанные в вашем кабинете.</> },
+              { title: "Оплатите и проверьте результат", text: <>Завершите оплату на стороне ЮKassa и вернитесь в Yleum. Проверьте остаток и <Link href="/billing/transactions" className="text-accent hover:underline">«Операции»</Link>. Если деньги списаны, а результат ещё не появился, сначала проверьте операцию и обратитесь в поддержку.</>, result: "Оплата отражена в операциях, выбранный пакет или тариф применён." },
+            ]} />
+            <Note title="Следите за продлением в кабинете">Если вы используете подписку, её состояние и доступные действия смотрите в «Тарифе». Стоимость и состав пакетов могут меняться, поэтому перед каждой оплатой проверяйте текущий заказ.</Note>
+          </GuideSection>
+
+          <GuideSection id="errors" number="12" eyebrow="Помощь" title="Если что-то не работает" lead="Начните с последнего действия: что вы нажали и что увидели. Сохраните текст ошибки и время. Это поможет решить проблему и быстрее объяснить её поддержке.">
+            <div className="grid gap-4 sm:grid-cols-2">
               {[
-                [MailCheck, "Не приходит email", "Проверьте адрес и спам → повторите один раз → если канал недоступен, не создавайте второй аккаунт."],
-                [UserRoundCheck, "MAX не подтвердил профиль", "Откройте MAX Partner → прочитайте точную причину → исправьте данные там. В Yleum повторная анкета не нужна."],
-                [Sparkles, "Генерация долго идёт", "Обновите страницу → проверьте, восстановился ли серверный статус → не отправляйте тот же запрос повторно."],
-                [LockKeyhole, "Безопасное превью не открылось", "Нажмите «Повторить» → обновите Yleum → не открывайте внутренний preview URL отдельно без сессии."],
-                [KeyRound, "Секрет MAX отклонён", "Проверьте, что выбран правильный промодерированный бот → скопируйте секрет заново → подключите его только через защищённую форму."],
-                [Rocket, "Deploy failed", "Откройте детали фазы → исправьте первую ошибку сборки/health → опубликуйте обновление."],
-                [Webhook, "Webhook не активен", "Это не блокирует Mini App. Исправляйте webhook только если сценарию нужны сообщения или серверные события бота."],
-                [Link2, "Кнопка в MAX открывает не то", "Сверьте бота и production URL → удалите preview-параметры → сохраните URL и кнопку «Открыть»."],
-                [CreditCard, "Оплата есть, баланс не изменился", "Не платите повторно → откройте транзакции → дождитесь reconcile/webhook → передайте ID платежа поддержке."],
-                [Users, "Пользователи видят чужие данные", "Немедленно остановите приёмку → не продолжайте production → зафиксируйте сценарий и результат проверки для исправления изоляции."],
-              ].map(([Icon, title, copy]) => { const ItemIcon = Icon as typeof MailCheck; return <article key={String(title)} className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-5"><div className="flex gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-[8px] bg-[#2b2d32]"><ItemIcon className="size-4 text-accent" /></span><div><h3 className="text-sm font-semibold">{String(title)}</h3><p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{String(copy)}</p></div></div></article>; })}
+                ["Не приходит SMS", "Проверьте номер с кодом страны и доступность связи. Повторите отправку, когда форма разрешит. Если код по-прежнему не приходит, обратитесь в поддержку и укажите время попытки."],
+                ["Не получается войти", "Проверьте email и воспользуйтесь восстановлением пароля на странице входа. Если письмо не пришло, посмотрите папку «Спам» и правильность адреса."],
+                ["Сборка долго не заканчивается", "Проверьте сообщения редактора. После обновления страницы дождитесь актуального состояния. Не отправляйте одинаковые задания подряд; при ошибке сохраните её текст."],
+                ["Не открывается предпросмотр", "Вернитесь в редактор и используйте предложенное повторное открытие или проверку. Если проблема остаётся, передайте поддержке название проекта и текст сообщения."],
+                ["Цена или фото не обновились", "Проверьте сохранение в каталоге и состояние «Публичное приложение». Если доступно «Повторить применение», используйте его. Если каталог ещё не подключён к экранам, потребуется отдельная доработка."],
+                ["Не подключается бот", "Проверьте, что используете токен нужного бота, и вставьте его заново в скрытое поле подключения. Уточните готовность бота в кабинете MAX. Токен в обращение не прикладывайте."],
+                ["Публикация завершилась ошибкой", "Прочитайте сообщение в окне публикации. Если это обновление, проверьте работу уже опубликованного приложения и сохраните его доступным. Исправьте указанную причину и повторите публикацию."],
+                ["В MAX открывается другая страница", "Сверьте выбранного бота и постоянный адрес Yleum в его настройках. Сохраните правильный адрес, затем закройте и снова откройте мини-приложение в MAX."],
+                ["Сервис подключён, но действия нет", "Откройте интеграцию и проверьте, добавлена ли нужная функция в приложение. После доработки ИИ проверьте результат и повторно опубликуйте его."],
+                ["Оплата прошла, остаток прежний", "Проверьте «Операции» и обновите баланс. Если результат не появился, передайте поддержке время, сумму и номер платежа. Не создавайте повторный платёж для проверки."],
+                ["Видны личные данные другого человека", "Прекратите проверку и приём обращений через проблемный сценарий. Сразу обратитесь в поддержку: опишите действие и какие чужие данные появились, не пересылая сами личные данные."],
+              ].map(([title, text]) => (
+                <article key={title} className="rounded-xl border border-[#2b2d32] bg-[#191b20] p-5">
+                  <h3 className="text-sm font-semibold">{title}</h3>
+                  <p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{text}</p>
+                </article>
+              ))}
             </div>
-            <div className="mt-8 rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6">
-              <h3 className="text-base font-semibold">Что приложить к обращению в поддержку</h3>
-              <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                {["Email аккаунта без пароля", "Название и ID проекта", "Точное время с часовым поясом", "Какую кнопку нажали", "Полный текст ошибки", "Скриншот без токенов и ПДн", "Production URL, если ошибка после deploy", "Ожидаемый и фактический результат"].map((item) => <p key={item} className="flex gap-2 text-sm text-[#9fa1b1]"><Check className="mt-0.5 size-4 shrink-0 text-success-fg" />{item}</p>)}
+            <GuideScreenshot id="support" />
+            <StepList steps={[
+              { title: "Откройте поддержку", text: <>Нажмите кнопку поддержки в углу Yleum. В <strong>«Помощнике»</strong> можно задать вопрос, а вкладка <strong>«Оператор»</strong> открывает форму обращения.</> },
+              { title: "Опишите, что произошло", text: <>Укажите название проекта, действие, время с часовым поясом, текст ошибки и ожидаемый результат. Для проблемы после публикации добавьте адрес приложения. Если передаёте снимок экрана, предварительно скройте пароли, токены, коды и данные клиентов.</> },
+              { title: "Отправьте обращение и следите за ответом", text: <>Нажмите <strong>«Отправить обращение»</strong>. Переписка доступна во вкладке <strong>«Обращения»</strong>; сохраните номер обращения.</> },
+            ]} />
+          </GuideSection>
+
+          <GuideSection id="checklists" number="13" eyebrow="Списки для запуска" title="Проверьте готовность своего приложения" lead="Используйте эти списки перед первым приглашением клиентов и после важных доработок. Отмечайте только те пункты, которые проверили в своём проекте.">
+            <div className="grid gap-5 xl:grid-cols-2">
+              <Checklist title="Перед публикацией" items={[
+                "Главный сценарий работает в предпросмотре.",
+                "Тексты, цены, фотографии и наличие проверены.",
+                "Документы прочитаны, подтверждение в «Политиках» сохранено.",
+                "Нужный бот подготовлен в MAX и подключён в Yleum.",
+                "Необходимые сервисы подключены, их функции добавлены в приложение.",
+                "Три условия публикации выполнены.",
+              ]} />
+              <Checklist title="Перед приглашением клиентов" items={[
+                "Приложение опубликовано и открывается по постоянному адресу.",
+                "Этот адрес сохранён в настройках правильного бота MAX.",
+                "Ручное подтверждение адреса сохранено в Yleum.",
+                "Приложение открывается из бота в самом MAX.",
+                "Пробный заказ, заявка или запись сохранились после повторного открытия.",
+                "Обращение видно владельцу, если это предусмотрено сценарием.",
+                "Второй пользователь видит свои данные, личные данные первого ему недоступны.",
+                "Оплата и CRM проверены отдельно, если они используются.",
+              ]} />
+            </div>
+            <div className="rounded-[14px] bg-[#121519] p-6 text-white sm:p-8">
+              <div className="grid gap-6 xl:grid-cols-[1fr_auto] xl:items-center">
+                <div>
+                  <h3 className="text-2xl font-semibold tracking-[-.03em]">Продолжите с нужного шага в Yleum</h3>
+                  <p className="mt-3 max-w-[650px] text-sm leading-6 text-white/60">Если проект уже создан, откройте его и посмотрите, что осталось до публикации. Для ежедневной работы используйте «Управление» и «Каталог».</p>
+                </div>
+                <Link href="/login?next=/max" className="omnia-button omnia-button-primary min-h-12 px-6">Перейти в Yleum <ArrowRight className="size-4" aria-hidden="true" /></Link>
               </div>
-            </div>
-          </GuideSection>
-
-          <GuideSection id="checklists" number="13" eyebrow="Контроль качества" title="Два финальных списка перед отметкой «MVP готов»" lead="Первый список проверяет, что техническая и внешняя части готовы. Второй фиксирует чистый golden path без ручного редактирования базы, подмены статусов и повторных зачислений.">
-            <div className="grid gap-5 lg:grid-cols-2">
-              <Checklist title="Перед реальной приёмкой" items={["SMTP доставляет подтверждение и восстановление пароля.", "ЮKassa использует настоящий shopId и утверждённую схему чеков, если в приложении есть платежи.", "Оператор, регистрационные данные, адрес и поддержка доступны пользователю приложения.", "MAX-профиль верифицирован, бот промодерирован.", "Секрет бота проверен и хранится только в защищённой интеграции.", "Сборка работает в безопасном превью.", "Production deploy имеет статус done и зелёный health.", "Production URL сохранён в MAX Partner.", "Кнопка «Открыть» видна в реальном клиенте MAX.", "Назначены два разных MAX-пользователя."]} />
-              <Checklist title="Чистый golden path" items={["Новый пользователь зарегистрировался через UI.", "Email подтверждён по настоящему письму.", "Проект создан и собран через Yleum без бизнес-анкеты.", "Безопасное превью открыто через подписанную сессию.", "При платном тарифе реальный платёж завершён у провайдера и в ledger ровно одно зачисление.", "Бизнес-профиль и бот проверены в MAX Partner.", "Безопасный вход подключён одним секретом.", "Публикация выполнена штатным deploy.", "URL добавлен в правильного MAX-бота.", "Два пользователя прошли сценарий и не увидели чужие данные.", "Автопродление управляется из кабинета.", "Во время пути не выполнялись ручные SQL/SSH-правки."]} />
-            </div>
-            <div className="mt-8 rounded-[14px] bg-[#121519] p-7 text-white sm:p-9">
-              <div className="grid gap-7 lg:grid-cols-[1fr_auto] lg:items-center"><div><p className="omnia-kicker text-accent">Следующий шаг</p><h3 className="mt-3 text-[30px] font-semibold tracking-[-.04em]">Откройте Yleum и пройдите путь по главам 01–09</h3><p className="mt-3 max-w-[650px] text-sm leading-6 text-white/48">Если проект уже создан, начинайте с главы, которую показывает мастер готовности. Он всегда ведёт к первой незавершённой причине.</p></div><Link href="/login?next=/max" className="omnia-button omnia-button-primary min-h-12 px-6">Перейти в Yleum <ArrowRight className="size-4" /></Link></div>
             </div>
           </GuideSection>
         </div>
@@ -501,7 +449,13 @@ export default function MaxGuidePage() {
       <footer className="border-t border-[#2b2d32] bg-[#191b20] px-4 py-10 sm:px-7">
         <div className="mx-auto flex max-w-[1320px] flex-col gap-7 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3"><BrandMark /><span className="h-5 w-px bg-[#2b2d32]" /><span className="text-xs text-[#9fa1b1]">Руководство Yleum</span></div>
-          <div className="flex flex-wrap gap-5 text-xs text-[#9fa1b1]"><Link href="/max/product">О продукте</Link><Link href="/mvp">Статус продукта</Link><Link href="/legal/offer">Оферта</Link><Link href="/security">Безопасность</Link><a href="https://dev.max.ru/" target="_blank" rel="noreferrer">Документация MAX <ExternalLink className="ml-1 inline size-3" /></a></div>
+          <div className="flex flex-wrap gap-5 text-xs text-[#9fa1b1]">
+            <Link href="/max/product">О продукте</Link>
+            <Link href="/mvp">Статус продукта</Link>
+            <Link href="/legal/offer">Оферта</Link>
+            <Link href="/security">Безопасность</Link>
+            <a href="https://dev.max.ru/" target="_blank" rel="noreferrer">Документация MAX <ExternalLink className="ml-1 inline size-3" aria-hidden="true" /></a>
+          </div>
         </div>
       </footer>
     </main>
