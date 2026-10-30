@@ -3,12 +3,15 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { CircleCheck, CircleHelp, Clock3, LoaderCircle, RotateCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { createPayment, createSubscriptionCheckout, createTestPayment, getPaymentConfig, listPayments } from "@/lib/api/account";
 import { ApiError } from "@/lib/api/client";
-import { money, paymentState } from "./account-presentation";
+import { date, money, paymentState } from "./account-presentation";
+import { paymentConfirmationDescription, paymentTitle } from "./payment-presentation";
 import { refreshOwnerAllowances } from "@/lib/owner-chat-quota";
+import "./account-billing.css";
 
 export type CheckoutSelection = { kind: "topup" | "plan" | "test"; code: string; title: string; price: string; credit: string; allowance?: string; offerId?: string };
 type Attempt = { key: string; selection: CheckoutSelection; autoRenew: boolean; paymentId?: string };
@@ -167,13 +170,21 @@ export function usePaymentJourney(email: string) {
 export type PaymentJourney = ReturnType<typeof usePaymentJourney>;
 export function PaymentCheckout({ journey: j }: { journey: PaymentJourney }) {
   const state = paymentState(j.payment?.status ?? "");
+  const ResultIcon = j.payments.isError ? CircleHelp : j.payments.isPending ? LoaderCircle
+    : j.payment?.status === "succeeded" ? CircleCheck : j.payment?.status === "refunded" ? RotateCcw
+      : state.terminal ? X : j.payment && ["pending", "waiting_for_capture"].includes(j.payment.status) ? Clock3 : CircleHelp;
+  const resultTitle = j.payments.isError ? "Не удалось проверить оплату" : j.payments.isPending ? "Проверяем результат оплаты…"
+    : !j.payment ? "Платёж не найден" : state.label;
+  const resultDescription = paymentConfirmationDescription(j.payment, j.payments);
   return <>
     {j.storageError && <div role="alert" className="account-notice error">{j.storageError}</div>}
-    {j.paymentId && <section className={`account-payment-result account-notice ${j.payments.isError ? "error" : state.tone}`} aria-live="polite">
-      <div>
-        <h2>{j.payments.isError ? "Не удалось проверить оплату" : j.payments.isPending ? "Проверяем результат оплаты…" : !j.payment ? "Платёж не найден" : state.label}</h2>
-        <p>{j.payments.isError ? "Статус недоступен. Повторите проверку; новая оплата не требуется." : !j.payment && !j.payments.isPending ? "В последних 100 платежах аккаунта нет этого заказа. Его результат пока неизвестен." : j.payment?.status === "succeeded" ? `Сервер подтвердил платёж ${money(j.payment.amount_rub)}. ${j.payment.purpose === "payment_test" ? "Подписка и пакеты не изменены." : "Баланс и тариф обновляются."}` : state.terminal ? "Результат получен с сервера. Подробности доступны в операциях." : "Дождитесь подтверждения сервера. Не оплачивайте заказ повторно."}</p>
-        <small>Заказ: {j.paymentId}</small>
+    {j.paymentId && <section className={`account-payment-result account-payment-confirmation ${j.payments.isError ? "error" : state.tone}`} aria-live="polite">
+      <div className="account-payment-result-icon"><ResultIcon size={24} aria-hidden="true" /></div>
+      <div className="account-payment-result-content">
+        <h2>{resultTitle}</h2>
+        <p>{resultDescription}</p>
+        {j.payment && !j.payments.isError && <div className="account-payment-result-purchase"><span>{paymentTitle(j.payment)}</span><strong>{money(j.payment.amount_rub)}</strong></div>}
+        <details className="account-payment-result-details"><summary>Детали платежа</summary><small>Заказ: {j.paymentId}</small>{j.payment && <time dateTime={j.payment.created_at}>{date(j.payment.created_at)}</time>}</details>
       </div>
       <div className="account-actions">
         <Button variant="outline" disabled={j.payments.isFetching} onClick={() => void j.payments.refetch()}>Проверить статус</Button>

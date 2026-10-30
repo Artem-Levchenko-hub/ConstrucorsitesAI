@@ -94,3 +94,71 @@
 @media (prefers-reduced-motion: reduce) {
   .billing-overview .account-package-action { transition: none; transform: none; }
 }
+
+/* Payment history keeps table semantics while arranging entries as receipts. */
+.account-transactions { padding: 8px 24px; }
+.account-transactions .account-transactions-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 0 24px; }
+.account-transactions .account-transactions-scope { font-size: 13px; color: var(--color-fg-secondary); margin: 0; }
+.account-transactions .account-payment-filter { display: flex; align-items: center; gap: 12px; margin: 0; font-size: 13px; color: var(--color-fg-secondary); }
+.account-transactions .account-payment-select { position: relative; display: inline-flex; align-items: center; }
+.account-transactions .account-payment-select select { appearance: none; min-height: 44px; min-width: 180px; margin: 0; padding: 10px 40px 10px 16px; border-radius: 10px; font: inherit; color: var(--color-fg-primary); cursor: pointer; }
+.account-transactions .account-payment-select > svg { position: absolute; right: 16px; pointer-events: none; color: var(--color-fg-secondary); }
+.account-transactions .account-receipts table, .account-transactions .account-receipts tbody { display: block; width: 100%; min-width: 0; }
+.account-transactions .account-receipts thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.account-transactions .account-receipts tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, auto); grid-template-areas: "purpose amount" "date status"; column-gap: 24px; row-gap: 4px; padding: 24px 0; border-top: 1px solid var(--color-border-subtle); }
+.account-transactions .account-receipts td { display: block; min-width: 0; padding: 0; border: 0; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.account-transactions .account-receipts [headers="payment-purpose"] { grid-area: purpose; }
+.account-transactions .account-receipts [headers="payment-purpose"] strong { font-weight: 550; }
+.account-transactions .account-receipts [headers="payment-purpose"] small { display: block; margin-top: 4px; font-size: 13px; color: var(--color-fg-secondary); }
+.account-transactions .account-receipts [headers="payment-date"] { grid-area: date; align-self: center; color: var(--color-fg-secondary); font-size: 13px; }
+.account-transactions .account-receipts [headers="payment-amount"] { grid-area: amount; text-align: right; font-variant-numeric: tabular-nums; }
+.account-transactions .account-receipts [headers="payment-amount"] strong { font-size: 18px; font-weight: 550; letter-spacing: -.02em; }
+.account-transactions .account-receipts [headers="payment-status"] { grid-area: status; justify-self: end; }
+.account-transactions .account-operation-label { display: none; }
+.account-transactions .account-receipt-status { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 0 8px 8px; max-width: 100%; font-size: 13px; color: var(--color-fg-secondary); text-decoration: none; }
+.account-transactions .account-receipt-status > svg { flex: 0 0 auto; transition: transform 180ms ease; }
+.account-transactions .account-receipt-status:hover > svg { transform: translate(2px, -2px); }
+.account-transactions .account-receipt-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+.account-transactions .account-receipt-status.success { color: var(--color-success, #17613a); }
+.account-transactions .account-receipt-status.pending { color: var(--color-accent-secondary); }
+.account-transactions .account-receipt-status.error { color: var(--color-danger, #a22f28); }
+.account-transactions .account-empty { padding: 48px 16px; }
+.account-transactions > [role="status"] { padding: 24px 0; font-size: 14px; color: var(--color-fg-secondary); }
+.account-transactions .account-empty > svg { margin: 0 auto 16px; color: var(--color-fg-secondary); }
+.account-transactions .account-empty h3 { font-size: 16px; margin: 0 0 8px; }
+.account-transactions .account-empty p { font-size: 14px; color: var(--color-fg-secondary); }
+.account-transactions .account-empty a { display: inline-flex; min-height: 44px; align-items: center; }
+.account-transactions :is(select, a):focus-visible, .account-payment-confirmation :is(button, a, summary):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 4px; }
+
+/* Only the icon carries status colour; the confirmation stays a calm surface. */
+.account-payment-result.account-payment-confirmation { display: grid; grid-template-columns: 48px minmax(0, 1fr); align-items: start; gap: 16px; padding: 24px; border: 1px solid var(--color-border-default); border-radius: var(--account-panel-radius, 16px); background: var(--color-surface); color: var(--color-fg-primary); animation: account-payment-appear 180ms ease-out; }
+.account-payment-confirmation .account-payment-result-icon { display: grid; place-items: center; width: 48px; height: 48px; background: var(--color-surface-2); color: var(--color-fg-secondary); border-radius: 14px; }
+.account-payment-confirmation.success .account-payment-result-icon { background: var(--color-accent-subtle); color: var(--color-accent-secondary); }
+.account-payment-confirmation.pending .account-payment-result-icon { color: var(--color-accent-secondary); }
+.account-payment-confirmation.error .account-payment-result-icon { color: var(--color-danger, #a22f28); }
+.account-payment-confirmation .account-payment-result-content { min-width: 0; }
+.account-payment-confirmation h2 { font-size: 18px; line-height: 1.5; font-weight: 550; margin: 0 0 4px; }
+.account-payment-confirmation p { font-size: 14px; line-height: 1.6; color: var(--color-fg-secondary); margin: 0; }
+.account-payment-confirmation .account-payment-result-purchase { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; margin-top: 16px; font-size: 14px; }
+.account-payment-confirmation .account-payment-result-purchase strong { font-size: 18px; font-weight: 550; font-variant-numeric: tabular-nums; }
+.account-payment-confirmation .account-payment-result-details { margin-top: 8px; color: var(--color-fg-secondary); font-size: 13px; }
+.account-payment-confirmation .account-payment-result-details summary { min-height: 44px; width: fit-content; align-content: center; cursor: pointer; }
+.account-payment-confirmation .account-payment-result-details small, .account-payment-confirmation .account-payment-result-details time { display: block; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.account-payment-confirmation .account-actions { grid-column: 2; gap: 12px; padding-top: 16px; border-top: 1px solid var(--color-border-subtle); }
+.account-payment-confirmation .account-actions > :is(button, a) { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; margin: 0; padding: 10px 12px; font-size: 14px; line-height: 1.5; white-space: normal; text-align: center; }
+@keyframes account-payment-appear { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 600px) {
+  .account-transactions { padding: 8px 16px; }
+  .account-transactions .account-transactions-toolbar { align-items: flex-start; flex-direction: column; gap: 12px; padding-bottom: 16px; }
+  .account-transactions .account-payment-filter { width: 100%; justify-content: space-between; }
+  .account-transactions .account-receipts tr { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "purpose amount" "date date" "status status"; gap: 8px 16px; padding: 20px 0; }
+  .account-transactions .account-receipts [headers="payment-status"] { justify-self: start; }
+  .account-transactions .account-receipt-status { padding-left: 0; }
+  .account-payment-result.account-payment-confirmation { padding: 20px 16px; grid-template-columns: 40px minmax(0, 1fr); gap: 12px; }
+  .account-payment-confirmation .account-payment-result-icon { width: 40px; height: 40px; border-radius: 12px; }
+  .account-payment-confirmation .account-actions { grid-column: 1 / -1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .account-payment-result.account-payment-confirmation { animation: none; }
+  .account-transactions .account-receipt-status > svg { transition: none; transform: none; }
+}

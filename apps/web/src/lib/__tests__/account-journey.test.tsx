@@ -380,6 +380,46 @@ it("filters real ledger statuses without treating pending payments as credited",
     expect(document.querySelectorAll("tbody tr")).toHaveLength(1); expect(document.querySelector("tbody")!.textContent).toContain("Не зачислено"); expect(document.querySelector("tbody")!.textContent).not.toContain("555");
   } finally { await app.close(); }
 });
+it("presents readable receipts without internal subscription SKU and retains exact timestamps", async () => {
+  payments = [{ ...payment, id: "subscription", purpose: "subscription_initial", package_code: "subscription:pro:v5", status: "succeeded" }];
+  const app = await mount("transactions");
+  try {
+    await wait(() => expect(document.querySelector("tbody tr")).not.toBeNull());
+    const receipt = document.querySelector("tbody tr")!;
+    expect(receipt.textContent).toContain("Тариф Pro");
+    expect(receipt.textContent).not.toContain("subscription:pro:v5");
+    expect(receipt.querySelector("time")?.dateTime).toBe(payment.created_at);
+    expect(document.querySelector(".account-payment-filter select")?.getAttribute("aria-label")).toBe("Статус платежей");
+    expect(document.body.textContent).toContain("Последние 100 платежей");
+  } finally { await app.close(); }
+});
+it("includes both cancellation spellings in the filter and never labels refunds as credited", async () => {
+  payments = ["cancelled", "canceled", "refunded", "alien", "waiting_for_capture"].map((status, index) => ({ ...payment, id: `state-${index}`, status }));
+  const app = await mount("transactions");
+  try {
+    await wait(() => expect(document.querySelectorAll("tbody tr")).toHaveLength(5));
+    const refunded = [...document.querySelectorAll("tbody tr")].find(row => row.textContent?.includes("Возврат проведён"))!;
+    expect(refunded.textContent).toContain("Оплата возвращена");
+    expect(refunded.textContent).not.toContain("Начислено");
+    await act(async () => { const select = document.querySelector("select")!; select.value = "cancelled"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(document.querySelectorAll("tbody tr")).toHaveLength(2);
+    expect(requests).toHaveLength(0);
+  } finally { await app.close(); }
+});
+it("shows the confirmed purchased allowance after payment without a cash wallet promise", async () => {
+  mocks.search = "payment=pay-1";
+  payments = [{ ...payment, status: "succeeded", edit_units: 5 }];
+  const app = await mount("billing");
+  try {
+    await wait(() => expect(document.querySelector(".account-payment-result")?.textContent).toContain("Оплата подтверждена"));
+    const result = document.querySelector(".account-payment-result")!;
+    expect(result.textContent).toContain("Начислено: 5 правок");
+    expect(result.textContent).not.toContain("Баланс и тариф обновляются");
+    expect(result.querySelector(".account-payment-result-icon")).not.toBeNull();
+    expect(result.querySelector("details")?.textContent).toContain(payment.id);
+    expect(requests).toHaveLength(0);
+  } finally { await app.close(); }
+});
 it("keeps failed deletion in the dialog and preserves exact-email confirmation", async () => {
   const app = await mount("profile");
   try {
