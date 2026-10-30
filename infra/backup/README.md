@@ -26,6 +26,16 @@ does not assert a ciphertext decrypt or restore; those require independent
 private-key recovery and restore evidence. Deliver the helper alongside both
 canonical shell scripts before running either hook.
 
+`cms-encrypt.py` keeps encryption bounded in memory above the same OpenSSL buffer
+ceiling. OpenSSL still performs RSA and AES-256-CBC encryption; the helper accepts
+only its five-container streaming BER profile, preserves recipient/algorithm and
+ciphertext bytes, and writes canonical DER with lengths derived from the held
+plaintext file's size. Every fragment, terminator, byte count, input identity and
+child exit status must agree before an exclusive private ciphertext is published.
+The existing DER gate, checksums and offline-key requirements remain unchanged.
+Install this sibling helper with `cms-envelope.py`; whole-message decrypt APIs
+still require a separate bounded-memory recovery path for multi-gigabyte copies.
+
 The explicit topology requires Core, Commerce and runtime. Core/Commerce collect
 their local Docker cell databases and state journals. Runtime lists every `app-*`
 namespace and logically dumps both `core-postgres` and `project-postgres`, using

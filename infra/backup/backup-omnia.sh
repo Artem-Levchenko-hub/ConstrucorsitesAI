@@ -328,11 +328,7 @@ tar -czf "$bundle_tmp" -C "$dir" \
   MANIFEST.txt \
   || fail "portable backup bundle failed"
 encrypted="${dir}/omnia-backup-${ts}.cms"
-openssl cms -encrypt -binary -aes-256-cbc \
-  -in "$bundle_tmp" \
-  -out "$encrypted" \
-  -outform DER \
-  "$PUBLIC_CERT" \
+python3 "$(dirname "$0")/cms-encrypt.py" "$bundle_tmp" "$encrypted" --cert "$PUBLIC_CERT" \
   || fail "backup encryption failed"
 rm -f "$bundle_tmp"
 (
