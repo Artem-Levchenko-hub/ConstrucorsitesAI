@@ -11,11 +11,12 @@ from passlib.context import CryptContext
 
 from yleum_api.core.config import get_settings
 
-# Ship the compatible reader before enabling new hashes, so this revision can
-# serve as a rollback target. Keep the writer explicitly on legacy bcrypt.
+# Rollbacks must retain the compatible reader. Keep legacy hashes readable without
+# automatic rehashing, which could silently enroll an unproven legacy suffix.
 _pwd_context = CryptContext(
     schemes=["bcrypt_sha256", "bcrypt"],
-    default="bcrypt",
+    default="bcrypt_sha256",
+    bcrypt_sha256__version=2,
     bcrypt_sha256__rounds=12,
     bcrypt__rounds=12,
     deprecated="auto",

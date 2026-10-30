@@ -277,6 +277,23 @@ For an off-host database acceptance run, first verify the downloaded CMS against
 the private key onto a production or restore server. Pass only the decrypted
 archive to a disposable local Docker engine with cached, digest-pinned images:
 
+Use the streaming decryptor for large DER copies, with `cryptography` from the
+locked API environment and OpenSSL on `PATH`. Obtain the expected SHA-256 through
+the authenticated backup channel before decrypting; keep the key and output in
+a private local directory. The output must not exist:
+
+```sh
+python infra/backup/cms-decrypt.py /private/backup.cms /private/decrypted.tgz \
+  --private-key /private/recipient-private.pem --cert /private/recipient-cert.pem \
+  --expected-sha256 '<authenticated ciphertext SHA-256>'
+```
+
+The helper validates the strict DER profile and checksum before reading the key,
+matches the RSA key, certificate and recipient, and streams AES-CBC with padding
+validation. Its receipt binds ciphertext and plaintext hashes and byte counts;
+it does not establish database recovery. Preserve that receipt alongside the
+following isolated restore receipt.
+
 ```sh
 DOCKER_HOST=unix:///run/disposable-recovery.sock python infra/backup/offline-restore.py \
   --bundle /private/decrypted.tgz --work-dir /private/new-restore-directory \

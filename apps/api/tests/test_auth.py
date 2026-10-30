@@ -1,7 +1,14 @@
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import httpx
+import pytest
+from passlib.context import CryptContext
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from yleum_api.core.security import create_access_token
+from yleum_api.models.account import AuthSession
+from yleum_api.models.user import User
 from yleum_api.services.readiness import ReadinessReport
 
 
@@ -64,6 +71,79 @@ async def test_login_with_correct_credentials_sets_cookie(client: httpx.AsyncCli
     assert r.status_code == 200
     assert "omnia_session" in r.cookies
     assert r.json()["email"] == "bob@example.com"
+
+
+@pytest.mark.parametrize(
+    ("password", "equivalent_password"),
+    [
+        pytest.param("secret123", "secret123", id="short"),
+        pytest.param("a" * 71 + "1", "a" * 71 + "1extra", id="exactly-72-bytes"),
+        pytest.param("a" * 72 + "1A", "a" * 72 + "1B", id="ascii-suffix"),
+        pytest.param("я" * 36 + "1A", "я" * 36 + "1B", id="unicode-suffix"),
+    ],
+)
+async def test_legacy_bcrypt_login_preserves_hash_and_existing_session(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    password: str,
+    equivalent_password: str,
+) -> None:
+    legacy_context = CryptContext(schemes=["bcrypt"], bcrypt__rounds=12)
+    legacy_hash = legacy_context.hash(password)
+    user = User(
+        email="legacy@example.com",
+        password_hash=legacy_hash,
+        status="active",
+        is_anon=False,
+        session_version=3,
+    )
+    db_session.add(user)
+    await db_session.flush()
+    existing_session = AuthSession(
+        user_id=user.id, expires_at=datetime.now(UTC) + timedelta(days=1),
+    )
+    db_session.add(existing_session)
+    await db_session.commit()
+    existing_cookie = create_access_token(
+        user.id, session_id=existing_session.id, session_version=user.session_version,
+    )
+
+    for accepted_password in (password, equivalent_password):
+        login = await client.post(
+            "/api/auth/login", json={"email": user.email, "password": accepted_password},
+        )
+        assert login.status_code == 200, login.text
+        assert "omnia_session" in login.cookies
+
+    await db_session.refresh(user)
+    await db_session.refresh(existing_session)
+    assert user.password_hash == legacy_hash
+    assert user.session_version == 3
+    assert existing_session.revoked_at is None
+    client.cookies.clear()
+    client.cookies.set("omnia_session", existing_cookie)
+    assert (await client.get("/api/auth/me")).status_code == 200
+
+
+async def test_registration_and_login_preserve_a_long_password_suffix(
+    client: httpx.AsyncClient,
+) -> None:
+    password = "🔐" * 127 + "1"
+    registered = await client.post(
+        "/api/auth/register", json={"email": "long@example.com", "password": password},
+    )
+    assert registered.status_code == 201
+    client.cookies.clear()
+
+    altered = await client.post(
+        "/api/auth/login",
+        json={"email": "long@example.com", "password": "🔐" * 127 + "2"},
+    )
+    assert altered.status_code == 401
+    correct = await client.post(
+        "/api/auth/login", json={"email": "long@example.com", "password": password},
+    )
+    assert correct.status_code == 200
 
 
 async def test_login_wrong_password_returns_401(client: httpx.AsyncClient) -> None:

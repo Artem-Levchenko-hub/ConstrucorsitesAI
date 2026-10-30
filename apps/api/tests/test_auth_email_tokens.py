@@ -247,8 +247,15 @@ async def test_preexisting_link_without_code_remains_usable(client, outbox, db_s
 # ── reset password ────────────────────────────────────────────────────────────
 
 
+@pytest.mark.parametrize(
+    ("new_password", "wrong_password"),
+    [
+        pytest.param("brand-new-456", "brand-new-457", id="short"),
+        pytest.param("a" * 127 + "1", "a" * 127 + "2", id="maximum-ascii-length"),
+    ],
+)
 async def test_reset_letter_changes_the_password_once_and_signs_everyone_out(
-    client, outbox, db_session: AsyncSession
+    client, outbox, db_session: AsyncSession, new_password, wrong_password,
 ):
     await _register(client)
     forgot = await client.post("/api/auth/password/forgot", json={"email": EMAIL})
@@ -259,7 +266,7 @@ async def test_reset_letter_changes_the_password_once_and_signs_everyone_out(
     version = (await db_session.execute(select(User.session_version))).scalar_one()
 
     reset = await client.post(
-        "/api/auth/password/reset", json={"token": outbox.token(), "password": "brand-new-456"}
+        "/api/auth/password/reset", json={"token": outbox.token(), "password": new_password}
     )
     assert (reset.status_code, reset.json()) == (200, {"reset": True})
 
@@ -272,7 +279,11 @@ async def test_reset_letter_changes_the_password_once_and_signs_everyone_out(
 
     old = await client.post("/api/auth/login", json={"email": EMAIL, "password": PASSWORD})
     assert old.status_code == 401
-    new = await client.post("/api/auth/login", json={"email": EMAIL, "password": "brand-new-456"})
+    altered = await client.post(
+        "/api/auth/login", json={"email": EMAIL, "password": wrong_password},
+    )
+    assert altered.status_code == 401
+    new = await client.post("/api/auth/login", json={"email": EMAIL, "password": new_password})
     assert new.status_code == 200
 
     replay = await client.post(

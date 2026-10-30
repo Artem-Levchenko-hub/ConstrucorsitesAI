@@ -63,8 +63,15 @@ def cap(letter):
     return found.group(1)
 
 
+@pytest.mark.parametrize(
+    ("new_password", "wrong_password"),
+    [
+        pytest.param("replacement456", "replacement457", id="short"),
+        pytest.param("🔐" * 127 + "1", "🔐" * 127 + "2", id="maximum-unicode-length"),
+    ],
+)
 async def test_signed_in_password_change_revokes_sessions_and_queues_one_notice(
-    client, db_session, mail
+    client, db_session, mail, new_password, wrong_password,
 ):
     user, headers = await owner(db_session)
     assert (await client.get("/api/account/credentials", headers=headers)).json() == {
@@ -73,14 +80,16 @@ async def test_signed_in_password_change_revokes_sessions_and_queues_one_notice(
     changed = await client.post(
         "/api/account/credentials/password",
         headers=headers,
-        json={"current_password": PASSWORD, "new_password": "replacement456"},
+        json={"current_password": PASSWORD, "new_password": new_password},
     )
     assert changed.status_code == 200, changed.text
     assert changed.json() == {"ok": True, "reauthenticate": True}
     assert "Max-Age=0" in changed.headers["set-cookie"]
     assert (await client.get("/api/auth/me", headers=headers)).status_code == 401
     await db_session.refresh(user)
-    assert await verify_password("replacement456", user.password_hash)
+    assert await verify_password(new_password, user.password_hash)
+    assert not await verify_password(wrong_password, user.password_hash)
+    assert not await verify_password(PASSWORD, user.password_hash)
     assert all(row.revoked_at for row in (await db_session.scalars(select(AuthSession))).all())
     notices = (await db_session.scalars(select(AccountSecurityEmail))).all()
     assert len(notices) == 1 and notices[0].kind == "password_changed"
@@ -298,16 +307,29 @@ async def test_stale_sending_is_never_replayed(test_engine, db_session, mail):
     assert row.status == "uncertain" and mail == []
 
 
-async def test_reset_sends_branded_link_and_commits_success_notice_once(client, db_session, mail):
+@pytest.mark.parametrize(
+    ("new_password", "wrong_password"),
+    [
+        pytest.param("replacement456", "replacement457", id="short"),
+        pytest.param("я" * 127 + "1", "я" * 127 + "2", id="maximum-unicode-length"),
+    ],
+)
+async def test_reset_sends_branded_link_and_commits_success_notice_once(
+    client, db_session, mail, new_password, wrong_password,
+):
     user, _ = await owner(db_session)
     requested = await client.post("/api/auth/password/forgot", json={"email": user.email})
     assert requested.status_code == 202
     assert len(mail) == 1 and "cid:yleum-logo" in mail[0]["html"]
     token = re.search(r"token=([A-Za-z0-9_-]+)", mail[0]["text"]).group(1)
     changed = await client.post(
-        "/api/auth/password/reset", json={"token": token, "password": "replacement456"}
+        "/api/auth/password/reset", json={"token": token, "password": new_password}
     )
     assert changed.status_code == 200
+    await db_session.refresh(user)
+    assert await verify_password(new_password, user.password_hash)
+    assert not await verify_password(wrong_password, user.password_hash)
+    assert not await verify_password(PASSWORD, user.password_hash)
     notice = (await db_session.scalars(select(AccountSecurityEmail))).one()
     assert notice.kind == "password_reset" and notice.recipient_email == "owner@example.com"
     assert (
