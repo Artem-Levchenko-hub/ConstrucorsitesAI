@@ -10,6 +10,7 @@ import asyncio
 import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -87,6 +88,11 @@ async def _register(client: httpx.AsyncClient) -> None:
 def _error(response: httpx.Response) -> dict[str, str]:
     body = response.json()["error"]
     return {"code": body["code"], "message": body["message"]}
+
+
+def _browser_headers() -> dict[str, str]:
+    origin = urlsplit(get_settings().web_base_url)
+    return {"Origin": f"{origin.scheme}://{origin.netloc}"}
 
 
 # ── verify email ──────────────────────────────────────────────────────────────
@@ -212,7 +218,10 @@ async def test_code_cannot_be_used_without_auth_or_by_another_account(site, outb
     assert unauth.status_code == 401
     await _register(http)
     owner_code = outbox.code()
-    other = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver")
+    other = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver",
+        headers=_browser_headers(),
+    )
     try:
         registration = {**REGISTRATION, "email": "other@example.com"}
         assert (await other.post("/api/auth/register", json=registration)).status_code == 201
@@ -386,7 +395,9 @@ async def site(test_engine, db_session):  # db_session: table cleanup only
 
     app.dependency_overrides[get_session] = per_request
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as http:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", headers=_browser_headers()
+    ) as http:
         yield http, factory
     app.dependency_overrides.clear()
 
