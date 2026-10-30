@@ -1,0 +1,96 @@
+/* Billing keeps its own compact rhythm without changing other account views. */
+.account-billing.billing-overview {
+  display: grid;
+  grid-template-columns: minmax(0, .9fr) minmax(0, 1.15fr);
+  gap: 16px;
+  align-items: stretch;
+}
+.billing-overview .account-packages {
+  display: flex;
+  flex-direction: column;
+  padding: var(--account-panel-padding, 20px);
+  border-radius: var(--account-panel-radius, 16px);
+  scroll-margin-top: 24px;
+}
+.billing-overview .account-packages-heading h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 550;
+  line-height: 1.5;
+  letter-spacing: -.015em;
+}
+.billing-overview .account-packages-heading .account-hint { margin: 6px 0 16px; }
+.billing-overview .account-package-list { display: grid; grid-auto-rows: 1fr; }
+.billing-overview .account-package {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 0;
+  border-top: 1px solid var(--color-border-subtle);
+}
+.billing-overview .account-package-info {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+}
+.billing-overview .account-package h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.billing-overview .account-package strong {
+  max-width: 100%;
+  font-size: 18px;
+  font-weight: 550;
+  line-height: 1.5;
+  letter-spacing: -.025em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.billing-overview .account-package p {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--color-fg-secondary);
+  overflow-wrap: anywhere;
+}
+.billing-overview .account-package-action {
+  width: 100%;
+  height: auto;
+  min-height: var(--account-control-height, 44px);
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+  color: var(--color-accent-secondary);
+  transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease;
+}
+.billing-overview .account-package-action:hover:not(:disabled) {
+  color: var(--color-accent-secondary);
+  background: var(--color-accent-subtle);
+  border-color: var(--color-accent);
+}
+.billing-overview .account-packages > .account-packages-note {
+  margin: auto 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+@media (max-width: 1000px) {
+  .account-billing.billing-overview { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 480px) {
+  .billing-overview .account-packages { padding: 16px; }
+  .billing-overview .account-package { grid-template-columns: minmax(0, 1fr) 88px; gap: 10px; }
+  .billing-overview .account-package-info { grid-template-columns: minmax(0, 1fr); }
+  .billing-overview .account-package-action { padding-inline: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .billing-overview .account-package-action { transition: none; transform: none; }
+}

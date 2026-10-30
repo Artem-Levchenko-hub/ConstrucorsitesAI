@@ -13,6 +13,7 @@ import Link from "next/link";
 import { logoutAction } from "@/app/(auth)/actions";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import type { AccountView } from "@/components/account/AccountControlCenter";
+import { AccountPageTransition } from "./AccountPageTransition";
 import { getMaxAdminAccessServer } from "@/lib/auth-mock";
 import "@/components/max/max-studio.css";
 import "./account.css";
@@ -69,11 +70,14 @@ export async function AccountShell({
           {isAdmin && <Link className="account-admin" href="/admin/max" aria-current={active === "admin" ? "page" : undefined}>
             <ScanSearch className="size-4" />Админ-центр</Link>}</aside>
         <main className="account-main">
-          <header className="account-heading">
-            <h1>{page.title}</h1>
-            <p>{page.lead}</p>
-          </header>
-          {children}</main>
+          <AccountPageTransition transitionKey={active}>
+            <header className="account-heading">
+              <h1>{page.title}</h1>
+              <p>{page.lead}</p>
+            </header>
+            {children}
+          </AccountPageTransition>
+        </main>
       </div>
     </div>
   );

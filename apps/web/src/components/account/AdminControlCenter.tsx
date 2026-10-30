@@ -4,6 +4,7 @@ import { History, UsersRound, MessageCircle, Settings } from "lucide-react";
 import { AdminAuditPanel } from "./AdminAuditPanel";
 import { AdminUsersPanel } from "./AdminUsersPanel";
 import { AdminSupportPanel } from "./AdminSupportPanel";
+import { AccountPageTransition } from "./AccountPageTransition";
 import "./admin.css";
 
 const tabs = [["users", "Аккаунты", UsersRound], ["audit", "Журнал", History], ["support", "Поддержка", MessageCircle], ["settings", "Настройки", Settings]] as const;
@@ -37,10 +38,12 @@ export function AdminControlCenter({ currentEmail }: { currentEmail: string }) {
       }}><Icon aria-hidden="true" />{label}</button>)}
     </div>
     <section role="tabpanel" id={`${id}-panel`} aria-labelledby={`${id}-${location.tab}`} tabIndex={0}>
+      <AccountPageTransition transitionKey={`${location.tab}:${location.archive}:${location.ticket ?? ""}`}>
       {location.tab === "users" && <AdminUsersPanel currentEmail={currentEmail} />}
       {location.tab === "audit" && <AdminAuditPanel />}
       {location.tab === "support" && <AdminSupportPanel ticketId={location.ticket} onSelect={ticket => navigate({ ...location, ticket })} />}
       {location.tab === "settings" && (location.archive ? <><button type="button" className="support-back" onClick={() => selectTab("settings")}>← Настройки</button><AdminSupportPanel archived ticketId={location.ticket} onSelect={ticket => navigate({ ...location, ticket })} /></> : <div className="admin-support"><h2>Настройки</h2><button aria-label="Архив поддержки" className="support-ticket" type="button" onClick={() => navigate({ tab: "settings", archive: true, ticket: null })}><strong>Архив поддержки</strong><span className="support-meta">Завершённые более суток назад обращения</span></button></div>)}
+      </AccountPageTransition>
     </section>
   </div>;
 }

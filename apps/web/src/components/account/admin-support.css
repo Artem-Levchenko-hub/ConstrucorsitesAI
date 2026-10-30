@@ -1,0 +1,79 @@
+.admin-support-panel { container: admin-support / inline-size; display: grid; gap: 16px; min-width: 0; }
+.admin-support-heading h2 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -.025em; line-height: 1.4; }
+.admin-support-heading p { margin-top: 5px; max-width: 720px; color: var(--color-fg-secondary); font-size: 12px; line-height: 1.65; }
+.admin-support-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-width: 0; }
+.admin-support-status-filters { display: inline-flex; flex: 0 0 auto; align-items: center; min-height: var(--account-control-height, 44px); border-radius: 11px; background: var(--color-surface-3); }
+.admin-support-status-filters button { display: inline-flex; justify-content: center; align-items: center; gap: 7px; height: var(--account-control-height, 44px); padding: 0 13px; border: 1px solid transparent; border-radius: 10px; color: var(--color-fg-secondary); font-size: 12px; font-weight: 500; white-space: nowrap; transition: color 180ms ease, background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease; }
+.admin-support-status-filters button[aria-pressed=true] { color: var(--color-accent-secondary); background: var(--color-surface); border-color: var(--color-border-default); box-shadow: 0 2px 5px rgb(20 20 26 / .04); }
+.admin-support-status-filters button:hover { color: var(--color-accent-secondary); }
+.admin-support-filter-count { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 5px; background: var(--color-accent-subtle); color: var(--color-accent-secondary); font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.admin-support-search { display: flex; flex: 1 1 200px; align-items: center; gap: 9px; height: var(--account-control-height, 44px); min-width: 160px; padding: 0 12px; border: 1px solid var(--color-border-default); border-radius: 11px; background: var(--color-surface); transition: border-color 180ms ease, box-shadow 180ms ease; }
+.admin-support-search > svg { flex-shrink: 0; color: var(--color-fg-tertiary); }
+.admin-support-search input { width: 100%; min-width: 0; height: 100%; min-height: 0; padding: 0; border: 0; border-radius: 0; outline: none; box-shadow: none; background: transparent; color: var(--color-fg-primary); font: inherit; font-size: 13px; }
+.admin-support-search input::placeholder { color: var(--color-fg-tertiary); }
+.admin-support-search:focus-within { border-color: var(--color-accent); box-shadow: 0 0 0 3px rgb(0 98 238 / .1); }
+.admin-support-overdue { position: relative; display: inline-flex; flex: 0 0 auto; align-items: center; gap: 8px; min-height: var(--account-control-height, 44px); padding: 0 12px; border: 1px solid var(--color-border-default); border-radius: 11px; background: var(--color-surface); color: var(--color-fg-secondary); font-size: 12px; line-height: 1.4; cursor: pointer; transition: color 180ms ease, border-color 180ms ease, background-color 180ms ease; }
+.admin-support-overdue:hover { border-color: var(--color-accent); }
+.admin-support-overdue[data-active=true] { color: var(--color-accent-secondary); border-color: color-mix(in srgb, var(--color-accent) 45%, transparent); background: var(--color-accent-subtle); }
+.admin-support-overdue input { position: absolute; left: 12px; width: 17px; height: 17px; margin: 0; opacity: 0; }
+.admin-support-checkbox { display: grid; place-items: center; flex: 0 0 17px; width: 17px; height: 17px; border: 1px solid var(--color-border-strong); border-radius: 5px; background: var(--color-surface); color: var(--color-accent-fg); }
+.admin-support-overdue[data-active=true] .admin-support-checkbox { border-color: var(--color-accent); background: var(--color-accent); }
+.admin-support-overdue input:focus-visible + .admin-support-checkbox { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.admin-support-list-heading { display: flex; align-items: center; justify-content: space-between; min-width: 0; margin-bottom: -6px; color: var(--color-fg-secondary); font-size: 12px; }
+.admin-support-list-heading strong { color: var(--color-fg-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+.admin-support-queue { display: grid; gap: 10px; min-width: 0; }
+.admin-support-ticket { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(210px, .55fr); gap: 14px 24px; width: 100%; min-width: 0; padding: 18px 42px 14px 18px; border: 1px solid var(--color-border-default); border-radius: 14px; background: var(--color-surface); color: var(--color-fg-primary); text-align: left; transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease; }
+.admin-support-ticket:hover { border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-border-default)); box-shadow: 0 4px 16px rgb(20 40 80 / .04); }
+.admin-support-ticket-main, .admin-support-ticket-timing { display: grid; align-content: start; gap: 7px; min-width: 0; }
+.admin-support-ticket-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.admin-support-reference { color: var(--color-fg-tertiary); font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.admin-support-status-badge { display: inline-flex; align-items: center; min-height: 23px; padding: 2px 7px; border-radius: 6px; background: var(--color-surface-3); color: var(--color-fg-secondary); font-size: 10px; font-weight: 550; line-height: 1.5; }
+.admin-support-status-badge[data-status=new] { color: var(--color-accent-secondary); background: var(--color-accent-subtle); }
+.admin-support-status-badge[data-status=in_progress] { color: var(--color-warning); background: color-mix(in srgb, var(--color-warning) 8%, var(--color-surface)); }
+.admin-support-subject { font-size: 15px; font-weight: 600; letter-spacing: -.015em; line-height: 1.5; overflow-wrap: anywhere; }
+.admin-support-preview { color: var(--color-fg-secondary); font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.admin-support-ticket-timing { justify-items: end; gap: 8px; text-align: right; font-size: 11px; line-height: 1.6; }
+.admin-support-updated { color: var(--color-fg-tertiary); font-variant-numeric: tabular-nums; }
+.admin-support-deadline { color: var(--color-fg-secondary); overflow-wrap: anywhere; }
+.admin-support-deadline[data-overdue=true] { color: var(--color-danger); }
+.admin-support-waiting { color: var(--color-fg-tertiary); font-variant-numeric: tabular-nums; }
+.admin-support-ticket-footer { display: flex; grid-column: 1 / -1; align-items: center; flex-wrap: wrap; gap: 6px 14px; min-width: 0; padding-top: 11px; border-top: 1px solid var(--color-border-subtle); color: var(--color-fg-tertiary); font-size: 11px; line-height: 1.55; }
+.admin-support-requester { flex: 1 1 200px; color: var(--color-fg-secondary); overflow-wrap: anywhere; }
+.admin-support-message-count { font-variant-numeric: tabular-nums; }
+.admin-support-assignee { overflow-wrap: anywhere; }
+.admin-support-ticket-arrow { position: absolute; top: 22px; right: 14px; color: var(--color-fg-tertiary); transition: color 180ms ease, transform 180ms ease; }
+.admin-support-ticket:hover .admin-support-ticket-arrow { color: var(--color-accent); transform: translateX(2px); }
+.admin-support-pagination { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; min-width: 0; color: var(--color-fg-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.admin-support-pagination > div { display: flex; gap: 6px; }
+.admin-support-pagination button, .admin-support-back { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--account-control-height, 44px); padding: 0 12px; border: 1px solid var(--color-border-default); border-radius: 10px; background: var(--color-surface); color: var(--color-fg-secondary); font-size: 12px; transition: border-color 180ms ease, color 180ms ease, background-color 180ms ease; }
+.admin-support-pagination button:hover:not(:disabled), .admin-support-back:hover { color: var(--color-accent-secondary); border-color: var(--color-accent); background: var(--color-accent-subtle); }
+.admin-support-back { justify-self: start; }
+.admin-support-panel button:disabled { opacity: .45; cursor: not-allowed; }
+.admin-support-panel :is(button, input):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.admin-support-panel .admin-support-search input:focus-visible { outline: none; }
+.admin-support-state { padding: 22px 16px; border: 1px solid var(--color-border-subtle); border-radius: 12px; background: var(--color-surface); color: var(--color-fg-secondary); font-size: 13px; line-height: 1.6; }
+.admin-support-state-error { color: var(--color-danger); }
+.admin-support-state button { margin-left: 4px; color: var(--color-accent-secondary); text-decoration: underline; text-underline-offset: 3px; }
+@container admin-support (max-width: 740px) {
+  .admin-support-search { order: 1; flex-basis: 100%; }
+  .admin-support-overdue { margin-left: auto; }
+}
+@container admin-support (max-width: 620px) {
+  .admin-support-toolbar { gap: 8px; }
+  .admin-support-search { order: 1; flex-basis: 100%; }
+  .admin-support-overdue { flex: 1 1 auto; justify-content: center; }
+  .admin-support-ticket { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 16px 34px 13px 16px; }
+  .admin-support-ticket-timing { justify-items: start; gap: 4px; text-align: left; }
+  .admin-support-ticket-footer { gap: 5px 12px; padding-top: 10px; }
+  .admin-support-requester { flex-basis: 100%; }
+  .admin-support-ticket-arrow { right: 11px; top: 20px; }
+}
+@container admin-support (max-width: 460px) {
+  .admin-support-status-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }
+  .admin-support-status-filters button { gap: 5px; padding-inline: 8px; }
+  .admin-support-overdue { justify-content: flex-start; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .admin-support-panel *, .admin-support-panel *::before, .admin-support-panel *::after { animation: none !important; transition: none !important; }
+  .admin-support-ticket:hover .admin-support-ticket-arrow { transform: none; }
+}
