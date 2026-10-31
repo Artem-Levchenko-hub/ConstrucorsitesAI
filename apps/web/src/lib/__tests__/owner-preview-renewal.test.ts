@@ -132,16 +132,28 @@ describe("initial owner preview recovery", () => {
     expect(native).toHaveBeenCalledTimes(1);
     expect(parent.postMessage).not.toHaveBeenCalled();
   });
-  it("does not share a broader in-flight trust scope with a caller allowing no editor origins", async () => {
+  it("independently proves the cookie for a queued caller allowing no editor origins", async () => {
     let expired = true;
     const native = vi.fn(async (input: RequestInfo | URL) => {
       if (String(input) === "/api/max/session") return expired ? new Response(null, { status: 401 }) : session();
       expired = false; return session();
     });
-    const { boundary } = child(native);
+    const { boundary, parent } = child(native);
     const allowed = recover(boundary);
     const disallowed = recover(boundary, []);
-    expect(await Promise.all([allowed, disallowed])).toEqual([true, false]);
+    expect(await Promise.all([allowed, disallowed])).toEqual([true, true]);
+    expect(native.mock.calls.filter(call => String(call[0]) === "/api/max/session")).toHaveLength(3);
+    expect(native.mock.calls.filter(call => String(call[0]).includes("preview-session?"))).toHaveLength(1);
+    expect(parent.postMessage).toHaveBeenCalledTimes(3);
+  });
+  it("never lends a broader capability to a queued caller whose cookie remains expired", async () => {
+    const native = vi.fn(async (input: RequestInfo | URL) => String(input) === "/api/max/session"
+      ? new Response(null, { status: 401 }) : session());
+    const { boundary, parent } = child(native);
+    expect(await Promise.all([recover(boundary), recover(boundary, [])])).toEqual([false, false]);
+    expect(native.mock.calls.filter(call => String(call[0]) === "/api/max/session")).toHaveLength(3);
+    expect(native.mock.calls.filter(call => String(call[0]).includes("preview-session?"))).toHaveLength(1);
+    expect(parent.postMessage).toHaveBeenCalledTimes(3);
   });
 });
 describe("owner preview expiry without business replay", () => {
@@ -189,7 +201,9 @@ describe("owner preview expiry without business replay", () => {
     let finish!: (r: Response) => void;
     const native = vi.fn(() => new Promise<Response>(resolve => { finish = resolve; }));
     const { boundary } = child(native); const stop = installOwnerPreviewFetch(boundary);
-    const pending = boundary.fetch("/api/tasks/one", { method: "PATCH" }); stop(); finish(session());
+    const pending = boundary.fetch("/api/tasks/one", { method: "PATCH" });
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    stop(); finish(session());
     expect((await pending).status).toBe(401); expect(native).toHaveBeenCalledTimes(1);
   });
 });
@@ -242,8 +256,10 @@ describe("request lifetime and capability rejection", () => {
     const controller = new AbortController();
     const aborted = boundary.fetch("/api/tasks/one", { method: "PATCH", signal: controller.signal });
     const live = boundary.fetch("/api/tasks/two", { method: "PATCH" });
+    const rejected = expect(aborted).rejects.toMatchObject({ name: "AbortError" });
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
     controller.abort(); finish(session());
-    await expect(aborted).rejects.toMatchObject({ name: "AbortError" }); expect((await live).status).toBe(200);
+    await rejected; expect((await live).status).toBe(200);
     expect(native.mock.calls.filter(c => String(c[0]) === "/api/tasks/one")).toHaveLength(0); stop();
   });
   it("does not dispatch with malformed or unavailable session evidence", async () => {

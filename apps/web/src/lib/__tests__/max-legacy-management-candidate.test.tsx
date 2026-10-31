@@ -1,39 +1,31 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { resolve } from "node:path";
-import ts from "typescript";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OwnerRecord } from "@/lib/api/max-management";
+import { createMaxTemplateLoader } from "./helpers/max-template-loader";
+import type * as Identity from "../../../../orchestrator/templates/max-miniapp-nextjs/src/lib/omnia/identity-scope";
 
 const readCatalog = vi.fn();
 const readProfile = vi.fn();
 const track = vi.fn(async () => {});
-const nodeRequire = createRequire(import.meta.url);
 const fixtures = resolve(process.cwd(), "src/lib/__tests__/fixtures");
-const sdkRoot = resolve(process.cwd(), "../orchestrator/templates/max-miniapp-nextjs/src/lib/omnia");
-const modules: Record<string, unknown> = {};
-function evaluate(source: string) {
-  const output = ts.transpileModule(source, { compilerOptions: {
-    module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX,
-  }, fileName: "consumer.tsx" }).outputText;
-  const loadedModule = { exports: {} as Record<string, unknown> };
-  new Function("require", "module", "exports", output)((id: string) => {
-    if (id === "./sever.css") return {};
-    if (id in modules) return modules[id];
-    return nodeRequire(id);
-  }, loadedModule, loadedModule.exports);
-  return loadedModule.exports;
-}
+const modules: Record<string, unknown> = { "./sever.css": {} };
+const loader = createMaxTemplateLoader(modules);
+const identity = loader.load("lib/omnia/identity-scope.ts") as typeof Identity;
+let identityWriter: ReturnType<typeof identity.createIdentityController>;
+// Consumer tests start below the Provider boundary, with its real protected
+// controller already verified. Session/business I/O remains independently tested.
+function verifyActor() { identityWriter.commit(identityWriter.begin(), { actor: actorId, mode: "max" }); }
 modules["@/lib/omnia/catalog-actions"] = { getYleumCatalog: readCatalog };
 modules["@/lib/omnia/app-profile-actions"] = { getYleumAppProfile: readProfile };
 for (const name of ["catalog-client", "app-profile-client", "business-client"]) {
-  modules[`@/lib/omnia/${name}`] = evaluate(readFileSync(resolve(sdkRoot, `${name}.ts`), "utf8"));
+  modules[`@/lib/omnia/${name}`] = loader.load(`lib/omnia/${name}.ts`);
 }
 modules["@/lib/omnia/client"] = { trackMaxActivity: track };
-modules["@/lib/sever/catalog-order"] = evaluate(readFileSync(resolve(fixtures, "max-legacy-catalog-order.ts.txt"), "utf8"));
-const Page = evaluate(readFileSync(resolve(fixtures, "max-legacy-management-page.tsx.txt"), "utf8")).default as React.ComponentType;
+modules["@/lib/sever/catalog-order"] = loader.evaluate(readFileSync(resolve(fixtures, "max-legacy-catalog-order.ts.txt"), "utf8"), resolve(fixtures, "catalog-order.ts"));
+const Page = loader.evaluate(readFileSync(resolve(fixtures, "max-legacy-management-page.tsx.txt"), "utf8"), resolve(fixtures, "page.tsx")).default as React.ComponentType;
 
 const catalogItem = (patch = {}) => ({ id: "coffee", title: "Кофе", category: "Напитки", description: "Описание", price: "250 ₽",
   availability: "in_stock", options: [] as string[], image_url: "", action_label: "Заказать", active: true, ...patch });
@@ -77,6 +69,7 @@ beforeEach(() => {
   actorId = "101"; holdSession = false; sessionReplies = []; loseCommittedResponse = null;
   receipts = new Map(); createdCounts = { orders: 0, leads: 0 };
   sessionDenied = false; rejectReplay = false;
+  identityWriter = identity.createIdentityController(); verifyActor();
   localStorage.clear(); sessionStorage.clear();
   readCatalog.mockReset().mockResolvedValue(catalogResponse(7)); track.mockClear();
   readProfile.mockReset().mockResolvedValue({ ok: true, configVersion: 7,
@@ -114,12 +107,13 @@ beforeEach(() => {
   }));
   node = document.createElement("div"); document.body.append(node); root = createRoot(node);
 });
-afterEach(async () => { await act(async () => root.unmount()); node.remove(); localStorage.clear(); sessionStorage.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(async () => { await act(async () => root.unmount()); identityWriter.dispose(); node.remove(); localStorage.clear(); sessionStorage.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 async function settle() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); }
 async function render() { await act(async () => root.render(<Page />)); await settle(); }
 async function remount() {
   await act(async () => root.unmount()); node.remove();
   node = document.createElement("div"); document.body.append(node); root = createRoot(node);
+  verifyActor();
   await render();
 }
 function button(text: string) { return [...node.querySelectorAll<HTMLButtonElement>("button")].find(value => value.textContent?.trim() === text)!; }
@@ -141,6 +135,15 @@ async function addCoffee() {
   expect(add).toBeTruthy(); expect(add.disabled).toBe(false); await act(async () => add.click()); await nav("Корзина");
 }
 const writes = (resource: string) => requests.filter(value => value.method === "POST" && value.url.endsWith(resource));
+
+it("denies personal reads and new writes without a verified protected identity", async () => {
+  orders = [order({ comment: "Личная история" })];
+  identityWriter.dispose();
+  await render();
+  expect(node.textContent).not.toContain("Личная история");
+  expect(node.querySelector<HTMLButtonElement>('[aria-label="Добавить в корзину: Кофе"]')?.disabled).toBe(true);
+  expect(requests).toEqual([]);
+});
 
 it("renders managed public profile and immutable historical orders with actual status, pickup and comment", async () => {
   orders = [order({ status: "completed", customer_name: "Исторический клиент", total_kopecks: 24690,
@@ -278,7 +281,8 @@ it("keeps actor A's restored intent on the same mounted page when actor B attemp
   expect(node.querySelector<HTMLInputElement>("#sever-lead-name")?.value).toBe("Ирина");
   expect(node.querySelector<HTMLTextAreaElement>("#sever-lead-comment")?.value).toBe("Отправка первого клиента");
   expect(node.querySelector<HTMLInputElement>("#sever-lead-name")?.disabled).toBe(true);
-  actorId = "101"; await click("Проверить отправку");
+  expect(() => identity.captureIdentityScope()).toThrow();
+  actorId = "101"; verifyActor(); await click("Проверить отправку");
   expect(writes("leads")).toHaveLength(2);
   expect(writes("leads")[1].body).toEqual(original);
   expect(createdCounts.leads).toBe(1); expect(leads).toHaveLength(1);
@@ -291,7 +295,7 @@ it("does not reveal or discard a saved lead when actor verification is unauthori
   expect(node.querySelector<HTMLInputElement>("#sever-lead-name")?.value).toBe("");
   expect(node.querySelector<HTMLInputElement>("#sever-lead-name")?.disabled).toBe(true);
   expect(node.textContent).not.toContain("Личное сообщение"); expect(writes("leads")).toHaveLength(1);
-  sessionDenied = false; await click("Повторить проверку отправок");
+  sessionDenied = false; verifyActor(); await click("Повторить проверку отправок");
   expect(node.querySelector<HTMLInputElement>("#sever-lead-name")?.value).toBe("Ирина");
   expect(writes("leads")).toHaveLength(1); await click("Проверить отправку");
   expect(createdCounts.leads).toBe(1);
