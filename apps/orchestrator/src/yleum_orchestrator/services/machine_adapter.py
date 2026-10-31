@@ -9,6 +9,7 @@ import os
 import secrets
 import socket
 import time
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -44,6 +45,12 @@ from yleum_orchestrator.services.machine_environment import (
     MachineEnvironmentStore,
 )
 from yleum_orchestrator.services.machine_services import MachineServiceFailed, MachineServices
+from yleum_orchestrator.services.machine_startup import (
+    PrepareBinding,
+    StartupJournal,
+    require_startup_admission,
+    require_startup_history_clear,
+)
 from yleum_orchestrator.services.project_database_credentials import (
     ProjectDatabaseCredentials,
     ProjectDatabaseCredentialStore,
@@ -240,6 +247,7 @@ class MachineAdapter:
         return bool(
             metadata.get("restore_in_progress")
             or metadata.get("quiesce_state") in {"pending", "failed"}
+            or "startup_recovery_barrier" in metadata
         )
 
     def parts(
@@ -397,12 +405,15 @@ class MachineAdapter:
                     machine_remaining_seconds(request.timeout_seconds + cleanup_reserve)
                 ):
                     if request.task_role == "restore_runtime":
-                        result = await self._execute(
-                            state,
-                            manifest,
-                            request,
-                            restore_effects=restore_effects,
-                        )
+                        from yleum_orchestrator.services.machine_startup import restoration_writer
+
+                        owned_machine, _owned_backend = self.parts(state)
+                        with restoration_writer(
+                            owned_machine.path, request.operation_id, request.fencing_epoch,
+                        ):
+                            result = await self._execute(
+                                state, manifest, request, restore_effects=restore_effects,
+                            )
                     else:
                         result = await self._execute(state, manifest, request)
                     succeeded = result.exit_code == 0 and not result.timed_out
@@ -467,12 +478,73 @@ class MachineAdapter:
                     request.operation_id
                 ) in saved.get("operations", {}):
                     with machine_budget(None):
-                        await machine_effect(backend.stop_machine)
+                        await machine_effect(
+                            backend.stop_failed_restoration,
+                            request.operation_id, request.fencing_epoch,
+                        )
+
+    async def prepare_environment(
+        self, state: Any, manifest: MachineManifest, binding: PrepareBinding,
+        verify_current: Callable[[], Awaitable[None]],
+        *, files: dict[str, str],
+    ) -> tuple[str, str]:
+        """One owned lifecycle effect; caller holds the nonrecursive workspace lock."""
+        with machine_budget(120):
+            async with asyncio.timeout(machine_remaining_seconds(120)):
+                current = self.manager.state_store.load(state.workspace_id)
+                if current is None or (
+                    current.workspace_id, current.project_id, current.owner_id
+                ) != (binding.workspace_id, binding.project_id, binding.owner_id):
+                    raise CellIdentityConflict("startup ownership changed")
+                admission = require_startup_admission(
+                    current, binding.generation_run_id, binding.fencing_epoch,
+                )
+                if (admission.operation_id, admission.request_digest) != (
+                    binding.admission_operation_id, binding.admission_request_sha256,
+                ):
+                    raise CellIdentityConflict("startup admission changed")
+                journal = StartupJournal(self.root, state.workspace_id)
+                require_startup_history_clear(
+                    self.manager.state_store.root, state.workspace_id, own=binding,
+                )
+                await verify_current()
+                machine, backend = self.parts(current)
+                record = journal.begin(binding)
+                if record.state == "intent":
+                    journal.dispatch(binding)
+                    from yleum_orchestrator.routers.workspace import (
+                        _configure_machine_cache_identity,
+                    )
+
+                    await machine_effect(
+                        _configure_machine_cache_identity, backend, files, manifest,
+                    )
+                    await machine.ensure(
+                        manifest, LifecycleMutation(
+                            binding.operation_id, binding.fencing_epoch, binding.digest(),
+                        ),
+                        startup_binding=binding,
+                    )
+                # A dispatched journal never authorizes a second ensure. A cold
+                # caller must observe the exact original durable physical ACK.
+                await verify_current()
+                await self.protect_migration_sources(current, files, resume=False)
+                incarnation = await machine_effect(backend.startup_incarnation)
+                from yleum_orchestrator.services.source_write_journal import _sync_directory
+
+                _sync_directory(machine.path.parent)
+                journal.reconcile(binding, machine.state().get("startup_prepare_ack"), incarnation)
+                environment = await machine_effect(backend.environment_digest)
+                if await machine_effect(backend.startup_incarnation) != incarnation:
+                    raise CellIdentityConflict("startup incarnation changed during preparation")
+                await verify_current()
+                return incarnation, environment
 
     async def protect_migration_sources(
         self,
         state: Any,
         files: dict[str, str],
+        *, resume: bool = True,
     ) -> dict[str, str]:
         from yleum_orchestrator.services.applied_migration_sources import (
             protected_sources,
@@ -487,6 +559,15 @@ class MachineAdapter:
             if postgres is not None:
                 await machine_effect(postgres.reload)
             if postgres is None or postgres.status != "running":
+                if not resume:
+                    from yleum_orchestrator.services.machine_startup import (
+                        MachineInventoryUnavailable,
+                    )
+
+                    # Propagate stopped/missing product identity, but never wake
+                    # a running product's missing DB as a hidden GET side effect.
+                    await machine_effect(backend.startup_incarnation)
+                    raise MachineInventoryUnavailable("unavailable")
                 # A released environment retains its DB volume. Resume it under
                 # the validated generation lease before the first write, using
                 # its persisted manifest rather than the proposed source patch.

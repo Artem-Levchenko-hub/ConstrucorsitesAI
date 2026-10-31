@@ -95,6 +95,7 @@ class CellOperationRecord:
     detail: str | None = None
     expected_resources: dict[str, str] | None = None
     observed_resources: dict[str, str] | None = None
+    startup_contract_version: int | None = None
 
     def matches_replay_envelope(
         self,
@@ -124,7 +125,13 @@ class CellOperationRecord:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> CellOperationRecord:
-        _ensure_exact_keys(payload, _OPERATION_KEYS, "operation record")
+        version = payload.get("startup_contract_version")
+        keys = _OPERATION_KEYS
+        if "startup_contract_version" in payload:
+            if type(version) is not int or version != 1:
+                raise RuntimeError("unknown startup contract version")
+            keys = keys | {"startup_contract_version"}
+        _ensure_exact_keys(payload, keys, "operation record")
         return cls(
             operation_id=_require_uuid_str(payload["operation_id"], "operation_id"),
             kind=_require_str(payload["kind"], "kind"),
@@ -148,10 +155,13 @@ class CellOperationRecord:
                 payload["observed_resources"],
                 "observed_resources",
             ),
+            startup_contract_version=version,
         )
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
+        if self.startup_contract_version is None:
+            payload.pop("startup_contract_version")
         payload["operation_id"] = str(self.operation_id)
         payload["generation_run_id"] = (
             str(self.generation_run_id) if self.generation_run_id is not None else None
@@ -344,6 +354,7 @@ class CellStateStore:
         resource_names: CellResourceNames,
         expected_resources: dict[str, str] | None = None,
         checkpoint_ref: str | None = None,
+        startup_contract: bool = False,
     ) -> CellWorkspaceState:
         workspace = self.load(spec.workspace_id)
         if workspace is not None:
@@ -361,6 +372,28 @@ class CellStateStore:
             ):
                 raise RuntimeError("reconcile generation lease is not recoverable")
         operations = list(workspace.operations if workspace is not None else ())
+        previous = next(
+            (row for row in operations if row.operation_id == mutation.operation_id), None,
+        )
+        if previous is not None and previous.startup_contract_version is not None and (
+            previous.kind != kind or previous.generation_run_id != spec.generation_run_id
+            or previous.request_digest != mutation.request_digest
+            or previous.fencing_epoch != mutation.fencing_epoch
+            or previous.expected_resources != expected_resources
+            or previous.checkpoint_ref != checkpoint_ref
+        ):
+            raise RuntimeError("startup admission immutable envelope changed")
+        startup_version = previous.startup_contract_version if previous is not None else None
+        if startup_contract and startup_version is None:
+            if (
+                kind != "ensure" or spec.generation_run_id is None
+                or previous is not None
+                or (workspace is not None and workspace.active_generation_run_id is not None)
+                or any(row.generation_run_id == spec.generation_run_id for row in operations)
+                or any(row.status not in {"completed", "failed"} for row in operations)
+            ):
+                raise RuntimeError("startup contract requires a resolved first generation ensure")
+            startup_version = 1
         operations = [item for item in operations if item.operation_id != mutation.operation_id]
         operations.append(
             CellOperationRecord(
@@ -373,6 +406,7 @@ class CellStateStore:
                 generation_run_id=spec.generation_run_id,
                 checkpoint_ref=checkpoint_ref,
                 expected_resources=expected_resources,
+                startup_contract_version=startup_version,
             )
         )
         next_state = CellWorkspaceState(
@@ -414,19 +448,11 @@ class CellStateStore:
         for item in workspace.operations:
             if item.operation_id == mutation.operation_id:
                 operations.append(
-                    CellOperationRecord(
-                        operation_id=item.operation_id,
-                        kind=item.kind,
-                        status=item.status,
+                    replace(
+                        item,
                         phase=phase,
-                        request_digest=item.request_digest,
-                        fencing_epoch=item.fencing_epoch,
-                        generation_run_id=item.generation_run_id,
-                        checkpoint_ref=item.checkpoint_ref,
-                        provider_ref=item.provider_ref,
                         bundle_state=bundle_state or item.bundle_state,
                         detail=detail if detail is not None else item.detail,
-                        expected_resources=item.expected_resources,
                         observed_resources=observed_resources,
                     )
                 )
@@ -465,20 +491,13 @@ class CellStateStore:
         completed_operation: CellOperationRecord | None = None
         for item in workspace.operations:
             if item.operation_id == mutation.operation_id:
-                completed_operation = CellOperationRecord(
-                    operation_id=item.operation_id,
-                    kind=item.kind,
+                completed_operation = replace(
+                    item,
                     status="completed",
                     phase=phase,
-                    request_digest=item.request_digest,
-                    fencing_epoch=item.fencing_epoch,
-                    generation_run_id=item.generation_run_id,
-                    checkpoint_ref=item.checkpoint_ref,
                     provider_ref=provider_ref or item.provider_ref,
                     bundle_state=bundle_state,
                     detail=detail if detail is not None else item.detail,
-                    expected_resources=item.expected_resources,
-                    observed_resources=item.observed_resources,
                 )
                 operations.append(completed_operation)
             else:
@@ -680,20 +699,13 @@ class CellStateStore:
         failed_operation: CellOperationRecord | None = None
         for item in workspace.operations:
             if item.operation_id == mutation.operation_id:
-                failed_operation = CellOperationRecord(
-                    operation_id=item.operation_id,
-                    kind=item.kind,
+                failed_operation = replace(
+                    item,
                     status="failed",
                     phase=phase,
-                    request_digest=item.request_digest,
-                    fencing_epoch=item.fencing_epoch,
-                    generation_run_id=item.generation_run_id,
-                    checkpoint_ref=item.checkpoint_ref,
                     provider_ref=provider_ref or item.provider_ref,
                     bundle_state=bundle_state,
                     detail=detail if detail is not None else item.detail,
-                    expected_resources=item.expected_resources,
-                    observed_resources=item.observed_resources,
                 )
                 operations.append(failed_operation)
             else:
@@ -761,22 +773,15 @@ class CellStateStore:
         for item in workspace.operations:
             if item.operation_id == operation_id:
                 operations.append(
-                    CellOperationRecord(
-                        operation_id=item.operation_id,
-                        kind=item.kind,
+                    replace(
+                        item,
                         status="indeterminate",
                         phase="indeterminate",
-                        request_digest=item.request_digest,
                         fencing_epoch=mutation.fencing_epoch
                         if mutation is not None
                         else item.fencing_epoch,
-                        generation_run_id=item.generation_run_id,
-                        checkpoint_ref=item.checkpoint_ref,
-                        provider_ref=item.provider_ref,
                         bundle_state="indeterminate",
                         detail=detail if detail is not None else item.detail,
-                        expected_resources=item.expected_resources,
-                        observed_resources=item.observed_resources,
                     )
                 )
             else:
@@ -816,20 +821,12 @@ class CellStateStore:
             if item.operation_id == mutation.operation_id:
                 operation_found = True
                 operations.append(
-                    CellOperationRecord(
-                        operation_id=item.operation_id,
-                        kind=item.kind,
+                    replace(
+                        item,
                         status="indeterminate",
                         phase="completed",
-                        request_digest=item.request_digest,
-                        fencing_epoch=item.fencing_epoch,
-                        generation_run_id=item.generation_run_id,
-                        checkpoint_ref=item.checkpoint_ref,
-                        provider_ref=item.provider_ref,
                         bundle_state="degraded",
                         detail=detail,
-                        expected_resources=item.expected_resources,
-                        observed_resources=item.observed_resources,
                     )
                 )
             else:

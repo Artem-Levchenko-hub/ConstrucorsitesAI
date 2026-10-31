@@ -38,9 +38,18 @@ from yleum_orchestrator.services.machine_network_allocation import (
     choose_subnet,
     create_pool_network,
 )
+from yleum_orchestrator.services.machine_startup import (
+    EnvironmentIdentity,
+    MachineInventoryUnavailable,
+    StartupJournal,
+    require_restoration_startup_clear,
+    restoration_recovery_completion,
+    startup_incarnation,
+)
 from yleum_orchestrator.services.project_database_credentials import ProjectDatabaseCredentials
 from yleum_orchestrator.services.project_machine import (
     machine_remaining_seconds,
+    sync_controller_parent_chain,
     write_controller_json,
 )
 from yleum_orchestrator.services.studio_origins import platform_api_url
@@ -65,7 +74,7 @@ _USERLAND_CAPS = [
 ]
 _LOG_LIMIT = 24000
 _ENVIRONMENT_INVENTORY_LIMIT = 1024 * 1024
-_ENVIRONMENT_REVISION = "project-machine-environment-v2"
+_ENVIRONMENT_REVISION = "project-machine-environment-v3"
 
 _ENVIRONMENT_INVENTORY_SCRIPT = r"""
 import json,subprocess
@@ -502,24 +511,28 @@ class DockerMachineBackend:
         reader_dispatch(machine.start)
 
     def environment_digest(self) -> str:
-        """Hash controller-selected runtime and package inventory without environment values."""
+        return self.environment_identity().digest
 
+    def environment_identity(self) -> EnvironmentIdentity:
+        """Bind fresh package inventory to one actual running Docker incarnation."""
+        try:
+            if "startup_recovery_barrier" in self._metadata():
+                raise CellResourceError("startup recovery hold is active")
+            metadata = self._metadata()
+            arguments = ({"recovery": metadata["startup_recovery_completed"]}
+                         if "startup_recovery_completed" in metadata else {})
+            require_restoration_startup_clear(
+                self.root / str(self.workspace_id) / "machine.json", **arguments,
+            )
+        except CellResourceError as error:
+            raise MachineInventoryUnavailable("unavailable") from error
         machine = self._container()
         if machine is None:
-            cached = self._metadata().get("environment_digest")
-            if isinstance(cached, str) and re.fullmatch(r"[0-9a-f]{64}", cached):
-                return cached
-            return hashlib.sha256(
-                json.dumps(
-                    {
-                        "base_image": self.base_image,
-                        "controller_revision": _ENVIRONMENT_REVISION,
-                        "inventory": None,
-                    },
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()
+            raise MachineInventoryUnavailable("missing")
+        incarnation = startup_incarnation(machine)
+        image = machine.attrs.get("Image")
+        if not isinstance(image, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", image) is None:
+            raise CellIdentityConflict("machine environment image identity is unavailable")
         result = reader_dispatch(machine.exec_run,
             ["python3", "-I", "-S", "-c", _ENVIRONMENT_INVENTORY_SCRIPT],
             user="0:0",
@@ -537,20 +550,29 @@ class DockerMachineBackend:
             inventory = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise CellResourceError("machine environment inventory is invalid") from exc
+        if startup_incarnation(machine) != incarnation or machine.attrs.get("Image") != image:
+            raise CellIdentityConflict("machine startup incarnation changed during inventory")
         canonical = json.dumps(
             {
                 "base_image": self.base_image,
                 "controller_revision": _ENVIRONMENT_REVISION,
+                "image_id": image,
                 "inventory": inventory,
             },
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-        digest = hashlib.sha256(canonical).hexdigest()
+        identity = EnvironmentIdentity(hashlib.sha256(canonical).hexdigest(), incarnation)
         metadata = self._metadata()
-        metadata["environment_digest"] = digest
+        metadata["environment_digest"] = identity.digest
         write_controller_json(self.metadata_path, metadata)
-        return digest
+        return identity
+
+    def startup_incarnation(self) -> str:
+        machine = self._container()
+        if machine is None:
+            raise MachineInventoryUnavailable("missing")
+        return startup_incarnation(machine)
 
     def container_options(
         self, manifest: MachineManifest, namespace_id: str, epoch: int
@@ -1411,12 +1433,39 @@ class DockerMachineBackend:
         if project_postgres is not None:
             project_postgres.stop(timeout=10)
 
-    def stop_machine(self) -> None:
+    def stop_machine(self, *, expected_epoch: int | None = None) -> None:
         """Stop only the product container; the project database keeps running."""
         self._require_recovery_access("quiesce")
         machine = self._container()
         if machine is not None:
+            if expected_epoch is not None:
+                machine.reload()
+                if machine.labels.get("omnia.fencing_epoch") != str(expected_epoch):
+                    raise CellIdentityConflict("product stop epoch no longer owns the machine")
             machine.stop(timeout=10)
+
+    def stop_failed_restoration(self, operation_id: UUID, fencing_epoch: int) -> None:
+        """Persist the recovery hold before any intentionally failed product stop."""
+        self._require_recovery_access("quiesce")
+        if (not isinstance(operation_id, UUID)
+                or type(fencing_epoch) is not int or fencing_epoch < 1):
+            raise CellIdentityConflict("failed restoration startup identity is invalid")
+        try:
+            metadata = self._metadata()
+            if "startup_recovery_barrier" not in metadata:
+                metadata["startup_recovery_barrier"] = {
+                    "version": 1, "workspace_id": str(self.workspace_id),
+                    "project_id": str(self.project_id), "owner_id": str(self.owner_id),
+                    "operation_id": str(operation_id), "fencing_epoch": fencing_epoch,
+                    "reason": "restore_runtime_failed",
+                }
+                write_controller_json(self.metadata_path, metadata, durable=True)
+            else:
+                sync_controller_parent_chain(self.metadata_path)
+        finally:
+            # Disk failure never leaves a partially restored product running.
+            # The earlier immutable request startup_role remains a startup hold.
+            self.stop_machine(expected_epoch=fencing_epoch)
 
     def remove_machine(self) -> None:
         """Retire only the product container (P09); volumes, guard, proxy and the
@@ -1690,6 +1739,18 @@ class DockerMachineBackend:
         require_machine_writers_allowed(
             self.root / str(self.workspace_id) / "machine.json", action=action
         )
+        if action in {"ensure", "exec", "service"} and (
+            "startup_recovery_barrier" in self._metadata()
+        ):
+            # Presence, including corrupt/unknown versions, is authoritative.
+            raise CellResourceError("startup recovery requires an explicit complete restoration")
+        if action in {"ensure", "exec", "service"}:
+            metadata = self._metadata()
+            arguments = ({"recovery": metadata["startup_recovery_completed"]}
+                         if "startup_recovery_completed" in metadata else {})
+            require_restoration_startup_clear(
+                self.root / str(self.workspace_id) / "machine.json", **arguments,
+            )
 
     def _recovery_volume_labels(self, name: str) -> dict[str, str]:
         restored_code = re.fullmatch(re.escape(self.stem) + r"-code-[0-9a-f]{32}", name)
@@ -2225,13 +2286,28 @@ class DockerMachineBackend:
         metadata = self._metadata()
         if not metadata.get("restore_in_progress") or not metadata.get("pending_image"):
             raise CellResourceError("restore cannot activate an incomplete environment")
+        reference = MachineEnvironmentRef.model_validate(metadata["restore_target"])
+        self.validate_restore_reference(reference)
+        if metadata["pending_image"] != reference.image_id:
+            raise CellIdentityConflict("restore activation image changed")
+        completion = restoration_recovery_completion(
+            self.root / str(self.workspace_id) / "machine.json", reference.sha256,
+        )
+        StartupJournal(self.root, self.workspace_id).resolve_by_restoration(reference.sha256)
         metadata["restored_image"] = metadata.pop("pending_image")
         metadata["environment_ref"] = metadata.pop("restore_target")
         metadata["restore_in_progress"] = False
         metadata["quiesce_state"] = None
+        # Only MachineEnvironmentStore's verified full restore reaches this
+        # completion boundary; a new lease, source edit or ensure never clears it.
+        metadata.pop("startup_recovery_barrier", None)
+        metadata["startup_recovery_completed"] = completion
         metadata.pop("quiesce_container", None)
         metadata["services"] = {}
         write_controller_json(self.metadata_path, metadata)
+        from yleum_orchestrator.services.source_write_journal import _sync_directory
+
+        _sync_directory(self.metadata_path.parent)
 
     @staticmethod
     def _restoration_identity_labels(

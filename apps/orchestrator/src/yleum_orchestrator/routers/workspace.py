@@ -64,6 +64,7 @@ from yleum_orchestrator.schemas.workspace import (
     WorkspaceAgentExecRequest,
     WorkspaceAgentExecResponse,
     WorkspaceAgentOperationStatusResponse,
+    WorkspaceAgentPrepareRequest,
     WorkspaceAgentTrackedExecResponse,
     WorkspaceAgentWriteRequest,
     WorkspaceAgentWriteResponse,
@@ -92,6 +93,12 @@ from yleum_orchestrator.services.cell_draft_support import (
 from yleum_orchestrator.services.cell_state import CellWorkspaceState
 from yleum_orchestrator.services.docker_cell_resources import DockerCellResourceManager
 from yleum_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
+from yleum_orchestrator.services.machine_startup import (
+    MachineInventoryUnavailable,
+    PrepareBinding,
+    require_prepare_identity_clear,
+    require_startup_admission,
+)
 from yleum_orchestrator.services.project_machine import machine_effect
 from yleum_orchestrator.services.workspace_provider_factory import (
     build_workspace_provider,
@@ -746,15 +753,7 @@ async def _execute_agent_command_locked(
             )
         try:
             machine, backend = manager.machine_runtime.parts(state)
-            backend.configure_cache_identity(
-                dependency_digest=_selected_files_digest(
-                    current_files, fixed_paths=_DEPENDENCY_IDENTITY_PATHS
-                ),
-                build_config_digest=_selected_files_digest(
-                    current_files, fixed_paths=_BUILD_CONFIG_PATHS
-                ),
-                manifest_digest=manifest.digest(),
-            )
+            _configure_machine_cache_identity(backend, current_files, manifest)
             request_digest = manager.machine_runtime._request_digest(manifest, request)
             await machine.ensure(
                 manifest,
@@ -764,10 +763,15 @@ async def _execute_agent_command_locked(
                     request_digest,
                 ),
             )
+            before_environment = (
+                await machine_effect(backend.environment_identity)
+                if request.task_role == "restore_runtime" else None
+            )
             before_identity = _workspace_identity_digest(
                 current_files,
                 manifest=manifest,
-                environment_digest=await machine_effect(backend.environment_digest),
+                environment_digest=(before_environment.digest if before_environment is not None
+                                    else await machine_effect(backend.environment_digest)),
             )
             if request.track_receipt:
                 from yleum_orchestrator.services.command_receipts import CommandJournal
@@ -784,6 +788,7 @@ async def _execute_agent_command_locked(
                 code="container_failure", message=str(exc), status_code=409
             ) from exc
         updated_files = await _read_agent_workspace_files(manager, volume_name)
+        after_environment = None
         status = await machine.request_status(
             operation_id=request.operation_id,
             fencing_epoch=request.fencing_epoch,
@@ -802,6 +807,9 @@ async def _execute_agent_command_locked(
                     "failed-restoration-environment-unavailable:" + str(request.operation_id)
                 ).encode()
             ).hexdigest()
+        elif request.task_role == "restore_runtime":
+            after_environment = await machine_effect(backend.environment_identity)
+            environment_digest = after_environment.digest
         else:
             environment_digest = await machine_effect(backend.environment_digest)
         after_identity = _workspace_identity_digest(
@@ -809,6 +817,17 @@ async def _execute_agent_command_locked(
             manifest=manifest,
             environment_digest=environment_digest,
         )
+        compiled_receipt = (
+            manager.machine_runtime.compilation_receipt(state, request.operation_id)
+            if request.task_role in {"full_build", "restore_runtime"}
+            and result.exit_code == 0 and not result.timed_out else None
+        )
+        if (request.task_role == "restore_runtime" and compiled_receipt is not None
+                and result.exit_code == 0 and not result.timed_out
+                and before_environment is not None and after_environment is not None):
+            transition = before_environment.restoration_transition(after_environment)
+            if transition is not None:
+                compiled_receipt = {**compiled_receipt, "environment_transition": transition}
         response = WorkspaceAgentExecResponse(
             ok=result.exit_code == 0 and not result.timed_out,
             exit_code=result.exit_code,
@@ -819,13 +838,7 @@ async def _execute_agent_command_locked(
             before_identity=before_identity,
             after_identity=after_identity,
             environment_mutated=before_identity != after_identity,
-            compiled_asset_receipt=(
-                manager.machine_runtime.compilation_receipt(state, request.operation_id)
-                if request.task_role in {"full_build", "restore_runtime"}
-                and result.exit_code == 0
-                and not result.timed_out
-                else None
-            ),
+            compiled_asset_receipt=compiled_receipt,
             project_migration_receipt=(
                 manager.machine_runtime.migration_receipt(state, request.operation_id)
                 if request.task_role in {"full_build", "restore_runtime"}
@@ -1143,7 +1156,7 @@ async def get_workspace_agent_identity(
             fencing_epoch=fencing_epoch,
         )
         files = await _read_agent_workspace_files(manager, volume_name)
-        manifest = await _prepare_portable_write(manager, state, files)
+        manifest = _machine_manifest(files, manager=manager, workspace_id=workspace_id)
         if manifest is None or manager.machine_runtime is None:
             raise OrchestratorError(
                 code="conflict",
@@ -1151,11 +1164,99 @@ async def get_workspace_agent_identity(
                 status_code=409,
             )
         _machine, backend = manager.machine_runtime.parts(state)
+        try:
+            require_prepare_identity_clear(
+                manager.state_store.root, state, _workspace_revision(files),
+                manifest.digest(), volume_name,
+            )
+            environment = await machine_effect(backend.environment_digest)
+            await _prepare_portable_write(manager, state, files, resume_migration_sources=False)
+        except MachineInventoryUnavailable as error:
+            raise OrchestratorError(
+                code="container_not_running",
+                message="machine environment inventory is unavailable",
+                status_code=409, details={
+                    "reason": error.reason, "workspace_revision": _workspace_revision(files),
+                    "manifest_digest": manifest.digest(),
+                },
+            ) from error
         return _workspace_identity_digest(
             files,
             manifest=manifest,
-            environment_digest=await machine_effect(backend.environment_digest),
+            environment_digest=environment,
         )
+
+
+@router.post("/workspaces/{workspace_id}/agent/environment/prepare")
+async def prepare_workspace_agent_environment(
+    workspace_id: UUID, request: WorkspaceAgentPrepareRequest,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> dict[str, Any]:
+    """Explicit lifecycle effect; GET identity never authorizes a container start."""
+    verify_internal_token(x_internal_token)
+    manager = _require_docker_resource_manager(_workspace_provider(workspace_id))
+    async with manager.operation_lock.hold(workspace_id):
+        state, volume = await _workspace_volume_identity(manager, workspace_id)
+        _require_generation_lease_match(
+            state, generation_run_id=request.generation_run_id,
+            fencing_epoch=request.fencing_epoch,
+        )
+        if (state.project_id, state.owner_id) != (request.project_id, request.owner_id):
+            raise OrchestratorError(
+                code="conflict", message="startup owner changed", status_code=409,
+            )
+        files = await _read_agent_workspace_files(manager, volume)
+        manifest = _machine_manifest(files, manager=manager, workspace_id=workspace_id)
+        if (_workspace_revision(files) != request.expected_revision or manifest is None
+                or manifest.digest() != request.manifest_digest):
+            raise OrchestratorError(
+                code="conflict", message="startup source changed", status_code=409,
+            )
+        runtime = _require_portable_runtime(manager)
+        try:
+            admission = require_startup_admission(
+                state, request.generation_run_id, request.fencing_epoch,
+            )
+            binding = PrepareBinding(
+                workspace_id=workspace_id, project_id=request.project_id, owner_id=request.owner_id,
+                generation_run_id=request.generation_run_id, fencing_epoch=request.fencing_epoch,
+                admission_operation_id=admission.operation_id,
+                admission_request_sha256=admission.request_digest,
+                physical_volume=volume, physical_volume_identity=await source_volume_call(
+                    manager, volume, "source_volume_identity",
+                ),
+                workspace_revision=request.expected_revision,
+                manifest_digest=request.manifest_digest,
+            )
+            guard = WorkspaceAgentCommandBinding(
+                operation_id=binding.operation_id, workspace_id=workspace_id,
+                project_id=request.project_id, owner_id=request.owner_id,
+                generation_run_id=request.generation_run_id,
+                dispatch_fencing_epoch=request.fencing_epoch, request_sha256=binding.digest(),
+                physical_volume=volume, physical_volume_identity=binding.physical_volume_identity,
+                before_revision=request.expected_revision,
+            )
+
+            async def verify_current() -> None:
+                await _verify_command_binding(
+                    manager, guard, request.fencing_epoch, after_revision=request.expected_revision,
+                )
+
+            incarnation, environment = await runtime.prepare_environment(
+                state, manifest, binding, verify_current, files=files,
+            )
+        except CellResourceError as error:
+            raise OrchestratorError(
+                code="conflict", message="startup preparation requires environment recovery",
+                status_code=409, details={"reason": "recovery_required"},
+            ) from error
+        return {
+            "operation_id": str(binding.operation_id), "binding_sha256": binding.digest(),
+            "startup_incarnation": incarnation,
+            "identity": _workspace_identity_digest(
+                files, manifest=manifest, environment_digest=environment,
+            ).model_dump(mode="json"),
+        }
 
 
 @router.get(
@@ -1706,7 +1807,8 @@ def _require_portable_runtime(manager: DockerCellResourceManager) -> Any:
 
 
 async def _prepare_portable_write(
-    manager: DockerCellResourceManager, state: CellWorkspaceState, files: dict[str, str]
+    manager: DockerCellResourceManager, state: CellWorkspaceState, files: dict[str, str],
+    *, resume_migration_sources: bool = True,
 ) -> MachineManifest | None:
     """Caller holds lease/source lock. Retire credentialed HMR BEFORE guest writes."""
     from yleum_orchestrator.services.machine_identity import machine_identity_root
@@ -1717,7 +1819,12 @@ async def _prepare_portable_write(
     if _portable_active(manager, state.workspace_id):
         runtime = _require_portable_runtime(manager)
         try:
-            await runtime.protect_migration_sources(state, files)
+            if resume_migration_sources:
+                await runtime.protect_migration_sources(state, files)
+            else:
+                await runtime.protect_migration_sources(state, files, resume=False)
+        except MachineInventoryUnavailable:
+            raise
         except CellResourceError as exc:
             raise OrchestratorError(
                 code="container_failure", message=str(exc), status_code=409,
@@ -2247,6 +2354,16 @@ def _selected_files_digest(
             if path not in selected and include(path)
         )
     return _digest_json(selected)
+
+
+def _configure_machine_cache_identity(
+    backend: Any, files: dict[str, str], manifest: MachineManifest,
+) -> None:
+    backend.configure_cache_identity(
+        dependency_digest=_selected_files_digest(files, fixed_paths=_DEPENDENCY_IDENTITY_PATHS),
+        build_config_digest=_selected_files_digest(files, fixed_paths=_BUILD_CONFIG_PATHS),
+        manifest_digest=manifest.digest(),
+    )
 
 
 def _workspace_identity_digest(

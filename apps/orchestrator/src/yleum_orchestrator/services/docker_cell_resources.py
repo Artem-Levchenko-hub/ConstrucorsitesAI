@@ -812,6 +812,21 @@ class DockerCellResourceManager:
         if state is not None:
             self._verify_spec_matches_state(state, spec)
         names = self._resource_names_for_spec(spec, state)
+        startup_contract = (
+            not wake_only and spec.generation_run_id is not None
+            and (state is None or not any(
+                row.generation_run_id == spec.generation_run_id for row in state.operations
+            ))
+        )
+        if startup_contract:
+            from yleum_orchestrator.services.machine_startup import require_startup_history_clear
+
+            if state is not None and (
+                state.active_generation_run_id is not None
+                or any(row.status not in {"completed", "failed"} for row in state.operations)
+            ):
+                raise CellIdentityConflict("startup predecessor remains unresolved")
+            require_startup_history_clear(self.state_store.root, spec.workspace_id)
         await self._preflight_named_resources(spec, names)
         replay = None
         if state is not None:
@@ -857,7 +872,8 @@ class DockerCellResourceManager:
             if self.machine_runtime is not None and state is not None:
                 await self.machine_runtime.halt(state)
             await self.stateful_begin_or_replay(
-                spec, mutation, kind="wake" if wake_only else "ensure", names=names
+                spec, mutation, kind="wake" if wake_only else "ensure", names=names,
+                startup_contract=startup_contract,
             )
             await self.docker.begin_operation(mutation.operation_id)
             await self._ensure_volumes(spec, mutation, names)
@@ -866,6 +882,8 @@ class DockerCellResourceManager:
                 spec, mutation, names, credentials.postgres_password
             )
             await self._ensure_sidecars(spec, mutation, names)
+            if startup_contract:
+                require_startup_history_clear(self.state_store.root, spec.workspace_id)
             completed = self.state_store.complete(
                 spec.workspace_id,
                 mutation,
@@ -910,6 +928,7 @@ class DockerCellResourceManager:
         kind: str,
         names: CellResourceNames | None = None,
         checkpoint_ref: str | None = None,
+        startup_contract: bool = False,
     ) -> CellWorkspaceState:
         self._assert_profile_version(spec.profile_version)
         state = self._prepared_state(
@@ -939,6 +958,7 @@ class DockerCellResourceManager:
                 )
             ),
             checkpoint_ref=checkpoint_ref,
+            startup_contract=startup_contract,
         )
 
     async def state_store_advance(

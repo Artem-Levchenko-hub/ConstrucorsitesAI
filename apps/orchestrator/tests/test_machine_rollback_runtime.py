@@ -19,6 +19,7 @@ from yleum_orchestrator.services import machine_adapter, next_compilation_captur
 async def test_rollback_rebuilds_and_replaces_only_product_verifying_existing_ledger(
     monkeypatch,
     failure,
+    tmp_path,
 ):
     trace = []
     running = {"candidate": True, "restored": False}
@@ -33,7 +34,7 @@ async def test_rollback_rebuilds_and_replaces_only_product_verifying_existing_le
         trace.append("ensure")
 
     async def start(mutation, **kwargs):
-        saved["operations"][str(mutation.operation_id)] = {}
+        saved["operations"][str(mutation.operation_id)] = {"startup_role": kwargs["phase"]}
 
     async def exec_start(argv, cwd, mutation):
         trace.append(argv)
@@ -61,9 +62,16 @@ async def test_rollback_rebuilds_and_replaces_only_product_verifying_existing_le
                 phase="activate",
             )
         ),
-        path="owned-controller-state",
+        path=tmp_path / "machine.json",
     )
-    backend = NS(remove_machine=remove, stop_machine=remove)
+
+    def failed_stop(operation_id, epoch):
+        assert epoch == 7
+        assert saved["operations"][str(operation_id)]["startup_role"] == "restore_runtime"
+        trace.append("persist_startup_hold")
+        remove()
+
+    backend = NS(remove_machine=remove, stop_machine=remove, stop_failed_restoration=failed_stop)
     runtime = machine_adapter.MachineAdapter(NS(), NS())
     runtime.parts = lambda _: (machine, backend)
 
@@ -115,6 +123,8 @@ async def test_rollback_rebuilds_and_replaces_only_product_verifying_existing_le
     assert result.exit_code == (0 if failure is None else 124 if failure == "timeout" else 1)
     assert not running["candidate"]
     assert running["restored"] is (failure is None)
+    if failure is not None:
+        assert trace[-2:] == ["persist_startup_hold", "remove_product"]
     assert trace.index("remove_product") < trace.index("verify_ledger")
     if failure == "source":
         assert "activate" not in trace
@@ -125,10 +135,12 @@ async def test_rollback_rebuilds_and_replaces_only_product_verifying_existing_le
         assert saved["operations"][str(request.operation_id)]["compiled_asset_receipt"] == receipt
 
 
-async def test_rollback_replay_does_not_kill_restored_runtime():
+async def test_rollback_replay_does_not_kill_restored_runtime(tmp_path):
     runtime = machine_adapter.MachineAdapter(NS(), NS())
-    backend = NS(remove_machine=pytest.fail, stop_machine=pytest.fail)
+    backend = NS(remove_machine=pytest.fail, stop_machine=pytest.fail,
+                 stop_failed_restoration=pytest.fail)
     machine = NS(
+        path=tmp_path / "machine.json",
         ensure=AsyncMock(),
         request_start=AsyncMock(
             return_value=NS(
@@ -157,9 +169,10 @@ async def test_rollback_replay_does_not_kill_restored_runtime():
     assert result.exit_code == 0
 
 
-async def test_failed_rollback_replay_cannot_stop_successful_successor_same_epoch():
+async def test_failed_rollback_replay_cannot_stop_successful_successor_same_epoch(tmp_path):
     runtime = machine_adapter.MachineAdapter(NS(), NS())
-    backend = NS(remove_machine=pytest.fail, stop_machine=pytest.fail)
+    backend = NS(remove_machine=pytest.fail, stop_machine=pytest.fail,
+                 stop_failed_restoration=pytest.fail)
     request = WorkspaceAgentExecRequest(
         generation_run_id=uuid4(),
         fencing_epoch=7,
@@ -168,6 +181,7 @@ async def test_failed_rollback_replay_cannot_stop_successful_successor_same_epoc
         task_role="restore_runtime",
     )
     machine = NS(
+        path=tmp_path / "machine.json",
         ensure=AsyncMock(),
         request_start=AsyncMock(
             return_value=NS(

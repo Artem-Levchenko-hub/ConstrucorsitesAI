@@ -262,8 +262,53 @@ supersession и срок 10 секунд; освобождение не зави
 - [x] Проверить эксперимент условий локально и независимо; отложить выявленные
   неподтверждённые расширения вместо допуска неработающего source.
 - [ ] Независимое review окончательного diff и общий обязательный gate.
-- [ ] Actor-boundary regressions: A→B→A, late response/401, pending intent,
+- [x] Actor-boundary regressions: A→B→A, late response/401, pending intent,
   отсутствие повторного POST, настоящий Provider mount и same-actor draft.
 - [ ] Подтвердить причину 503/500 и исправить доказанный дефект.
 - [ ] Commit/push, точная production revision, health и smoke нового изменения.
 - [ ] Принятая генерация, обычная публикация и полный MAX customer/owner путь.
+
+## Native startup и состояние доставки, 31 октября
+
+SDK и исправления web-тестов отправлены в GitHub (`3576886c`, `214847f6`).
+Для точного `214847f6` все 13 CI jobs успешны. Единственная запущенная canonical
+выкладка по последнему наблюдению ожидала physical drain: три старых command/starting не имеют
+подтверждённого исхода. Повторный deploy не запускался. Последняя подтверждённая
+API/Orchestrator revision — `ab437587`; позднее SSH стал завершаться timeout,
+поэтому текущие revision, health и состояние deployment job не подтверждены.
+
+Read-only inventory нашёл два уже уничтоженных workspace и наш QA. У QA нет
+development-контейнера, но работают guard/proxy и вспомогательные PG/Redis.
+Активных генераций, leases и lifecycle операций нет; сохранены 21 историческая
+SQL-indeterminate операция и 13 failed legacy REQUEST без immutable startup role.
+Эти записи не исправлялись и не объявлялись успешными. Штатная пауза затрагивает
+вспомогательные базы: сначала требуется доказать отдельные зависимости live
+публикации. Первая реальная проверка graph завершилась общим `context_changed`;
+локальный разбор показал, что он также скрывает transport/query failures.
+Причина этого конкретного отказа не установлена. Pause/attestation не выполнялись.
+
+В Native GET не запускает остановленный контейнер и возвращает типизированный
+отказ при недоступной inventory. Обычный coordinator использует отдельную fenced подготовку,
+связанную с первым новым ensure, владельцем, run, source/manifest и физическим
+томом. Intent фиксируется до создания контейнера; неизвестный исход допускает
+только reconciliation, без повторного старта. Текущий Docker incarnation входит
+в identity, поэтому restart исключает повторное использование старого RUNTIME.
+
+Повторное независимое review всех 22 Native файлов завершено без замечаний после
+трёх исправлений. Законное восстановление принимает только связанный переход
+incarnation с одинаковым свежим content digest; image/inventory/source changes
+отклоняются. Startup journal и его родительские каталоги синхронизируются до
+эффекта, включая retry. Immutable restoration role и failure barrier долговечны;
+ошибка фиксации barrier всё равно приводит к owned stop без успешного ACK.
+
+Проверки автора: 691 Orchestrator тест и 138 API тестов, включая 19 сценариев на
+изолированной PostgreSQL; один тест пропущен. Независимо повторены 51 + 189 Linux
+тестов, 13 API pure tests и compile 22 файлов. Полный release-contract gate прошёл
+225 тестов в Linux с точной LF-проекцией исходников; runtime hash checks не
+нормализуются. Новый complete source bundle и scoped startup-журналы проходят
+отдельное review. Полные API lint/types, итоговый commit/push/CI и production
+проверки Native остаются обязательными.
+
+Публичный/принятый source по последнему снимку остаётся `2a8cbba4`; все прежние
+17 заказов и идентичность физической базы сохранены. Это не приёмка новой
+генерации или перепубликации. Остаток разрешённых платных прогонов — 0.

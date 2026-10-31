@@ -67,6 +67,65 @@ async def test_command_replay_returns_result_without_repeating_side_effect(tmp_p
     assert len(backend.commands) == 1
 
 
+async def test_startup_ensure_ack_binds_exact_envelope_and_actual_incarnation(tmp_path):
+    from yleum_orchestrator.services.machine_startup import PrepareBinding
+
+    machine, backend, _lease, _mutation = fixture(tmp_path)
+    manifest = MachineManifest.model_validate(payload())
+    binding = PrepareBinding(
+        workspace_id=machine.workspace_id, project_id=uuid4(), owner_id=uuid4(),
+        generation_run_id=uuid4(), fencing_epoch=7, admission_operation_id=uuid4(),
+        admission_request_sha256="a" * 64, physical_volume="code",
+        physical_volume_identity="b" * 64, workspace_revision="c" * 64,
+        manifest_digest=manifest.digest(),
+    )
+    backend.startup_incarnation = lambda: "e" * 64
+    mutation = LifecycleMutation(binding.operation_id, 7, binding.digest())
+    await machine.ensure(manifest, mutation, startup_binding=binding)
+    assert machine.state()["startup_prepare_ack"] == {
+        "operation_id": str(binding.operation_id), "binding_sha256": binding.digest(),
+        "incarnation": "e" * 64,
+    }
+    assert machine.state()["ready_epoch"] == 7
+
+
+async def test_restoration_request_role_is_parent_durable_before_any_effect(tmp_path, monkeypatch):
+    from tests.test_machine_startup import directory_syncs
+
+    machine, backend, _lease, mutation = fixture(tmp_path / "new-controller")
+    await machine.ensure(MachineManifest.model_validate(payload()), mutation)
+    observed = directory_syncs(monkeypatch)
+    await machine.request_start(
+        mutation, phase="restore_runtime", deadline_at=datetime.now(UTC) + timedelta(seconds=30),
+    )
+    assert {machine.path.parent, machine.path.parent.parent, tmp_path} <= set(observed)
+    record = machine.state()["operations"][str(mutation.operation_id)]
+    assert record["startup_role"] == "restore_runtime"
+    assert backend.commands == []
+
+
+async def test_visible_restore_intent_after_sync_failure_cannot_bypass_sync_on_retry(
+    tmp_path, monkeypatch,
+):
+    from yleum_orchestrator.services import source_write_journal
+
+    machine, backend, _lease, mutation = fixture(tmp_path)
+    await machine.ensure(MachineManifest.model_validate(payload()), mutation)
+    original = source_write_journal._sync_directory
+
+    def failure(_path):
+        raise OSError("synthetic directory sync failure")
+
+    monkeypatch.setattr(source_write_journal, "_sync_directory", failure)
+    deadline = datetime.now(UTC) + timedelta(seconds=30)
+    for _attempt in range(2):
+        with pytest.raises(OSError, match="directory sync"):
+            await machine.request_start(mutation, phase="restore_runtime", deadline_at=deadline)
+    assert backend.commands == []
+    monkeypatch.setattr(source_write_journal, "_sync_directory", original)
+    await machine.request_start(mutation, phase="restore_runtime", deadline_at=deadline)
+
+
 async def test_request_journal_persists_heartbeat_and_terminal_replay(tmp_path):
     machine, _backend, _lease, mutation = fixture(tmp_path)
     await machine.ensure(MachineManifest.model_validate(payload()), mutation)
@@ -77,6 +136,7 @@ async def test_request_journal_persists_heartbeat_and_terminal_replay(tmp_path):
         phase="full_build",
         deadline_at=deadline,
     ) is None
+    assert machine.state()["operations"][str(mutation.operation_id)]["startup_role"] == "full_build"
     await machine.request_heartbeat(
         mutation,
         phase="build",

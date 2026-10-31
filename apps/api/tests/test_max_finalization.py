@@ -246,6 +246,7 @@ class _Harness:
     runtime_probes: list[str]
     set_build_green: Callable[[bool], None]
     files: dict[str, str]
+    set_environment: Callable[[str], None]
 
 
 async def _new_harness(
@@ -322,11 +323,20 @@ async def _new_harness(
     )
     roles: list[ProjectCellCommandRole] = []
     runtime_probes: list[str] = []
-    state = {"build_green": build_green}
+    state: dict[str, object] = {"build_green": build_green}
     observations: dict[UUID, ProjectCellCommandObservation] = {}
 
     def active_identity() -> ProofIdentity:
-        return replace(identity, workspace_revision=workspace_revision_digest(files))
+        environment = state.get("environment")
+        return replace(
+            identity, workspace_revision=workspace_revision_digest(files),
+            base_image_digest=(
+                environment if isinstance(environment, str) else identity.base_image_digest
+            ),
+            toolchain_digest=(
+                environment if isinstance(environment, str) else identity.toolchain_digest
+            ),
+        )
 
     async def current_identity() -> ProofIdentity:
         return active_identity()
@@ -470,8 +480,11 @@ async def _new_harness(
     def set_build_green(value: bool) -> None:
         state["build_green"] = value
 
+    def set_environment(value: str) -> None:
+        state["environment"] = value
+
     _RUNTIME_ARTIFACT_DIGESTS[workspace.id] = lambda: canonical_files_digest(files)
-    return _Harness(coordinator, roles, runtime_probes, set_build_green, files)
+    return _Harness(coordinator, roles, runtime_probes, set_build_green, files, set_environment)
 
 
 async def test_generation_deadline_terminalizes_bound_adaptation(
@@ -555,6 +568,35 @@ async def test_finalize_runs_one_full_build_and_reuses_release_evidence(
     assert first.proof.permit is not None
     assert second.proof.permit == first.proof.permit
     assert second.checkpoint.candidate_id == first.checkpoint.candidate_id
+
+
+async def test_changed_startup_incarnation_cannot_reuse_runtime_after_cold_resume(
+    db_session: AsyncSession, test_engine: AsyncEngine,
+) -> None:
+    from yleum_api.services.max_finalization import MaxFinalizationConflict
+
+    harness = await _new_harness(db_session, test_engine)
+    original = harness.coordinator
+    first = await original.finalize(files=dict(harness.files), prompt="Build tracker")
+    assert first.status is MaxFinalizationStatus.COMPLETE
+    assert len(harness.runtime_probes) == 1
+    harness.set_environment("8" * 64)
+    cold = MaxFinalizationCoordinator(
+        session_factory=original.session_factory, generation_run_id=original.generation_run_id,
+        project_id=original.project_id, project_slug=original.project_slug,
+        executor=original.executor,
+    )
+    with pytest.raises(MaxFinalizationConflict, match="identity or fence changed"):
+        await cold.resume(first.checkpoint)
+    second = await cold.finalize(files=dict(harness.files), prompt="Build tracker")
+    assert second.status is MaxFinalizationStatus.COMPLETE
+    assert len(harness.runtime_probes) == 2
+    assert first.proof.runtime.id != second.proof.runtime.id
+    assert first.proof.identity.workspace_revision == second.proof.identity.workspace_revision
+    assert first.checkpoint.proof_key != second.checkpoint.proof_key
+    assert harness.roles == [
+        ProjectCellCommandRole.BOOTSTRAP, ProjectCellCommandRole.FULL_BUILD,
+    ] * 2
 
 
 async def test_resume_rebuilds_legacy_full_build_and_dependent_proofs(

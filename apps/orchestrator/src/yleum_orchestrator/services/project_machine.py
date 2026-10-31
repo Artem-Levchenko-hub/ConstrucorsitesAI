@@ -29,6 +29,7 @@ from yleum_orchestrator.core.cell_resources import (
 )
 from yleum_orchestrator.core.project_machine import MachineCommand, MachineManifest
 from yleum_orchestrator.services.cell_state import _ensure_secure_dir, _read_plain_json_file
+from yleum_orchestrator.services.machine_startup import PrepareBinding
 
 
 class MachineOperationResult(BaseModel):
@@ -111,7 +112,18 @@ async def machine_effect(call: Callable[..., Any], *args: Any, **kwargs: Any) ->
     return result
 
 
-def write_controller_json(path: Path, payload: dict[str, Any]) -> None:
+def sync_controller_parent_chain(path: Path) -> None:
+    """Publish every ancestor entry, including parents visible after a failed sync."""
+    from yleum_orchestrator.services.source_write_journal import _sync_directory
+
+    directory = path.absolute().parent
+    for ancestor in (directory, *directory.parents):
+        _sync_directory(ancestor)
+
+
+def write_controller_json(
+    path: Path, payload: dict[str, Any], *, durable: bool = False,
+) -> None:
     _ensure_secure_dir(path.parent, create=True)
     fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".machine-")
     try:
@@ -120,6 +132,11 @@ def write_controller_json(path: Path, payload: dict[str, Any]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
+        if durable:
+            # A synced leaf file cannot survive loss of an unsynced parent
+            # entry. Repeat the chain on retries, including existing parents
+            # left visible by a previous failed publication.
+            sync_controller_parent_chain(path)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -151,6 +168,18 @@ class ProjectMachine:
         payload.setdefault("operations", {})
         return payload
 
+    def _save(self, state: dict[str, Any], *, durable: bool = False) -> None:
+        # Every subsequent rename must preserve the pre-effect restoration
+        # intent, including heartbeats and a terminal failed result.
+        restoration = any(
+            isinstance(record, dict) and record.get("startup_role") == "restore_runtime"
+            for record in state.get("operations", {}).values()
+        )
+        if durable or restoration:
+            write_controller_json(self.path, state, durable=True)
+        else:
+            write_controller_json(self.path, state)
+
     async def assert_fence(self, mutation: LifecycleMutation) -> dict[str, Any]:
         from yleum_orchestrator.services.adaptation_recovery_barrier import (
             require_machine_writers_allowed,
@@ -170,20 +199,39 @@ class ProjectMachine:
             raise CellFenceRejected("machine lease expired, cancelled, or changed")
         return state
 
-    async def ensure(self, manifest: MachineManifest, mutation: LifecycleMutation) -> None:
+    async def ensure(
+        self, manifest: MachineManifest, mutation: LifecycleMutation,
+        *, startup_binding: PrepareBinding | None = None,
+    ) -> None:
+        if startup_binding is not None and (
+            startup_binding.workspace_id != self.workspace_id
+            or startup_binding.operation_id != mutation.operation_id
+            or startup_binding.fencing_epoch != mutation.fencing_epoch
+            or startup_binding.digest() != mutation.request_digest
+            or startup_binding.manifest_digest != manifest.digest()
+        ):
+            raise CellFenceRejected("startup ensure envelope changed")
         state = await self.assert_fence(mutation)
         # Journal the target epoch before Docker create. Backend reconciles the
         # physical labels and never discards a newer machine based on old JSON.
         state["epoch"] = mutation.fencing_epoch
         state["ready_epoch"] = None
-        write_controller_json(self.path, state)
+        state.pop("startup_prepare_ack", None)
+        self._save(state, durable=startup_binding is not None)
         await machine_effect(self.backend.ensure, manifest, mutation.fencing_epoch)
+        if startup_binding is not None:
+            await self.assert_fence(mutation)
+            incarnation = await machine_effect(self.backend.startup_incarnation)
+            state["startup_prepare_ack"] = {
+                "operation_id": str(mutation.operation_id),
+                "binding_sha256": startup_binding.digest(), "incarnation": incarnation,
+            }
         state.update(
             epoch=mutation.fencing_epoch,
             ready_epoch=mutation.fencing_epoch,
             manifest=manifest.model_dump(mode="json"),
         )
-        write_controller_json(self.path, state)
+        self._save(state, durable=startup_binding is not None)
 
     async def assert_ready(self, mutation: LifecycleMutation) -> dict[str, Any]:
         state = await self.assert_fence(mutation)
@@ -223,7 +271,7 @@ class ProjectMachine:
             "log_bytes": 0,
         }
         state["operations"][operation_id] = record
-        write_controller_json(self.path, state)
+        self._save(state)
         exec_id = await machine_effect(
             self.backend.exec_start,
             command.argv,
@@ -231,7 +279,7 @@ class ProjectMachine:
             operation_id,
         )
         record.update(exec_id=exec_id, state="running")
-        write_controller_json(self.path, state)
+        self._save(state)
         return operation_id
 
     async def exec_status(
@@ -256,7 +304,7 @@ class ProjectMachine:
         record["log_bytes"] = len(result.output.encode("utf-8"))
         if not raw["running"]:
             record.update(state="completed", result=result.model_dump())
-        write_controller_json(self.path, state)
+        self._save(state)
         return result
 
     async def request_start(
@@ -278,6 +326,8 @@ class ProjectMachine:
                 or existing.get("epoch") != mutation.fencing_epoch
             ):
                 raise CellFenceRejected("machine request replay envelope mismatch")
+            if existing.get("startup_role") == "restore_runtime":
+                self._save(state)
             raw_result = existing.get("result")
             return (
                 MachineOperationResult.model_validate(raw_result)
@@ -291,12 +341,13 @@ class ProjectMachine:
             "state": "running",
             "epoch": mutation.fencing_epoch,
             "phase": phase,
+            "startup_role": phase,
             "started_at": now,
             "deadline_at": deadline_at.isoformat(),
             "heartbeat_at": now,
             "log_bytes": 0,
         }
-        write_controller_json(self.path, state)
+        self._save(state)
         return None
 
     async def request_heartbeat(
@@ -327,7 +378,7 @@ class ProjectMachine:
             record["phase"] = phase
             record["heartbeat_at"] = now.isoformat()
             record["log_bytes"] = max(int(record.get("log_bytes", 0)), max(0, log_bytes))
-            write_controller_json(self.path, state)
+            self._save(state)
 
     async def request_finish(
         self,
@@ -362,7 +413,7 @@ class ProjectMachine:
             log_bytes=len(result.output.encode("utf-8")),
             result=result.model_dump(),
         )
-        write_controller_json(self.path, state)
+        self._save(state)
         return result
 
     async def store_transport_response(
@@ -387,7 +438,7 @@ class ProjectMachine:
         if existing is not None and existing != response:
             raise CellFenceRejected("machine transport response replay mismatch")
         record["transport_response"] = response
-        write_controller_json(self.path, state)
+        self._save(state)
 
     async def request_status(
         self,
@@ -459,7 +510,7 @@ class ProjectMachine:
             state = await self.assert_fence(mutation)
         # Persist the fence before container teardown. A crash cannot reopen it.
         state["cancelled_epoch"] = mutation.fencing_epoch
-        write_controller_json(self.path, state)
+        self._save(state)
         await machine_effect(self.backend.remove, expected_epoch=mutation.fencing_epoch)
         if await machine_effect(self.backend.is_running):
             raise CellFenceRejected("cancel could not confirm process death")

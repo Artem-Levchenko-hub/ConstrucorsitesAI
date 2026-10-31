@@ -26,6 +26,11 @@ class PortableRuntime:
             configure_cache_identity=lambda **_kwargs: None,
             environment_digest=lambda: "e" * 64,
         )
+        from yleum_orchestrator.services.machine_startup import EnvironmentIdentity
+
+        self.backend.environment_identity = lambda: EnvironmentIdentity(
+            self.backend.environment_digest(), "f" * 64,
+        )
 
     async def _ensure(self, manifest, mutation):
         pass
@@ -74,7 +79,7 @@ class PortableRuntime:
     async def guarded_execute(self, state, manifest, request):
         return await self.execute(state, manifest, request)
 
-    async def protect_migration_sources(self, state, files):
+    async def protect_migration_sources(self, state, files, *, resume=True):
         return {}
 
     async def apply(self, state, manifest, request):
@@ -275,6 +280,72 @@ async def test_manifest_build_dispatches_to_machine_after_lease_and_revision_che
         )
         assert denied.status_code == 409
         assert len(runtime.commands) == 1
+
+
+@pytest.mark.usefixtures("_internal_settings")
+@pytest.mark.parametrize("content_changed", [False, True])
+async def test_restore_transport_binds_only_stable_content_across_real_process_change(
+    tmp_path, monkeypatch, content_changed,
+):
+    from yleum_orchestrator.services.machine_startup import EnvironmentIdentity
+
+    workspace_id = uuid4()
+    provider, manager, docker, run_id = await _ready_provider(tmp_path, workspace_id)
+
+    class RecreatedRuntime(PortableRuntime):
+        def __init__(self):
+            super().__init__()
+            self.environment = EnvironmentIdentity("a" * 64, "b" * 64)
+            self.backend.environment_identity = lambda: self.environment
+            self.receipt = None
+
+        async def execute(self, state, manifest, request):
+            self.environment = EnvironmentIdentity(
+                "d" * 64 if content_changed else "a" * 64, "c" * 64,
+            )
+            self.receipt = {
+                "collector_version": "next-restored-runtime-v1",
+                "workspace_id": str(state.workspace_id), "project_id": str(state.project_id),
+                "generation_run_id": str(request.generation_run_id),
+                "fencing_epoch": request.fencing_epoch, "operation_id": str(request.operation_id),
+                "source_revision": request.expected_revision, "manifest_digest": manifest.digest(),
+            }
+            return DockerCommandResult(exit_code=0, output="restored", timed_out=False)
+
+        def compilation_receipt(self, *_args):
+            return self.receipt
+
+        def migration_receipt(self, *_args):
+            return {"contract": "project-migrations-v1"}
+
+    runtime = RecreatedRuntime()
+    manager.machine_runtime = runtime
+    state = manager.state_store.load(workspace_id)
+    files = {".omnia/cell.json": json.dumps(payload()), "server.py": "print('python')"}
+    await docker.write_volume_files(
+        state.resource_names.workspace_volume,
+        {path: value.encode() for path, value in files.items()},
+    )
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _: provider)
+    async with _client() as client:
+        response = await client.post(
+            f"/internal/workspaces/{workspace_id}/agent/exec",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json={"generation_run_id": str(run_id), "fencing_epoch": 4,
+                  "expected_revision": workspace._workspace_revision(files),
+                  "operation_id": str(uuid4()), "cmd": "omnia:restore-runtime",
+                  "task_role": "restore_runtime"},
+        )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["environment_mutated"] is True
+    assert ("environment_transition" in body["compiled_asset_receipt"]) is (not content_changed)
+    assert "environment_transition" not in runtime.receipt
+    if not content_changed:
+        transition = body["compiled_asset_receipt"]["environment_transition"]
+        assert transition == EnvironmentIdentity("a" * 64, "b" * 64).restoration_transition(
+            runtime.environment,
+        )
 
 
 @pytest.mark.usefixtures("_internal_settings")

@@ -76,6 +76,9 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
         self.legacy_catalog = json.loads(
             (Path(__file__).parent / "fixtures/legacy-catalog-quiescence-sources.json").read_text()
         )
+        self.native = json.loads(
+            (Path(__file__).parent / "fixtures/native-startup-quiescence-sources.json").read_text()
+        )
         self.reviewed = (
             self.old, self.new, self.snapshot, self.catalog, self.legacy_catalog, self.owner,
             self.connect,
@@ -149,16 +152,19 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
                 for name, path in paths.items():
                     content = path.read_bytes()
                     path.unlink()
+                    importlib.invalidate_caches()
                     with self.subTest(missing=name), self.assertRaisesRegex(
                         self.checker.PhysicalDrainError, "quiescence_unsupported_source",
                     ):
                         self.checker._portable_quiescence_sources()
                     path.write_bytes(content + b"# unknown edit\n")
+                    importlib.invalidate_caches()
                     with self.subTest(tampered=name), self.assertRaisesRegex(
                         self.checker.PhysicalDrainError, "quiescence_unsupported_source",
                     ):
                         self.checker._portable_quiescence_sources()
                     path.write_bytes(content)
+                    importlib.invalidate_caches()
                     if self.owner[name] != self.legacy_catalog[name]:
                         digests[content] = self.owner[name]
                         with self.subTest(mixed=name), self.assertRaisesRegex(
@@ -168,6 +174,9 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
                         digests[content] = self.legacy_catalog[name]
                 extra = root / "services/owner_management_identity.py"
                 extra.write_bytes(b"# unexpected owner identity helper\n")
+                # WSL can preserve the same coarse directory mtime; fixture
+                # mutation must not reuse FileFinder's old directory listing.
+                importlib.invalidate_caches()
                 with self.assertRaisesRegex(
                     self.checker.PhysicalDrainError, "quiescence_unsupported_source",
                 ):
@@ -200,14 +209,33 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
         self.checker._require_reviewed_portable_sources(self.connect)
         self.checker._require_reviewed_portable_sources(self.owner)
 
-    def test_connect_bundle_matches_exact_current_source(self):
+    def test_native_bundle_matches_exact_current_source(self):
         root = Path(__file__).resolve().parents[2] / "apps/orchestrator/src/yleum_orchestrator"
-        for name, expected in self.connect.items():
+        self.assertEqual(self.checker._PORTABLE_QUIESCENCE_NATIVE_STARTUP_SOURCES, self.native)
+        self.assertEqual(len(self.native), 19)
+        for name, expected in self.native.items():
             source = root.joinpath(*name.split(".")).with_suffix(".py").read_bytes()
             # Git checkouts on Windows may materialize CRLF; live Linux bytes
             # and the authority table remain exact LF source, never normalized.
             actual = hashlib.sha256(source.replace(b"\r\n", b"\n")).hexdigest()
             self.assertEqual(actual, expected, name)
+
+    def test_native_mixed_or_partial_successor_never_inherits_legacy_authority(self):
+        changes = sorted(name for name in self.native if self.connect.get(name) != self.native[name])
+        self.assertEqual(len(changes), 11)
+        # Keep the exhaustive historical cross-product unchanged; separately
+        # cover every partial transition of the complete Native successor.
+        for selection in product((False, True), repeat=len(changes)):
+            value = dict(self.connect)
+            for name, selected in zip(changes, selection, strict=True):
+                if selected:
+                    value[name] = self.native[name]
+            with self.subTest(selection=selection):
+                if value in (self.connect, self.native):
+                    self.checker._require_reviewed_portable_sources(value)
+                else:
+                    with self.assertRaises(self.checker.PhysicalDrainError):
+                        self.checker._require_reviewed_portable_sources(value)
 
     def test_mixed_live_and_successor_modules_are_never_reviewed(self):
         for successor in (self.new, self.snapshot):
@@ -281,24 +309,35 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2] / "apps/orchestrator/src/yleum_orchestrator"
         with tempfile.TemporaryDirectory() as temporary:
             origins = {}
-            for name in self.connect:
+            for name in self.native:
                 source = root.joinpath(*name.split(".")).with_suffix(".py").read_bytes()
                 path = Path(temporary) / (name + ".py")
                 path.write_bytes(source.replace(b"\r\n", b"\n"))
                 origins["yleum_orchestrator." + name] = SimpleNamespace(origin=str(path))
             with patch.object(importlib.util, "find_spec", side_effect=origins.get):
-                self.assertEqual(self.checker._portable_quiescence_sources(), self.connect)
-                helper = origins.pop("yleum_orchestrator.services.app_business_config")
-                with self.assertRaisesRegex(
-                    self.checker.PhysicalDrainError, "quiescence_unsupported_source"
-                ):
-                    self.checker._portable_quiescence_sources()
-                origins["yleum_orchestrator.services.app_business_config"] = helper
-                Path(helper.origin).write_bytes(b"# unreviewed helper\n")
-                with self.assertRaisesRegex(
-                    self.checker.PhysicalDrainError, "quiescence_unsupported_source"
-                ):
-                    self.checker._portable_quiescence_sources()
+                self.assertEqual(self.checker._portable_quiescence_sources(), self.native)
+                helpers = (
+                    "services.app_business_config", "services.machine_startup",
+                    "schemas.workspace", "core.cell_resources",
+                    "services.command_receipts", "services.source_write_journal",
+                )
+                for name in helpers:
+                    with self.subTest(helper=name):
+                        key = "yleum_orchestrator." + name
+                        helper = origins.pop(key)
+                        with self.assertRaisesRegex(
+                            self.checker.PhysicalDrainError, "quiescence_unsupported_source"
+                        ):
+                            self.checker._portable_quiescence_sources()
+                        origins[key] = helper
+                        path = Path(helper.origin)
+                        before = path.read_bytes()
+                        path.write_bytes(b"# unreviewed helper\n")
+                        with self.assertRaisesRegex(
+                            self.checker.PhysicalDrainError, "quiescence_unsupported_source"
+                        ):
+                            self.checker._portable_quiescence_sources()
+                        path.write_bytes(before)
 
 
 class ProcessObservationRetryTests(unittest.TestCase):
@@ -797,6 +836,70 @@ class MachineQuiescenceTests(unittest.TestCase):
 
     def validate(self):
         return self.checker.machine_quiescence(self.state, self.client, WORKSPACE)
+
+    def startup(self, state="completed"):
+        from test_startup_prepare_drain_contract import StartupPrepareDrainTests
+
+        return StartupPrepareDrainTests.record(self.state, state)
+
+    def test_pending_startup_prevents_recording_current_quiescence(self):
+        for state in ("intent", "dispatched"):
+            with self.subTest(state=state), patch.object(
+                self.checker, "_portable_quiescence_sources", return_value={}
+            ):
+                self.startup(state)
+                with self.assertRaises(self.checker.PhysicalDrainError):
+                    self.record()
+                self.assertFalse(self.receipts.exists())
+
+    def test_pending_startup_invalidates_existing_attestation(self):
+        with patch.object(self.checker, "_portable_quiescence_sources", return_value={}):
+            self.record()
+            self.startup("intent")
+            with self.assertRaises(self.checker.PhysicalDrainError):
+                self.validate()
+
+    def test_terminal_startup_content_binds_current_attestation(self):
+        with patch.object(self.checker, "_portable_quiescence_sources", return_value={}):
+            path, value = self.startup()
+            self.record()
+            receipt = json.loads(next(self.receipts.glob("*/*.json")).read_bytes())
+            self.assertEqual(
+                receipt["binding"]["startup_prepares_sha256"],
+                {str(path.relative_to(self.state)): hashlib.sha256(path.read_bytes()).hexdigest()},
+            )
+            value["incarnation"] = "0" * 64
+            path.write_text(json.dumps(value))
+            # The changed binding selects a different content-addressed proof;
+            # the old receipt cannot authorize this new terminal history.
+            with self.assertRaises(FileNotFoundError):
+                self.validate()
+
+    def test_terminal_startup_change_during_attestation_is_not_published(self):
+        with patch.object(self.checker, "_portable_quiescence_sources", return_value={}):
+            path, value = self.startup()
+
+            def inventory(**kwargs):
+                value["incarnation"] = "0" * 64
+                path.write_text(json.dumps(value))
+                return []
+
+            with patch.object(self.client.containers, "list", side_effect=inventory):
+                with self.assertRaises(self.checker.PhysicalDrainError):
+                    self.record()
+            self.assertFalse(list(self.receipts.glob("*/*.json")))
+
+    def test_other_workspace_pending_startup_does_not_authorize_or_block_this_receipt(self):
+        with patch.object(self.checker, "_portable_quiescence_sources", return_value={}):
+            path, value = self.startup("intent")
+            path.unlink()
+            other = self.state / "project-machines" / PAUSE / "startup-prepares" / path.name
+            value["binding"]["workspace_id"] = PAUSE
+            self.write(other, value)
+            self.record()
+            self.validate()
+            with self.assertRaises(self.checker.PhysicalDrainError):
+                self.checker.require_physical_writers_drained(self.state, self.client)
 
     def test_gate_requires_separate_attestation_and_never_rewrites_unknown(self):
         before = self.machine_path.read_bytes()

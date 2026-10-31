@@ -135,6 +135,25 @@ _PORTABLE_QUIESCENCE_CONNECT_SOURCES = {
     **_PORTABLE_QUIESCENCE_OWNER_SOURCES,
     "services.machine_egress": "60ed890167ed85c5e326dfdc09cf10a139be0cd74bf90ed027470b2f38adf627",
 }
+# Independently reviewed Native startup successor (frozen ordinary V2). GET never
+# starts compute; the explicit fenced prepare persists intent before container
+# creation. Pending startup-prepares are NOT portable child-command retirement:
+# both global drain and scoped root attestation reject them. Bind the new typed
+# journal and its existing schema/receipt dependencies as one complete bundle.
+_PORTABLE_QUIESCENCE_NATIVE_STARTUP_SOURCES = {
+    **_PORTABLE_QUIESCENCE_CONNECT_SOURCES,
+    "core.cell_resources": "f05851b80fb9d13a0f69c75d7dbb098ec1082562c13eccff0e93df7ad659c3c4",
+    "routers.workspace": "7d53afffcceab86d89f39ddbc6063de9d70c41cc78e27063b75bffa176e970ac",
+    "schemas.workspace": "d7d281648481df4fcde770828948e3580224dba33729015bbf40c6c28c49b1ff",
+    "services.cell_state": "08fb69ff2eae48aaa778da24f495de21f6e0403a0ba7e4f1c2518bc90efba9a5",
+    "services.command_receipts": "44dd8cd1706e55eb46b10c7c05b4ff19dac0b642326cb5697e235c8a1f9e03e4",
+    "services.docker_cell_resources": "cadc34e78fb96da273098be7320541a55e1183bbc8483c5f7312423e7f87312d",
+    "services.docker_machine_backend": "d3495ddfa05e15564394bd5b8dacc69e41f2e8ee202e3f6926a6d25ff839121c",
+    "services.machine_adapter": "22d05923dd63b9e5aeae4994d3d0d988f6876e868a667eaa61a1448665d759d6",
+    "services.machine_startup": "0220a5d7f2be0da6c97012a9ca53272bd19331f40d282d576462a9445d64e71a",
+    "services.project_machine": "8ff389bd8194c3f7c043e62c7403ded15cea5c0deaedd11c9c90e9142960faa6",
+    "services.source_write_journal": "dcb5593846c3c75b277f62cd8310406f19564208cd5a0678bea13840671d6c21",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -146,9 +165,26 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_LEGACY_CATALOG_SOURCES,
     _PORTABLE_QUIESCENCE_OWNER_SOURCES,
     _PORTABLE_QUIESCENCE_CONNECT_SOURCES,
+    _PORTABLE_QUIESCENCE_NATIVE_STARTUP_SOURCES,
+)
+# These modules already exist in old releases, but their new startup contracts
+# are authority only for a complete successor producer bundle.
+_PORTABLE_QUIESCENCE_CONDITIONAL_SOURCE_NAMES = frozenset(
+    {
+        "schemas.workspace",
+        "core.cell_resources",
+        "services.source_write_journal",
+        "services.command_receipts",
+    }
 )
 _PORTABLE_QUIESCENCE_SOURCE_NAMES = tuple(
-    sorted({name for bundle in _PORTABLE_QUIESCENCE_SOURCE_BUNDLES for name in bundle})
+    sorted(
+        (
+            {name for bundle in _PORTABLE_QUIESCENCE_SOURCE_BUNDLES for name in bundle}
+            | {"services.machine_startup"}
+        )
+        - _PORTABLE_QUIESCENCE_CONDITIONAL_SOURCE_NAMES
+    )
 )
 
 
@@ -162,14 +198,31 @@ def _require_reviewed_portable_sources(sources: dict[str, str]) -> None:
 
 
 def _portable_quiescence_sources() -> dict[str, str]:
-    """Bind every present dependency; absence is valid only in an exact old bundle."""
+    """Match a producer first, then bind its complete conditional dependency set."""
     sources = {}
-    for name in _PORTABLE_QUIESCENCE_SOURCE_NAMES:
-        spec = importlib.util.find_spec("yleum_orchestrator." + name)
-        if spec is None:
-            continue
-        _kernel_need(spec.origin is not None, "quiescence_source")
-        sources[name] = hashlib.sha256(Path(spec.origin).read_bytes()).hexdigest()
+
+    def collect(names):
+        for name in names:
+            spec = importlib.util.find_spec("yleum_orchestrator." + name)
+            if spec is None:
+                continue
+            _kernel_need(spec.origin is not None, "quiescence_source")
+            sources[name] = hashlib.sha256(Path(spec.origin).read_bytes()).hexdigest()
+
+    collect(_PORTABLE_QUIESCENCE_SOURCE_NAMES)
+    candidates = [
+        bundle
+        for bundle in _PORTABLE_QUIESCENCE_SOURCE_BUNDLES
+        if {
+            name: digest
+            for name, digest in bundle.items()
+            if name in _PORTABLE_QUIESCENCE_SOURCE_NAMES
+        } == sources
+    ]
+    _kernel_need(bool(candidates), "quiescence_unsupported_source")
+    # Existing schemas may predate the new producer. They become authority only
+    # for the exact producer bundle that actually uses that dependency contract.
+    collect(sorted({name for bundle in candidates for name in bundle} - sources.keys()))
     _require_reviewed_portable_sources(sources)
     return sources
 
@@ -369,6 +422,11 @@ def _quiescence_binding(state_parent: Path, workspace_id: str, uid: int, client)
         "daemon": _daemon_identity(client),
         "sources_sha256": sources,
     }
+    startup_prepares = _startup_prepare_journals(state_parent, workspace_id)
+    if startup_prepares:
+        # Preserve historical empty bindings. New terminal history is an exact
+        # immutable input, rechecked under this same lock before publication.
+        binding["startup_prepares_sha256"] = startup_prepares
     return binding, cell
 
 
@@ -1214,11 +1272,100 @@ def _machine_command_exec_ids(value, path, state_parent, client):
     return commands
 
 
+def _startup_file_identity(info):
+    # Reading can update atime; only mutation/identity fields fence this sample.
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_uid,
+        info.st_gid,
+        info.st_nlink,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
+def _startup_prepare_journals(
+    state_parent: Path, workspace_id: str | None = None
+) -> dict[str, str]:
+    """A pending create is a writer even when no Docker object exists yet."""
+    machines = state_parent / "project-machines"
+    observed = {}
+    producer_reviewed = False
+    try:
+        if workspace_id is not None and str(UUID(workspace_id)) != workspace_id:
+            raise ValueError("startup workspace scope")
+        if not machines.exists() and not machines.is_symlink():
+            return observed
+        if machines.is_symlink() or not machines.is_dir():
+            raise ValueError("machine root")
+        workspaces = (
+            machines.iterdir() if workspace_id is None else (machines / workspace_id,)
+        )
+        for workspace in workspaces:
+            if workspace.is_symlink():
+                raise ValueError("workspace path")
+            directory = workspace / "startup-prepares"
+            if not directory.exists() and not directory.is_symlink():
+                continue
+            if (
+                str(UUID(workspace.name)) != workspace.name
+                or directory.is_symlink()
+                or not directory.is_dir()
+            ):
+                raise ValueError("startup directory")
+            if not producer_reviewed:
+                _portable_quiescence_sources()
+                producer_reviewed = True
+            for path in directory.iterdir():
+                before = path.lstat()
+                if (
+                    path.suffix != ".json"
+                    or not stat.S_ISREG(before.st_mode)
+                    or before.st_nlink != 1
+                    or before.st_size > 32768
+                ):
+                    raise ValueError("startup file")
+                flags = (
+                    os.O_RDONLY
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_NONBLOCK", 0)
+                )
+                with os.fdopen(os.open(path, flags), "rb") as source:
+                    opened = os.fstat(source.fileno())
+                    if _startup_file_identity(opened) != _startup_file_identity(before):
+                        raise ValueError("startup file changed")
+                    raw = source.read(32769)
+                if len(raw) > 32768 or _startup_file_identity(
+                    path.lstat()
+                ) != _startup_file_identity(before):
+                    raise ValueError("startup file changed")
+                from yleum_orchestrator.services.machine_startup import PrepareRecord
+
+                record = PrepareRecord.model_validate_json(raw, strict=True)
+                if (
+                    record.state not in {"completed", "recovered"}
+                    or str(record.binding.workspace_id) != workspace.name
+                    or str(record.binding.operation_id) != path.stem
+                    or record.model_dump(mode="json") != json.loads(raw)
+                ):
+                    raise ValueError("startup outcome or identity")
+                observed[str(path.relative_to(state_parent))] = hashlib.sha256(
+                    raw
+                ).hexdigest()
+    except Exception as exc:
+        raise PhysicalDrainError("physical startup preparation is unresolved") from exc
+    return observed
+
+
 def require_physical_writers_drained(
     state_parent: Path, client: object
 ) -> dict[str, int]:
     """Read actual helper/exec state in addition to historical terminal SQL proof."""
     containers = client.containers.list(all=True)
+    startup_prepares = _startup_prepare_journals(state_parent)
     by_name = {}
     by_id = {}
     inspected = {}
@@ -1248,7 +1395,9 @@ def require_physical_writers_drained(
         ):
             # Even an exited verifier is unresolved until its exact-owned cleanup
             # is confirmed. Never restart the controller around an orphan helper.
-            raise PhysicalDrainError("publication migration verifier cleanup is not confirmed")
+            raise PhysicalDrainError(
+                "publication migration verifier cleanup is not confirmed"
+            )
         affected = (
             labels.get("omnia.helper") == "true"
             or labels.get("omnia.project_machine") == "true"
@@ -1387,6 +1536,10 @@ def require_physical_writers_drained(
     if {c.id for c in client.containers.list(all=True)} != {c.id for c in containers}:
         raise PhysicalDrainError(
             "physical container inventory changed during inspection"
+        )
+    if _startup_prepare_journals(state_parent) != startup_prepares:
+        raise PhysicalDrainError(
+            "physical startup preparation changed during inspection"
         )
     return {"affected_containers": len(by_name), "physical_journals": journals}
 

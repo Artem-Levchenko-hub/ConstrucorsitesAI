@@ -22,7 +22,7 @@ from datetime import datetime
 from time import monotonic
 from typing import Any, Literal, Protocol, cast
 from urllib.parse import parse_qsl, urlsplit
-from uuid import UUID
+from uuid import UUID, uuid5
 
 import httpx
 import structlog
@@ -72,6 +72,16 @@ class OrchestratorUnavailable(ApiError):
 
 class OrchestratorReaderInventoryUnavailable(OrchestratorUnavailable):
     """A confirmed reader guard denial; earlier lifecycle effects may exist."""
+
+
+class OrchestratorMachineInventoryUnavailable(OrchestratorUnavailable):
+    """Typed missing process inventory; it carries no successful proof identity."""
+
+    def __init__(self, reason: str, workspace_revision: str, manifest_digest: str) -> None:
+        self.reason = reason
+        self.workspace_revision = workspace_revision
+        self.manifest_digest = manifest_digest
+        super().__init__("Portable machine environment inventory is unavailable")
 
 
 class OrchestratorBadRequest(ApiError):
@@ -2478,15 +2488,62 @@ async def project_cell_agent_identity(
     fencing_epoch: int,
 ) -> ProjectCellWorkspaceIdentity:
     _validate_fencing_epoch(fencing_epoch)
-    payload = await _request(
-        "GET",
-        f"/internal/workspaces/{workspace_id}/agent/identity",
-        params={
-            "generation_run_id": str(generation_run_id),
-            "fencing_epoch": fencing_epoch,
-        },
-    )
+    try:
+        payload = await _request(
+            "GET", f"/internal/workspaces/{workspace_id}/agent/identity",
+            params={"generation_run_id": str(generation_run_id), "fencing_epoch": fencing_epoch},
+        )
+    except OrchestratorBadRequest as error:
+        details = error.details
+        if (error.status_code == 409 and error.upstream_code == "container_not_running"
+                and type(details) is dict
+                and set(details) == {"reason", "workspace_revision", "manifest_digest"}
+                and type(details.get("reason")) is str
+                and details.get("reason") in {
+                    "stopped", "missing", "unavailable", "prepare_pending",
+                }
+                and all(isinstance(details.get(key), str)
+                        and re.fullmatch(r"[0-9a-f]{64}", details[key])
+                        for key in ("workspace_revision", "manifest_digest"))):
+            raise OrchestratorMachineInventoryUnavailable(
+                details["reason"], details["workspace_revision"], details["manifest_digest"],
+            ) from error
+        raise
     return ProjectCellWorkspaceIdentity.from_json(payload)
+
+
+async def project_cell_prepare_environment(
+    workspace_id: UUID, *, project_id: UUID, owner_id: UUID, generation_run_id: UUID,
+    fencing_epoch: int, expected_revision: str, manifest_digest: str,
+) -> ProjectCellWorkspaceIdentity:
+    _validate_fencing_epoch(fencing_epoch)
+    _validate_workspace_revision(expected_revision)
+    _validate_workspace_revision(manifest_digest)
+    payload = await _request(
+        "POST", f"/internal/workspaces/{workspace_id}/agent/environment/prepare",
+        json={"project_id": str(project_id), "owner_id": str(owner_id),
+              "generation_run_id": str(generation_run_id), "fencing_epoch": fencing_epoch,
+              "expected_revision": expected_revision, "manifest_digest": manifest_digest},
+        timeout=120,
+    )
+    operation_id = uuid5(generation_run_id, f"machine-startup-prepare/v1:{fencing_epoch}")
+    if (
+        type(payload) is not dict
+        or set(payload) != {"operation_id", "binding_sha256", "startup_incarnation", "identity"}
+        or payload.get("operation_id") != str(operation_id)
+        or any(
+            type(payload.get(key)) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", payload[key]) is None
+            for key in ("binding_sha256", "startup_incarnation")
+        )
+    ):
+        raise OrchestratorUnavailable("Orchestrator returned an invalid startup preparation")
+    identity = ProjectCellWorkspaceIdentity.from_json(payload["identity"])
+    if (identity.workspace_revision, identity.cell_manifest_digest) != (
+        expected_revision, manifest_digest,
+    ):
+        raise OrchestratorUnavailable("Orchestrator startup source identity changed")
+    return identity
 
 
 async def project_cell_agent_command_operation(

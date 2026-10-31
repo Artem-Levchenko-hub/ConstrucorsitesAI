@@ -116,6 +116,58 @@ def _make_manager(
     return manager, docker_backend, state_store, lock
 
 
+async def test_new_generation_ensure_issues_first_positive_startup_contract(tmp_path):
+    manager, _docker, store, _lock = _make_manager(tmp_path)
+    spec = replace(_spec(uuid4()), generation_run_id=uuid4())
+    mutation = _mutation("a", 1)
+    await manager.ensure(spec, mutation)
+    first = store.load(spec.workspace_id).operations[0]
+    assert first.startup_contract_version == 1
+    await manager.ensure(spec, mutation)
+    assert store.load(spec.workspace_id).operations == (first,)
+
+
+@pytest.mark.parametrize("evidence", ["unknown_effect", "failed_legacy_request", "startup_barrier"])
+async def test_new_ensure_cannot_mint_startup_contract_over_unknown_machine_effect(
+    tmp_path, evidence,
+):
+    from yleum_orchestrator.services.machine_identity import machine_identity_root
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    manager, docker, store, _lock = _make_manager(tmp_path)
+    spec = replace(_spec(uuid4()), generation_run_id=uuid4())
+    root = machine_identity_root(store.root, spec.workspace_id)
+    identifier = str(uuid4())
+    row = {"kind": "request", "state": "running", "result": None}
+    if evidence == "startup_barrier":
+        write_controller_json(root / "docker.json", {"startup_recovery_barrier": None})
+    else:
+        if evidence == "failed_legacy_request":
+            row.update(state="failed", result={"state": "completed", "operation_id": identifier,
+                                              "exit_code": 1, "timed_out": False})
+        write_controller_json(root / "machine.json", {
+            "workspace_id": str(spec.workspace_id), "operations": {identifier: row},
+        })
+    with pytest.raises(CellResourceError, match=r"uncertain|recovery"):
+        await manager.ensure(spec, _mutation("a", 1))
+    assert not docker.containers
+    assert store.load(spec.workspace_id) is None
+
+
+async def test_explicit_new_generation_can_admit_a_resolved_legacy_bundle(tmp_path):
+    from yleum_orchestrator.services.machine_startup import require_startup_admission
+
+    manager, _docker, store, _lock = _make_manager(tmp_path)
+    legacy = _spec(uuid4())
+    await manager.ensure(legacy, _mutation("a", 1))
+    current = replace(legacy, generation_run_id=uuid4())
+    await manager.ensure(current, _mutation("b", 2))
+    state = store.load(current.workspace_id)
+    assert state.operations[0].startup_contract_version is None
+    admitted = require_startup_admission(state, current.generation_run_id, 2)
+    assert admitted.operation_id == state.operations[1].operation_id
+
+
 async def test_observe_before_first_ensure_allows_canonical_recovery(tmp_path: Path) -> None:
     manager, _, state_store, _ = _make_manager(tmp_path)
     provider = DockerOwnerCanaryProvider(resource_manager=manager)
@@ -343,13 +395,18 @@ async def test_portable_runtime_is_halted_before_lease_change_pause_and_destroy(
     await manager.ensure(spec, _mutation("a", 1))
     runtime = SimpleNamespace(halt=AsyncMock())
     manager.machine_runtime = runtime
-    await manager.ensure(replace(spec, generation_run_id=uuid4()), _mutation("b", 2))
+    await manager.release_generation(
+        spec.workspace_id, _mutation("b", 2), generation_run_id=spec.generation_run_id,
+    )
     assert runtime.halt.await_count == 1
     assert runtime.halt.await_args.args[0].active_generation_fencing_epoch == 1
-    await manager.pause_services(spec.workspace_id, _mutation("c", 3), checkpoint_ref=None)
+    await manager.ensure(replace(spec, generation_run_id=uuid4()), _mutation("c", 3))
     assert runtime.halt.await_count == 2
-    await manager.destroy_compute(spec.workspace_id, _mutation("d", 4))
+    assert runtime.halt.await_args.args[0].active_generation_fencing_epoch is None
+    await manager.pause_services(spec.workspace_id, _mutation("d", 4), checkpoint_ref=None)
     assert runtime.halt.await_count == 3
+    await manager.destroy_compute(spec.workspace_id, _mutation("e", 5))
+    assert runtime.halt.await_count == 4
     assert runtime.halt.await_args.kwargs == {"remove_network": True}
 
 
@@ -380,7 +437,11 @@ async def test_disabled_portable_provider_cannot_advance_lease_or_release_capaci
     write_controller_json(marker, {"workspace_id": str(spec.workspace_id), "epoch": 1})
     before = state_store.load(spec.workspace_id)
     reservation = manager._capacity_reservation_store().load(spec.workspace_id)
-    with pytest.raises(CellResourceError, match=r"portable.*unavailable"):
+    expected = (
+        "startup predecessor remains unresolved" if operation == "ensure"
+        else r"portable.*unavailable"
+    )
+    with pytest.raises(CellResourceError, match=expected):
         mutation = _mutation("b", 2)
         if operation == "ensure":
             await manager.ensure(replace(spec, generation_run_id=uuid4()), mutation)
@@ -957,7 +1018,7 @@ async def test_repair_ensure_rebinds_matching_reconciled_capacity(tmp_path: Path
         read=lambda: replace(capacity, cpu_count=0),
     )
 
-    with pytest.raises(CellCapacityUnavailable):
+    with pytest.raises(CellIdentityConflict, match="startup predecessor"):
         await manager.ensure(
             replace(spec, generation_run_id=uuid4()),
             _mutation("d", 4),

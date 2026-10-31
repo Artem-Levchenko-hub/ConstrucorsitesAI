@@ -86,6 +86,76 @@ def _write_workspace_state(
     path.chmod(0o600)
 
 
+@pytest.mark.parametrize("terminal", ["complete", "failed", "indeterminate"])
+def test_first_startup_contract_is_atomic_and_survives_state_transitions(tmp_path, terminal):
+    store = CellStateStore(tmp_path / "cells")
+    spec = _spec(uuid4())
+    mutation = _mutation("a", 1)
+    names = CellResourceNames.for_workspace(spec.workspace_id, namespace="test")
+    state = store.begin(spec, mutation, kind="ensure", phase="planned", resource_names=names,
+                        startup_contract=True)
+    assert state.operations[0].startup_contract_version == 1
+    store.advance(spec.workspace_id, mutation, phase="sidecars_started")
+    if terminal == "complete":
+        store.complete(spec.workspace_id, mutation, bundle_state="resources_ready")
+    elif terminal == "failed":
+        store.mark_failed(spec.workspace_id, mutation, bundle_state="partial")
+    else:
+        store.mark_indeterminate(spec.workspace_id, mutation=mutation)
+    restored = store.load(spec.workspace_id)
+    assert restored.operations[0].startup_contract_version == 1
+
+
+def test_same_run_cold_ensure_cannot_mint_or_upgrade_startup_contract(tmp_path):
+    store = CellStateStore(tmp_path / "cells")
+    spec = _spec(uuid4())
+    mutation = _mutation("a", 1)
+    names = CellResourceNames.for_workspace(spec.workspace_id, namespace="test")
+    store.begin(spec, mutation, kind="ensure", phase="planned", resource_names=names)
+    store.complete(spec.workspace_id, mutation, bundle_state="resources_ready")
+    state = store.load(spec.workspace_id)
+    store._persist_state(replace(state, active_generation_run_id=None,
+                                  active_generation_fencing_epoch=None))
+    with pytest.raises(RuntimeError, match="startup"):
+        store.begin(spec, _mutation("b", 2), kind="ensure", phase="planned",
+                    resource_names=names, startup_contract=True)
+    assert store.load(spec.workspace_id).operations[0].startup_contract_version is None
+
+
+@pytest.mark.parametrize("changed", ["run", "digest", "epoch", "kind", "resources"])
+def test_original_marked_admission_cannot_be_rebound_by_begin(tmp_path, changed):
+    store = CellStateStore(tmp_path / "cells")
+    spec, mutation = _spec(uuid4()), _mutation("a", 1)
+    names = CellResourceNames.for_workspace(spec.workspace_id, namespace="test")
+    store.begin(spec, mutation, kind="ensure", phase="planned", resource_names=names,
+                startup_contract=True)
+    store.complete(spec.workspace_id, mutation, bundle_state="resources_ready")
+    before = store.load(spec.workspace_id)
+    kind, resources = "ensure", None
+    if changed == "run":
+        spec = replace(spec, generation_run_id=uuid4())
+    elif changed == "digest":
+        mutation = replace(mutation, request_digest="f" * 64)
+    elif changed == "epoch":
+        mutation = replace(mutation, fencing_epoch=2)
+    elif changed == "kind":
+        kind = "reconcile"
+    else:
+        resources = {"replacement": "foreign"}
+    with pytest.raises(RuntimeError, match="startup admission"):
+        store.begin(spec, mutation, kind=kind, phase="planned", resource_names=names,
+                    expected_resources=resources)
+    assert store.load(spec.workspace_id) == before
+
+
+@pytest.mark.parametrize("bad", [True, False, 0, 2, "1", None])
+def test_startup_contract_unknown_or_bool_versions_are_rejected(bad):
+    from yleum_orchestrator.services.cell_state import CellOperationRecord
+
+    with pytest.raises(RuntimeError):
+        CellOperationRecord.from_dict({**_operation_payload(), "startup_contract_version": bad})
+
+
 def test_state_round_trip_is_per_workspace(tmp_path: Path) -> None:
     store = CellStateStore(tmp_path / "project-cells.json")
     workspace_id = UUID("00000000-0000-0000-0000-000000000001")

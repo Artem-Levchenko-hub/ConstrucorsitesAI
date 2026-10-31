@@ -1474,6 +1474,35 @@ async def test_adaptation_cannot_fall_back_to_legacy_execution(
         )
 
 
+async def test_owned_prepare_callback_uses_current_source_and_never_dispatches_role(
+    monkeypatch, db_session, test_engine,
+):
+    calls = []
+    harness = await _prepare_executor(
+        monkeypatch, db_session, test_engine,
+        snapshot_files={".omnia/cell.json": '{"version":1}', "server.py": "owned source"},
+        capabilities={"portable_machine": True},
+    )
+
+    async def prepare(workspace_id, **kwargs):
+        assert workspace_id == harness.workspace_id
+        assert kwargs["project_id"] == harness.project_id
+        assert kwargs["generation_run_id"] == harness.run_id
+        calls.append(kwargs)
+
+    monkeypatch.setattr(project_cell_executor, "project_cell_prepare_environment", prepare)
+    identity = await harness.handle.current_identity()
+    assert harness.handle.prepare_environment is not None
+    await harness.handle.prepare_environment(
+        identity.workspace_revision, identity.cell_manifest_digest,
+    )
+    assert len(calls) == 1
+    assert harness.exec_calls == []
+    with pytest.raises(OrchestratorUnavailable):
+        await harness.handle.prepare_environment("0" * 64, identity.cell_manifest_digest)
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize("modern", [False, True])
 async def test_portable_executor_advertises_capabilities_and_dispatches_manifest_build(
     monkeypatch,
@@ -1550,7 +1579,11 @@ async def test_full_build_executor_rejects_green_stdout_without_database_receipt
         assert "migration receipt is missing or stale" in result.redacted_detail
 
 
-@pytest.mark.parametrize("fault", [None, "migration", "compilation", "run", "source", "identity"])
+@pytest.mark.parametrize("fault", [
+    None, "migration", "compilation", "run", "source", "identity",
+    "incarnation_only", "incarnation_content_changed", "incarnation_missing_transition",
+    "incarnation_invalid_transition", "incarnation_source_changed",
+])
 async def test_restore_runtime_requires_bound_compilation_and_existing_database_receipts(
     monkeypatch,
     db_session,
@@ -1597,15 +1630,39 @@ async def test_restore_runtime_requires_bound_compilation_and_existing_database_
         if fault == "source":
             compilation["source_revision"] = "f" * 64
         after = result.after_identity
+        before = result.before_identity
+        if fault is not None and fault.startswith("incarnation_"):
+            content, first_incarnation, next_incarnation = "1" * 64, "2" * 64, "3" * 64
+
+            def digest(content_digest, incarnation):
+                return hashlib.sha256(json.dumps({
+                    "protocol": "project-machine-environment-incarnation/v1",
+                    "content_digest": content_digest, "startup_incarnation": incarnation,
+                }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+            before = replace(before, environment_digest=digest(content, first_incarnation))
+            after_content = "4" * 64 if fault == "incarnation_content_changed" else content
+            after = replace(after, environment_digest=digest(after_content, next_incarnation))
+            if fault != "incarnation_missing_transition":
+                compilation["environment_transition"] = {
+                    "protocol": "restored-environment-transition/v1", "version": 1,
+                    "content_digest": content, "before_incarnation": first_incarnation,
+                    "after_incarnation": next_incarnation,
+                }
+            if fault == "incarnation_invalid_transition":
+                compilation["environment_transition"]["version"] = True
+            if fault == "incarnation_source_changed":
+                after = replace(after, workspace_revision="f" * 64)
         if fault == "identity":
             after = replace(after, workspace_revision="f" * 64)
         return replace(
             result,
             project_migration_receipt=None if fault == "migration" else migration,
             compiled_asset_receipt=None if fault == "compilation" else compilation,
+            before_identity=before,
             after_identity=after,
             workspace_revision=after.workspace_revision,
-            environment_mutated=result.before_identity != after,
+            environment_mutated=before != after,
         )
 
     monkeypatch.setattr(project_cell_executor, "project_cell_agent_exec", response)
@@ -1613,7 +1670,10 @@ async def test_restore_runtime_requires_bound_compilation_and_existing_database_
         project_cell_executor.ProjectCellCommandRole.RESTORE_RUNTIME,
         uuid4(),
     )
-    assert result.ok is (fault is None)
+    assert result.ok is (fault in {None, "incarnation_only"})
+    if fault == "incarnation_only":
+        assert result.before != result.after
+        assert ProofDimension.RUNTIME in result.invalidated_dimensions
 
 
 @pytest.mark.parametrize("ok,timed_out", [(True, False), (False, False), (False, True)])

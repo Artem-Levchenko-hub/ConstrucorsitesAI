@@ -1271,7 +1271,7 @@ def test_environment_digest_changes_with_controller_owned_package_inventory(tmp_
     runtime = backend(tmp_path)
     inventory = [b'[{"command":["dpkg-query"],"exit_code":0,"output":"base=1"}]']
 
-    class Container:
+    class Container(_InventoryContainer):
         def exec_run(self, argv, **kwargs):
             assert argv[:4] == ["python3", "-I", "-S", "-c"]
             assert "environment" not in kwargs
@@ -1284,6 +1284,327 @@ def test_environment_digest_changes_with_controller_owned_package_inventory(tmp_
 
     assert first != second
     assert len(first) == len(second) == 64
+
+
+class _InventoryContainer:
+    def __init__(self):
+        self.id = "d" * 64
+        self.attrs = {
+            "Id": self.id,
+            "Image": "sha256:" + "c" * 64,
+            "State": {
+                "Status": "running", "Running": True, "Paused": False,
+                "StartedAt": "2026-10-31T08:00:00.123456789Z",
+            },
+        }
+        self.calls = 0
+        self.reloads = 0
+
+    def reload(self):
+        self.reloads += 1
+
+    def exec_run(self, argv, **kwargs):
+        self.calls += 1
+        return SimpleNamespace(exit_code=0, output=b'[{"inventory":"same"}]')
+
+
+@pytest.mark.parametrize("change", ["container_id", "started_at"])
+def test_environment_digest_includes_actual_startup_incarnation(tmp_path, change):
+    runtime = backend(tmp_path)
+    container = _InventoryContainer()
+    runtime._container = lambda: container
+    before = runtime.environment_digest()
+    if change == "container_id":
+        container.id = container.attrs["Id"] = "e" * 64
+    else:
+        container.attrs["State"]["StartedAt"] = "2026-10-31T08:01:00.123456789Z"
+    after = runtime.environment_digest()
+    assert before != after
+    assert container.reloads >= 2
+
+
+def test_restoration_transition_keeps_content_but_never_reuses_runtime_incarnation(tmp_path):
+    runtime = backend(tmp_path)
+    container = _InventoryContainer()
+    runtime._container = lambda: container
+    before = runtime.environment_identity()
+    container.attrs["State"]["StartedAt"] = "2026-10-31T08:01:00.123456789Z"
+    after = runtime.environment_identity()
+    assert before.content_digest == after.content_digest and before.digest != after.digest
+    assert before.restoration_transition(after) == {
+        "protocol": "restored-environment-transition/v1", "version": 1,
+        "content_digest": before.content_digest,
+        "before_incarnation": before.incarnation, "after_incarnation": after.incarnation,
+    }
+    container.attrs["Image"] = "sha256:" + "e" * 64
+    changed_image = runtime.environment_identity()
+    assert changed_image.content_digest != after.content_digest
+    assert after.restoration_transition(changed_image) is None
+
+
+@pytest.mark.parametrize("fault", ["missing_id", "wrong_id", "missing_started", "invalid_started"])
+def test_environment_inventory_unknown_startup_incarnation_denies(tmp_path, fault):
+    from yleum_orchestrator.core.cell_resources import CellResourceError
+
+    runtime = backend(tmp_path)
+    container = _InventoryContainer()
+    if fault == "missing_id":
+        container.attrs.pop("Id")
+    elif fault == "wrong_id":
+        container.attrs["Id"] = "e" * 64
+    elif fault == "missing_started":
+        container.attrs["State"].pop("StartedAt")
+    else:
+        container.attrs["State"]["StartedAt"] = "0001-01-01T00:00:00Z"
+    runtime._container = lambda: container
+    with pytest.raises(CellResourceError, match="incarnation"):
+        runtime.environment_digest()
+    assert container.calls == 0
+
+
+def test_stopped_inventory_denies_without_exec_or_cached_digest(tmp_path):
+    from yleum_orchestrator.core.cell_resources import CellResourceError
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    runtime = backend(tmp_path)
+    container = _InventoryContainer()
+    container.attrs["State"].update(Status="exited", Running=False)
+    runtime._container = lambda: container
+    write_controller_json(runtime.metadata_path, {"environment_digest": "f" * 64})
+    with pytest.raises(CellResourceError, match="not running"):
+        runtime.environment_digest()
+    assert container.calls == 0
+
+
+@pytest.mark.parametrize(
+    "fault", ["missing_running", "missing_paused", "non_boolean", "contradictory"],
+)
+def test_unknown_physical_state_never_looks_like_a_recoverable_stop(tmp_path, fault):
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+
+    runtime = backend(tmp_path)
+    container = _InventoryContainer()
+    if fault == "missing_running":
+        container.attrs["State"].pop("Running")
+    elif fault == "missing_paused":
+        container.attrs["State"].pop("Paused")
+    elif fault == "non_boolean":
+        container.attrs["State"]["Running"] = 1
+    else:
+        container.attrs["State"].update(Status="exited", Running=True)
+    runtime._container = lambda: container
+    with pytest.raises(CellIdentityConflict, match="incarnation"):
+        runtime.environment_digest()
+    assert container.calls == 0
+
+
+def test_running_inventory_refuses_failed_restoration_hold(tmp_path):
+    from yleum_orchestrator.core.cell_resources import CellResourceError
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    runtime = backend(tmp_path)
+    container = _InventoryContainer()
+    runtime._container = lambda: container
+    write_controller_json(runtime.metadata_path, {"startup_recovery_barrier": None})
+    with pytest.raises(CellResourceError):
+        runtime.environment_digest()
+    assert container.calls == 0
+
+
+@pytest.mark.parametrize("barrier", [{"version": 1}, {"version": True}, None, "unknown"])
+@pytest.mark.parametrize("action", ["ensure", "exec", "service"])
+def test_failed_restoration_barrier_presence_blocks_all_startup_paths(tmp_path, barrier, action):
+    from yleum_orchestrator.core.cell_resources import CellResourceError
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    runtime = backend(tmp_path)
+    write_controller_json(runtime.metadata_path, {"startup_recovery_barrier": barrier})
+    with pytest.raises(CellResourceError, match="startup recovery"):
+        runtime._require_recovery_access(action)
+
+
+def test_failed_restoration_barrier_is_durable_before_product_stop(tmp_path):
+    runtime = backend(tmp_path)
+    operation_id = uuid4()
+
+    def failed_stop(*, expected_epoch):
+        assert expected_epoch == 7
+        marker = runtime._metadata()["startup_recovery_barrier"]
+        assert marker["operation_id"] == str(operation_id)
+        assert marker["fencing_epoch"] == 7
+        assert marker["version"] == 1
+        raise RuntimeError("local simulated Docker failure")
+
+    runtime.stop_machine = failed_stop
+    with pytest.raises(RuntimeError, match="simulated"):
+        runtime.stop_failed_restoration(operation_id, 7)
+    assert "startup_recovery_barrier" in runtime._metadata()
+
+
+def test_failed_restoration_stop_still_happens_when_barrier_write_fails(tmp_path, monkeypatch):
+    from yleum_orchestrator.services import docker_machine_backend as implementation
+
+    runtime = backend(tmp_path)
+    stopped = []
+
+    def disk_failure(*_args, **_kwargs):
+        raise OSError("local disk-write fault")
+
+    monkeypatch.setattr(implementation, "write_controller_json", disk_failure)
+    runtime.stop_machine = lambda **_kwargs: stopped.append(True)
+    with pytest.raises(OSError, match="disk-write fault"):
+        runtime.stop_failed_restoration(uuid4(), 7)
+    assert stopped == [True]
+
+
+def test_failed_restoration_stop_still_happens_when_metadata_read_fails(tmp_path):
+    runtime = backend(tmp_path)
+    stopped = []
+
+    def read_failure():
+        raise OSError("local metadata-read fault")
+
+    runtime._metadata = read_failure
+    runtime.stop_machine = lambda **_kwargs: stopped.append(True)
+    with pytest.raises(OSError, match="metadata-read fault"):
+        runtime.stop_failed_restoration(uuid4(), 7)
+    assert stopped == [True]
+
+
+def test_failed_restoration_barrier_and_parent_entries_are_durable_before_stop(
+    tmp_path, monkeypatch,
+):
+    from tests.test_machine_startup import directory_syncs
+
+    runtime = backend(tmp_path / "new-controller")
+    observed = directory_syncs(monkeypatch)
+    stopped = []
+
+    def stop(*, expected_epoch):
+        assert expected_epoch == 7
+        assert {runtime.metadata_path.parent, runtime.root, tmp_path} <= set(observed)
+        stopped.append(True)
+
+    runtime.stop_machine = stop
+    runtime.stop_failed_restoration(uuid4(), 7)
+    assert stopped == [True]
+
+
+def test_visible_barrier_after_failed_sync_is_resynced_before_retry_stop(tmp_path, monkeypatch):
+    from tests.test_machine_startup import directory_syncs
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    runtime = backend(tmp_path)
+    write_controller_json(runtime.metadata_path, {"startup_recovery_barrier": {"version": 1}})
+    observed = directory_syncs(monkeypatch)
+
+    def stop(**_kwargs):
+        assert runtime.metadata_path.parent in observed
+
+    runtime.stop_machine = stop
+    runtime.stop_failed_restoration(uuid4(), 7)
+
+
+async def test_barrier_fsync_failure_still_stops_and_durable_restore_intent_keeps_hold(
+    tmp_path, monkeypatch,
+):
+    from datetime import UTC, datetime, timedelta
+
+    from tests.test_project_machine import MachineBackend
+    from yleum_orchestrator.core.cell_resources import CellResourceError, LifecycleMutation
+    from yleum_orchestrator.core.project_machine import MachineManifest
+    from yleum_orchestrator.services import source_write_journal
+    from yleum_orchestrator.services.project_machine import ProjectMachine
+
+    runtime = backend(tmp_path)
+    machine = ProjectMachine(
+        runtime.root, runtime.workspace_id, MachineBackend(), lease_epoch=lambda: 7,
+    )
+    mutation = LifecycleMutation(uuid4(), 7, "a" * 64)
+    await machine.ensure(MachineManifest.model_validate(payload()), mutation)
+    await machine.request_start(
+        mutation, phase="restore_runtime", deadline_at=datetime.now(UTC) + timedelta(seconds=30),
+    )
+    stopped = []
+    runtime.stop_machine = lambda **_kwargs: stopped.append(True)
+
+    def failure(_path):
+        raise OSError("synthetic barrier fsync failure")
+
+    monkeypatch.setattr(source_write_journal, "_sync_directory", failure)
+    with pytest.raises(OSError, match="barrier fsync"):
+        runtime.stop_failed_restoration(mutation.operation_id, 7)
+    assert stopped == [True]
+    # Simulate only the failed barrier rename being lost by the host crash.
+    runtime.metadata_path.unlink()
+    with pytest.raises(CellResourceError, match="explicit complete restoration"):
+        runtime._require_recovery_access("ensure")
+
+
+def test_failed_restoration_stop_cannot_stop_a_physical_successor(tmp_path):
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+
+    runtime = backend(tmp_path)
+    stopped = []
+    product = SimpleNamespace(labels={"omnia.fencing_epoch": "8"}, reload=lambda: None,
+                              stop=lambda **_kwargs: stopped.append(True))
+    runtime._container = lambda: product
+    with pytest.raises(CellIdentityConflict, match="epoch"):
+        runtime.stop_machine(expected_epoch=7)
+    assert stopped == []
+
+
+@pytest.mark.parametrize("state", ["running", "failed"])
+def test_durable_restoration_intent_blocks_start_even_without_metadata_barrier(tmp_path, state):
+    from yleum_orchestrator.core.cell_resources import CellResourceError
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    runtime = backend(tmp_path)
+    operation_id = str(uuid4())
+    write_controller_json(runtime.root / str(runtime.workspace_id) / "machine.json", {
+        "workspace_id": str(runtime.workspace_id),
+        "operations": {operation_id: {
+            "kind": "request", "startup_role": "restore_runtime", "epoch": 7,
+            "state": state,
+            "result": None if state == "running" else {
+                "state": "completed", "exit_code": 1, "timed_out": False,
+            },
+        }},
+    })
+    with pytest.raises(CellResourceError, match="startup recovery"):
+        runtime._require_recovery_access("ensure")
+
+
+def test_explicit_complete_restore_resolves_hold_without_rewriting_original_failure(tmp_path):
+    from yleum_orchestrator.services.cell_state import _read_plain_json_file
+    from yleum_orchestrator.services.machine_environment import MachineEnvironmentRef
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    runtime = backend(tmp_path)
+    operation_id = str(uuid4())
+    original = {"workspace_id": str(runtime.workspace_id), "operations": {operation_id: {
+        "kind": "request", "startup_role": "restore_runtime", "epoch": 7, "state": "failed",
+        "result": {"state": "completed", "exit_code": 1, "timed_out": False},
+    }}}
+    machine_path = runtime.root / str(runtime.workspace_id) / "machine.json"
+    write_controller_json(machine_path, original)
+    target = MachineEnvironmentRef(
+        workspace_id=runtime.workspace_id, image_id="sha256:" + "c" * 64,
+        artifact_ref="a" * 32 + ".tar", sha256="d" * 64, size=1,
+        base_image=runtime.base_image,
+        manifest_digest=MachineManifest.model_validate(payload()).digest(), volumes=(),
+    )
+    write_controller_json(runtime.metadata_path, {
+        "startup_recovery_barrier": None, "restore_in_progress": True,
+        "pending_image": target.image_id, "restore_target": target.model_dump(mode="json"),
+    })
+    runtime._reconcile_recovery_helpers = lambda: None
+    runtime.finish_restore()
+    runtime._require_recovery_access("ensure")
+    assert _read_plain_json_file(machine_path) == original
+    completion = runtime._metadata()["startup_recovery_completed"]
+    assert completion["reference_sha256"] == target.sha256
+    assert completion["operations"] == {operation_id: 7}
 
 
 def test_service_budget_is_rejected_before_docker_side_effects(tmp_path):
@@ -1926,6 +2247,7 @@ def test_crash_surviving_recovery_helper_is_removed_before_restore_activation(tm
 
     import docker
 
+    from yleum_orchestrator.services.machine_environment import MachineEnvironmentRef
     from yleum_orchestrator.services.project_machine import write_controller_json
 
     runtime = backend(tmp_path)
@@ -1950,12 +2272,18 @@ def test_crash_surviving_recovery_helper_is_removed_before_restore_activation(tm
     runtime.client = SimpleNamespace(
         containers=SimpleNamespace(list=lambda **kwargs: [helper] if alive[0] else [], get=get)
     )
+    target = MachineEnvironmentRef(
+        workspace_id=runtime.workspace_id, image_id="sha256:" + "c" * 64,
+        artifact_ref="a" * 32 + ".tar", sha256="d" * 64, size=1,
+        base_image=runtime.base_image,
+        manifest_digest=MachineManifest.model_validate(payload()).digest(), volumes=(),
+    )
     write_controller_json(
         runtime.metadata_path,
         {
             "restore_in_progress": True,
             "pending_image": "sha256:" + "c" * 64,
-            "restore_target": {"known": True},
+            "restore_target": target.model_dump(mode="json"),
         },
     )
     runtime.finish_restore()

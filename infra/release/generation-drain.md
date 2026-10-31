@@ -330,6 +330,41 @@ It intentionally cannot certify a running workspace or unknown container create.
 An invalidated receipt must never be edited: a newly authorized retirement and fresh
 positive checks are needed to record a new content-addressed receipt.
 
+### Native startup preparation
+
+The reviewed Native successor is a separate complete 19-module source bundle.
+It retains every historical bundle and adds the startup journal plus its schema,
+cell-resource and receipt dependencies. Presence of the new producer prevents
+fallback to an older bundle. Existing schema modules become authority only for
+the exact successor that uses them; source hashes remain exact live Linux bytes.
+
+`project-machines/<workspace>/startup-prepares/*.json` can describe an uncertain
+**container create**, even with no Docker object and no active SQL lease. An
+`intent`, `dispatched`, malformed, foreign or unsafe-path record denies drain.
+It cannot be covered by a lost child-command attestation. Terminal records are
+strictly validated against the reviewed producer contract; they establish only
+historical completion or explicit recovery, never a current runtime proof.
+
+Both global release inspection and root attestation inspect these journals.
+Attestation uses only the exact workspace while holding its existing lock, binds
+nonempty terminal membership/content, and repeats the check before publishing.
+Changing that history invalidates the receipt. Empty historical bindings retain
+their original format. A pending record in another workspace still blocks the
+global release gate.
+
+A normal pause stops the draft PostgreSQL/Redis services as well as draft
+compute. Before pausing a published QA workspace, positively verify its declared
+live runtime, database, Redis and boundary dependencies are separate: publication
+placement, workload/Pod/Service bindings, both Endpoints and EndpointSlice sets,
+network policies and persistent-volume/node bindings. Unknown or shared origins
+are a blocker. The allowance for exact auxiliary services in a quiescence receipt
+does not promise that pause keeps them running. Check public availability and
+business-data preservation separately after the operation.
+
+None of these receipts admits a new generation or resolves an ambiguous failed
+restoration. Legacy failed REQUEST records without immutable startup roles and
+SQL-indeterminate lifecycle history keep their separate recovery requirements.
+
 ### Replacing a blocked candidate before runtime replacement
 
 If a prior owned deployment stopped **before its first persisted reader capture

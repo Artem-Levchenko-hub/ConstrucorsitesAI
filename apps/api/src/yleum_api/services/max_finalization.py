@@ -72,6 +72,7 @@ from yleum_api.services.max_generation_contract import max_source_completion_gap
 from yleum_api.services.max_runtime_probe import MaxRuntimeProbe
 from yleum_api.services.notes_acceptance_browser import NotesDriver
 from yleum_api.services.orchestrator_client import (
+    OrchestratorMachineInventoryUnavailable,
     ProjectCellAgentOperationStatus,
     RestorationAdaptationProof,
     RestorationAdaptationWorkspace,
@@ -449,7 +450,7 @@ class MaxFinalizationCoordinator:
         await self._raise_persisted_infrastructure_failure()
         if self.executor.prove_restoration_adaptation is not None:
             return await self._adaptation_fast_check()
-        identity = await self._identity()
+        identity = await self._normal_fast_check_identity()
         proof = await self._proof(identity)
         bootstrap = await self._find(proof, ProofDimension.BOOTSTRAP)
         if bootstrap is None:
@@ -1894,6 +1895,18 @@ class MaxFinalizationCoordinator:
         if effective_files is None or effective_prompt is None:
             raise MaxFinalizationConflict("resume requires source inputs for unfinished work")
         return await self.finalize(files=effective_files, prompt=effective_prompt)
+
+    async def _normal_fast_check_identity(self) -> ProofIdentity:
+        try:
+            return await self._identity()
+        except OrchestratorMachineInventoryUnavailable as error:
+            prepare = getattr(self.executor, "prepare_environment", None)
+            if prepare is None or error.reason not in {"stopped", "missing", "prepare_pending"}:
+                raise
+            await prepare(error.workspace_revision, error.manifest_digest)
+            # One attempt only. The durable startup journal, not this stack,
+            # owns the physical effect budget across a cold continuation.
+            return await self._identity()
 
     async def _identity(self) -> ProofIdentity:
         assert self.executor.current_identity is not None

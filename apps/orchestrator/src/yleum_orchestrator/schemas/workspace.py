@@ -18,6 +18,17 @@ from pydantic import (
 from yleum_orchestrator.core.workspace_provider import ProjectCellLeaseObservation
 
 
+class WorkspaceAgentPrepareRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: UUID
+    owner_id: UUID
+    generation_run_id: UUID
+    fencing_epoch: int = Field(strict=True, gt=0)
+    expected_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class WorkspaceEnsureRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

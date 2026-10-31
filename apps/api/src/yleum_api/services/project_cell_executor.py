@@ -51,6 +51,7 @@ from yleum_api.services.orchestrator_client import (
     project_cell_apply_business_config,
     project_cell_apply_draft,
     project_cell_create_preview_session,
+    project_cell_prepare_environment,
     project_cell_prepare_restoration_adaptation,
     project_cell_prove_restoration_adaptation,
 )
@@ -365,6 +366,40 @@ def invalidated_dimensions(
     return frozenset(invalid)
 
 
+def restored_environment_transition_matches(
+    before: ProofIdentity, after: ProofIdentity, compilation: object,
+) -> bool:
+    """Permit only an actual process change over the same freshly observed content."""
+    if before == after:
+        return True
+    if not isinstance(compilation, dict):
+        return False
+    transition = compilation.get("environment_transition")
+    if (
+        type(transition) is not dict
+        or set(transition) != {
+            "protocol", "version", "content_digest", "before_incarnation", "after_incarnation",
+        }
+        or transition.get("protocol") != "restored-environment-transition/v1"
+        or type(transition.get("version")) is not int or transition["version"] != 1
+        or any(type(transition.get(key)) is not str
+               or re.fullmatch(r"[0-9a-f]{64}", transition[key]) is None
+               for key in ("content_digest", "before_incarnation", "after_incarnation"))
+        or replace(before, base_image_digest=after.base_image_digest,
+                   toolchain_digest=after.toolchain_digest) != after
+    ):
+        return False
+    for identity, key in ((before, "before_incarnation"), (after, "after_incarnation")):
+        digest = hashlib.sha256(json.dumps({
+            "protocol": "project-machine-environment-incarnation/v1",
+            "content_digest": transition["content_digest"],
+            "startup_incarnation": transition[key],
+        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        if identity.base_image_digest != digest or identity.toolchain_digest != digest:
+            return False
+    return True
+
+
 def valid_project_migration_receipt(
     receipt: object, *, workspace_id: UUID, generation_run_id: UUID, fencing_epoch: int,
     source_revision: str, adaptation: bool,
@@ -468,6 +503,7 @@ class ProjectCellExecutorHandle:
     release: Callable[[], Awaitable[None]]
     refresh_snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None
     current_identity: Callable[[], Awaitable[ProofIdentity]] | None = None
+    prepare_environment: Callable[[str, str], Awaitable[None]] | None = None
     run_role: (
         Callable[[ProjectCellCommandRole, UUID], Awaitable[ProjectCellCommandObservation]] | None
     ) = None
@@ -1205,7 +1241,9 @@ async def maybe_create_project_cell_executor(
             role is not ProjectCellCommandRole.RESTORE_RUNTIME
             or not result.ok
             or (
-                before == after
+                restored_environment_transition_matches(
+                    before, after, result.compiled_asset_receipt,
+                )
                 and isinstance(result.compiled_asset_receipt, dict)
                 and result.compiled_asset_receipt.get("collector_version")
                 == "next-restored-runtime-v1"
@@ -1248,6 +1286,19 @@ async def maybe_create_project_cell_executor(
         )
         last_identity = _proof_identity(identity)
         return last_identity
+
+    async def _prepare_environment(expected_revision: str, manifest_digest: str) -> None:
+        if (restoration_adaptation or not _is_portable()
+                or expected_revision != workspace_revision):
+            raise OrchestratorUnavailable("Owned startup source context is unavailable")
+        try:
+            await project_cell_prepare_environment(
+                agent_workspace_id, project_id=project_id, owner_id=user_id,
+                generation_run_id=leased_run_id, fencing_epoch=fencing_epoch,
+                expected_revision=expected_revision, manifest_digest=manifest_digest,
+            )
+        except (OrchestratorBadRequest, OrchestratorUnavailable) as error:
+            raise OrchestratorUnavailable("Owned environment startup requires recovery") from error
 
     async def _run_role(
         role: ProjectCellCommandRole,
@@ -2014,6 +2065,7 @@ async def maybe_create_project_cell_executor(
             (lambda: _release(completion_ready=True)) if not restoration_adaptation else None
         ),
         current_identity=_current_identity,
+        prepare_environment=_prepare_environment if not restoration_adaptation else None,
         run_role=_run_role,
         replay_role_response=_replay_role_response,
         runtime_probe=_runtime_probe,
