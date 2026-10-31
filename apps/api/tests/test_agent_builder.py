@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -941,6 +942,298 @@ def test_source_completion_callback_waits_for_fresh_green_build():
 
     assert result.done and result.needs_finalization and result.summary == "checked"
     assert checked == [{"src/app/page.tsx": "changed"}]
+
+
+def _repair_action(name, **args):
+    return f'<omnia:action name="{name}">{json.dumps(args)}</omnia:action>'
+
+
+def _repair_prelude():
+    return [
+        _repair_action("write_file", path="src/app/page.tsx", content="thin"),
+        *[_repair_action("docs", query=f"fixture-{i}") for i in range(4)],
+        _repair_action("build"),
+        _repair_action("done", summary="premature"),
+    ]
+
+
+def _run_source_repair(
+    actions, *, read_ok=True, cancel_read=False, fail_edit=False, max_steps=None, max_segments=1,
+):
+    state = {"src/app/page.tsx": "initial", "src/app/other.tsx": "other"}
+    executed, events = [], []
+    ordinary_execute = _ok_executor(executed, state)
+
+    async def execute(action):
+        if action.name == "edit_file" and fail_edit:
+            executed.append((action.name, action.path))
+            return {"ok": False, "error": "edit refused", "environment_mutated": False}
+        if action.name == "read_file":
+            executed.append((action.name, action.path))
+            if cancel_read:
+                raise asyncio.CancelledError
+            return {"ok": read_ok, "content": state.get(action.path, "")}
+        return await ordinary_execute(action)
+
+    async def snapshot():
+        return dict(state)
+
+    async def emit(name, payload):
+        if name == "agent.step":
+            events.append(payload)
+
+    def check(files, _evidence):
+        return None if files.get("src/app/page.tsx") == "complete" else "Connect catalog items."
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="repair", model="fixture", execute=execute,
+        complete=_scripted(actions), snapshot_files=snapshot, completion_check=check,
+        coordinator_handoff=True, max_steps=max_steps or len(actions),
+        max_segments=max_segments, emit=emit,
+    ))
+    return result, executed, events
+
+
+def test_source_repair_reads_current_source_after_discovery_then_edits_and_builds():
+    result, executed, _events = _run_source_repair([
+        *_repair_prelude(),
+        _repair_action("read_file", path="src/app/page.tsx"),
+        _repair_action("edit_file", path="src/app/page.tsx", search="thin", replace="complete"),
+        _repair_action("build"),
+        _repair_action("done", summary="repaired"),
+    ])
+    assert ("read_file", "src/app/page.tsx") in executed
+    assert result.done and result.needs_finalization and result.summary == "repaired"
+    assert result.files["src/app/page.tsx"] == "complete"
+    after_gap = next(i for i, message in enumerate(result.transcript)
+                     if "NOT DONE YET" in str(message.get("content")))
+    assert not any("Call done to HAND OFF" in str(message.get("content"))
+                   for message in result.transcript[after_gap + 1:])
+
+
+def test_source_repair_can_reread_pre_gap_source_once_without_resetting_repeat_guard():
+    prelude = _repair_prelude()
+    prelude.insert(1, _repair_action("read_file", path="src/app/page.tsx"))
+    result, executed, events = _run_source_repair([
+        *prelude,
+        _repair_action("read_file", path="src/app/page.tsx"),
+        _repair_action("read_file", path="src/app/page.tsx"),
+        _repair_action("edit_file", path="src/app/page.tsx", search="thin", replace="complete"),
+        _repair_action("build"), _repair_action("done", summary="repaired"),
+    ])
+    assert result.done and result.needs_finalization
+    assert [item for item in executed if item[0] == "read_file"] == [
+        ("read_file", "src/app/page.tsx"), ("read_file", "src/app/page.tsx"),
+    ]
+    assert len([event for event in events
+                if event["action"] == "read_file" and event.get("skipped")]) == 1
+
+
+def test_source_repair_nudge_does_not_claim_green_source_is_ready():
+    result, _executed, _events = _run_source_repair([
+        *_repair_prelude(), _repair_action("list_dir", path="src/app"),
+    ])
+    assert not result.done
+    last_message = result.transcript[-1]["content"]
+    assert "Connect catalog items." in last_message
+    assert "write_file" in last_message and "edit_file" in last_message
+    assert "Call done to HAND OFF" not in last_message
+
+
+@pytest.mark.parametrize("read_ok", [True, False])
+@pytest.mark.parametrize("second_path", [
+    "src/app/other.tsx", "./src/app/page.tsx", "src\\app\\page.tsx",
+])
+def test_source_repair_read_is_one_shot_despite_repeated_done_and_read_failure(
+    read_ok, second_path,
+):
+    result, executed, _events = _run_source_repair([
+        *_repair_prelude(),
+        _repair_action("read_file", path="src/app/page.tsx"),
+        _repair_action("done", summary="still thin"),
+        _repair_action("read_file", path=second_path),
+    ], read_ok=read_ok)
+    assert not result.done
+    assert [item for item in executed if item[0] == "read_file"] == [
+        ("read_file", "src/app/page.tsx"),
+    ]
+
+
+@pytest.mark.parametrize("bad_path", [
+    "src/app/missing.tsx", "../src/app/page.tsx", "./src/app/page.tsx",
+    "/src/app/page.tsx", ".env", ".omnia/management.json",
+])
+def test_source_repair_read_requires_canonical_existing_source(bad_path):
+    result, executed, _events = _run_source_repair([
+        *_repair_prelude(),
+        _repair_action("read_file", path=bad_path),
+        _repair_action("read_file", path="src/app/page.tsx"),
+    ])
+    assert not result.done
+    assert [item for item in executed if item[0] == "read_file"] == [
+        ("read_file", "src/app/page.tsx"),
+    ]
+
+
+@pytest.mark.parametrize("mutation", [
+    _repair_action("write_file", path="src/app/page.tsx", content="thin"),
+    _repair_action("edit_file", path="src/app/page.tsx", search="absent", replace="complete"),
+])
+def test_source_repair_noop_does_not_replenish_read(mutation):
+    result, executed, _events = _run_source_repair([
+        *_repair_prelude(),
+        _repair_action("read_file", path="src/app/page.tsx"), mutation,
+        _repair_action("build"), _repair_action("done", summary="still thin"),
+        _repair_action("read_file", path="src/app/other.tsx"),
+    ])
+    assert not result.done
+    assert len([item for item in executed if item[0] == "read_file"]) == 1
+
+
+def test_source_repair_failed_edit_does_not_replenish_read():
+    result, executed, _events = _run_source_repair([
+        *_repair_prelude(), _repair_action("read_file", path="src/app/page.tsx"),
+        _repair_action("edit_file", path="src/app/page.tsx", search="thin", replace="complete"),
+        _repair_action("done", summary="edit was refused"),
+        _repair_action("read_file", path="src/app/other.tsx"),
+    ], fail_edit=True)
+    assert not result.done
+    assert ("edit_file", "src/app/page.tsx") in executed
+    assert [item for item in executed if item[0] == "read_file"] == [
+        ("read_file", "src/app/page.tsx"),
+    ]
+
+
+def test_source_repair_actual_progress_allows_one_new_cycle():
+    result, executed, _events = _run_source_repair([
+        *_repair_prelude(),
+        _repair_action("read_file", path="src/app/page.tsx"),
+        _repair_action("write_file", path="src/app/page.tsx", content="improved but incomplete"),
+        _repair_action("build"), _repair_action("done", summary="still incomplete"),
+        _repair_action("read_file", path="src/app/other.tsx"),
+        _repair_action("read_file", path="src/app/page.tsx"),
+    ])
+    assert not result.done
+    assert [item for item in executed if item[0] == "read_file"] == [
+        ("read_file", "src/app/page.tsx"), ("read_file", "src/app/other.tsx"),
+    ]
+
+
+def test_source_repair_read_limit_also_applies_before_discovery_pause():
+    prelude = _repair_prelude()
+    result, executed, _events = _run_source_repair([
+        prelude[0], *prelude[-2:],
+        _repair_action("read_file", path="src/app/page.tsx"),
+        _repair_action("read_file", path="src/app/other.tsx"),
+    ])
+    assert not result.done
+    assert [item for item in executed if item[0] == "read_file"] == [
+        ("read_file", "src/app/page.tsx"),
+    ]
+
+
+def test_source_repair_context_boundary_does_not_replenish_consumed_read():
+    first_segment = [*_repair_prelude(), _repair_action("read_file", path="src/app/page.tsx")]
+    result, executed, _events = _run_source_repair([
+        *first_segment, _repair_action("build"),
+        _repair_action("done", summary="still incomplete"),
+        _repair_action("read_file", path="src/app/other.tsx"),
+        _repair_action("done", summary="still incomplete"),
+    ], max_steps=len(first_segment), max_segments=2)
+    assert not result.done and result.segments == 2
+    assert [item for item in executed if item[0] == "read_file"] == [
+        ("read_file", "src/app/page.tsx"),
+    ]
+
+
+def test_source_repair_cold_resume_keeps_consumed_read_and_current_feedback():
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from yleum_api.services.generation.recovery_execution import GenerationYielded
+
+    state = {"src/app/page.tsx": "initial", "src/app/other.tsx": "other"}
+    executed, saved = [], {}
+    cold = False
+    prelude = _repair_prelude()
+    prelude.insert(1, _repair_action("read_file", path="src/app/page.tsx"))
+    actions = [
+        *prelude, _repair_action("read_file", path="src/app/page.tsx"),
+        _repair_action("done", summary="still thin"),
+        _repair_action("read_file", path="src/app/other.tsx"),
+    ]
+    complete = _scripted(actions)
+
+    async def snapshot():
+        return dict(state)
+
+    async def provider(frame, invoke):
+        nonlocal saved
+        if not cold and sum(name == "read_file" for name, _path in executed) == 2:
+            saved = deepcopy(frame["value"])
+            raise GenerationYielded(
+                run_id=uuid4(), checkpoint=None, attempt_seq=1, phase="waiting_dependency",
+            )
+        return await invoke()
+
+    driver = SimpleNamespace(
+        restore_frame=lambda _kind: deepcopy(saved) if cold else None, provider=provider,
+    )
+
+    async def run():
+        return await ab._run_agent_segment(
+            system_prompt="s", user_prompt="repair", model="fixture",
+            execute=_ok_executor(executed, state), complete=complete,
+            snapshot_files=snapshot, completion_check=lambda *_: "Connect catalog items.",
+            coordinator_handoff=True, max_steps=len(actions), continuation=driver,
+        )
+
+    with pytest.raises(GenerationYielded):
+        asyncio.run(run())
+    assert saved["source_repair_read_used"] is True
+    assert saved["source_repair_gap"] == "Connect catalog items."
+    assert sum(count for sig, count in saved["sig_seen"].items()
+               if sig.startswith("read_file|src/app/page.tsx|")) == 2
+    cold = True
+    result = asyncio.run(run())
+    assert not result.done
+    assert [item for item in executed if item[0] == "read_file"] == [
+        ("read_file", "src/app/page.tsx"), ("read_file", "src/app/page.tsx"),
+    ]
+    assert "SOURCE REPAIR REQUIRED: Connect catalog items." in result.transcript[-1]["content"]
+
+
+def test_source_repair_hard_no_progress_limit_still_blocks_read():
+    result, executed, events = _run_source_repair([
+        *[_repair_action("build", fixture=i) for i in range(ab._NO_WRITE_ABORT_AT)],
+        _repair_action("done", summary="unverified"),
+        _repair_action("read_file", path="src/app/page.tsx"),
+        _repair_action("write_file", path="src/app/page.tsx", content="complete"),
+    ])
+    assert not result.done and result.stop_reason == "exploring"
+    assert not any(name in {"read_file", "write_file"} for name, _path in executed)
+    assert events[-1]["action"] == "done" and events[-1]["ok"] is False
+
+
+def test_source_repair_repeated_semantic_done_consumes_existing_no_progress_limit():
+    result, executed, events = _run_source_repair([
+        *_repair_prelude(),
+        *[_repair_action("done", summary="same rejected source") for _ in range(30)],
+    ])
+    assert not result.done and result.stop_reason == "exploring"
+    assert result.steps < len(_repair_prelude()) + 30
+    assert len([event for event in events if event["action"] == "done"]) == (
+        ab._NO_WRITE_ABORT_AT - 5
+    )
+    assert len(executed) == 6  # Initial write, four discoveries, one build; no hidden tools.
+
+
+def test_source_repair_targeted_read_keeps_cancellation():
+    with pytest.raises(asyncio.CancelledError):
+        _run_source_repair([
+            *_repair_prelude(), _repair_action("read_file", path="src/app/page.tsx"),
+        ], cancel_read=True)
 
 
 def test_source_completion_cancellation_propagates_without_handoff():

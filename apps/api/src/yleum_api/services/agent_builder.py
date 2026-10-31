@@ -100,6 +100,8 @@ class _LegacyLoopFrame(BaseModel):
     sig_seen: dict[str, NonNegativeInt]
     blocked_cycles: dict[str, NonNegativeInt]
     read_sigs: dict[str, list[str]]
+    source_repair_gap: str | None = None
+    source_repair_read_used: bool = False
     content_receipts_seen: bool
     last_build_ok: bool | None
     fast_check_fresh: bool
@@ -128,6 +130,8 @@ class _LegacyOuterFrame(BaseModel):
     transcript: list[dict[str, Any]]
     task: str
     source_history: list[str] | None
+    source_repair_gap: str | None = None
+    source_repair_read_used: bool = False
 
 
 # ── Action protocol ────────────────────────────────────────────────────────
@@ -324,6 +328,12 @@ Emit = Callable[[str, dict[str, Any]], Awaitable[None]]
 CompletionCheck = Callable[[Mapping[str, str], Mapping[str, int]], str | None]
 
 
+@dataclass
+class _SourceRepairState:
+    gap: str | None = None
+    read_used: bool = False
+
+
 def _safe_file_path(path: str) -> str | None:
     """Canonical read identity; traversal is never a progress witness."""
     candidate = PurePosixPath(path.replace("\\", "/"))
@@ -384,6 +394,10 @@ async def run_agent_build(
         or (segment_limit is not None and restored.segment > segment_limit)
     ):
         raise RecoveryContractError("legacy segment continuation contract changed")
+    source_repair = _SourceRepairState(
+        gap=restored.source_repair_gap if restored is not None else None,
+        read_used=restored.source_repair_read_used if restored is not None else False,
+    )
     novelty = None
     if segment_limit is None and restored is None:
         assert snapshot_files is not None and edit_deadline is not None
@@ -446,6 +460,8 @@ async def run_agent_build(
                 contract=contract, segment=segment, total_steps=total_steps,
                 cumulative_files=cumulative_files, transcript=transcript, task=task,
                 source_history=list(novelty.source_history()) if novelty is not None else None,
+                source_repair_gap=source_repair.gap,
+                source_repair_read_used=source_repair.read_used,
             )
             continuation.context = {
                 **continuation.context, "legacy_outer": outer.model_dump(mode="json"),
@@ -466,6 +482,7 @@ async def run_agent_build(
             response_recovery=response_recovery, take_verified_progress=take_verified_progress,
             on_progress=segment_progress,
             edit_deadline=edit_deadline, continuation=continuation,
+            source_repair=source_repair,
         )
         restored = None
         cumulative_files.update(result.files)
@@ -555,6 +572,7 @@ async def _run_agent_segment(
     on_progress: Callable[[AgentResult], Awaitable[None]] | None = None,
     edit_deadline: datetime | None = None,
     continuation: ExecutionDriver | None = None,
+    source_repair: _SourceRepairState | None = None,
 ) -> AgentResult:
     """Drive the plan→act→observe loop until the model says done or budget hits.
 
@@ -584,6 +602,7 @@ async def _run_agent_segment(
     sig_seen: dict[str, int] = {}  # executed non-consecutive action signatures
     blocked_cycles: dict[str, int] = {}  # denied repeat attempts keep the existing bound
     read_sigs: dict[str, set[str]] = {}  # canonical file -> its read signatures
+    source_repair = source_repair or _SourceRepairState()
     content_receipts_seen = False  # skip generic before-read after producer proves support
     last_build_ok: bool | None = None  # result of the most recent `build` action
     fast_check_fresh = False  # candidate check, never a runtime/release proof
@@ -630,6 +649,8 @@ async def _run_agent_segment(
         infra_dead_streak = saved_frame.infra_dead_streak
         sig_seen, blocked_cycles = saved_frame.sig_seen, saved_frame.blocked_cycles
         read_sigs = {path: set(values) for path, values in saved_frame.read_sigs.items()}
+        source_repair.gap = saved_frame.source_repair_gap
+        source_repair.read_used = saved_frame.source_repair_read_used
         content_receipts_seen = saved_frame.content_receipts_seen
         last_build_ok, fast_check_fresh = saved_frame.last_build_ok, saved_frame.fast_check_fresh
         pending_source_build, red_build_streak = (
@@ -699,9 +720,7 @@ async def _run_agent_segment(
     def _source_change_pending() -> bool:
         return edit_source_changed is not None and not edit_source_changed()
 
-    def _source_completion_gap() -> str | None:
-        if completion_check is None:
-            return None
+    def _source_inventory_error() -> str | None:
         if completion_inventory is None:
             return "Current source inventory is unavailable; completion cannot be verified."
         if any(
@@ -710,6 +729,15 @@ async def _run_agent_segment(
             for path, content in completion_inventory.items()
         ):
             return "Current source inventory is invalid; completion cannot be verified."
+        return None
+
+    def _source_completion_gap() -> str | None:
+        if completion_check is None:
+            return None
+        inventory_error = _source_inventory_error()
+        if inventory_error is not None:
+            return inventory_error
+        assert completion_inventory is not None
         try:
             # Legacy source admission earns no native runtime/tool proof counters.
             gap = completion_check(dict(completion_inventory), {})
@@ -721,32 +749,48 @@ async def _run_agent_segment(
             return "Product acceptance check returned invalid feedback."
         return bounded_redacted_diagnostic(gap, max_bytes=_MAX_OBS_CHARS)
 
+    def _can_read_repair_source(action: Action) -> bool:
+        path = action.path
+        return (
+            action.name == "read_file" and source_repair.gap is not None
+            and not source_repair.read_used and _source_inventory_error() is None
+            and _safe_file_path(path) == path and path.startswith("src/")
+            and PurePosixPath(path).suffix in {".ts", ".tsx", ".js", ".jsx", ".css", ".scss"}
+            and not any(part.startswith(".") for part in PurePosixPath(path).parts)
+            and completion_inventory is not None and path in completion_inventory
+        )
+
     async def _nudge_exploration(step: int) -> None:
         green = (
             fast_check_fresh
             if coordinator_handoff
             else (last_build_ok is True and last_runtime_ok is True and not wrote_since_check)
         )
+        if green and completion_check is not None:
+            source_repair.gap = _source_completion_gap()
         await _escalate(step, "explore")
         if emit:
             await emit("agent.stalled", {"step": step})
-        convo.append(
-            {
-                "role": "user",
-                "content": (
-                    _SOURCE_CHANGE_REQUIRED
-                    if _source_change_pending()
-                    else "FAST_CHECK is current and clean. Call done to HAND OFF to the "
-                    "server coordinator; do not rewrite source for deferred runtime proof."
-                    if green and coordinator_handoff
-                    else _DONE_WHEN_GREEN_NUDGE
-                    if green
-                    else _EDIT_EXPLORE_STALL_NUDGE
-                    if edit_mode
-                    else _EXPLORE_STALL_NUDGE
-                ),
-            }
-        )
+        if _source_change_pending():
+            nudge = _SOURCE_CHANGE_REQUIRED
+        elif source_repair.gap is not None:
+            nudge = (
+                "SOURCE REPAIR REQUIRED: " + source_repair.gap + " "
+                "A clean FAST_CHECK does not resolve this source gap. Apply a minimal "
+                "write_file/edit_file change addressing it, then build and call done. "
+                "Only one canonical existing src source file may be read in this repair "
+                "cycle; reading is not progress and does not renew any budget."
+            )
+        elif green and coordinator_handoff:
+            nudge = (
+                "FAST_CHECK is current and clean. Call done to HAND OFF to the "
+                "server coordinator; do not rewrite source for deferred runtime proof."
+            )
+        elif green:
+            nudge = _DONE_WHEN_GREEN_NUDGE
+        else:
+            nudge = _EDIT_EXPLORE_STALL_NUDGE if edit_mode else _EXPLORE_STALL_NUDGE
+        convo.append({"role": "user", "content": nudge})
 
     async def _escalate(step: int, reason: str) -> None:
         """First stall-nudge of any kind → upgrade to the stronger model, once.
@@ -800,6 +844,12 @@ async def _run_agent_segment(
                 continuation_reason=fallback.stop_reason,
             )
         return fallback
+
+    def _exploration_failure(step: int) -> AgentResult:
+        return AgentResult(
+            done=False, summary="stuck exploring without successful source changes",
+            files=written, steps=step + 1, transcript=convo, stop_reason="exploring",
+        )
 
     for step in range(start_step, max_steps):
         restoring = saved_frame is not None and step == start_step
@@ -927,6 +977,8 @@ async def _run_agent_segment(
                             infra_dead_streak=infra_dead_streak, sig_seen=sig_seen,
                             blocked_cycles=blocked_cycles,
                             read_sigs={path: sorted(values) for path, values in read_sigs.items()},
+                            source_repair_gap=source_repair.gap,
+                            source_repair_read_used=source_repair.read_used,
                             content_receipts_seen=content_receipts_seen,
                             last_build_ok=last_build_ok, fast_check_fresh=fast_check_fresh,
                             pending_source_build=pending_source_build,
@@ -1158,9 +1210,11 @@ async def _run_agent_segment(
             source_feedback = False
             if gap is None:
                 gap = _source_completion_gap()
+                source_repair.gap = gap
                 source_feedback = gap is not None
             if gap is not None:
                 if source_feedback:
+                    no_write_streak += 1
                     await _step_result(action, step, {"ok": False, "detail": gap})
                 else:
                     await _step_result(action, step, skipped=gap)
@@ -1169,6 +1223,14 @@ async def _run_agent_segment(
                 convo.append({"role": "user", "content": (
                     "NOT DONE YET — " + gap + "."
                 )})
+                if source_feedback:
+                    if no_write_streak >= _NO_WRITE_ABORT_AT:
+                        # The known semantic rejection cannot be rescued by a green build.
+                        return _exploration_failure(step)
+                    if no_write_streak == (
+                        _EDIT_NO_WRITE_NUDGE_AT if edit_mode else _NO_WRITE_NUDGE_AT
+                    ):
+                        await _nudge_exploration(step)
                 continue
             await _step_result(action, step, {"ok": True, "detail": action.args.get("summary", "")})
             return AgentResult(
@@ -1187,22 +1249,18 @@ async def _run_agent_segment(
                 action, step, skipped="No source progress; exploration budget exhausted"
             )
             return _ship_green_or(
-                AgentResult(
-                    done=False,
-                    summary="stuck exploring without successful source changes",
-                    files=written,
-                    steps=step + 1,
-                    transcript=convo,
-                    stop_reason="exploring",
-                ),
-                step,
-                "explore",
+                _exploration_failure(step), step, "explore",
             )
 
         # Circuit breaker: the model sometimes gets stuck re-issuing the SAME
         # action (observed live: 34x identical grep → max_steps, no progress).
         # Detect consecutive identical actions → nudge to move on → then abort.
         read_path = _safe_file_path(action.path) if action.name == "read_file" else None
+        repair_read = _can_read_repair_source(action)
+        if source_repair.gap is not None and action.name == "read_file" and not repair_read:
+            await _skip_action(action, step, "Source repair read unavailable; edit the source")
+            await _nudge_exploration(step)
+            continue
         sig_args = {**action.args, "path": read_path} if read_path else action.args
         sig = (
             f"{action.name}|{read_path or action.path}|"
@@ -1221,7 +1279,7 @@ async def _run_agent_segment(
         # Idempotent verify actions (build / read_logs / runtime_check) are exempt:
         # re-observing the app after a fix is progress, not a cycle — caging them
         # here is what falsely aborted long build→fix→build loops as "looping".
-        if sig != last_sig and action.name not in _VERIFY_ACTIONS:
+        if sig != last_sig and action.name not in _VERIFY_ACTIONS and not repair_read:
             cycle_count = sig_seen.get(sig, 0) + blocked_cycles.get(sig, 0) + 1
             if cycle_count >= _REPEAT_ABORT_AT:
                 await _step_result(action, step, skipped="Repeated unchanged action; cycle limit")
@@ -1249,7 +1307,7 @@ async def _run_agent_segment(
                 )})
                 continue
         next_repeat_count = repeat_count + 1 if sig == last_sig else 0
-        if next_repeat_count >= 5:
+        if next_repeat_count >= 5 and not repair_read:
             await _step_result(action, step, skipped="Repeated identical action; repeat limit")
             return _ship_green_or(
                 AgentResult(
@@ -1260,7 +1318,7 @@ async def _run_agent_segment(
                 ),
                 step, "repeat",
             )
-        if next_repeat_count >= 2:
+        if next_repeat_count >= 2 and not repair_read:
             repeat_count = next_repeat_count
             await _skip_action(action, step, "Repeated identical action; repeat guard")
             await _escalate(step, "repeat")
@@ -1343,7 +1401,7 @@ async def _run_agent_segment(
                 )
                 convo.append({"role": "user", "content": _BUILD_PRESSURE_NUDGE})
                 continue  # build once before piling on more files
-        elif action.name not in _VERIFY_ACTIONS and no_write_streak >= (
+        elif not repair_read and action.name not in _VERIFY_ACTIONS and no_write_streak >= (
             _EDIT_NO_WRITE_NUDGE_AT if edit_mode else _NO_WRITE_NUDGE_AT
         ):
             # The threshold-producing action ran on the previous turn. Its real
@@ -1378,6 +1436,10 @@ async def _run_agent_segment(
         if sig != last_sig and action.name not in _VERIFY_ACTIONS:
             sig_seen[sig] = sig_seen.get(sig, 0) + 1
         repeat_count, last_sig = next_repeat_count, sig
+        if repair_read:
+            # Consume before any awaited tool/snapshot, including failures or cancellation.
+            # Repeat counters above still accrue; only this phase's first read is exempt.
+            source_repair.read_used = True
         source_before = dict(await snapshot_files()) if snapshot_files is not None else None
         tool = getattr(continuation, "tool", None)
         obs = (
@@ -1435,6 +1497,8 @@ async def _run_agent_segment(
             pending_source_build = False
         if changed_source_paths and obs.get("ok") is True:
             no_write_streak = 0
+            source_repair.gap = None
+            source_repair.read_used = False
             if action.name != "build":
                 for path in changed_source_paths:
                     writes_since_build += 1
