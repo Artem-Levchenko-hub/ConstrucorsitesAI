@@ -61,6 +61,7 @@ MAX_MANAGEMENT_RUNTIME_FILES = (
     "src/lib/omnia/management-config.ts", "src/lib/omnia/management-auth.ts",
     "src/lib/omnia/management-store.ts", "src/lib/omnia/management-resources.ts",
     "src/lib/omnia/business-client.ts", "src/lib/omnia/business-server.ts",
+    "src/lib/omnia/identity-scope.ts",
     "src/app/api/omnia/owner/route.ts", "src/app/api/omnia/business/[resource]/route.ts",
     "src/lib/omnia/app-profile-client.ts", "src/lib/omnia/app-profile-actions.ts",
     "drizzle/0003_owner_management.sql",

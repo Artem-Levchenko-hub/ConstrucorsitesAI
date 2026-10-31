@@ -8,11 +8,11 @@
     "mode": "100644"
   },
   "src/components/MaxAppProvider.tsx": {
-    "sha256": "371131abca621c2d0c73cd5d3e5c3f322d1d4b62591084d3366fbeac6ea1588f",
+    "sha256": "af61352a0ff2b5154f5c8b45140243ec1079f90b9eff16369af6e830bfe0fa5c",
     "mode": "100644"
   },
   "src/lib/max/owner-preview-renewal.ts": {
-    "sha256": "6b98c373250199e12cdbb0723a77795acce0ec76d12fff8d53232a78a4075089",
+    "sha256": "1be92a1e0b55bdffc27f8b9a0bee8ceaa17f162d5852a4794d85f5fe25c5d0c6",
     "mode": "100644"
   }
 }

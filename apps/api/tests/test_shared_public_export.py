@@ -60,6 +60,7 @@ assert set(OWNER_OVERRIDES) == {
     'src/lib/omnia/management-store.ts',
     'src/lib/omnia/management-resources.ts',
     'src/lib/omnia/business-client.ts',
+    'src/lib/omnia/identity-scope.ts',
     'src/lib/omnia/business-server.ts',
     'src/app/api/omnia/owner/route.ts',
     'src/app/api/omnia/business/[resource]/route.ts',

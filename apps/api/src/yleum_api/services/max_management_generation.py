@@ -798,6 +798,9 @@ def management_source_gap(files: Mapping[str, str]) -> str | None:
             "Use direct JSX from the live SDK hook/result and a real event handler "
             "with an explicit input object. Keep SDK rows out of useMemo, pre-filters "
             "and helper projections; apply category conditions inside the JSX map. "
+            "In submit handlers, use separate direct guards for pending intent, readiness "
+            "and form inputs. Do not hide the SDK call behind a combined reason-string "
+            "condition: the bounded verifier does not interpret arbitrary JS conditions. "
             "This is a supported source shape, not a request for static or mock data."
         )
     return gap

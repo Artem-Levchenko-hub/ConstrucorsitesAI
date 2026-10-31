@@ -1,4 +1,8 @@
 "use client";
+import {
+  IdentityScopeError, assertIdentityScope, captureIdentityScope, reportIdentityInvalidation,
+  type IdentityScope,
+} from "@/lib/omnia/identity-scope";
 import type {
   ResourceId,
   ManagedRecord,
@@ -44,6 +48,26 @@ const acknowledgedIntents = new Map<string, string>();
 const intentProvenance = new Map<string, { actor: string; origin: string }>();
 function intentError(code = "pending_intent", status = 409): never {
   throw new ManagedBusinessError(code, status);
+}
+function currentScope(): IdentityScope | null {
+  if (typeof window === "undefined") return null;
+  try { return captureIdentityScope(); }
+  catch (error) {
+    if (error instanceof IdentityScopeError) throw new ManagedBusinessError(error.code, error.status);
+    throw error;
+  }
+}
+function requireScope(scope: IdentityScope | null): void {
+  if (!scope) return;
+  try { assertIdentityScope(scope); }
+  catch (error) {
+    if (error instanceof IdentityScopeError) throw new ManagedBusinessError(error.code, error.status);
+    throw error;
+  }
+}
+function unauthorized(scope: IdentityScope | null, status: number): never {
+  if (status === 401 && scope) reportIdentityInvalidation(scope);
+  return intentError(status === 401 ? "unauthorized" : "forbidden", status);
 }
 function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -96,16 +120,24 @@ function bindIntent(context: IntentContext, operationKey: string): void {
   if (previous && (previous.actor !== context.actor || previous.origin !== context.origin)) intentError("actor_changed", 409);
   if (!previous) intentProvenance.set(key, { actor: context.actor, origin: context.origin });
 }
-async function verifiedContext(resource: ResourceId): Promise<IntentContext> {
+async function verifiedContext(resource: ResourceId, scope: IdentityScope | null): Promise<IntentContext> {
   if (!["orders", "leads", "bookings"].includes(resource)) intentError("invalid_request", 400);
   let response: Response, data: unknown;
   try {
     response = await fetch("/api/max/session", { credentials: "include", cache: "no-store", redirect: "error" });
-    data = await response.json();
-  } catch { return intentError("unavailable", 503); }
-  if (!response.ok) return intentError(response.status === 401 ? "unauthorized" : "unavailable", response.status === 401 ? 401 : 503);
+  } catch { requireScope(scope); return intentError("unavailable", 503); }
+  requireScope(scope);
+  if (response.status === 401 || response.status === 403) return unauthorized(scope, response.status);
+  try { data = await response.json(); }
+  catch { requireScope(scope); return intentError("unavailable", 503); }
+  requireScope(scope);
+  if (!response.ok) return intentError("unavailable", 503);
   if (!record(data) || !record(data.user) || !text(data.user.id, 128, 1) || data.user.id.length > 128 || !data.user.id.trim() || /[\u0000-\u001f\u007f]/.test(data.user.id)) intentError("unavailable", 503);
   const actor = data.user.id, origin = window.location.origin;
+  if (scope && actor !== scope.actor) {
+    reportIdentityInvalidation(scope);
+    return intentError("actor_changed", 409);
+  }
   try { if (!["https:", "http:"].includes(new URL(origin).protocol) || new URL(origin).origin !== origin) intentError("unavailable", 503); }
   catch { return intentError("unavailable", 503); }
   return { actor, origin, resource, key: `yleum.managed-intent.v1:${encodeURIComponent(origin)}:${encodeURIComponent(actor)}:${resource}` };
@@ -184,13 +216,17 @@ export function loadPendingManagedIntent(resource: "bookings"): Promise<Readonly
 export function loadPendingManagedIntent(resource: ResourceId): Promise<Readonly<ManagedInput> | null>;
 export async function loadPendingManagedIntent(resource: ResourceId): Promise<Readonly<ManagedInput> | null> {
   if (typeof window === "undefined") return null;
-  const context = await verifiedContext(resource), input = pendingIntent(context).input;
+  const scope = currentScope(), context = await verifiedContext(resource, scope);
+  requireScope(scope);
+  const input = pendingIntent(context).input;
   if (input) bindIntent(context, input.operationKey);
+  requireScope(scope);
   return input;
 }
 async function create(resource: ResourceId, input: ManagedInput): Promise<ManagedRecord> {
   if (typeof window === "undefined") return request(resource, input);
-  const context = await verifiedContext(resource);
+  const scope = currentScope(), context = await verifiedContext(resource, scope);
+  requireScope(scope);
   let copy: unknown;
   try { const raw = JSON.stringify(input); if (!bounded(raw)) intentError("invalid_request", 400); copy = JSON.parse(raw); }
   catch { return intentError("invalid_request", 400); }
@@ -203,14 +239,17 @@ async function create(resource: ResourceId, input: ManagedInput): Promise<Manage
   if (pending.input && body(pending.input) !== body(copy)) intentError();
   const saved = pending.input || freeze(JSON.parse(canonical(copy)) as ManagedInput), value = persist(context, saved, pending.stores, !pending.input);
   let receipt: ManagedRecord;
-  try { receipt = await request(resource, saved, "", context.actor); }
+  try { receipt = await request(resource, saved, "", context.actor, scope); requireScope(scope); }
   catch (error) {
+    if (error instanceof ManagedBusinessError && ["unauthorized", "actor_changed"].includes(error.code)) throw error;
+    requireScope(scope);
     if (error instanceof ManagedBusinessError && ((error.code === "quote_changed" && error.status === 409) ||
       (!pending.input && error.code === "invalid_request" && error.status === 400))) clearIntent(context, value, pending.stores);
     throw error;
   }
   acknowledgedIntents.set(context.key, value);
   if (clearIntent(context, value, pending.stores)) acknowledgedIntents.delete(context.key);
+  requireScope(scope);
   return receipt;
 }
 // Validate the receipt before callers may discard their input and operation key.
@@ -249,34 +288,43 @@ async function request<T>(
   input?: unknown,
   query = "",
   actor?: string,
+  scope: IdentityScope | null = currentScope(),
 ): Promise<T> {
+  requireScope(scope);
   let response: Response;
   try {
     response = await fetch(`/api/omnia/business/${resource}${query}`, {
       method: input === undefined ? "GET" : "POST",
       credentials: "include",
       cache: "no-store",
-      headers: { "Content-Type": "application/json", ...(actor ? { "X-Max-Expected-Actor": actor } : {}) },
+      headers: { "Content-Type": "application/json", ...((actor || scope?.actor) ? { "X-Max-Expected-Actor": actor || scope!.actor } : {}) },
       ...(input === undefined ? {} : { body: JSON.stringify(input) }),
     });
   } catch {
+    requireScope(scope);
     throw new ManagedBusinessError("unavailable", 503);
   }
+  requireScope(scope);
+  if (response.status === 401 || response.status === 403) return unauthorized(scope, response.status);
   let data;
   try { data = await response.json(); }
-  catch { throw new ManagedBusinessError("unavailable", 503); }
-  if (!response.ok)
+  catch { requireScope(scope); throw new ManagedBusinessError("unavailable", 503); }
+  requireScope(scope);
+  if (!response.ok) {
+    if (response.status === 409 && data?.error?.code === "actor_changed" && scope) reportIdentityInvalidation(scope);
     throw new ManagedBusinessError(
       data?.error?.code || "unavailable",
       response.status,
       data?.quote,
     );
+  }
   const valid = input === undefined
     ? data && Array.isArray(data.records) && data.records.length <= 100 &&
       (data.next_cursor === null || (typeof data.next_cursor === "string" && data.next_cursor.length > 0 && data.next_cursor.length <= 4096)) &&
       data.records.every((record: unknown) => validRecord(record, resource))
     : validRecord(data, resource);
   if (!valid) throw new ManagedBusinessError("unavailable", 503);
+  requireScope(scope);
   return data as T;
 }
 /** Preserve operationKey after ambiguous transport failures. Never auto-confirm a new quote. */

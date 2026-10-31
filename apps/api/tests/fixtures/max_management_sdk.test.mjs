@@ -22,7 +22,7 @@ const ids = [
   "22222222-2222-4222-8222-222222222222",
   "33333333-3333-4333-8333-333333333333",
 ];
-function runtime(overrides = {}, transport, browser) {
+function runtime(overrides = {}, transport, browser, initialActor = "42") {
   const env = {
     YLEUM_OWNER_ASSERTION_KEY: "ab".repeat(32),
     YLEUM_OWNER_PROJECT_ID: ids[0],
@@ -102,7 +102,16 @@ function runtime(overrides = {}, transport, browser) {
     );
     return exports;
   }
-  return { env, load, calls, dependencies };
+  let identityOwner;
+  const identity = () => load("lib/omnia/identity-scope.ts");
+  const setActor = (actor, mode = "max") => {
+    const scope = identity();
+    identityOwner ||= scope.createIdentityController();
+    identityOwner.commit(identityOwner.begin(), { actor, mode });
+  };
+  if (browser) setActor(initialActor);
+  return { env, load, calls, dependencies, setActor,
+    identitySnapshot: () => identity().getIdentitySnapshot() };
 }
 function sign(app, body, patch = {}) {
   const now = Math.floor(Date.now() / 1000),
@@ -137,6 +146,108 @@ function verifiedTransport(post, actor = () => "42") {
   return async (url, options) => url === "/api/max/session"
     ? Response.json({ user: { id: actor() } }) : post(url, options);
 }
+
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+function deferredJson() {
+  const reading = deferred(); let stream;
+  const response = new Response(new ReadableStream({ start(controller) { stream = controller; } }),
+    { headers: { "Content-Type": "application/json" } });
+  const json = response.json.bind(response);
+  response.json = () => { reading.resolve(); return json(); };
+  return { response, reading: reading.promise,
+    resolve(value) { stream.enqueue(new TextEncoder().encode(JSON.stringify(value))); stream.close(); } };
+}
+
+for (const restoreActor of [false, true]) for (const duringDecode of [false, true])
+test(`late POST cannot expose A receipt after ${restoreActor ? "A-B-A" : "A-B"} during ${duringDecode ? "decode" : "fetch"}`, async () => {
+  const browser = intentBrowser(), response = deferred(), sent = deferred();
+  const decoded = deferredJson();
+  let actor = "42", posts = 0;
+  const app = runtime({}, verifiedTransport((_url, options) => {
+    posts++;
+    if (JSON.parse(options.body).operationKey === ids[0]) { sent.resolve(); return duringDecode ? decoded.response : response.promise; }
+    throw Error("B response unknown");
+  }, () => actor), browser);
+  const client = app.load("lib/omnia/business-client.ts");
+  const pending = client.createManagedLead(lead);
+  await sent.promise;
+  if (duringDecode) await decoded.reading;
+  actor = "43"; app.setActor(actor);
+  await assert.rejects(client.createManagedLead({ ...lead, operationKey: ids[1], customerName: "B" }));
+  const before = [...browser.localStorage.values.entries()];
+  if (restoreActor) { actor = "42"; app.setActor(actor); }
+  if (duringDecode) decoded.resolve(leadReceipt());
+  else response.resolve(Response.json(leadReceipt()));
+  await assert.rejects(pending, error => error.code === "actor_changed");
+  assert.deepEqual([...browser.localStorage.values.entries()], before);
+  assert.equal(posts, 2, "one POST per deliberate intent; no automatic replay");
+});
+
+for (const duringDecode of [false, true]) test(`history is fenced after ${duringDecode ? "JSON decode" : "fetch"}`, async () => {
+  const sent = deferred(), response = deferred(), decoded = deferredJson();
+  const app = runtime({}, () => {
+    sent.resolve();
+    return duringDecode ? decoded.response : response.promise;
+  }, intentBrowser());
+  const pending = app.load("lib/omnia/business-client.ts").getManagedRecords("leads");
+  await sent.promise;
+  if (duringDecode) await decoded.reading;
+  app.setActor("43");
+  const payload = { records: [leadReceipt()], next_cursor: null };
+  if (duringDecode) decoded.resolve(payload);
+  else response.resolve(Response.json(payload));
+  await assert.rejects(pending, error => error.code === "actor_changed");
+  assert.equal(app.calls.length, 1, "history does not add session lookups");
+  assert.equal(app.calls[0].headers["X-Max-Expected-Actor"], "42");
+});
+
+test("late A 401 cannot invalidate B; plain current 401/403 are classified without JSON", async () => {
+  const response = deferred(), sent = deferred();
+  const app = runtime({}, () => { sent.resolve(); return response.promise; }, intentBrowser());
+  const pending = app.load("lib/omnia/business-client.ts").getManagedRecords("leads");
+  await sent.promise; app.setActor("43");
+  response.resolve(new Response("expired", { status: 401 }));
+  await assert.rejects(pending, error => error.code === "actor_changed");
+  assert.equal(app.identitySnapshot().principal.actor, "43");
+  for (const [status, code] of [[401, "unauthorized"], [403, "forbidden"]]) {
+    const current = runtime({}, () => new Response("denied", { status }), intentBrowser());
+    await assert.rejects(current.load("lib/omnia/business-client.ts").getManagedRecords("leads"),
+      error => error.status === status && error.code === code);
+    if (status === 401) assert.equal(current.identitySnapshot().principal, null);
+  }
+});
+
+for (const duringDecode of [false, true]) test(`late session lookup during ${duringDecode ? "decode" : "fetch"} cannot read A pending input in B`, async () => {
+  const browser = intentBrowser(), response = deferred(), sent = deferred(), decoded = deferredJson();
+  let sessions = 0, reads = 0;
+  const app = runtime({}, (url) => {
+    if (url === "/api/max/session") {
+      if (++sessions === 2) { sent.resolve(); return duringDecode ? decoded.response : response.promise; }
+      return Response.json({ user: { id: "42" } });
+    }
+    throw Error("unknown POST outcome");
+  }, browser);
+  const client = app.load("lib/omnia/business-client.ts");
+  await assert.rejects(client.createManagedLead(lead));
+  for (const store of [browser.localStorage, browser.sessionStorage]) {
+    const get = store.getItem; store.getItem = key => { reads++; return get(key); };
+  }
+  const before = [...browser.localStorage.values.entries()];
+  const pending = client.loadPendingManagedIntent("leads");
+  await sent.promise;
+  if (duringDecode) await decoded.reading;
+  app.setActor("43");
+  if (duringDecode) decoded.resolve({ user: { id: "42" } });
+  else response.resolve(Response.json({ user: { id: "42" } }));
+  await assert.rejects(pending, error => error.code === "actor_changed");
+  assert.equal(reads, 0);
+  assert.deepEqual([...browser.localStorage.values.entries()], before);
+});
 test("durable browser intent replays committed lost response after remount with one record", async () => {
   const browser = intentBrowser(), rows = new Map(), posted = [], rawBodies = []; let lost = true;
   const transport = async (url, options) => {
@@ -162,7 +273,7 @@ test("pending restoration verifies actor first and isolates actors and origins w
     if (url === "/api/max/session") { verified = true; return Response.json({ user: { id: actor } }); }
     assert.equal(options.headers["X-Max-Expected-Actor"], actor); throw Error("lost");
   };
-  const client = () => runtime({}, transport, browser).load("lib/omnia/business-client.ts");
+  const client = () => runtime({}, transport, browser, actor).load("lib/omnia/business-client.ts");
   await assert.rejects(client().createManagedLead(lead));
   const originalKeys = [...browser.localStorage.values.keys()];
   actor = "43"; verified = false;
@@ -195,20 +306,25 @@ test("loaded and attempted intent provenance denies cross-actor recovery before 
       return Response.json(rows.get(key));
     }, () => actor);
     const original = { ...lead, operationKey: "abcdefab-1234-4123-8123-abcdefabcdef" };
-    const producer = runtime({}, transport, browser).load("lib/omnia/business-client.ts");
+    const producerApp = runtime({}, transport, browser);
+    const producer = producerApp.load("lib/omnia/business-client.ts");
     await assert.rejects(producer.createManagedLead(original));
-    const client = fromLoad ? runtime({}, transport, browser).load("lib/omnia/business-client.ts") : producer;
+    const clientApp = fromLoad ? runtime({}, transport, browser) : producerApp;
+    const client = clientApp.load("lib/omnia/business-client.ts");
     const pending = fromLoad ? await client.loadPendingManagedIntent("leads") : original;
     const preserved = [...browser.localStorage.values.entries()], before = reads.length;
     actor = "43";
+    clientApp.setActor(actor);
     await assert.rejects(client.createManagedLead({ ...pending, operationKey: pending.operationKey.toUpperCase() }), e => e.code === "actor_changed" && e.status === 409);
     assert.equal(reads.length, before); assert.equal(posted.length, 1); assert.deepEqual([...browser.localStorage.values.entries()], preserved);
     assert.equal(rows.size, 1);
     actor = "42";
+    clientApp.setActor(actor);
     assert.equal((await client.createManagedLead({ ...pending })).id, ids[1]);
     assert.equal(rows.size, 1); assert.equal(posted[1].key.toLowerCase(), original.operationKey);
     // A genuinely new B form has its own key and may create its own record.
     actor = "43";
+    clientApp.setActor(actor);
     assert.equal((await client.createManagedLead({ ...lead, operationKey: ids[2], customerName: "New B form" })).id, ids[2]);
     assert.equal(rows.size, 2); assert.deepEqual(posted.map(p => p.actor), ["42", "42", "43"]);
   }
@@ -324,8 +440,12 @@ test("two deliberate identical intents never turn a known acknowledged cleanup f
 test("only first fresh validation and post-receipt quote rejection clear pending; unknown outcomes retain", async () => {
   for (const [status, code] of [[500, "unavailable"], [409, "operation_conflict"], [401, "unauthorized"], [409, "actor_changed"], [409, "unsupported"], [400, "unknown_code"]]) {
     const browser = intentBrowser(), transport = verifiedTransport(() => Response.json({ error: { code } }, { status }));
-    const client = runtime({}, transport, browser).load("lib/omnia/business-client.ts");
+    const app = runtime({}, transport, browser), client = app.load("lib/omnia/business-client.ts");
     await assert.rejects(client.createManagedLead(lead));
+    // Authentication failures preserve the pending body but require a newly
+    // verified Provider scope before it may be restored by the same actor.
+    assert.equal(browser.localStorage.values.size, 1);
+    app.setActor("42");
     assert.equal((await client.loadPendingManagedIntent("leads")).operationKey, lead.operationKey);
   }
   for (const code of ["invalid_request", "quote_changed"]) {
@@ -381,6 +501,21 @@ test("customer actor pin rejects a session switch before body parsing or databas
   for (const headers of [{}, { "X-Max-Expected-Actor": "43" }])
     assert.equal((await route.POST(new Request("https://one.app.test/api/omnia/business/leads", { method: "POST", headers, body: JSON.stringify(lead) }), ctx)).status, 201);
   assert.equal(writes, 2);
+});
+
+test("history actor pin rejects a session switch before database reads", async () => {
+  const app = runtime(); let reads = 0;
+  app.dependencies.set("@/lib/max/session", { getMaxUser: async () => ({ id: "43" }) });
+  app.dependencies.set("@/lib/omnia/management-config", { getManagementContract: async () => fixture });
+  app.dependencies.set("@/lib/omnia/management-store", { listManagedRecords: async ({ actor }) => {
+    assert.equal(actor, "43"); reads++; return { records: [], next_cursor: null };
+  } });
+  const route = app.load("app/api/omnia/business/[resource]/route.ts"), ctx = { params: Promise.resolve({ resource: "leads" }) };
+  const rejected = await route.GET(new Request("https://one.app.test/api/omnia/business/leads", { headers: { "X-Max-Expected-Actor": "42" } }), ctx);
+  assert.equal(rejected.status, 409); assert.equal((await rejected.json()).error.code, "actor_changed"); assert.equal(reads, 0);
+  for (const headers of [{}, { "X-Max-Expected-Actor": "43" }])
+    assert.equal((await route.GET(new Request("https://one.app.test/api/omnia/business/leads", { headers }), ctx)).status, 200);
+  assert.equal(reads, 2);
 });
 test("canonical fixture matches independent TS registry and rejects rehashed capabilities", () => {
   const m = runtime().load("lib/omnia/management-resources.ts");

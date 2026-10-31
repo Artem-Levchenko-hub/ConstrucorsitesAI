@@ -6,14 +6,20 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 
 import { configureMaxShell, getMaxWebApp } from "@/lib/max/bridge";
-import { installOwnerPreviewFetch, recoverOwnerPreviewSession } from "@/lib/max/owner-preview-renewal";
+import { installOwnerPreviewFetch, requestAuthenticatedSession } from "@/lib/max/owner-preview-renewal";
 import type { MaxSessionUser } from "@/lib/max/session";
 import { YleumCompliance } from "@/components/YleumCompliance";
+import {
+  createIdentityController, getIdentitySnapshot, getServerIdentitySnapshot, subscribeIdentityScope,
+} from "@/lib/omnia/identity-scope";
 
 const MaxUI = dynamic(
   () => import("@maxhub/max-ui").then((module) => module.MaxUI),
@@ -24,6 +30,7 @@ type MaxContextValue = {
   mode: "loading" | "max" | "preview" | "error";
   user: MaxSessionUser | null;
   error: string | null;
+  checking: boolean;
   previewOrigins?: string[];
 };
 
@@ -31,17 +38,15 @@ const MaxContext = createContext<MaxContextValue>({
   mode: "loading",
   user: null,
   error: null,
+  checking: true,
 });
 
 const MAX_INIT_DATA_HEADER = "X-Omnia-MAX-Init-Data";
-let nativeFetch: typeof window.fetch | null = null;
-let activeInitData = "";
-
-function installAuthenticatedFetch(initData: string) {
-  activeInitData = initData;
-  if (nativeFetch) return;
-  nativeFetch = window.fetch.bind(window);
-  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+function installAuthenticatedFetch() {
+  const previous = window.fetch;
+  const nativeFetch = previous.bind(window);
+  let activeInitData = "";
+  const authenticated = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const requestUrl =
       input instanceof Request
         ? new URL(input.url)
@@ -51,7 +56,7 @@ function installAuthenticatedFetch(initData: string) {
       requestUrl.origin !== window.location.origin ||
       !requestUrl.pathname.startsWith("/api/")
     ) {
-      return nativeFetch!(input, init);
+      return nativeFetch(input, init);
     }
 
     const requestHeaders = new Headers(
@@ -63,15 +68,26 @@ function installAuthenticatedFetch(initData: string) {
     requestHeaders.set(MAX_INIT_DATA_HEADER, activeInitData);
 
     if (input instanceof Request) {
-      return nativeFetch!(new Request(input, { ...init, headers: requestHeaders }));
+      return nativeFetch(new Request(input, { ...init, headers: requestHeaders }));
     }
-    return nativeFetch!(input, { ...init, headers: requestHeaders });
+    return nativeFetch(input, { ...init, headers: requestHeaders });
   }) as typeof window.fetch;
+  window.fetch = authenticated;
+  return {
+    fetch: authenticated,
+    setInitData(value: string) { activeInitData = value; },
+    dispose() {
+      activeInitData = "";
+      if (window.fetch === authenticated) window.fetch = previous;
+    },
+  };
 }
 
 export function useMaxApp() {
   return useContext(MaxContext);
 }
+
+const useBeforePaint = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 function AuthScreen({
   error,
@@ -80,7 +96,19 @@ function AuthScreen({
   error: string | null;
   onRetry: () => void;
 }) {
+  const gate = useRef<HTMLDialogElement>(null);
+  useBeforePaint(() => {
+    const dialog = gate.current;
+    if (!dialog) return;
+    // A native top-layer gate also covers ordinary portals outside our DOM
+    // wrapper. Keep the generated subtree mounted until identity is known.
+    dialog.showModal();
+    return () => { if (dialog.open) dialog.close(); };
+  }, []);
   return (
+    <dialog ref={gate} aria-label="Безопасный вход" onCancel={event => event.preventDefault()}
+      style={{ width: "100vw", height: "100dvh", maxWidth: "none", maxHeight: "none",
+        margin: 0, border: 0, padding: 0, background: "#fff", overflow: "auto" }}>
     <main
       style={{
         minHeight: "100dvh",
@@ -144,70 +172,62 @@ function AuthScreen({
         ) : null}
       </section>
     </main>
+    </dialog>
   );
 }
 
 export function MaxAppProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<MaxContextValue>({
-    mode: "loading",
-    user: null,
-    error: null,
-  });
+  const snapshot = useSyncExternalStore(subscribeIdentityScope, getIdentitySnapshot, getServerIdentitySnapshot);
+  const controller = useRef<ReturnType<typeof createIdentityController> | null>(null);
+  const transport = useRef<ReturnType<typeof installAuthenticatedFetch> | null>(null);
+  const previewCleanup = useRef<(() => void) | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [previewOrigins, setPreviewOrigins] = useState<string[] | undefined>();
   const [appearance, setAppearance] = useState<{
     platform: "ios" | "android";
     colorScheme: "light" | "dark";
   }>({ platform: "android", colorScheme: "light" });
 
   const authenticate = useCallback(async () => {
-    setState({ mode: "loading", user: null, error: null });
+    const owner = controller.current;
+    const authenticated = transport.current;
+    if (!owner || !authenticated) return;
+    const attempt = owner.begin();
+    if (attempt < 0) return;
+    setError(null);
     const webApp = getMaxWebApp();
-    if (!webApp?.initData) {
-      // A reload may retain its signed cookie while the MAX bridge has no
-      // launch data. Clear any previous in-memory launch header before resume.
-      activeInitData = "";
-    } else {
+    const initData = webApp?.initData || "";
+    authenticated.setInitData(initData);
+    if (webApp && initData) {
       configureMaxShell(webApp);
       // Some iOS MAX WebViews do not persist Set-Cookie from a fetch response.
       // Keep signed launch data in memory and attach it only to same-origin APIs.
-      installAuthenticatedFetch(webApp.initData);
       setAppearance({
         platform: webApp.platform === "ios" ? "ios" : "android",
         colorScheme: webApp.colorScheme === "dark" ? "dark" : "light",
       });
     }
+    let denied = false;
     try {
-      let response = await fetch("/api/max/session", webApp?.initData ? {
-        method: "POST",
-        credentials: "include",
-        cache: "no-store",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ initData: webApp.initData }),
-      } : {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-      });
-      // An expired owner cookie has no launch data. Repair only authentication;
-      // the product stays unmounted until the server proves the private actor.
-      const recovered = !webApp?.initData && response.status === 401 &&
-        await recoverOwnerPreviewSession(window);
-      if (recovered) {
-        response = await fetch("/api/max/session", { method: "GET", credentials: "include", cache: "no-store" });
-      }
+      const result = await requestAuthenticatedSession(window, authenticated.fetch, initData,
+        () => owner.isCurrent(attempt), () => { denied = true; owner.revoke(attempt); });
+      if (!result || !owner.isCurrent(attempt)) return;
+      const { response, recovered } = result;
       const body = (await response.json().catch(() => ({}))) as {
         user?: MaxSessionUser;
         code?: string;
         mode?: string;
         editor_origins?: string[];
       };
-      const ownerPreview = !webApp?.initData && body.mode === "preview" && body.user?.id === "preview";
+      if (!owner.isCurrent(attempt)) return;
+      const ownerPreview = !initData && body.mode === "preview" && body.user?.id === "preview";
       const validUser = body.user && (
         ownerPreview ||
         (!recovered && body.mode !== "preview" && typeof body.user.id === "string" && /^[1-9][0-9]{0,19}$/.test(body.user.id))
       );
       if (!response.ok || !body.user || !validUser) {
         if (response.status === 401) {
-          if (!webApp?.initData) {
+          if (!initData) {
             throw new Error("Откройте приложение из чата с ботом в MAX.");
           }
           console.warn("[max-auth] launch rejected", body.code || "unknown");
@@ -220,40 +240,73 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
         }
         throw new Error("Не удалось завершить безопасный вход. Попробуйте ещё раз.");
       }
-      setState({ mode: ownerPreview ? "preview" : "max", user: body.user, error: null,
-        ...(ownerPreview && body.editor_origins ? { previewOrigins: body.editor_origins } : {}),
-      });
-    } catch (error) {
-      setState({
-        mode: "error",
-        user: null,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Проверьте соединение и попробуйте ещё раз.",
-      });
+      if (owner.commit(attempt, { actor: body.user.id, mode: ownerPreview ? "preview" : "max" })) {
+        setPreviewOrigins(ownerPreview ? body.editor_origins : undefined);
+      }
+    } catch (failure) {
+      if (owner.fail(attempt, denied)) setError(
+        failure instanceof Error ? failure.message : "Проверьте соединение и попробуйте ещё раз.",
+      );
     }
   }, []);
 
   useEffect(() => {
+    const owner = createIdentityController(() => void authenticate());
+    const authenticated = installAuthenticatedFetch();
+    controller.current = owner;
+    transport.current = authenticated;
+    const revalidate = () => {
+      if (document.visibilityState !== "hidden") void authenticate();
+    };
+    window.addEventListener("focus", revalidate);
+    window.addEventListener("omnia:authchange", revalidate);
+    document.addEventListener("visibilitychange", revalidate);
     void authenticate();
+    return () => {
+      window.removeEventListener("focus", revalidate);
+      window.removeEventListener("omnia:authchange", revalidate);
+      document.removeEventListener("visibilitychange", revalidate);
+      previewCleanup.current?.();
+      previewCleanup.current = null;
+      authenticated.dispose();
+      owner.dispose();
+      if (controller.current === owner) controller.current = null;
+      if (transport.current === authenticated) transport.current = null;
+    };
   }, [authenticate]);
 
   useEffect(() => {
-    if (state.mode === "preview") return installOwnerPreviewFetch(window, state.previewOrigins);
-  }, [state.mode, state.previewOrigins]);
+    if (snapshot.principal?.mode !== "preview") return;
+    const generation = snapshot.generation;
+    const dispose = installOwnerPreviewFetch(window, previewOrigins, () => {
+      const current = getIdentitySnapshot();
+      return current.generation === generation && current.principal?.mode === "preview";
+    });
+    previewCleanup.current = dispose;
+    return () => {
+      dispose();
+      if (previewCleanup.current === dispose) previewCleanup.current = null;
+    };
+  }, [snapshot.principal?.mode, snapshot.generation, previewOrigins]);
 
-  const value = useMemo(() => state, [state]);
+  const user = useMemo(() => snapshot.principal ? { id: snapshot.principal.actor } : null, [snapshot.principal]);
+  const value = useMemo<MaxContextValue>(() => ({
+    mode: snapshot.principal?.mode || (error ? "error" : "loading"), user, error,
+    checking: snapshot.checking, ...(previewOrigins ? { previewOrigins } : {}),
+  }), [snapshot.principal, snapshot.checking, user, error, previewOrigins]);
+  const blocked = snapshot.checking || !!error || !snapshot.principal;
   return (
     <MaxUI platform={appearance.platform} colorScheme={appearance.colorScheme}>
       <MaxContext.Provider value={value}>
-        {state.mode === "loading" || state.mode === "error" ? (
-          <AuthScreen error={state.error} onRetry={() => void authenticate()} />
-        ) : (
-          <>
+        {blocked && (
+          <AuthScreen error={error} onRetry={() => void authenticate()} />
+        )}
+        {snapshot.principal && (
+          <div key={snapshot.generation} hidden={blocked}
+            style={{ display: blocked ? "none" : "contents" }}>
             {children}
             <YleumCompliance />
-          </>
+          </div>
         )}
       </MaxContext.Provider>
     </MaxUI>

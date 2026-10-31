@@ -214,10 +214,8 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert "export async function DELETE" in action_item
     assert "if (cookieUser) return cookieUser" in session
     provider = files["src/components/MaxAppProvider.tsx"]
-    assert 'state.mode === "loading" || state.mode === "error"' in provider
     assert "<AuthScreen" in provider
     assert 'const MAX_INIT_DATA_HEADER = "X-Omnia-MAX-Init-Data"' in provider
-    assert "installAuthenticatedFetch(webApp.initData)" in provider
     assert "requestUrl.origin !== window.location.origin" in provider
     assert '!requestUrl.pathname.startsWith("/api/")' in provider
     assert 'from "@/components/YleumCompliance"' in provider
@@ -239,6 +237,19 @@ def test_managed_config_sync_never_overwrites_project_dependencies_or_schema() -
     assert "package.json" not in files
     assert "pnpm-lock.yaml" not in files
     assert "src/lib/db/schema.ts" not in files
+
+
+def test_identity_scope_is_rendered_and_protected_with_its_sdk_consumers() -> None:
+    from yleum_api.services.max_managed_generation import MANAGED_GENERATION_PATHS
+
+    path = "src/lib/omnia/identity-scope.ts"
+    files = render_max_managed_files(_config(), uuid4())
+    assert path in files
+    assert path in MAX_SECURITY_LOCKED_FILES
+    assert path in MANAGED_GENERATION_PATHS
+    assert files[path] == max_project_kit_svc._template_file(path)
+    for consumer in ("src/components/MaxAppProvider.tsx", "src/lib/omnia/business-client.ts"):
+        assert 'from "@/lib/omnia/identity-scope"' in files[consumer]
 
 
 def test_managed_kit_refuses_a_missing_platform_component(monkeypatch) -> None:
