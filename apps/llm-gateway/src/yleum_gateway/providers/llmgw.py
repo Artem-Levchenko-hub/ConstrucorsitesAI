@@ -633,8 +633,12 @@ async def acompletion(
         else:
             data = await asyncio.to_thread(_completion_sync)
     except httpx.HTTPStatusError as exc:
+        from yleum_gateway.services.provider_validation_diagnostics import (
+            capture_validation_failure,
+        )
         from yleum_gateway.services.text_failover import overload_candidate
 
+        capture_validation_failure(exc, credential=key)
         details = failure_details(bounded_error_body(exc.response) or {},
             _receipt_headers(exc.response.headers), upstream_http_status=exc.response.status_code)
         category = _refusal_category(exc.response)

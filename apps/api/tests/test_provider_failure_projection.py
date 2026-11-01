@@ -20,6 +20,57 @@ def provider_step(**overrides):
     }
 
 
+async def test_observed_upstream_422_survives_gateway_502_without_claiming_safe_retry():
+    data = records()
+    data["run"].status = "failed"
+    data["run"].error = "provider_http_422: PRIVATE_PROVIDER_BODY"
+    data["message"].agent_steps = [provider_step(
+        upstream_http_status=422, error_origin="provider", retry_safe=False,
+        recovery_trace={
+            "error_code": "model_unavailable", "error_origin": "provider",
+            "http_status": 502, "upstream_http_status": 422,
+            "provider_charge_ambiguous": True, "retry_safe": False, "will_retry": False,
+        },
+    )]
+    view = await project_loaded(**data)
+    assert view.failure.code == "provider_unavailable"
+    assert view.failure.retryable is False
+    assert "HTTP 422" in view.failure.message
+    assert "502" not in view.failure.message
+    assert "Не получен подтверждённый результат" not in view.failure.message
+    assert view.failure.diagnostics.model_dump(exclude_none=True) == {
+        "error_code": "model_unavailable", "error_origin": "provider", "http_status": 502,
+        "upstream_http_status": 422, "provider_charge_ambiguous": True, "retry_safe": False,
+    }
+    assert not view.acceptance.current_request_complete
+    assert "PRIVATE_PROVIDER_BODY" not in view.model_dump_json()
+
+
+def test_historical_exact_422_marker_has_known_status_without_inventing_accounting():
+    failure = public_generation_failure(SimpleNamespace(
+        status="failed", error="provider_http_422: PRIVATE_PROVIDER_BODY", agent_state={},
+    ))
+    assert "HTTP 422" in failure.message
+    assert failure.retryable is False
+    assert failure.diagnostics.model_dump(exclude_none=True) == {
+        "error_origin": "provider", "upstream_http_status": 422,
+    }
+    assert "PRIVATE_PROVIDER_BODY" not in failure.model_dump_json()
+
+
+@pytest.mark.parametrize("terminal", [
+    "provider_request_failed: gateway422", "provider_http_502: PRIVATE",
+    "MAX_FINALIZATION_FAILED: provider_http_422: PRIVATE",
+    "arbitrary provider_http_422: PRIVATE", "provider_http_400: PRIVATE",
+])
+def test_422_summary_never_borrows_a_stale_step_or_embedded_marker(terminal):
+    failure = public_generation_failure(
+        SimpleNamespace(status="failed", error=terminal, agent_state={}),
+        agent_steps=[provider_step(upstream_http_status=422)],
+    )
+    assert "HTTP 422" not in failure.message
+
+
 async def test_owner_status_exposes_exact_failure_before_canary_cleanup():
     data = records()
     data["run"].status = "failed"

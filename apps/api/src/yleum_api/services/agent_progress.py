@@ -19,6 +19,9 @@ PROVIDER_ERROR_DETAILS = {
     "rate_limit": "Провайдер ограничил частоту запросов.",
 }
 PROVIDER_ERROR_DETAIL = "Не получен подтверждённый результат запроса к модели."
+PROVIDER_HTTP_422_DETAIL = (
+    "Провайдер модели отклонил запрос (HTTP 422). Требуется проверить параметры запроса."
+)
 
 _SENSITIVE_NAME = (
     r"(?:"
@@ -119,12 +122,43 @@ def provider_error_origin(payload: dict[str, Any]) -> str:
     return "provider"
 
 
+def _provider_error_attribution(step: dict[str, Any]) -> tuple[str, bool]:
+    """Keep missing/conflicting 422 attribution unknown across public re-sanitization."""
+    origin = provider_error_origin(step)
+    trace = step.get("recovery_trace")
+    sources = (step, trace) if isinstance(trace, dict) else (step,)
+    statuses = [source["upstream_http_status"] for source in sources
+                if "upstream_http_status" in source]
+    if not any(type(value) is int and value == 422 for value in statuses):
+        return origin, False
+    origins = [source["error_origin"] for source in sources if "error_origin" in source]
+    if (not origins
+            or not all(type(value) is int and value == 422 for value in statuses)
+            or not all(value == origin for value in origins)):
+        return "unknown", False
+    return origin, origin == "provider"
+
+
+def _provider_error_display(category: object, known_upstream_422: bool) -> tuple[str, str]:
+    """Name only the explicit upstream status, never parse a provider body."""
+    action = "Запрос к модели не завершён"
+    if isinstance(category, str) and category in PROVIDER_ERROR_DETAILS:
+        return action, PROVIDER_ERROR_DETAILS[category]
+    if known_upstream_422:
+        return "Провайдер отклонил запрос", PROVIDER_HTTP_422_DETAIL
+    return action, PROVIDER_ERROR_DETAIL
+
+
 def sanitize_agent_step(step: dict[str, Any]) -> dict[str, Any]:
     """Copy one agent-step payload while redacting every textual surface."""
 
     safe = dict(step)
     provider_error = safe.get("kind") == "provider_error"
-    if provider_error or safe.get("tool") == "provider_response":
+    provider_trace = provider_error or safe.get("tool") == "provider_response"
+    error_origin, known_upstream_422 = (
+        _provider_error_attribution(step) if provider_trace else ("unknown", False)
+    )
+    if provider_trace:
         from yleum_api.services.generation.recovery_trace import safe_recovery_trace
 
         # Historical rows cross the same public boundary as new observations.
@@ -133,7 +167,7 @@ def sanitize_agent_step(step: dict[str, Any]) -> dict[str, Any]:
             key: value for key, value in safe.items()
             if key in {"step", "kind", "tool", "ok", "skipped", "message_id", "recovery_trace"}
         }
-        safe.update(safe_recovery_trace({**step, "error_origin": provider_error_origin(step)}))
+        safe.update(safe_recovery_trace({**step, "error_origin": error_origin}))
         safe["path"] = ""
         safe["tool"] = "provider_request" if provider_error else "provider_response"
         safe["action"] = (
@@ -142,10 +176,7 @@ def sanitize_agent_step(step: dict[str, Any]) -> dict[str, Any]:
         category = safe.get("provider_refusal_category")
         safe["detail"] = PROVIDER_RESPONSE_DETAIL
         if provider_error:
-            safe["detail"] = (
-                PROVIDER_ERROR_DETAILS.get(category, PROVIDER_ERROR_DETAIL)
-                if isinstance(category, str) else PROVIDER_ERROR_DETAIL
-            )
+            safe["action"], safe["detail"] = _provider_error_display(category, known_upstream_422)
             if (safe.get("error_code") == "deadline_before_dispatch"
                     and safe.get("error_origin") == "gateway"
                     and safe.get("provider_charge_ambiguous") is False):
@@ -165,8 +196,8 @@ def sanitize_agent_step(step: dict[str, Any]) -> dict[str, Any]:
         from yleum_api.services.generation.recovery_trace import safe_recovery_trace
 
         trace = safe["recovery_trace"]
-        if isinstance(trace, dict) and (provider_error or safe.get("tool") == "provider_response"):
-            trace = {**trace, "error_origin": provider_error_origin(step)}
+        if isinstance(trace, dict) and provider_trace:
+            trace = {**trace, "error_origin": error_origin}
         safe["recovery_trace"] = safe_recovery_trace(trace) if isinstance(trace, dict) else {}
     for key in ("action", "tool", "path", "detail", "human"):
         value = safe.get(key)

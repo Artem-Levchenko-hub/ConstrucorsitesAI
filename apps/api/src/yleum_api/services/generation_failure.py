@@ -276,6 +276,12 @@ def failure_for_error(raw_error: object, *, restoration: bool = False) -> Genera
             "Генерация не запускалась: не удалось подготовить среду MAX. "
             "Деньги за вызов модели не списаны. Повторите после восстановления среды."
         )
+    elif error.startswith("provider_http_422:"):
+        from yleum_api.services.agent_progress import PROVIDER_HTTP_422_DETAIL
+
+        code = "provider_unavailable"
+        retryable = False
+        message = PROVIDER_HTTP_422_DETAIL + " Автоматический повтор остановлен."
     elif re.search(r"\bprovider_http_(?:401|402|403):", error):
         code = "provider_access"
         retryable = False

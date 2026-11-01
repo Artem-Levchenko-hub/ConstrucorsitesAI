@@ -51,6 +51,7 @@ from yleum_gateway.services.pricing import (
     resolve_request_cost,
 )
 from yleum_gateway.services.provider_receipt_cleanup import await_provider_receipt
+from yleum_gateway.services.provider_validation_diagnostics import provider_validation_scope
 from yleum_gateway.services.receipt_evidence import receipt_evidence
 from yleum_gateway.services.token_counter import count_message_tokens
 
@@ -191,13 +192,15 @@ async def _dispatch_chat_provider(
                 completion_options.pop("user", None)
                 completion_options.update(provider_scope="aitunnel", retry_preconnect=False)
                 completion_options["response_budget"] = _remaining_provider_budget(request, received_at, reserve=RECEIPT_RESERVE_SECONDS)
-            response = await completion(
-                model=req.model,
-                messages=filtered_messages,
-                temperature=0.5 if req.temperature is None else req.temperature,
-                max_tokens=req.max_tokens,
-                **completion_options,
-            )
+            with provider_validation_scope(project_id=meta.project_id, run_id=meta.run_id,
+                                           call_id=call_id):
+                response = await completion(
+                    model=req.model,
+                    messages=filtered_messages,
+                    temperature=0.5 if req.temperature is None else req.temperature,
+                    max_tokens=req.max_tokens,
+                    **completion_options,
+                )
         except BaseException as exc:
             details = exc.details if isinstance(exc, GatewayError) else {}
             retry_candidate = details.pop("_rate_limit_retry_candidate", None)
