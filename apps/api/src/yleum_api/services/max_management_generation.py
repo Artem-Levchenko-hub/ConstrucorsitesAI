@@ -323,21 +323,45 @@ class _Connections:
             self.projections[key] = allowed
         return self.projections[key]
 
+    @staticmethod
+    def callback_expression(
+        fn: _Value, arity: int,
+    ) -> tuple[str, Node, dict[str, _Value], tuple[str, ...]] | None:
+        """Extract a synchronous callback without parameter initialization effects."""
+        if fn.function is None:
+            return None
+        path, node, closure = fn.function
+        if any(child.type == "async" for child in node.children):
+            return None
+        parameters = node.child_by_field_name("parameters")
+        children = (
+            list(parameters.named_children) if parameters is not None
+            else [node.child_by_field_name("parameter")]
+        )
+        if len(children) != arity or any(
+            child is None or child.child_by_field_name("value") is not None for child in children
+        ):
+            return None
+        patterns = [
+            child if child.type == "identifier" else child.child_by_field_name("pattern")
+            for child in children if child is not None
+        ]
+        if any(pattern is None or pattern.type != "identifier" for pattern in patterns):
+            return None
+        names = tuple(_text(pattern) for pattern in patterns)
+        body = node.child_by_field_name("body")
+        if body is None or len(set(names)) != arity:
+            return None
+        return path, body, closure, names
+
     def sort_is_read_only(self, fn: _Value, elements: tuple[_Value, ...]) -> bool:
         # Only the candidate's proven timestamp comparison, never arbitrary sort
         # callbacks which could mutate records/collections while returning them.
-        if fn.function is None:
+        callback = self.callback_expression(fn, 2)
+        if callback is None:
             return False
-        path, node, closure = fn.function
-        parameters = node.child_by_field_name("parameters")
-        if parameters is None or len(parameters.named_children) != 2:
-            return False
-        patterns = [child.child_by_field_name("pattern") for child in parameters.named_children]
-        if any(pattern is None or pattern.type != "identifier" for pattern in patterns):
-            return False
-        names = {_text(pattern) for pattern in patterns}
-        body = node.child_by_field_name("body")
-        if body is None or body.type != "call_expression":
+        path, body, closure, names = callback
+        if body.type != "call_expression":
             return False
         target = body.child_by_field_name("function")
         arguments = body.child_by_field_name("arguments")
@@ -377,6 +401,35 @@ class _Connections:
             ):
                 return False
         return True
+
+    def category_find_index_is_read_only(self, fn: _Value, elements: tuple[_Value, ...]) -> bool:
+        callback = self.callback_expression(fn, 1)
+        if callback is None:
+            return False
+        path, body, closure, names = callback
+        if body.type != "binary_expression" or _text(body.child_by_field_name("operator")) != "===":
+            return False
+        operands = [body.child_by_field_name("left"), body.child_by_field_name("right")]
+        roots = []
+        for operand in operands:
+            if (operand is None or operand.type != "member_expression"
+                    or _text(operand.child_by_field_name("property")) != "category"):
+                return False
+            root = operand.child_by_field_name("object")
+            if root is None or root.type != "identifier":
+                return False
+            roots.append(_text(root))
+        # The exact supported category deduplication compares the candidate to
+        # another live SDK row, with no helper call, mutation or alias escape.
+        if roots[0] != names[0] or roots[1] == names[0]:
+            return False
+        for element in elements:
+            scope = {**closure, names[0]: element}
+            if any(
+                "item:catalog" not in self.value(operand, scope, path).tags for operand in operands
+            ):
+                return False
+        return bool(elements)
 
     def invoke(self, fn: _Value, args: list[_Value], render: bool = False) -> _Value:
         if fn.setter is not None and args:
@@ -650,6 +703,15 @@ class _Connections:
                     and self.sort_is_read_only(args[0], source.elements)
                 ):
                     return source
+                if (
+                    operation == "findIndex"
+                    and "catalog" in source.tags
+                    and len(args) == 1
+                    and self.category_find_index_is_read_only(args[0], source.elements)
+                ):
+                    # A proven read-only lookup preserves the collection, but
+                    # its numeric result is never rendered-item evidence.
+                    return _Value()
                 if operation != "then":
                     self.invalidate(source)
             if operation == "then" and args and source.pending is not None:

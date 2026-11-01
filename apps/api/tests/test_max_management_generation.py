@@ -177,6 +177,137 @@ def connection_files(source, modules):
     }
 
 
+CATALOG_CATEGORY_PAGE = """
+import {useYleumAppProfile} from '@/lib/omnia/app-profile-client';
+import {useYleumCatalog, useYleumCatalogSelection} from '@/lib/omnia/catalog-client';
+declare function opaque(value: unknown): any;
+declare function compareCategory(candidate: unknown, item: unknown): boolean;
+declare const opaquePredicate: (candidate: unknown) => boolean;
+declare const opaqueThis: unknown;
+const staticItem = {category: 'fixed'};
+export default function Page() {
+  const profile = useYleumAppProfile();
+  const {items} = useYleumCatalog();
+  const selection = useYleumCatalogSelection(items);
+  return <main>
+    {items.map((item, index) => item.active && item.category &&
+      items.findIndex((candidate) => candidate.category === item.category) === index ?
+      <button key={item.category} onClick={() => selection.setCategory(item.category)}>
+        {item.category}
+      </button> : null)}
+    {items.map(item => <article key={item.id}><h2>{item.title}</h2><p>{item.price}</p></article>)}
+    <h1>{profile.profile?.app_name}</h1>
+  </main>;
+}
+"""
+
+
+def test_read_only_category_find_index_keeps_later_live_catalog_rendering():
+    files = connection_files(CATALOG_CATEGORY_PAGE, ("catalog",))
+    assert management_source_gap(files) is None
+    assert management_implemented_capabilities(files) == frozenset({"catalog"})
+
+
+def test_find_index_preserves_proven_collection_alias_and_local_predicate():
+    source = CATALOG_CATEGORY_PAGE.replace(
+        "  return <main>", "  const alias = items;\n  return <main>",
+    ).replace(
+        "items.map((item, index) => item.active && item.category &&\n"
+        "      items.findIndex((candidate) => candidate.category === item.category) === index ?",
+        "items.map((item, index) => {\n"
+        "      const sameCategory = (candidate: typeof item) => "
+        "candidate.category === item.category;\n"
+        "      return item.active && item.category && alias.findIndex(sameCategory) === index ?",
+    ).replace("</button> : null)}", "</button> : null; })}")
+    assert source != CATALOG_CATEGORY_PAGE
+    assert management_source_gap(connection_files(source, ("catalog",))) is None
+
+
+def test_find_index_numeric_result_is_not_rendered_catalog_evidence():
+    source = CATALOG_CATEGORY_PAGE.replace(
+        "<button key={item.category} onClick={() => selection.setCategory(item.category)}>\n"
+        "        {item.category}\n      </button>",
+        "<span>{items.findIndex(candidate => candidate.category === item.category)}</span>",
+    ).replace(
+        "{items.map(item => <article key={item.id}><h2>{item.title}</h2>"
+        "<p>{item.price}</p></article>)}",
+        "",
+    )
+    assert source != CATALOG_CATEGORY_PAGE
+    gap = management_source_gap(connection_files(source, ("catalog",)))
+    assert gap is not None and gap.startswith("Connect useYleumCatalog items")
+
+
+@pytest.mark.parametrize("predicate", [
+    "(candidate) => { items.splice(0); return candidate.category === item.category; }",
+    "(candidate) => { candidate.category = 'fake'; return true; }",
+    "(candidate) => { const alias = items; alias.length = 0; return true; }",
+    "(candidate) => { const alias = candidate; delete alias.category; return true; }",
+    "(candidate) => { opaque(items); return candidate.category === item.category; }",
+    "(candidate) => compareCategory(candidate, item)",
+    "opaquePredicate",
+    "async (candidate) => candidate.category === item.category",
+    "(candidate = opaque(items)) => candidate.category === item.category",
+    "(...candidates) => candidates[0].category === item.category",
+    "(candidate, index, rows) => candidate.category === item.category",
+    "(candidate) => candidate.category === opaque(item.category)",
+    "(candidate) => candidate.category === (item.category = 'fake')",
+    "(candidate) => candidate.category === staticItem.category",
+    "(candidate) => candidate.category === 'fixed'",
+    "(candidate) => candidate.title === item.title",
+])
+def test_find_index_keeps_unproven_or_mutating_callbacks_fail_closed(predicate):
+    source = CATALOG_CATEGORY_PAGE.replace(
+        "(candidate) => candidate.category === item.category", predicate,
+    )
+    assert source != CATALOG_CATEGORY_PAGE
+    gap = management_source_gap(connection_files(source, ("catalog",)))
+    assert gap is not None and gap.startswith("Connect useYleumCatalog items")
+
+
+@pytest.mark.parametrize("mutation", [
+    "const alias = items; alias.splice(0);",
+    "const alias = items; ((alias as any)).length = 0;",
+    "const alias = items; opaque(alias);",
+    "(items as any).findIndex = opaquePredicate;",
+    "delete (items as any).findIndex;",
+])
+def test_find_index_cannot_recreate_trust_after_aliased_catalog_mutation(mutation):
+    source = CATALOG_CATEGORY_PAGE.replace("  return <main>", "  " + mutation + "\n  return <main>")
+    assert management_source_gap(connection_files(source, ("catalog",)))
+
+
+@pytest.mark.parametrize("operation", [
+    "filter((candidate) => candidate.category === item.category)",
+    "find((candidate) => candidate.category === item.category)",
+    "findLastIndex((candidate) => candidate.category === item.category)",
+    "findIndex((candidate) => candidate.category === item.category, opaqueThis)",
+])
+def test_find_index_does_not_admit_other_collection_methods_or_overloads(operation):
+    source = CATALOG_CATEGORY_PAGE.replace(
+        "findIndex((candidate) => candidate.category === item.category)", operation,
+    )
+    assert management_source_gap(connection_files(source, ("catalog",)))
+
+
+def test_find_index_does_not_turn_static_rows_into_sdk_catalog():
+    source = CATALOG_CATEGORY_PAGE.replace(
+        "const {items} = useYleumCatalog();",
+        "const items = [{id: 'fixed', title: 'Fixed', category: 'fake'}];",
+    )
+    assert management_source_gap(connection_files(source, ("catalog",)))
+
+
+def test_find_index_retains_ast_budget_fail_closed():
+    source = CATALOG_CATEGORY_PAGE.replace(
+        "  return <main>",
+        "  " + "".join(f"const unused{index} = 0;" for index in range(4500)) + "\n  return <main>",
+    )
+    assert management_source_gap(connection_files(source, ("catalog",))) == (
+        "Managed source connection analysis exceeded its bounded AST budget."
+    )
+
+
 @pytest.mark.parametrize("modules", CONNECTION_MODULES)
 def test_supported_direct_jsx_connections_cover_every_valid_module_combination(modules):
     files = connection_files(connection_example(modules), modules)
