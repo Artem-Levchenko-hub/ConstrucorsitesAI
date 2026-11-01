@@ -19,6 +19,7 @@ from yleum_api.services.agent_progress import bounded_redacted_text
 from yleum_api.services.orchestrator_client import OrchestratorUnavailable
 from yleum_api.services.project_cell_errors import (
     PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED,
+    READER_INVENTORY_UNAVAILABLE,
     ProjectCellInfrastructureError,
     terminal_cell_error,
 )
@@ -455,8 +456,18 @@ async def run_with_activity_lease[T](
         await session.commit()
 
     if existing_state != ActivityState.ACTIVE.value:
-        if diagnostic == PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED:
-            raise ProjectCellInfrastructureError(diagnostic, lease.operation_id)
+        terminal_diagnostic = (
+            PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED
+            if diagnostic == PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED
+            else READER_INVENTORY_UNAVAILABLE
+            if existing_state == ActivityState.FAILED.value
+            and diagnostic == READER_INVENTORY_UNAVAILABLE
+            else None
+        )
+        if terminal_diagnostic is not None:
+            # The exact lease was validated above. A recorded guard denial is
+            # an error to preserve, never permission to dispatch work again.
+            raise ProjectCellInfrastructureError(terminal_diagnostic, lease.operation_id)
         if existing_state == ActivityState.CANCELLED.value:
             raise asyncio.CancelledError
         if replay_terminal is not None:

@@ -1969,9 +1969,9 @@ async def maybe_create_project_cell_executor(
             return _action_failure(exc)
 
     def _action_failure(exc: Exception) -> dict[str, Any]:
+        raise_if_terminal_cell_error(exc)
         if isinstance(exc, OrchestratorUnavailable):
             return {"ok": False, "error": f"infra: {exc.message}", "infra_dead": True}
-        raise_if_terminal_cell_error(exc)
         if isinstance(exc, OrchestratorBadRequest):
             infra_dead = "container_not_running" in str(exc.details or "")
             return {

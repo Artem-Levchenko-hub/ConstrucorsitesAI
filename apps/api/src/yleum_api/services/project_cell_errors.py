@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from yleum_api.services.orchestrator_client import OrchestratorBadRequest
+from yleum_api.services.orchestrator_client import (
+    OrchestratorBadRequest,
+    OrchestratorReaderInventoryUnavailable,
+)
 
 PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED = "protected_environment_recovery_required"
 PROTECTED_SOURCE_VERIFICATION_UNAVAILABLE = "protected_source_verification_unavailable"
+READER_INVENTORY_UNAVAILABLE = "reader_inventory_unavailable"
 TERMINAL_PROJECT_CELL_CODES = frozenset(
     {
         PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED,
@@ -34,6 +38,10 @@ def terminal_cell_error(
 ) -> ProjectCellInfrastructureError | None:
     if isinstance(error, ProjectCellInfrastructureError):
         return error
+    if isinstance(error, OrchestratorReaderInventoryUnavailable):
+        # Only the client's exact reader-guard classification is authoritative.
+        # A generic transport/5xx body must not gain this diagnostic by wording.
+        return ProjectCellInfrastructureError(READER_INVENTORY_UNAVAILABLE, operation_id)
     if (
         isinstance(error, OrchestratorBadRequest)
         and error.upstream_code in TERMINAL_PROJECT_CELL_CODES

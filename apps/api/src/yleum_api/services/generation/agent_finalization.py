@@ -28,6 +28,7 @@ from yleum_api.services.generation.source_intent import (
 from yleum_api.services.generation.source_intent import (
     source_change_required,
 )
+from yleum_api.services.generation.source_repair_context import with_managed_source_context
 from yleum_api.services.max_finalization import ProofBundle
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 
@@ -211,8 +212,13 @@ async def run_native_source_repair(
         from yleum_api.services.generation.recovery_contract import IncompleteResponseBudget
         from yleum_api.services.generation.recovery_pipeline import (
             _result_from_data,
+            pending_source_repair,
             prepare_source_repair,
         )
+        # Persist exact context once. A resumed paid request keeps its original
+        # task/baseline even when a later observation is larger or different.
+        if pending_source_repair(continuation) is None:
+            task = with_managed_source_context(task, baseline)
         entry = await prepare_source_repair(
             continuation, task=task, baseline=dict(baseline), edit_deadline=edit_deadline,
             targeted=source_failure is not None,
@@ -228,6 +234,8 @@ async def run_native_source_repair(
         if entry.targeted and source_failure is None:
             # A historical path list is not current source-repair authority.
             source_failure = SourceFailure()
+    else:
+        task = with_managed_source_context(task, baseline)
     execute = operations.execute
     if source_failure is not None:
         allowed = frozenset(source_failure.allowed_paths)

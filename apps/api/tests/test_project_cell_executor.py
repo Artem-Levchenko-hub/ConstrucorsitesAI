@@ -2713,11 +2713,15 @@ async def test_queued_cancel_survives_outer_flow_finalize_and_releases_lease(
     ]
 
 
-async def test_executor_does_not_turn_protected_environment_failure_into_model_observation(
+@pytest.mark.parametrize("failure", ["protected_environment", "reader_inventory", "generic_503"])
+async def test_executor_classifies_terminal_cause_before_generic_model_observation(
     monkeypatch,
     db_session,
     test_engine,
+    failure,
 ):
+    from yleum_api.services.orchestrator_client import OrchestratorReaderInventoryUnavailable
+
     harness = await _prepare_executor(
         monkeypatch,
         db_session,
@@ -2726,7 +2730,18 @@ async def test_executor_does_not_turn_protected_environment_failure_into_model_o
         capabilities={"portable_machine": True},
     )
 
+    calls = []
+
     async def fail_exec(*args, **kwargs):
+        calls.append("exec")
+        if failure == "reader_inventory":
+            raise OrchestratorReaderInventoryUnavailable(
+                "Orchestrator returned 503", {"upstream_body": "PRIVATE_CONTROLLER_DETAIL"}
+            )
+        if failure == "generic_503":
+            raise OrchestratorUnavailable(
+                "Orchestrator returned 503", {"upstream_body": "PRIVATE_CONTROLLER_DETAIL"}
+            )
         raise OrchestratorBadRequest(
             "private diagnostic",
             status_code=409,
@@ -2734,8 +2749,18 @@ async def test_executor_does_not_turn_protected_environment_failure_into_model_o
         )
 
     monkeypatch.setattr(project_cell_executor, "project_cell_agent_exec", fail_exec)
-    with pytest.raises(RuntimeError, match="protected_environment_recovery_required"):
-        await harness.handle.execute(Action(name="build", args={}))
+    if failure == "generic_503":
+        result = await harness.handle.execute(Action(name="build", args={}))
+        assert result == {
+            "ok": False, "error": "infra: Orchestrator returned 503", "infra_dead": True,
+        }
+    else:
+        code = ("reader_inventory_unavailable" if failure == "reader_inventory"
+                else "protected_environment_recovery_required")
+        with pytest.raises(RuntimeError, match=code) as caught:
+            await harness.handle.execute(Action(name="build", args={}))
+        assert "PRIVATE_CONTROLLER_DETAIL" not in str(caught.value)
+    assert calls == ["exec"]
 
 
 async def test_saved_role_response_replays_without_command_and_rejects_other_identity(

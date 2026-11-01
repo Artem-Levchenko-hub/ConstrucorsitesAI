@@ -218,12 +218,16 @@ async def test_finish_is_idempotent_only_for_matching_terminal_state(
 
 
 @pytest.mark.parametrize("failure_boundary", [None, "emit", "finish"])
+@pytest.mark.parametrize("reader_denial", [False, True])
 async def test_exact_failed_activity_replays_original_code_without_work(
-    db_session, test_engine, monkeypatch, failure_boundary
+    db_session, test_engine, monkeypatch, failure_boundary, reader_denial
 ):
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from yleum_api.services.orchestrator_client import OrchestratorBadRequest
+    from yleum_api.services.orchestrator_client import (
+        OrchestratorBadRequest,
+        OrchestratorReaderInventoryUnavailable,
+    )
     from yleum_api.services.project_cell_activity import ActivityStart, run_with_activity_lease
 
     owner = await _new_user(db_session, "replay")
@@ -242,9 +246,17 @@ async def test_exact_failed_activity_replays_original_code_without_work(
         "prepare",
     )
     calls = []
+    expected_code = (
+        "reader_inventory_unavailable"
+        if reader_denial else "protected_environment_recovery_required"
+    )
 
     async def work():
         calls.append("work")
+        if reader_denial:
+            raise OrchestratorReaderInventoryUnavailable(
+                "not safe to echo", {"upstream_body": "PRIVATE_CONTROLLER_DETAIL"}
+            )
         raise OrchestratorBadRequest(
             "not safe to echo",
             status_code=409,
@@ -266,7 +278,7 @@ async def test_exact_failed_activity_replays_original_code_without_work(
 
         monkeypatch.setattr(project_cell_activity, "finish_activity", failed_persistence)
     for attempt in range(1 if failure_boundary == "finish" else 2):
-        with pytest.raises(Exception, match="protected_environment_recovery_required") as raised:
+        with pytest.raises(Exception, match=expected_code) as raised:
             await run_with_activity_lease(
                 session_factory=async_sessionmaker(test_engine, expire_on_commit=False),
                 lease=lease,
@@ -275,6 +287,7 @@ async def test_exact_failed_activity_replays_original_code_without_work(
                 emit=emit,
             )
         assert raised.value.operation_id == lease.operation_id
+        assert "PRIVATE_CONTROLLER_DETAIL" not in str(raised.value)
     assert calls == ["work"]
 
 
