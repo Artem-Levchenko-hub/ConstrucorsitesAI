@@ -365,10 +365,17 @@ async def test_portable_production_route_dispatch_is_bracketed_by_durable_bindin
     from yleum_orchestrator.services.command_receipts import CommandJournal
     from yleum_orchestrator.services.docker_cell_resources import DockerCommandResult
     from yleum_orchestrator.services.machine_adapter import MachineAdapter
+    from yleum_orchestrator.services.machine_startup import EnvironmentIdentity
 
     wid, oid, manager, _docker, _run, state, body, _calls = prepared
     journal = CommandJournal(manager.state_store.root, wid)
     events = []
+    environment = EnvironmentIdentity("e" * 64, "f" * 64)
+
+    def environment_identity():
+        assert journal.load(oid).receipt is None
+        events.append("environment-snapshot-with-intent")
+        return environment
 
     async def ensure(*args):
         assert journal.load(oid).receipt is None
@@ -391,7 +398,8 @@ async def test_portable_production_route_dispatch_is_bracketed_by_durable_bindin
     backend = SimpleNamespace(
         workspace_volume=state.resource_names.workspace_volume,
         configure_cache_identity=lambda **kw: None,
-        environment_digest=lambda: "e" * 64,
+        environment_digest=lambda: environment.digest,
+        environment_identity=environment_identity,
     )
     manager.machine_runtime = SimpleNamespace(
         exists=lambda _: False,
@@ -412,7 +420,12 @@ async def test_portable_production_route_dispatch_is_bracketed_by_durable_bindin
             f"/internal/workspaces/{wid}/agent/exec", headers=HEADERS, json=body
         )
     assert response.status_code == 200, response.text
-    assert events == ["ensure-with-intent", "physical-command-with-intent", "transport-result"]
+    assert events == [
+        "ensure-with-intent", "environment-snapshot-with-intent",
+        "physical-command-with-intent", "environment-snapshot-with-intent", "transport-result",
+    ]
+    assert response.json()["before_identity"]["environment_digest"] == environment.digest
+    assert response.json()["after_identity"]["environment_digest"] == environment.digest
     assert journal.load(oid).receipt is not None
 
 

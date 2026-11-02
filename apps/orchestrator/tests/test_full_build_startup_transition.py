@@ -127,7 +127,8 @@ def test_real_migration_prepare_controlled_docker_restart_changes_only_process(
     backend = object.__new__(backend_module.DockerMachineBackend)
     backend.root, backend.workspace_id, backend.base_image = tmp_path, uuid4(), "fixed-base"
     folder = tmp_path / str(backend.workspace_id)
-    folder.mkdir()
+    folder.mkdir(mode=0o700)
+    assert folder.stat().st_mode & 0o777 == 0o700
     metadata = {"epoch": 3, "services": {}, "exec_logs": {}, "exec_pids": {}}
     backend._metadata = lambda: dict(metadata)
     backend._container = lambda: machine
