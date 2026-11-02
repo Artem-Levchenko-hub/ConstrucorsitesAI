@@ -310,6 +310,49 @@ async def _observe_source_changes(
     return observed, changed
 
 
+def _resumed_product_delta(
+    reference: Mapping[str, str], restored: Mapping[str, str], current: Mapping[str, str],
+) -> bool:
+    """Attribute only a still-present product delta from the validated restore.
+
+    The caller supplies restored source only after normal adjacent-checkpoint
+    validation/application and successful persistence for this invocation. This
+    comparison grants no write, proof or completion authority of its own.
+    """
+    from yleum_api.services.generation.agent_finalization import (
+        unchanged_candidate_before_finalization,
+    )
+    from yleum_api.services.max_generation_contract import _is_product_source
+    from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
+
+    if any(
+        not isinstance(path, str) or agent_builder._safe_file_path(path) != path
+        or not isinstance(source, str)
+        for files in (reference, restored, current) for path, source in files.items()
+    ) or any(
+        restored.get(path) != current.get(path)
+        or (path in reference and restored.get(path) != reference[path])
+        for path in MAX_SECURITY_LOCKED_FILES
+    ):
+        return False
+
+    def unchanged(before: Mapping[str, str], after: Mapping[str, str]) -> bool:
+        return unchanged_candidate_before_finalization(
+            baseline_files=before, workspace_files=after, requires_source_change=True,
+            message="", catalog_runtime=True,
+        ) is not None
+
+    if not unchanged(restored, current):
+        return False
+    product_before = {
+        path: source for path, source in reference.items() if _is_product_source(path)
+    }
+    product_restored = {
+        path: source for path, source in restored.items() if _is_product_source(path)
+    }
+    return not unchanged(product_before, product_restored)
+
+
 async def execute_agent_turn(
     *,
     _agent_res: agent_builder.AgentResult | None,
@@ -334,6 +377,7 @@ async def execute_agent_turn(
 
         await freeze_for_turn(runtime.coordinator, prompt_text, template=project_info.template)
     edit_source_changed: Callable[[], bool] | None = None
+    restored_source: dict[str, str] | None = None
     current_source = baseline.files if workspace_context_files is None else workspace_context_files
     resume_instruction = (
         "RESUME SAVED PRODUCT. Continue the existing restored source below; "
@@ -354,6 +398,7 @@ async def execute_agent_turn(
             # The resumed run becomes adjacent immediately. An outage on its
             # first provider request must not strand the earlier source object.
             await source_checkpoint(candidate)
+            restored_source = dict(current_source)
         except Exception:
             candidate.stop_reason = "checkpoint_error"
             candidate.summary = _SOURCE_CHECKPOINT_FAILURE
@@ -604,12 +649,18 @@ async def execute_agent_turn(
         # A full unchanged export is not a write. Stop before legacy probes,
         # looped-but-serves reporting, production finalization or publication.
         raise RuntimeError("edit produced no source changes")
-    # A green starter is not proof that the user's request was generated.
-    # Native `done` may otherwise succeed after only reading/building the
-    # template. Require at least one attributable model write on a seeded
-    # first MAX build; without it, keep the run incomplete instead of
-    # committing the untouched starter as a successful generation.
-    if _max_seed_files and not _agent_res.files:
+    # A green starter is not a generated product. Empty export_files describes
+    # only this invocation's writes; a validated restored product may already
+    # contain the original request's attributable work. Keep that distinction
+    # without inventing a new write or bypassing any normal finalization gate.
+    resumed_product = False
+    if (_max_seed_files and not _agent_res.files and not _is_edit
+            and restored_source is not None and operations.snapshot_files is not None):
+        resumed_product = _resumed_product_delta(
+            runtime.migration_baseline or {**baseline.files, **_max_seed_files},
+            restored_source, await operations.snapshot_files(),
+        )
+    if _max_seed_files and not _agent_res.files and not resumed_product:
         await operations.emit(
             "agent.stalled",
             {
@@ -627,7 +678,7 @@ async def execute_agent_turn(
         _agent_res = agent_builder.AgentResult(
             done=False,
             summary=(
-                "Google AI-агент не внёс ни одного изменения в MAX-приложение; "
+                "AI-агент не внёс ни одного изменения в MAX-приложение; "
                 "неизменённый шаблон не засчитан как готовая генерация."
             ),
             files={},
