@@ -79,6 +79,11 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
         self.native = json.loads(
             (Path(__file__).parent / "fixtures/native-startup-quiescence-sources.json").read_text()
         )
+        self.full_build = {
+            **self.native,
+            "routers.workspace": "8eb9c5504c1bc85e694261a1289bfa1a03259e4473a903819240bb9ca4d95008",
+            "services.machine_startup": "9b02eae20e5760f6735f9fb9dbf1f2c1150bc8291662baf71d31af630f85b794",
+        }
         self.reviewed = (
             self.old, self.new, self.snapshot, self.catalog, self.legacy_catalog, self.owner,
             self.connect,
@@ -209,16 +214,50 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
         self.checker._require_reviewed_portable_sources(self.connect)
         self.checker._require_reviewed_portable_sources(self.owner)
 
-    def test_native_bundle_matches_exact_current_source(self):
-        root = Path(__file__).resolve().parents[2] / "apps/orchestrator/src/yleum_orchestrator"
+    def test_native_historical_bundle_remains_supported(self):
         self.assertEqual(self.checker._PORTABLE_QUIESCENCE_NATIVE_STARTUP_SOURCES, self.native)
         self.assertEqual(len(self.native), 19)
-        for name, expected in self.native.items():
+        self.checker._require_reviewed_portable_sources(self.native)
+
+    def test_full_build_bundle_matches_exact_current_source(self):
+        root = Path(__file__).resolve().parents[2] / "apps/orchestrator/src/yleum_orchestrator"
+        self.assertEqual(self.checker._PORTABLE_QUIESCENCE_FULL_BUILD_STARTUP_SOURCES, self.full_build)
+        self.assertEqual(len(self.full_build), 19)
+        self.assertEqual(set(self.full_build), set(self.native))
+        self.assertEqual(
+            {name for name in self.full_build if self.full_build[name] != self.native[name]},
+            {"routers.workspace", "services.machine_startup"},
+        )
+        for name, expected in self.full_build.items():
             source = root.joinpath(*name.split(".")).with_suffix(".py").read_bytes()
             # Git checkouts on Windows may materialize CRLF; live Linux bytes
             # and the authority table remain exact LF source, never normalized.
             actual = hashlib.sha256(source.replace(b"\r\n", b"\n")).hexdigest()
             self.assertEqual(actual, expected, name)
+
+    def test_full_build_mixed_or_partial_bundle_never_inherits_native_authority(self):
+        changed = ("routers.workspace", "services.machine_startup")
+        for selected in product((False, True), repeat=len(changed)):
+            value = dict(self.native)
+            for name, use_new in zip(changed, selected, strict=True):
+                if use_new:
+                    value[name] = self.full_build[name]
+            with self.subTest(selected=selected):
+                if value in (self.native, self.full_build):
+                    self.checker._require_reviewed_portable_sources(value)
+                else:
+                    with self.assertRaises(self.checker.PhysicalDrainError):
+                        self.checker._require_reviewed_portable_sources(value)
+        for name in self.full_build:
+            for mode in ("missing", "unknown"):
+                value = dict(self.full_build)
+                if mode == "missing":
+                    del value[name]
+                else:
+                    value[name] = "0" * 64
+                with self.subTest(name=name, mode=mode):
+                    with self.assertRaises(self.checker.PhysicalDrainError):
+                        self.checker._require_reviewed_portable_sources(value)
 
     def test_native_mixed_or_partial_successor_never_inherits_legacy_authority(self):
         changes = sorted(name for name in self.native if self.connect.get(name) != self.native[name])
@@ -309,13 +348,13 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2] / "apps/orchestrator/src/yleum_orchestrator"
         with tempfile.TemporaryDirectory() as temporary:
             origins = {}
-            for name in self.native:
+            for name in self.full_build:
                 source = root.joinpath(*name.split(".")).with_suffix(".py").read_bytes()
                 path = Path(temporary) / (name + ".py")
                 path.write_bytes(source.replace(b"\r\n", b"\n"))
                 origins["yleum_orchestrator." + name] = SimpleNamespace(origin=str(path))
             with patch.object(importlib.util, "find_spec", side_effect=origins.get):
-                self.assertEqual(self.checker._portable_quiescence_sources(), self.native)
+                self.assertEqual(self.checker._portable_quiescence_sources(), self.full_build)
                 helpers = (
                     "services.app_business_config", "services.machine_startup",
                     "schemas.workspace", "core.cell_resources",

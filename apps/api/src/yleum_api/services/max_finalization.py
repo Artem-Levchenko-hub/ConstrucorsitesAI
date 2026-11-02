@@ -93,6 +93,7 @@ from yleum_api.services.project_cell_errors import (
     ProjectCellInfrastructureError,
 )
 from yleum_api.services.project_cell_executor import (
+    FullBuildStartupTransition,
     ProjectCellCommandObservation,
     ProjectCellCommandRole,
     ProjectCellExecutorHandle,
@@ -127,6 +128,7 @@ _MIN_REPAIR_SECONDS = 60
 # How often the watchdog looks again while a sealed hand-off runs under its own ceiling.
 _SEALED_RECHECK_SECONDS = 15.0
 _FULL_BUILD_DETAIL_PREFIX = f"[build-contract:{MAX_FULL_BUILD_CONTRACT_VERSION}]"
+_FULL_BUILD_STARTUP_TRANSITION = "[full-build-startup-transition:v1]"
 
 
 async def _discard_event(
@@ -550,13 +552,9 @@ class MaxFinalizationCoordinator:
                 build = None
                 refresh_dependents = True
         if build is None:
-            build = await self._run_role_result(
-                proof=proof,
-                identity=identity,
-                dimension=ProofDimension.FULL_BUILD,
-                role=ProjectCellCommandRole.FULL_BUILD,
-                phase=GenerationPhase.FINAL_BUILD,
-            )
+            before_build = identity
+            build, identity, proof = await self._run_full_build_result(proof, identity)
+            refresh_dependents = refresh_dependents or identity != before_build
         else:
             await self._counter("proof_hit")
         bundle = ProofBundle(identity=proof, bootstrap=bootstrap, full_build=build)
@@ -569,6 +567,18 @@ class MaxFinalizationCoordinator:
                 build.redacted_detail,
                 bundle=bundle,
             )
+
+        transition_prefix = _versioned_build_detail(_FULL_BUILD_STARTUP_TRANSITION)
+        if build.redacted_detail.startswith(transition_prefix):
+            bootstrap, rejected = await self._revalidate_full_build_startup(proof, identity, build)
+            bundle = ProofBundle(identity=proof, bootstrap=bootstrap, full_build=build)
+            if rejected is not None:
+                return await self._failed(
+                    identity, proof,
+                    GenerationPhase.PREPARE if rejected.dimension == ProofDimension.BOOTSTRAP.value
+                    else GenerationPhase.FAST_CHECK,
+                    rejected, rejected.redacted_detail, bundle=bundle,
+                )
 
         build_digest = _artifact_digest(build)
         runtime = None
@@ -2108,14 +2118,52 @@ class MaxFinalizationCoordinator:
             role=role,
             phase=phase,
         )
-        if observation.after.proof_key != identity.proof_key:
+        result, _identity, _proof = await self._record_role_observation(
+            proof=proof, identity=identity, dimension=dimension, observation=observation,
+        )
+        return result
+
+    async def _run_full_build_result(
+        self, proof: ProjectCellProof, identity: ProofIdentity,
+    ) -> tuple[ProjectCellProofResult, ProofIdentity, ProjectCellProof]:
+        observation = await self._execute_role(
+            identity=identity, dimension=ProofDimension.FULL_BUILD,
+            role=ProjectCellCommandRole.FULL_BUILD, phase=GenerationPhase.FINAL_BUILD,
+        )
+        return await self._record_role_observation(
+            proof=proof, identity=identity, dimension=ProofDimension.FULL_BUILD,
+            observation=observation, allow_full_build_startup=True,
+        )
+
+    async def _record_role_observation(
+        self, *, proof: ProjectCellProof, identity: ProofIdentity, dimension: ProofDimension,
+        observation: ProjectCellCommandObservation, allow_full_build_startup: bool = False,
+    ) -> tuple[ProjectCellProofResult, ProofIdentity, ProjectCellProof]:
+        transition = getattr(observation, "full_build_startup_transition", None)
+        authorized_restart = bool(
+            allow_full_build_startup and dimension is ProofDimension.FULL_BUILD
+            and observation.role is ProjectCellCommandRole.FULL_BUILD
+            and observation.ok and not observation.timed_out and observation.before == identity
+            and isinstance(transition, FullBuildStartupTransition)
+            and transition.before == identity and transition.after == observation.after
+            and transition.operation_id == observation.operation_id
+        )
+        if (observation.before != identity
+                or (observation.after != identity and not authorized_restart)):
             detail = "command changed the frozen proof identity"
             if observation.redacted_detail:
                 detail += "\n" + observation.redacted_detail
             outcome = ProofOutcome.RED
         else:
             detail = observation.redacted_detail
-            outcome = ProofOutcome.GREEN if observation.ok else ProofOutcome.RED
+            outcome = (
+                ProofOutcome.GREEN
+                if observation.ok and not observation.timed_out else ProofOutcome.RED
+            )
+        if authorized_restart:
+            identity = observation.after
+            proof = await self._proof(identity)
+            detail = _FULL_BUILD_STARTUP_TRANSITION + ("\n" + detail if detail else "")
         artifact_ref = None
         if dimension is ProofDimension.FULL_BUILD and outcome is ProofOutcome.GREEN:
             artifact_files = await self._verified_workspace_files(identity)
@@ -2134,15 +2182,56 @@ class MaxFinalizationCoordinator:
             detail = _versioned_build_detail(
                 detail, source_repair=source_repair,
             )
-        return await self._commit_role_result(observation.operation_id, lambda: self._record(
-            proof=proof,
-            dimension=dimension,
-            outcome=outcome,
-            operation_id=observation.operation_id,
-            artifact_ref=artifact_ref,
-            detail=detail,
-            refresh_incompatible=dimension is ProofDimension.FULL_BUILD,
-        ))
+        async def store() -> ProjectCellProofResult:
+            result = await self._record(
+                proof=proof, dimension=dimension, outcome=outcome,
+                operation_id=observation.operation_id, artifact_ref=artifact_ref, detail=detail,
+                refresh_incompatible=(
+                    dimension is ProofDimension.FULL_BUILD and not authorized_restart
+                ),
+            )
+            if authorized_restart and (
+                result.proof_id != proof.id or result.operation_id != observation.operation_id
+                or result.outcome != outcome.value or result.artifact_ref != artifact_ref
+            ):
+                raise MaxFinalizationConflict("full-build transition conflicts with retained proof")
+            return result
+
+        result = await self._commit_role_result(observation.operation_id, store)
+        return result, identity, proof
+
+    async def _revalidate_full_build_startup(
+        self, proof: ProjectCellProof, identity: ProofIdentity, build: ProjectCellProofResult,
+    ) -> tuple[ProjectCellProofResult, ProjectCellProofResult | None]:
+        """One cheap proof pass under AFTER; never run another full-build restart.
+
+        Persisted results allow cold continuation to resume this pass without
+        replaying commands. A source/environment/artifact change fails closed.
+        """
+        artifact_digest = _artifact_digest(build)
+        bootstrap: ProjectCellProofResult | None = None
+        for dimension, role, phase in (
+            (ProofDimension.BOOTSTRAP, ProjectCellCommandRole.BOOTSTRAP, GenerationPhase.PREPARE),
+            (ProofDimension.FAST_CHECK, ProjectCellCommandRole.FAST_CHECK,
+             GenerationPhase.FAST_CHECK),
+        ):
+            result = await self._find(proof, dimension)
+            if result is None:
+                result = await self._run_role_result(
+                    proof=proof, identity=identity, dimension=dimension, role=role, phase=phase,
+                )
+            if dimension is ProofDimension.BOOTSTRAP:
+                bootstrap = result
+            assert bootstrap is not None
+            if result.outcome != ProofOutcome.GREEN.value:
+                return bootstrap, result
+            files = await self._verified_workspace_files(identity)
+            if canonical_files_digest(files) != artifact_digest:
+                raise MaxFinalizationConflict(
+                    "artifact changed during full-build startup revalidation"
+                )
+        assert bootstrap is not None
+        return bootstrap, None
 
     async def _commit_role_result(
         self, operation_id: UUID, store: Callable[[], Awaitable[ProjectCellProofResult]],

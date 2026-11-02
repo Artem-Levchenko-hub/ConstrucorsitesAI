@@ -23,6 +23,7 @@ from yleum_api.services.max_behavior_proof import (
     need,
 )
 from yleum_api.services.orchestrator_client import ProjectCellAgentExecResponse
+from yleum_api.services.project_cell_executor import full_build_response_transition
 from yleum_api.services.project_cell_proofs import ProofIdentity
 from yleum_api.services.promotion_permit import MAX_FULL_BUILD_CONTRACT_VERSION
 
@@ -65,6 +66,13 @@ async def resolve_retained_compilation(
     bound = request.binding
     before = _identity(await handle.current_identity(), bound)
     operation = compilation_operation_id(bound)
+    resolver = getattr(handle, "resolve_full_build_operation", None)
+    owner_id = None
+    if callable(resolver):
+        resolved = await resolver(bound.proof_key, bound.build_ref)
+        need(type(resolved) is tuple and len(resolved) == 2
+             and all(type(item) is UUID for item in resolved), "BEHAVIOR_COMPILATION_UNAVAILABLE")
+        operation, owner_id = resolved
     status = await handle.operation_status(operation)
     response = status.terminal_response
     need(
@@ -92,8 +100,13 @@ async def resolve_retained_compilation(
         environment_digest=before.base_image_digest,
         build_config_digest=before.build_config_digest,
     )
+    transition = (
+        full_build_response_transition(response, before,
+                                       project_id=bound.project_id, owner_id=owner_id)
+        if owner_id is not None else None
+    )
     need(
-        asdict(response.before_identity) == expected
+        (asdict(response.before_identity) == expected or transition is not None)
         and asdict(response.after_identity) == expected,
         "BEHAVIOR_COMPILATION_IDENTITY_CHANGED",
     )
@@ -113,6 +126,8 @@ async def resolve_retained_compilation(
         "manifest_digest",
         "collector_source_sha256",
     }
+    if transition is not None:
+        keys.add("full_build_startup_transition")
     need(type(data) is dict and set(data) == keys, "BEHAVIOR_COMPILATION_UNAVAILABLE")
     try:
         need(

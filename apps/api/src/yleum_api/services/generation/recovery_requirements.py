@@ -38,7 +38,10 @@ from yleum_api.services.generation.recovery_contract import (
     RecoveryRequirement,
     RequirementWitness,
 )
-from yleum_api.services.orchestrator_client import project_cell_agent_identity
+from yleum_api.services.orchestrator_client import (
+    project_cell_agent_identity,
+    project_cell_agent_operation_status,
+)
 from yleum_api.services.project_cell_proofs import ProofDimension, proof_identity_from_model
 
 STATE_KEY = "recovery_requirements_v1"
@@ -407,11 +410,29 @@ async def load_compiler_witness(
         _need(lease is not None and lease.workspace_id == workspace_id
               and lease.generation_run_id == run.id and lease.kind == "command"
               and lease.fencing_epoch == binding.fencing_epoch
-              and lease.proof_key == proof.proof_key
               and lease.phase
               == ("fast_check" if result.dimension == "fast_check" else "final_build")
               and lease.state == ("completed" if result.outcome == "green" else "failed")
               and lease.finished_at is not None, "compiler operation is not terminal or owned")
+        assert lease is not None
+        activity_identity_matches = lease.proof_key == proof.proof_key
+        if (not activity_identity_matches
+                and result.dimension == "full_build" and result.outcome == "green"):
+            from yleum_api.services.project_cell_executor import full_build_response_transition
+
+            status = await project_cell_agent_operation_status(workspace_id, result.operation_id)
+            response = status.terminal_response
+            transition = (
+                full_build_response_transition(response, physical, project_id=run.project_id,
+                                               owner_id=run.user_id)
+                if status.operation_id == result.operation_id and status.state == "completed"
+                and response is not None and response.operation_id == result.operation_id else None
+            )
+            activity_identity_matches = bool(
+                transition is not None and transition.before.proof_key == lease.proof_key
+                and transition.operation_id == result.operation_id
+            )
+        _need(activity_identity_matches, "compiler operation is not terminal or owned")
         current = await project_cell_agent_identity(workspace_id,
             generation_run_id=run.id, fencing_epoch=binding.fencing_epoch)
         _need(current.workspace_revision == physical.workspace_revision

@@ -154,6 +154,16 @@ _PORTABLE_QUIESCENCE_NATIVE_STARTUP_SOURCES = {
     "services.project_machine": "8ff389bd8194c3f7c043e62c7403ded15cea5c0deaedd11c9c90e9142960faa6",
     "services.source_write_journal": "dcb5593846c3c75b277f62cd8310406f19564208cd5a0678bea13840671d6c21",
 }
+# FULL_BUILD startup successor: the existing fenced command captures and binds
+# a same-content process transition to its compilation and migration receipts.
+# The helper only constructs metadata; routing keeps the same reader_dispatch,
+# machine_effect and command lock boundaries. Admit the complete reviewed pair
+# over Native19, never either new module mixed with its historical counterpart.
+_PORTABLE_QUIESCENCE_FULL_BUILD_STARTUP_SOURCES = {
+    **_PORTABLE_QUIESCENCE_NATIVE_STARTUP_SOURCES,
+    "routers.workspace": "8eb9c5504c1bc85e694261a1289bfa1a03259e4473a903819240bb9ca4d95008",
+    "services.machine_startup": "9b02eae20e5760f6735f9fb9dbf1f2c1150bc8291662baf71d31af630f85b794",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -166,6 +176,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_OWNER_SOURCES,
     _PORTABLE_QUIESCENCE_CONNECT_SOURCES,
     _PORTABLE_QUIESCENCE_NATIVE_STARTUP_SOURCES,
+    _PORTABLE_QUIESCENCE_FULL_BUILD_STARTUP_SOURCES,
 )
 # These modules already exist in old releases, but their new startup contracts
 # are authority only for a complete successor producer bundle.

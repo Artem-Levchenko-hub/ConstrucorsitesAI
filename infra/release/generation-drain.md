@@ -338,6 +338,21 @@ cell-resource and receipt dependencies. Presence of the new producer prevents
 fallback to an older bundle. Existing schema modules become authority only for
 the exact successor that uses them; source hashes remain exact live Linux bytes.
 
+The FULL_BUILD startup successor preserves that complete 19-module closure and
+all historical bundles. Only the workspace router and startup helper change:
+the existing fenced command records its actual same-content process transition
+alongside the compiled-asset and migration receipts. This adds no container,
+process or lock producer. Mixed old/new pairs, partial closures and unknown
+hashes remain unsupported. The API validates this separate FULL_BUILD protocol;
+it does not grant restoration or general environment-change authority.
+
+Quiescence attestations still bind the actual observed source bundle. After a
+controller source change, a retired workspace needs a fresh content-addressed
+attestation under closed ingress and durable admission, using the documented
+`--record-machine-quiescence` command above. Preserve the old attestations and
+unknown command journals; neither their outcomes nor their source bindings may
+be rewritten to match the new release.
+
 `project-machines/<workspace>/startup-prepares/*.json` can describe an uncertain
 **container create**, even with no Docker object and no active SQL lease. An
 `intent`, `dispatched`, malformed, foreign or unsafe-path record denies drain.

@@ -64,6 +64,45 @@ class EnvironmentIdentity:
             "after_incarnation": after.incarnation,
         }
 
+    def full_build_transition(
+        self, after: EnvironmentIdentity, *, binding: dict[str, Any],
+        compilation: dict[str, Any], migration: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Bind a same-content owned build restart to its exact terminal receipts."""
+        transition = self.restoration_transition(after)
+        if transition is None or self.incarnation == after.incarnation:
+            return None
+        if (type(binding) is not dict or type(compilation) is not dict
+                or type(migration) is not dict
+                or set(binding) != {
+            "workspace_id", "project_id", "owner_id", "generation_run_id", "fencing_epoch",
+            "operation_id", "source_revision", "manifest_digest",
+        } or type(binding.get("fencing_epoch")) is not int or binding["fencing_epoch"] < 1):
+            return None
+        try:
+            if any(str(UUID(binding[key])) != binding[key] for key in (
+                "workspace_id", "project_id", "owner_id", "generation_run_id", "operation_id",
+            )) or any(type(value) is not str or re.fullmatch(r"[0-9a-f]{64}", value) is None
+                      for value in (self.content_digest, self.incarnation, after.incarnation,
+                                    binding["source_revision"], binding["manifest_digest"])):
+                return None
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+        def digest(value: dict[str, Any]) -> str:
+            return hashlib.sha256(json.dumps(
+                value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False,
+            ).encode()).hexdigest()
+
+        try:
+            return {
+                **transition, "protocol": "full-build-startup-transition/v1", "role": "full_build",
+                **binding, "compilation_sha256": digest(compilation),
+                "migration_sha256": digest(migration),
+            }
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            return None
+
 
 @contextmanager
 def restoration_writer(path: Path, operation_id: UUID, epoch: int) -> Iterator[None]:

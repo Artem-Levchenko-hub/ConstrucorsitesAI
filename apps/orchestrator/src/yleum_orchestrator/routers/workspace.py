@@ -765,7 +765,7 @@ async def _execute_agent_command_locked(
             )
             before_environment = (
                 await machine_effect(backend.environment_identity)
-                if request.task_role == "restore_runtime" else None
+                if request.task_role in {"full_build", "restore_runtime"} else None
             )
             before_identity = _workspace_identity_digest(
                 current_files,
@@ -807,7 +807,7 @@ async def _execute_agent_command_locked(
                     "failed-restoration-environment-unavailable:" + str(request.operation_id)
                 ).encode()
             ).hexdigest()
-        elif request.task_role == "restore_runtime":
+        elif request.task_role in {"full_build", "restore_runtime"}:
             after_environment = await machine_effect(backend.environment_identity)
             environment_digest = after_environment.digest
         else:
@@ -828,6 +828,29 @@ async def _execute_agent_command_locked(
             transition = before_environment.restoration_transition(after_environment)
             if transition is not None:
                 compiled_receipt = {**compiled_receipt, "environment_transition": transition}
+        migration_receipt = (
+            manager.machine_runtime.migration_receipt(state, request.operation_id)
+            if request.task_role in {"full_build", "restore_runtime"}
+            and result.exit_code == 0 and not result.timed_out else None
+        )
+        if (request.task_role == "full_build" and compiled_receipt is not None
+                and migration_receipt is not None and result.exit_code == 0 and not result.timed_out
+                and before_environment is not None and after_environment is not None):
+            transition = before_environment.full_build_transition(
+                after_environment,
+                binding={
+                    "workspace_id": str(workspace_id), "project_id": str(state.project_id),
+                    "owner_id": str(state.owner_id),
+                    "generation_run_id": str(request.generation_run_id),
+                    "fencing_epoch": request.fencing_epoch,
+                    "operation_id": str(request.operation_id),
+                    "source_revision": before_identity.workspace_revision,
+                    "manifest_digest": before_identity.cell_manifest_digest,
+                },
+                compilation=compiled_receipt, migration=migration_receipt,
+            )
+            if transition is not None:
+                compiled_receipt = {**compiled_receipt, "full_build_startup_transition": transition}
         response = WorkspaceAgentExecResponse(
             ok=result.exit_code == 0 and not result.timed_out,
             exit_code=result.exit_code,
@@ -839,13 +862,7 @@ async def _execute_agent_command_locked(
             after_identity=after_identity,
             environment_mutated=before_identity != after_identity,
             compiled_asset_receipt=compiled_receipt,
-            project_migration_receipt=(
-                manager.machine_runtime.migration_receipt(state, request.operation_id)
-                if request.task_role in {"full_build", "restore_runtime"}
-                and result.exit_code == 0
-                and not result.timed_out
-                else None
-            ),
+            project_migration_receipt=migration_receipt,
         )
         await machine.store_transport_response(
             operation_id=request.operation_id,

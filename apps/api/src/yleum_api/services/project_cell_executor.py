@@ -317,6 +317,13 @@ class ProjectCellCommandRole(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class FullBuildStartupTransition:
+    before: ProofIdentity
+    after: ProofIdentity
+    operation_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectCellCommandObservation:
     operation_id: UUID
     role: ProjectCellCommandRole | None
@@ -326,6 +333,7 @@ class ProjectCellCommandObservation:
     before: ProofIdentity
     after: ProofIdentity
     invalidated_dimensions: frozenset[ProofDimension]
+    full_build_startup_transition: FullBuildStartupTransition | None = None
 
 
 def invalidated_dimensions(
@@ -374,13 +382,21 @@ def restored_environment_transition_matches(
         return True
     if not isinstance(compilation, dict):
         return False
-    transition = compilation.get("environment_transition")
+    return _same_content_environment_transition(
+        before, after, compilation.get("environment_transition"),
+        protocol="restored-environment-transition/v1",
+    )
+
+
+def _same_content_environment_transition(
+    before: ProofIdentity, after: ProofIdentity, transition: object, *, protocol: str,
+) -> bool:
     if (
         type(transition) is not dict
         or set(transition) != {
             "protocol", "version", "content_digest", "before_incarnation", "after_incarnation",
         }
-        or transition.get("protocol") != "restored-environment-transition/v1"
+        or transition.get("protocol") != protocol
         or type(transition.get("version")) is not int or transition["version"] != 1
         or any(type(transition.get(key)) is not str
                or re.fullmatch(r"[0-9a-f]{64}", transition[key]) is None
@@ -398,6 +414,98 @@ def restored_environment_transition_matches(
         if identity.base_image_digest != digest or identity.toolchain_digest != digest:
             return False
     return True
+
+
+def full_build_startup_transition(
+    before: ProofIdentity, after: ProofIdentity, compilation: object, migration: object, *,
+    project_id: UUID, owner_id: UUID, operation_id: UUID,
+    ok: bool, timed_out: bool, exit_code: int | None,
+) -> FullBuildStartupTransition | None:
+    """Authorize only an exact same-content FULL_BUILD controller restart.
+
+    The caller supplies authenticated terminal command evidence. This does not
+    normalize the new process into the old identity or carry any green proof.
+    """
+    if (ok is not True or timed_out is not False or type(exit_code) is not int or exit_code != 0
+            or before == after or type(compilation) is not dict or type(migration) is not dict):
+        return None
+    transition = compilation.get("full_build_startup_transition")
+    core_keys = {"protocol", "version", "content_digest", "before_incarnation", "after_incarnation"}
+    binding = {
+        "workspace_id": str(before.workspace_id), "project_id": str(project_id),
+        "owner_id": str(owner_id), "generation_run_id": str(before.generation_run_id),
+        "fencing_epoch": before.fencing_epoch, "operation_id": str(operation_id),
+        "source_revision": before.workspace_revision,
+        "manifest_digest": before.cell_manifest_digest,
+    }
+    if (type(transition) is not dict
+            or set(transition) != core_keys | set(binding) | {
+                "role", "compilation_sha256", "migration_sha256",
+            }
+            or transition.get("role") != "full_build"
+            or type(transition.get("fencing_epoch")) is not int
+            or any(transition.get(key) != value for key, value in binding.items())
+            or not _same_content_environment_transition(
+                before, after, {key: transition[key] for key in core_keys},
+                protocol="full-build-startup-transition/v1",
+            )
+            or compilation.get("collector_version") != "next-fixed-data-v1"
+            or type(compilation.get("fencing_epoch")) is not int
+            or type(migration.get("fencing_epoch")) is not int
+            or any(compilation.get(key) != value for key, value in binding.items()
+                   if key != "owner_id")
+            or not valid_project_migration_receipt(
+                migration, workspace_id=before.workspace_id,
+                generation_run_id=before.generation_run_id, fencing_epoch=before.fencing_epoch,
+                source_revision=before.workspace_revision, adaptation=False,
+            )):
+        return None
+
+    def digest(value: dict[str, Any]) -> str:
+        return hashlib.sha256(json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False,
+        ).encode()).hexdigest()
+
+    try:
+        compiled = {key: value for key, value in compilation.items()
+                    if key != "full_build_startup_transition"}
+        if (transition["compilation_sha256"] != digest(compiled)
+                or transition["migration_sha256"] != digest(migration)):
+            return None
+    except (TypeError, ValueError, UnicodeError, RecursionError):
+        return None
+    return FullBuildStartupTransition(before, after, operation_id)
+
+
+def full_build_response_transition(
+    response: ProjectCellAgentExecResponse, identity: ProofIdentity, *,
+    project_id: UUID, owner_id: UUID,
+) -> FullBuildStartupTransition | None:
+    """Reload a retained authenticated response against an exact current AFTER."""
+    if (response.operation_id is None or response.before_identity is None
+            or response.after_identity is None
+            or response.workspace_revision != identity.workspace_revision):
+        return None
+
+    def convert(raw: ProjectCellWorkspaceIdentity) -> ProofIdentity:
+        return replace(
+            identity, workspace_revision=raw.workspace_revision,
+            dependency_digest=raw.dependency_digest, schema_data_digest=raw.schema_data_digest,
+            cell_manifest_digest=raw.cell_manifest_digest, base_image_digest=raw.environment_digest,
+            toolchain_digest=raw.environment_digest, build_config_digest=raw.build_config_digest,
+        )
+
+    try:
+        before, after = convert(response.before_identity), convert(response.after_identity)
+    except (TypeError, ValueError):
+        return None
+    if after != identity:
+        return None
+    return full_build_startup_transition(
+        before, after, response.compiled_asset_receipt, response.project_migration_receipt,
+        project_id=project_id, owner_id=owner_id, operation_id=response.operation_id,
+        ok=response.ok, timed_out=response.timed_out, exit_code=response.exit_code,
+    )
 
 
 def valid_project_migration_receipt(
@@ -526,6 +634,9 @@ class ProjectCellExecutorHandle:
     ) = None
     release_for_completion: Callable[[], Awaitable[None]] | None = None
     seed_business_config: Callable[[int, dict[str, Any]], Awaitable[None]] | None = None
+    resolve_full_build_operation: (
+        Callable[[str, str], Awaitable[tuple[UUID, UUID] | None]] | None
+    ) = None
 
 
 # Оркестратор отвечает этой фразой из трёх мест (routers/workspace.py), с кодом
@@ -1273,6 +1384,14 @@ async def maybe_create_project_cell_executor(
             before=before,
             after=after,
             invalidated_dimensions=invalidated_dimensions(before, after),
+            full_build_startup_transition=(
+                full_build_startup_transition(
+                    before, after, result.compiled_asset_receipt,
+                    getattr(result, "project_migration_receipt", None),
+                    project_id=project_id, owner_id=user_id, operation_id=result.operation_id,
+                    ok=result.ok, timed_out=result.timed_out, exit_code=result.exit_code,
+                ) if role is ProjectCellCommandRole.FULL_BUILD else None
+            ),
         )
 
     async def _current_identity() -> ProofIdentity:
@@ -1356,6 +1475,75 @@ async def maybe_create_project_cell_executor(
 
     async def _operation_status(operation_id: UUID) -> ProjectCellAgentOperationStatus:
         return await project_cell_agent_operation_status(agent_workspace_id, operation_id)
+
+    async def _resolve_full_build_operation(
+        proof_key: str, build_ref: str,
+    ) -> tuple[UUID, UUID] | None:
+        """Resolve an actual GREEN compiler command, never derive an AFTER alias."""
+        from yleum_api.models.project_cell import (
+            ProjectCellActivityLease,
+            ProjectCellProof,
+            ProjectCellProofResult,
+        )
+        from yleum_api.services.project_cell_proofs import proof_identity_from_model
+
+        current = await _current_identity()
+        if current.proof_key != proof_key:
+            return None
+        async with session_factory() as session:
+            rows = (await session.execute(
+                select(ProjectCellProofResult, ProjectCellProof, ProjectCellActivityLease)
+                .join(ProjectCellProof, ProjectCellProofResult.proof_id == ProjectCellProof.id)
+                .join(ProjectCellActivityLease,
+                      ProjectCellActivityLease.operation_id == ProjectCellProofResult.operation_id)
+                .join(ProjectCellWorkspace,
+                      ProjectCellWorkspace.id == ProjectCellProof.workspace_id)
+                .join(Project, Project.id == ProjectCellWorkspace.project_id)
+                .join(GenerationRun, GenerationRun.id == ProjectCellProof.generation_run_id)
+                .where(
+                    ProjectCellProof.workspace_id == agent_workspace_id,
+                    ProjectCellProof.generation_run_id == leased_run_id,
+                    ProjectCellProof.fencing_epoch == fencing_epoch,
+                    ProjectCellProof.proof_key == proof_key,
+                    ProjectCellProofResult.dimension == ProofDimension.FULL_BUILD.value,
+                    ProjectCellProofResult.outcome == "green",
+                    ProjectCellProofResult.artifact_ref == build_ref,
+                    ProjectCellWorkspace.project_id == project_id,
+                    ProjectCellWorkspace.owner_id == user_id,
+                    ProjectCellWorkspace.generation_run_id == leased_run_id,
+                    ProjectCellWorkspace.fencing_epoch == fencing_epoch,
+                    ProjectCellWorkspace.deleted_at.is_(None),
+                    ProjectCellWorkspace.state == "ready",
+                    Project.owner_id == user_id, GenerationRun.project_id == project_id,
+                    GenerationRun.user_id == user_id, GenerationRun.status == "running",
+                ).limit(2),
+            )).all()
+        if len(rows) != 1:
+            return None
+        result, proof, lease = rows[0]
+        if (proof_identity_from_model(proof) != current
+                or result.workspace_id != agent_workspace_id
+                or result.dimension_key != current.dimension_key(ProofDimension.FULL_BUILD)
+                or lease.workspace_id != agent_workspace_id
+                or lease.generation_run_id != leased_run_id
+                or lease.fencing_epoch != fencing_epoch or lease.kind != "command"
+                or lease.phase != "final_build" or lease.state != "completed"
+                or lease.finished_at is None
+                or result.detail_digest != hashlib.sha256(
+                    result.redacted_detail.encode()).hexdigest()):
+            return None
+        if lease.proof_key != current.proof_key:
+            status = await _operation_status(result.operation_id)
+            response = status.terminal_response
+            transition = (
+                full_build_response_transition(response, current, project_id=project_id,
+                                               owner_id=user_id)
+                if status.operation_id == result.operation_id and status.state == "completed"
+                and response is not None and response.operation_id == result.operation_id else None
+            )
+            if transition is None or transition.before.proof_key != lease.proof_key:
+                return None
+        return result.operation_id, user_id
 
     async def _runtime_probe(proof_key: str) -> Any:
         from yleum_api.services.max_management_generation import management_probe_resources
@@ -2070,6 +2258,9 @@ async def maybe_create_project_cell_executor(
         replay_role_response=_replay_role_response,
         runtime_probe=_runtime_probe,
         operation_status=_operation_status,
+        resolve_full_build_operation=(
+            _resolve_full_build_operation if not restoration_adaptation else None
+        ),
         capabilities=capabilities,
         is_portable=_is_portable,
         control_workspace_id=workspace_id,
