@@ -122,6 +122,7 @@ def connection_example(modules):
         declarations += [
             "const catalog = useYleumCatalog();",
             "const selection = useYleumCatalogSelection(catalog.items);",
+            "const onChoose = inputs.onChoose;",
             "const ready = catalog.status === 'ready' && catalog.configVersion !== null;",
         ]
         rendered += [
@@ -132,7 +133,7 @@ def connection_example(modules):
               <article key={item.id}><h2>{item.title}</h2><span>{item.price}</span>
                 <button disabled={!ready || item.availability !== "in_stock" ||
                   (item.options.length > 0 && !selection.getOption(item))}
-                  onClick={() => inputs.onChoose(item, selection.getOption(item))}>Choose</button>
+                  onClick={() => onChoose(item, selection.getOption(item))}>Choose</button>
               </article> : null)}""",
         ]
     for resource, method in CREATE_METHOD.items():
@@ -206,6 +207,14 @@ def test_read_only_category_find_index_keeps_later_live_catalog_rendering():
     files = connection_files(CATALOG_CATEGORY_PAGE, ("catalog",))
     assert management_source_gap(files) is None
     assert management_implemented_capabilities(files) == frozenset({"catalog"})
+
+
+def test_passive_catalog_selection_destructuring_keeps_locked_category_field():
+    source = CATALOG_CATEGORY_PAGE.replace(
+        "const selection = useYleumCatalogSelection(items);",
+        "const {category, setCategory, getOption, selectOption} = useYleumCatalogSelection(items);",
+    ).replace("selection.setCategory", "setCategory")
+    assert management_source_gap(connection_files(source, ("catalog",))) is None
 
 
 def test_find_index_preserves_proven_collection_alias_and_local_predicate():
@@ -306,6 +315,323 @@ def test_find_index_retains_ast_budget_fail_closed():
     assert management_source_gap(connection_files(source, ("catalog",))) == (
         "Managed source connection analysis exceeded its bounded AST budget."
     )
+
+
+LEAD_STATUS_PAGE = """
+import {useEffect, useState, type FormEvent} from 'react';
+import {useYleumAppProfile} from '@/lib/omnia/app-profile-client';
+import {createManagedLead, getManagedRecords} from '@/lib/omnia/business-client';
+export default function Page() {
+  const {profile} = useYleumAppProfile();
+  const [status, setStatus] = useState('idle');
+  const [leads, setLeads] = useState<any[]>([]);
+  async function refresh() { setLeads((await getManagedRecords('leads')).records); }
+  useEffect(() => { void refresh(); }, []);
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (status === 'pending') return;
+    await createManagedLead({operationKey: 'fixture-operation', customerName: 'Fixture'});
+    setStatus('ok');
+    await refresh();
+  }
+  return <main><h1>{profile?.app_name}</h1>
+    <form onSubmit={submit}><button type="submit">Send</button></form>
+    {leads.map(record => <p key={record.id}>{record.customer_name} {record.status}</p>)}
+  </main>;
+}
+"""
+
+
+@pytest.mark.parametrize("guard", ["status === 'pending'", "'pending' === status"])
+def test_status_comparison_does_not_hide_live_form_creation(guard):
+    source = LEAD_STATUS_PAGE.replace("status === 'pending'", guard)
+    files = connection_files(source, ("leads",))
+    assert management_source_gap(files) is None
+    assert management_implemented_capabilities(files) == frozenset({"history"})
+
+
+@pytest.mark.parametrize("guard", [
+    "true", "true === true", "false !== true", "false !== 0", "true !== 1",
+    "'1' !== 1", "1 === 1.0", "null === null", "null !== false", "0 === -0",
+    "!'nonempty' === false", "true || opaque(leads)", "'nonempty' ?? false",
+    "'same' == 'same'", "1 == 1.0", "false == false", "null == null",
+])
+def test_known_true_comparison_guards_keep_unreachable_create_rejected(guard):
+    source = LEAD_STATUS_PAGE.replace("status === 'pending'", guard)
+    assert management_source_gap(connection_files(source, ("leads",)))
+
+
+@pytest.mark.parametrize("guard", [
+    "false", "false === true", "false === 0", "true === 1", "'1' === 1",
+    "1 !== 1.0", "null !== null", "null === false", "''", "0", "-0",
+    "false && opaque(leads)", "'' || false", "null ?? false",
+    "unknownValue === unknownValue", "unknownValue === null", "NaN === NaN",
+])
+def test_false_or_unknown_comparison_guards_keep_potential_creation(guard):
+    source = LEAD_STATUS_PAGE.replace("status === 'pending'", guard)
+    assert management_source_gap(connection_files(source, ("leads",))) is None
+
+
+@pytest.mark.parametrize("disconnect", ["create", "history"])
+def test_status_comparison_still_requires_actual_create_and_history(disconnect):
+    source = LEAD_STATUS_PAGE.replace(
+        "await createManagedLead(" if disconnect == "create"
+        else "setLeads((await getManagedRecords('leads')).records)",
+        "await Promise.resolve(" if disconnect == "create" else "setLeads([])",
+    )
+    assert management_source_gap(connection_files(source, ("leads",)))
+
+
+@pytest.mark.parametrize("field", ["profile", "catalog", "history"])
+@pytest.mark.parametrize("operator", ["===", "!==", "==", "!=", "<", ">", "<=", ">="])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_comparison_boolean_is_not_rendered_managed_data(field, operator, reverse):
+    source = connection_example(("catalog", "leads"))
+
+    def comparison(value):
+        return f"'fixed' {operator} {value}" if reverse else f"{value} {operator} 'fixed'"
+
+    if field == "profile":
+        source = source.replace("{profile?.app_name}", "{" + comparison("profile?.app_name") + "}")
+    elif field == "catalog":
+        source = source.replace(
+            "<h2>{item.title}</h2><span>{item.price}</span>",
+            "<h2>{" + comparison("item.title") + "}</h2>",
+        )
+    else:
+        source = source.replace(
+            "{record.customer_name} {record.status}",
+            "{" + comparison("record.customer_name") + "}",
+        )
+    assert source != connection_example(("catalog", "leads"))
+    assert management_source_gap(connection_files(source, ("catalog", "leads")))
+
+
+def test_comparison_cannot_forward_sdk_field_into_visible_input_value():
+    source = LEAD_STATUS_PAGE.replace(
+        "<h1>{profile?.app_name}</h1>", '<input value={"fixed" === profile?.app_name} />',
+    )
+    gap = management_source_gap(connection_files(source, ("leads",)))
+    assert gap is not None and gap.startswith("Connect useYleumAppProfile")
+
+
+@pytest.mark.parametrize("condition", [
+    "opaque(leads) === true",
+    "(async () => { const alias = leads; alias.splice(0); })() === true",
+])
+def test_comparison_still_visits_opaque_or_async_mutation_before_guard(condition):
+    # The normal post-submit refresh legitimately restores live records. Omit
+    # that reload here so the earlier opaque mutation must remain observable.
+    source = LEAD_STATUS_PAGE.replace("status === 'pending'", condition).replace(
+        "    await refresh();", "",
+    )
+    assert management_source_gap(connection_files(source, ("leads",)))
+
+
+@pytest.mark.parametrize("condition", [
+    "((arg = leads.splice(0)) => false)() === true",
+    "(function(arg = leads.splice(0)) { return false; })() === true",
+    "(async (arg = leads.splice(0)) => false)() === true",
+    "(({value = leads.splice(0)} = {}) => false)() === true",
+    "(([value = leads.splice(0)] = []) => false)() === true",
+    "(({[leads.splice(0).length]: value} = {}) => false)() === true",
+    "(({[opaque(leads)]: value}) => false)({}) === true",
+    "(({value}) => false)({get value() { leads.splice(0); return 1; }}) === true",
+    "((arg) => { const {value = leads.splice(0)} = {}; return false; })() === true",
+    "(() => { const [value = leads.splice(0)] = []; return false; })() === true",
+    "(() => { const {[opaque(leads)]: value} = {}; return false; })() === true",
+    "(() => { const rows = leads; function helper(arg = rows.splice(0)) { return false; } "
+    "const alias = helper; return alias(); })() === true",
+])
+def test_comparison_does_not_hide_parameter_or_binding_initializer_effects(condition):
+    from yleum_api.services.max_management_generation import _Connections
+
+    source = LEAD_STATUS_PAGE.replace("status === 'pending'", condition).replace(
+        "    await refresh();", "",
+    )
+    files = connection_files(source, ("leads",))
+    assert not _Connections(files).programs["src/app/page.tsx"].has_error
+    assert management_source_gap(files)
+
+
+@pytest.mark.parametrize("probe", [
+    "((arg = leads.splice(0)) => false)()",
+    "(function(arg = leads.splice(0)) { return false; })()",
+    "(async (arg = leads.splice(0)) => false)()",
+    "(({value = leads.splice(0)} = {}) => false)()",
+    "(({[opaque(leads)]: value}) => false)({})",
+    "(({value}) => false)({get value() { leads.splice(0); return 1; }})",
+    "((arg) => { const {value} = arg; return false; })"
+    "({get value() { leads.splice(0); return 1; }})",
+    "(() => { const {[opaque(leads)]: value} = {}; return false; })()",
+    "((arg = true) => arg)()",
+])
+def test_hoisted_probe_cannot_hide_default_or_binding_effects_from_later_comparison(probe):
+    from yleum_api.services.max_management_generation import _Connections
+
+    source = LEAD_STATUS_PAGE.replace(
+        "    if (status === 'pending') return;",
+        "    const probe = " + probe + ";\n    if (probe === true) return;",
+    ).replace("    await refresh();", "")
+    files = connection_files(source, ("leads",))
+    assert not _Connections(files).programs["src/app/page.tsx"].has_error
+    assert management_source_gap(files)
+
+
+@pytest.mark.parametrize("condition", [
+    "((arg: unknown) => false)(status) === true",
+    "(async (arg: unknown) => false)(status) === true",
+    "(function(arg: unknown) { return false; })(status) === true",
+    "(({value}: {value: boolean}) => value)({value: false}) === true",
+    "(([value]: boolean[]) => value)([false]) === true",
+    "(() => { const {flag} = {flag: false}; return flag; })() === true",
+    "(() => { const [flag] = [false]; return flag; })() === true",
+])
+def test_comparison_keeps_plain_async_or_typed_parameter_calls_supported(condition):
+    source = LEAD_STATUS_PAGE.replace("status === 'pending'", condition)
+    assert management_source_gap(connection_files(source, ("leads",))) is None
+
+
+@pytest.mark.parametrize("statements", [
+    "const source = {get value() { leads.splice(0); return 1; }}; const copy = {...source};",
+    "const source = {value: 0, get value() { leads.splice(0); return 1; }}; "
+    "const copy = {...source};",
+    "const copy = {[leads.splice(0).length]: 1};",
+    "const copy = {[leads.splice(0).length]() { return 1; }};",
+    "class X { static value = leads.splice(0); }",
+    "class X { static { leads.splice(0); } }",
+    "const X = class { static value = leads.splice(0); };",
+    "enum X { value = leads.splice(0).length }",
+    "const source = unknownSource(); const copy = {...source};",
+    "const source = {value: 1}; opaque(source); const copy = {...source};",
+    "const label = `${leads.splice(0)}`;",
+    "const value = (leads.splice(0), false);",
+])
+@pytest.mark.parametrize("hoist", [False, True])
+def test_comparison_cannot_drop_unproven_object_or_class_construction_effects(statements, hoist):
+    from yleum_api.services.max_management_generation import _Connections
+
+    probe = "(() => { " + statements + " return false; })()"
+    guard = ("const probe = " + probe + "; if (probe === true) return;" if hoist
+             else "if (" + probe + " === true) return;")
+    source = LEAD_STATUS_PAGE.replace("if (status === 'pending') return;", guard).replace(
+        "    await refresh();", "",
+    )
+    files = connection_files(source, ("leads",))
+    assert not _Connections(files).programs["src/app/page.tsx"].has_error
+    assert management_source_gap(files)
+
+
+@pytest.mark.parametrize("statements", [
+    "const copy = {value: false};",
+    "const value = false; const copy = {value};",
+    "const source = {value: false}; const copy = {...source};",
+    "const source = {}; const copy = {...source};",
+    "const copy = {...leads};",
+    "type Shape = {value: boolean}; interface OtherShape { value: boolean; }",
+    "const label = `Status: ${status}`;",
+])
+def test_passive_object_spreads_and_type_only_declarations_remain_supported(statements):
+    source = LEAD_STATUS_PAGE.replace(
+        "status === 'pending'", "(() => { " + statements + " return false; })() === true",
+    )
+    assert management_source_gap(connection_files(source, ("leads",))) is None
+
+
+def test_opaque_callback_receiver_cannot_keep_later_input_spread_passive():
+    source = connection_example(("catalog", "leads")).replace(
+        "const onChoose = inputs.onChoose;", "",
+    ).replace("onChoose(item,", "inputs.onChoose(item,")
+    gap = management_source_gap(connection_files(source, ("catalog", "leads")))
+    assert gap is not None and "cannot prove call or binding effects" in gap
+
+
+@pytest.mark.parametrize("key", ["__proto__", '"__proto__"'])
+def test_unproven_prototype_initializer_cannot_forge_passive_data(key):
+    source = LEAD_STATUS_PAGE.replace(
+        "status === 'pending'",
+        "(() => { const copy = {" + key + ": unknownSource()}; "
+        "const {value} = copy; return false; })() === true",
+    )
+    assert management_source_gap(connection_files(source, ("leads",)))
+
+
+@pytest.mark.parametrize("probe", [
+    "(({missing: {value}}) => false)({})",
+    "(() => { const source = {}; const {missing: {value}} = source; return false; })()",
+])
+def test_spread_passivity_does_not_prove_missing_destructured_properties(probe):
+    source = LEAD_STATUS_PAGE.replace("status === 'pending'", probe + " === true")
+    assert management_source_gap(connection_files(source, ("leads",)))
+
+
+@pytest.mark.parametrize("condition", [
+    "0 == '0'", "0 != '0'", "1 + 1 === 2", "'x' < 'y'", r"'\u0078' === 'x'",
+])
+def test_known_unsupported_comparison_control_fails_closed(condition):
+    source = LEAD_STATUS_PAGE.replace("status === 'pending'", condition)
+    gap = management_source_gap(connection_files(source, ("leads",)))
+    assert gap == "Managed source connection analysis cannot prove unsupported constant control."
+
+
+@pytest.mark.parametrize("expression", [
+    "false && <h1>{profile?.app_name}</h1>",
+    "true || <h1>{profile?.app_name}</h1>",
+    "(true === false) && <h1>{profile?.app_name}</h1>",
+    "('same' == 'same') || <h1>{profile?.app_name}</h1>",
+    "'fixed' ?? <h1>{profile?.app_name}</h1>",
+])
+def test_comparison_short_circuit_does_not_render_unreachable_sdk_jsx(expression):
+    source = LEAD_STATUS_PAGE.replace("<h1>{profile?.app_name}</h1>", "{" + expression + "}")
+    gap = management_source_gap(connection_files(source, ("leads",)))
+    assert gap is not None and gap.startswith("Connect useYleumAppProfile")
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_comparing_collection_map_to_something_is_not_history_rendering(reverse):
+    original = "leads.map(record => <p key={record.id}>{record.customer_name} {record.status}</p>)"
+    expression = f"something === ({original})" if reverse else f"({original}) === something"
+    source = LEAD_STATUS_PAGE.replace("{" + original + "}", "{" + expression + "}")
+    assert source != LEAD_STATUS_PAGE
+    assert management_source_gap(connection_files(source, ("leads",)))
+
+
+def test_comparison_map_operand_keeps_mutation_effects_before_later_history():
+    source = LEAD_STATUS_PAGE.replace(
+        "    {leads.map(record =>",
+        "    {(leads.map(record => { leads.length = 0; return record; })) === something}\n"
+        "    {leads.map(record =>",
+    )
+    assert source != LEAD_STATUS_PAGE
+    assert management_source_gap(connection_files(source, ("leads",)))
+
+
+def test_comparison_unmounted_form_does_not_activate_its_create_handler():
+    form = '<form onSubmit={submit}><button type="submit">Send</button></form>'
+    source = LEAD_STATUS_PAGE.replace(
+        form, "{(" + form + ") === something}",
+    ).replace("status === 'pending'", "'pending' === status")
+    assert source != LEAD_STATUS_PAGE
+    assert management_source_gap(connection_files(source, ("leads",)))
+
+
+def test_comparison_unmounted_jsx_still_evaluates_child_expression_effects():
+    source = LEAD_STATUS_PAGE.replace(
+        "    {leads.map(record =>",
+        "    {(<div>{opaque(leads)}</div>) === something}\n    {leads.map(record =>",
+    )
+    assert management_source_gap(connection_files(source, ("leads",)))
+
+
+def test_comparison_unmounted_component_cannot_load_history_through_effect_hook():
+    source = LEAD_STATUS_PAGE.replace(
+        "  useEffect(() => { void refresh(); }, []);",
+        "  function HiddenHistory() { useEffect(() => { void refresh(); }, []); return null; }",
+    ).replace("    await refresh();", "").replace(
+        "    {leads.map(record =>",
+        "    {(<HiddenHistory />) === something}\n    {leads.map(record =>",
+    )
+    assert management_source_gap(connection_files(source, ("leads",)))
 
 
 @pytest.mark.parametrize("modules", CONNECTION_MODULES)

@@ -9,7 +9,9 @@ Generated code is parsed, never executed. Runtime probes remain a separate gate.
 from __future__ import annotations
 
 import json
+import math
 import posixpath
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -40,6 +42,53 @@ _VISIBLE_FIELDS = {
     "textarea": {"value", "defaultValue", "placeholder"},
     "img": {"alt", "src"},
 }
+_NULL_LITERAL = object()
+_UNSUPPORTED_LITERAL = object()
+_DECIMAL_LITERAL = re.compile(
+    r"(?:0|[1-9][0-9]*)(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?|\.[0-9]+(?:[eE][+-]?[0-9]+)?"
+)
+_TYPE_ONLY_DECLARATIONS = {
+    "interface_declaration", "type_alias_declaration", "ambient_declaration", "function_signature",
+}
+
+
+def _primitive_literal(node: Node) -> object:
+    kind = node.type
+    text = _text(node)
+    if kind in {"true", "false"}:
+        return kind == "true"
+    if kind == "null":
+        return _NULL_LITERAL
+    if kind == "string":
+        # Do not guess JS escape semantics using Python string decoding.
+        return text[1:-1] if "\\" not in text else _UNSUPPORTED_LITERAL
+    if _DECIMAL_LITERAL.fullmatch(text):
+        number = float(text)
+        if math.isfinite(number):
+            return number
+    return _UNSUPPORTED_LITERAL
+
+
+def _literal_truth(value: object) -> bool | None:
+    if value is _NULL_LITERAL:
+        return False
+    return bool(value) if type(value) in {bool, str, float} else None
+
+
+def _comparison_literal(left: object, right: object, operator: str) -> object:
+    if left is _UNSUPPORTED_LITERAL or right is _UNSUPPORTED_LITERAL:
+        return _UNSUPPORTED_LITERAL
+    if left is None or right is None:
+        return None
+    # Only same-type loose equality needs no JS coercion. Unsupported constant
+    # conditions must not turn into hypothetical runtime paths granting writes.
+    same_type = type(left) is type(right)
+    if operator in {"==", "!="} and not same_type:
+        return _UNSUPPORTED_LITERAL
+    if operator not in {"===", "!==", "==", "!="}:
+        return _UNSUPPORTED_LITERAL
+    equal = same_type and left == right
+    return not equal if operator in {"!==", "!="} else equal
 
 
 def _text(node: Node | None) -> str:
@@ -63,6 +112,7 @@ class _Value:
     elements: tuple[_Value, ...] | None = None
     pending: _Value | None = None
     mutation_roots: tuple[_Value, ...] = ()
+    passive: bool = False
 
 
 def _contract(files: Mapping[str, str]) -> ManagementContract | None:
@@ -91,6 +141,9 @@ class _Connections:
         self.created: set[str] = set()
         self.rendered: set[str] = set()
         self.catalog_selection = False
+        self.unsupported_constant_control = False
+        self.unsupported_effects = False
+        self.render_suppression = 0
         self.active: set[tuple[str, int]] = set()
         self.steps = 0
         self.event_depth = 0
@@ -164,44 +217,123 @@ class _Connections:
                     env["default"] = self.value(statement.child_by_field_name("value"), env, path)
         return env
 
+    def binding_is_supported(self, pattern: Node | None, value: _Value) -> bool:
+        """Prove passive bindings, never omit defaults, computed keys or getters."""
+        pending = [(pattern, value)]
+        while pending:
+            current, source = pending.pop()
+            self.steps += 1
+            if current is None or self.steps > 4000:
+                return False
+            kind = current.type
+            if kind in {"identifier", "shorthand_property_identifier_pattern"}:
+                continue
+            if kind in {"required_parameter", "optional_parameter"}:
+                if current.child_by_field_name("value") is not None:
+                    return False
+                pending.append((current.child_by_field_name("pattern"), source))
+            elif kind == "object_pattern":
+                if not source.props and not source.tags:
+                    return False
+                for child in current.named_children:
+                    if child.type == "comment":
+                        continue
+                    if child.type == "pair_pattern":
+                        key_node = child.child_by_field_name("key")
+                        if key_node is None or key_node.type != "property_identifier":
+                            return False
+                        key = _text(key_node)
+                        target = child.child_by_field_name("value")
+                    elif child.type == "shorthand_property_identifier_pattern":
+                        key, target = _text(child), child
+                    else:
+                        return False
+                    # Known JSX/literal props and locked SDK data are passive.
+                    # An omitted/unknown property could execute a source getter.
+                    if key not in source.props and not source.tags:
+                        return False
+                    pending.append((target, self.member(source, key)))
+            elif kind == "array_pattern":
+                children = [c for c in current.named_children if c.type != "comment"]
+                if source.state:
+                    if len(children) > 2 or any(c.type != "identifier" for c in children):
+                        return False
+                    expecting_value = True
+                    for child in current.children:
+                        if child.type == ",":
+                            if expecting_value:
+                                return False
+                            expecting_value = True
+                        elif child.is_named and child.type != "comment":
+                            expecting_value = False
+                elif source.elements is None:
+                    return False
+                else:
+                    index = 0
+                    for child in current.children:
+                        if child.type == ",":
+                            index += 1
+                        elif child.is_named and child.type != "comment":
+                            element = (
+                                source.elements[index]
+                                if index < len(source.elements) else _Value()
+                            )
+                            pending.append((child, element))
+            else:
+                return False
+        return True
+
     def bind(self, pattern: Node | None, value: _Value, env: dict[str, _Value]) -> None:
+        if pattern is None:
+            return
+        if not self.binding_is_supported(pattern, value):
+            self.unsupported_effects = True
+            return
+        self.bind_supported(pattern, value, env)
+
+    def bind_supported(self, pattern: Node | None, value: _Value, env: dict[str, _Value]) -> None:
         if pattern is None:
             return
         if pattern.type in {"identifier", "shorthand_property_identifier_pattern"}:
             env[_text(pattern)] = value
         elif pattern.type in {"required_parameter", "optional_parameter"}:
-            self.bind(pattern.child_by_field_name("pattern"), value, env)
+            self.bind_supported(pattern.child_by_field_name("pattern"), value, env)
         elif pattern.type == "object_pattern":
             for child in pattern.named_children:
+                if child.type == "comment":
+                    continue
                 key = (
                     _text(child.child_by_field_name("key"))
                     if child.type == "pair_pattern"
                     else _text(child)
                 )
-                self.bind(
+                self.bind_supported(
                     child.child_by_field_name("value") if child.type == "pair_pattern" else child,
                     self.member(value, key),
                     env,
                 )
         elif pattern.type == "array_pattern" and value.state:
-            children = pattern.named_children
-            state = _Value(tags=set(value.tags), props=dict(value.props), elements=value.elements)
+            children = [child for child in pattern.named_children if child.type != "comment"]
+            state = _Value(
+                tags=set(value.tags), props=dict(value.props), elements=value.elements,
+                passive=value.passive,
+            )
             if children:
-                self.bind(children[0], state, env)
+                self.bind_supported(children[0], state, env)
             if len(children) > 1:
-                self.bind(children[1], _Value(setter=state), env)
+                self.bind_supported(children[1], _Value(setter=state), env)
         elif pattern.type == "array_pattern":
             index = 0
             for child in pattern.children:
                 if child.type == ",":
                     index += 1
-                elif child.is_named:
+                elif child.is_named and child.type != "comment":
                     element = (
                         value.elements[index]
                         if value.elements is not None and index < len(value.elements)
                         else _Value()
                     )
-                    self.bind(child, element, env)
+                    self.bind_supported(child, element, env)
 
     def declare(self, node: Node, env: dict[str, _Value], path: str) -> None:
         if node.type == "function_declaration":
@@ -214,6 +346,10 @@ class _Connections:
                         self.value(declaration.child_by_field_name("value"), env, path),
                         env,
                     )
+        elif node.type == "expression_statement":
+            self.statement(node, env, path, False)
+        elif node.type not in _TYPE_ONLY_DECLARATIONS | {"comment", "empty_statement"}:
+            self.unsupported_effects = True
 
     def member(self, value: _Value, key: str) -> _Value:
         if key in value.props:
@@ -242,7 +378,10 @@ class _Connections:
             for tag in tags
             if tag == "catalog" or tag.startswith("records:")
         )
-        result = _Value(tags=tags, elements=elements or None, mutation_roots=value.mutation_roots)
+        result = _Value(
+            tags=tags, elements=elements or None, mutation_roots=value.mutation_roots,
+            passive=value.passive or bool(value.tags),
+        )
         if elements:
             # Re-reading a response property must observe mutations to that collection.
             value.props[key] = result
@@ -291,6 +430,7 @@ class _Connections:
             current.function = None
             current.setter = None
             current.literal = None
+            current.passive = False
 
     def projection_is_bounded(self, path: str, node: Node) -> bool:
         key = (path, node.start_byte)
@@ -436,6 +576,7 @@ class _Connections:
             fn.setter.tags = set(args[0].tags)
             fn.setter.props = dict(args[0].props)
             fn.setter.elements = args[0].elements
+            fn.setter.passive = args[0].passive
             return _Value()
         if fn.function is None:
             if not fn.sdk:
@@ -443,19 +584,27 @@ class _Connections:
                     self.invalidate(arg)
             return _Value()
         path, node, closure = fn.function
-        if self.projection_depth and not self.projection_is_bounded(path, node):
-            return _Value()
         key = (path, node.start_byte)
         if key in self.active or self.steps > 4000:
             return _Value()
-        self.active.add(key)
-        env = dict(closure)
         parameters = node.child_by_field_name("parameters")
         patterns = (
             parameters.named_children if parameters else [node.child_by_field_name("parameter")]
         )
-        for index, pattern in enumerate(patterns):
-            self.bind(pattern, args[index] if index < len(args) else _Value(), env)
+        bindings = [
+            (pattern, args[index] if index < len(args) else _Value())
+            for index, pattern in enumerate(patterns)
+        ]
+        if not all(self.binding_is_supported(pattern, value) for pattern, value in bindings):
+            self.unsupported_effects = True
+            return _Value()
+        if self.projection_depth and not self.projection_is_bounded(path, node):
+            self.unsupported_effects = True
+            return _Value()
+        self.active.add(key)
+        env = dict(closure)
+        for pattern, value in bindings:
+            self.bind_supported(pattern, value, env)
         body = node.child_by_field_name("body")
         result = (
             self.block(body, env, path, render)[1]
@@ -476,7 +625,8 @@ class _Connections:
             if child.type in {"lexical_declaration", "variable_declaration"}:
                 for declaration in child.named_children:
                     if declaration.type == "variable_declarator":
-                        self.bind(declaration.child_by_field_name("name"), _Value(), env)
+                        # Hoisting establishes names, not executed binding effects.
+                        self.bind_supported(declaration.child_by_field_name("name"), _Value(), env)
         for child in node.named_children:
             if child.type == "function_declaration":
                 self.declare(child, env, path)
@@ -487,12 +637,16 @@ class _Connections:
                 )
             if child.type == "if_statement":
                 condition = self.value(child.child_by_field_name("condition"), env, path)
+                if condition.literal is _UNSUPPORTED_LITERAL:
+                    self.unsupported_constant_control = True
+                    return True, _Value()
+                truth = _literal_truth(condition.literal)
                 branch = child.child_by_field_name(
-                    "alternative" if condition.literal is False else "consequence"
+                    "alternative" if truth is False else "consequence"
                 )
                 if branch is not None:
                     returned, value = self.statement(branch, env, path, render)
-                    if returned and condition.literal is not None:
+                    if returned and truth is not None:
                         return True, value
             else:
                 self.statement(child, env, path, render)
@@ -516,7 +670,80 @@ class _Connections:
             body = node.child_by_field_name("body")
             if body is not None:
                 return self.block(body, env, path, render)
+        elif node.type not in _TYPE_ONLY_DECLARATIONS | {"comment", "empty_statement"}:
+            self.unsupported_effects = True
         return False, _Value()
+
+    def value_for_effects(self, node: Node | None, env: dict[str, _Value], path: str) -> _Value:
+        # A comparison discards rendering, not callback effects. Using the
+        # projection path here could skip an unsupported mutating map callback.
+        self.render_suppression += 1
+        try:
+            return self.value(node, env, path, True)
+        finally:
+            self.render_suppression -= 1
+
+    def binary_value(
+        self, node: Node, env: dict[str, _Value], path: str, render: bool,
+    ) -> _Value:
+        operator = _text(node.child_by_field_name("operator"))
+        forwarding = operator in {"&&", "||", "??"}
+        if forwarding:
+            left = self.value(
+                node.child_by_field_name("left"), env, path,
+                render and operator in {"||", "??"},
+            )
+            if left.literal is _UNSUPPORTED_LITERAL:
+                self.unsupported_constant_control = True
+                return left
+            truth = _literal_truth(left.literal)
+            if ((operator == "&&" and truth is False)
+                    or (operator == "||" and truth is True)
+                    or (operator == "??" and left.literal is not None
+                        and left.literal is not _NULL_LITERAL)):
+                return left
+            return self.value(node.child_by_field_name("right"), env, path, render)
+        # Comparisons render a Boolean, not either operand's SDK data. Both
+        # operands still run for effects; neither can leak a render witness.
+        left = self.value_for_effects(node.child_by_field_name("left"), env, path)
+        right = self.value_for_effects(node.child_by_field_name("right"), env, path)
+        return _Value(literal=_comparison_literal(left.literal, right.literal, operator))
+
+    def object_value(self, node: Node, env: dict[str, _Value], path: str) -> _Value:
+        props: dict[str, _Value] = {}
+        passive = True
+        for child in node.named_children:
+            if child.type == "comment":
+                continue
+            if child.type == "pair":
+                key = child.child_by_field_name("key")
+                name = (
+                    _primitive_literal(key) if key is not None and key.type == "string"
+                    else _text(key)
+                )
+                if (key is None or key.type not in {"property_identifier", "string", "number"}
+                        or not isinstance(name, str) or name == "__proto__"):
+                    self.unsupported_effects = True
+                    passive = False
+                props[str(name)] = self.value(child.child_by_field_name("value"), env, path)
+            elif child.type == "shorthand_property_identifier":
+                props[_text(child)] = env.get(_text(child), _Value())
+            elif child.type == "spread_element":
+                source = self.value(
+                    child.named_children[0] if child.named_children else None, env, path,
+                )
+                if source.passive or source.tags:
+                    props.update(source.props)
+                else:
+                    self.unsupported_effects = True
+                    passive = False
+                    self.invalidate(source)
+            else:
+                # Getter/method/computed syntax can execute source closures
+                # during construction or a later spread. Never omit it silently.
+                self.unsupported_effects = True
+                passive = False
+        return _Value(props=props, passive=passive)
 
     def value(
         self, node: Node | None, env: dict[str, _Value], path: str, render: bool = False
@@ -548,15 +775,16 @@ class _Connections:
                 if root is not None:
                     self.invalidate(root)
                 self.invalidate(operand)
-            result = _Value(
-                literal=not operand.literal
-                if operator == "!" and isinstance(operand.literal, bool)
-                else None
-            )
-        elif kind in {"true", "false", "string", "number"}:
-            result = _Value(
-                literal=kind == "true" if kind in {"true", "false"} else _text(node).strip("'\"")
-            )
+            truth = _literal_truth(operand.literal)
+            if operator == "!" and truth is not None:
+                literal: object = not truth
+            elif operator in {"+", "-"} and type(operand.literal) is float:
+                literal = -operand.literal if operator == "-" else operand.literal
+            else:
+                literal = None if operand.literal is None else _UNSUPPORTED_LITERAL
+            result = _Value(literal=literal)
+        elif kind in {"true", "false", "string", "number", "null"}:
+            result = _Value(literal=_primitive_literal(node))
         elif kind == "member_expression":
             result = self.member(
                 self.value(node.child_by_field_name("object"), env, path),
@@ -584,7 +812,7 @@ class _Connections:
                 and len(children) <= _MAX_COLLECTION_ITEMS
                 and all(child.type != "spread_element" for child in children)
             ):
-                result = _Value(elements=elements)
+                result = _Value(elements=elements, passive=True)
             else:
                 for element in elements:
                     self.invalidate(element)
@@ -613,44 +841,47 @@ class _Connections:
             self.value(node.child_by_field_name("right"), env, path)
             result = _Value()
         elif kind == "object":
-            props = {}
+            result = self.object_value(node, env, path)
+        elif kind in {"class", "class_expression"}:
+            self.unsupported_effects = True
+            result = _Value()
+        elif kind == "template_string":
+            # Preserve passive labels used by existing pages, without evaluating
+            # JS strings or treating their Boolean comparisons as SDK rendering.
             for child in node.named_children:
-                if child.type == "pair":
-                    props[_text(child.child_by_field_name("key"))] = self.value(
-                        child.child_by_field_name("value"), env, path
-                    )
-                elif child.type == "spread_element":
-                    self.value(child, env, path)
-                elif child.type == "shorthand_property_identifier":
-                    props[_text(child)] = env.get(_text(child), _Value())
-            result = _Value(props=props)
+                if child.type == "template_substitution":
+                    for expression in child.named_children:
+                        self.value_for_effects(expression, env, path)
+                elif child.type not in {"string_fragment", "escape_sequence"}:
+                    self.unsupported_effects = True
+            result = _Value(literal=_UNSUPPORTED_LITERAL)
         elif kind == "call_expression":
             result = self.call(node, env, path, render)
         elif kind in {"jsx_element", "jsx_self_closing_element", "jsx_fragment"}:
             return self.jsx(node, env, path) if render else _Value()
         elif kind == "binary_expression":
-            left = self.value(node.child_by_field_name("left"), env, path, render)
-            operator = _text(node.child_by_field_name("operator"))
-            if (operator == "&&" and left.literal is False) or (
-                operator == "||" and left.literal is True
-            ):
-                return left
-            result = self.value(node.child_by_field_name("right"), env, path, render)
+            result = self.binary_value(node, env, path, render)
         elif kind == "ternary_expression":
             condition = self.value(node.child_by_field_name("condition"), env, path)
-            if condition.literal is None:
+            if condition.literal is _UNSUPPORTED_LITERAL:
+                self.unsupported_constant_control = True
+                return _Value()
+            truth = _literal_truth(condition.literal)
+            if truth is None:
                 self.value(node.child_by_field_name("alternative"), env, path, render)
             result = self.value(
                 node.child_by_field_name(
-                    "alternative" if condition.literal is False else "consequence"
+                    "alternative" if truth is False else "consequence"
                 ),
                 env,
                 path,
                 render,
             )
         else:
+            if kind not in {"undefined", "this", "super", "regex"}:
+                self.unsupported_effects = True
             result = _Value()
-        if render:
+        if render and not self.render_suppression:
             self.rendered.update(result.tags)
         return result
 
@@ -725,6 +956,7 @@ class _Connections:
                 tags=set(initial.tags),
                 props=dict(initial.props),
                 elements=initial.elements,
+                passive=initial.passive,
             )
         if fn.sdk == "useEffect":
             return self.invoke(args[0], []) if args else _Value()
@@ -738,8 +970,11 @@ class _Connections:
             if args and "catalog" in args[0].tags:
                 self.catalog_selection = True
             return _Value(props={
-                name: _Value(sdk="catalog-selection-" + name)
-                for name in ("getOption", "selectOption", "setCategory")
+                "category": _Value(),
+                **{
+                    name: _Value(sdk="catalog-selection-" + name)
+                    for name in ("getOption", "selectOption", "setCategory")
+                },
             })
         if fn.sdk == "getManagedRecords" and args and args[0].literal in _CREATE:
             return _Value(pending=_Value(tags={"response:" + str(args[0].literal)}))
@@ -777,18 +1012,27 @@ class _Connections:
                         if attribute_value
                         else _Value(literal=True)
                     )
-            if any(props.get(key, _Value()).literal is True for key in ("hidden", "disabled")):
-                return _Value()
+            if not self.render_suppression:
+                controls = [props.get(key, _Value()).literal for key in ("hidden", "disabled")]
+                if any(value is _UNSUPPORTED_LITERAL for value in controls):
+                    self.unsupported_constant_control = True
+                    return _Value()
+                if any(value is True for value in controls):
+                    return _Value()
             name = _text(opening.child_by_field_name("name"))
             if name and name[0].isupper():
-                return self.invoke(env.get(name, _Value()), [_Value(props=props)], True)
-            for key, value in props.items():
-                if key in _INTRINSIC_EVENTS:
-                    self.event_depth += 1
-                    self.invoke(value, [])
-                    self.event_depth -= 1
-                elif key in _VISIBLE_FIELDS.get(name, ()):
-                    self.rendered.update(value.tags)
+                if not self.render_suppression:
+                    return self.invoke(
+                        env.get(name, _Value()), [_Value(props=props, passive=True)], True,
+                    )
+            elif not self.render_suppression:
+                for key, value in props.items():
+                    if key in _INTRINSIC_EVENTS:
+                        self.event_depth += 1
+                        self.invoke(value, [])
+                        self.event_depth -= 1
+                    elif key in _VISIBLE_FIELDS.get(name, ()):
+                        self.rendered.update(value.tags)
         for child in node.named_children:
             if child.type == "jsx_expression":
                 for expression in child.named_children:
@@ -799,7 +1043,12 @@ class _Connections:
 
     def analyze(self) -> None:
         if "src/app/page.tsx" in self.programs:
-            self.invoke(self.module("src/app/page.tsx").get("default", _Value()), [], True)
+            # Entry props come from the framework, not source-defined getters
+            # closing over the component's SDK collections.
+            self.invoke(
+                self.module("src/app/page.tsx").get("default", _Value()),
+                [_Value(passive=True)], True,
+            )
 
 
 def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
@@ -816,6 +1065,18 @@ def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
     connections.analyze()
     if connections.steps > 4000:
         return "Managed source connection analysis exceeded its bounded AST budget.", frozenset()
+    if connections.unsupported_effects:
+        return (
+            "Managed source connection analysis cannot prove call or binding effects. "
+            "Use passive bindings and explicit body statements instead of default, rest "
+            "or computed bindings.",
+            frozenset(),
+        )
+    if connections.unsupported_constant_control:
+        return (
+            "Managed source connection analysis cannot prove unsupported constant control.",
+            frozenset(),
+        )
     if "profile-field" not in connections.rendered:
         return (
             "Connect useYleumAppProfile from app-profile-client "
