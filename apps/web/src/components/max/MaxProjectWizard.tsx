@@ -7,28 +7,17 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { ManagementModule } from "@/lib/api/types";
-import { MAX_APP_TYPES, MAX_BRIEF_LENGTH, MAX_FEATURES, MAX_FEATURE_INFO, MAX_MANAGEMENT_MODULES, MAX_STYLES, REQUIRED_MANAGEMENT_MODULES, newProjectManagementModules, type MaxAppTypeId, type MaxFeature, type MaxStyleId } from "@/lib/max-brief";
+import { MAX_APP_TYPES, MAX_BRIEF_LENGTH, MAX_FEATURES, MAX_FEATURE_INFO, MAX_MANAGEMENT_MODULES, MAX_STYLES, REQUIRED_MANAGEMENT_MODULES, newProjectManagementModules, type MaxFeature, type MaxProjectBrief } from "@/lib/max-brief";
 import { MaxFeaturePreview } from "./MaxFeaturePreview";
 import { MaxProjectReview } from "./MaxProjectReview";
 import "./max-studio.css";
 
-type WizardValues = {
-  name: string;
-  idea: string;
-  appType: MaxAppTypeId;
-  audience: string;
-  primaryAction: string;
-  features: MaxFeature[];
-  style: MaxStyleId;
-  brandColors: string;
-  managementModules?: ManagementModule[];
-};
+type WizardValues = Omit<MaxProjectBrief, "catalogItemCount">;
 
 const titles = ["Что создаём?", "Для кого приложение?", "Функции и оформление", "Проверьте описание"];
 
 /** Presentation only: the parent owns all answers and the real creation mutation. */
-export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending, onSubmit, submitDisabled = false, quotaNotice }: {
+export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending, onSubmit, submitDisabled = false, quotaNotice, initialCatalog }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   values: WizardValues;
@@ -36,6 +25,7 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
   pending: boolean;
   submitDisabled?: boolean;
   quotaNotice?: ReactNode;
+  initialCatalog?: ReactNode;
   onSubmit: () => Promise<unknown>;
 }) {
   const [step, setStep] = useState(0);
@@ -154,7 +144,7 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
               <fieldset><legend className="text-sm font-medium">Стиль</legend><div className="mt-3 grid gap-2 sm:grid-cols-3">{MAX_STYLES.map(item => <button key={item.id} type="button" aria-pressed={values.style === item.id} className="max-wizard-option max-wizard-option--style" onClick={() => onChange({ style: item.id })}><span className="text-sm font-medium">{item.label}</span><span className="mt-1 block text-xs leading-5 text-fg-secondary">{item.description}</span></button>)}</div></fieldset>
               <div className="space-y-2"><Label htmlFor="max-brand">Цвета бренда</Label><Input id="max-brand" value={values.brandColors} onChange={event => onChange({ brandColors: event.target.value })} placeholder="#0062ee, графит, молочный" /></div>
             </>}
-            {step === 3 && <MaxProjectReview {...values} />}
+            {step === 3 && <>{initialCatalog}<MaxProjectReview {...values} /></>}
           </div>
           <footer className="max-wizard-footer">
             <Button type="button" variant="outline" disabled={busy} onClick={() => step === 0 ? onOpenChange(false) : setStep(step - 1)}>{step === 0 ? "Отмена" : "Назад"}</Button>

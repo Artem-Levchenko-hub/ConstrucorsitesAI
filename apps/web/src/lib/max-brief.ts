@@ -103,6 +103,8 @@ export type MaxProjectBrief = {
   style: MaxStyleId;
   brandColors: string;
   managementModules?: ManagementModule[];
+  /** The reviewed catalog is already saved in the same project-creation request. */
+  catalogItemCount?: number;
 };
 
 function optionLabel<T extends { id: string; label: string }>(
@@ -112,6 +114,9 @@ function optionLabel<T extends { id: string; label: string }>(
   return options.find((option) => option.id === id)?.label ?? id;
 }
 export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
+  if (brief.catalogItemCount !== undefined && (!Number.isInteger(brief.catalogItemCount) || brief.catalogItemCount < 0 || brief.catalogItemCount > 100)) {
+    throw new Error("В начальном каталоге может быть от 0 до 100 позиций.");
+  }
   if (Array.from(brief.idea.trim()).length > MAX_BRIEF_LENGTH) {
     throw new Error(`Описание слишком длинное: максимум ${MAX_BRIEF_LENGTH} символов. Текст сохранён в форме.`);
   }
@@ -141,6 +146,11 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
     `Цвета бренда: ${colors}.`,
     "",
     "Сразу собери целостный рабочий MVP: мобильную навигацию, все основные экраны, состояния загрузки/пустого списка/ошибки, реальные русские тексты. Начальные данные добавляй только по явному запросу пользователя; иначе оставь списки пустыми.",
+    ...(brief.catalogItemCount === undefined ? [] : [
+      brief.catalogItemCount === 0
+        ? "Владелец подтвердил пустой начальный каталог. Не добавляй позиции из описания или примеров. Покажи честное пустое состояние и читай каталог через штатный SDK Yleum."
+        : `Владелец подтвердил начальный каталог: ${brief.catalogItemCount} позиций уже сохранены в Yleum. Названия, цены и дальнейшие изменения читай из штатного SDK каталога. Этот сохранённый список имеет приоритет перед примерами в описании; не вшивай позиции в код и не создавай вторую копию данных.`,
+    ]),
     "Используй готовую обвязку MAX Bridge, серверную проверку initData, MAX-профиль пользователя и webhook бота из шаблона. Не добавляй отдельную регистрацию или вход по email.",
   ].join("\n");
   if (Array.from(prompt).length > MAX_PROMPT_LENGTH) {

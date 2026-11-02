@@ -115,8 +115,8 @@ export function MaxProjectReview({
       <section className="max-project-review__next" aria-labelledby="max-review-next">
         <h4 id="max-review-next">Что произойдёт после кнопки «Создать проект»</h4>
         <ol>
-          <li><span aria-hidden="true">1</span><span>Создадим проект и откроем редактор — описание уже будет внутри.</span></li>
-          <li><span aria-hidden="true">2</span><span>ИИ соберёт приложение: экраны, данные, кнопки.</span></li>
+          <li><span aria-hidden="true">1</span><span>Создадим проект, сохраним подтверждённый каталог и откроем редактор.</span></li>
+          <li><span aria-hidden="true">2</span><span>ИИ соберёт экраны и кнопки, подключит их к данным Yleum.</span></li>
           <li><span aria-hidden="true">3</span><span>Дальше правите словами в чате, проверяете приложение и публикуете обновления.</span></li>
         </ol>
       </section>

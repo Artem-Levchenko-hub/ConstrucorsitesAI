@@ -13,9 +13,12 @@ import { connectAppIntegration, getIntegrationCatalog } from "@/lib/api/app-inte
 import { describeApiError } from "@/lib/api/errors";
 import { saveLandingPrompt, takeLandingPrompt } from "@/lib/landing-prompt";
 import { createProject, listProjects } from "@/lib/api/projects";
-import type { ManagementModule } from "@/lib/api/types";
+import type { ManagementModule, MaxContentItem } from "@/lib/api/types";
 import { buildMaxProjectPrompt, defaultManagementModules, newProjectManagementModules, type MaxAppTypeId, type MaxFeature, type MaxStyleId } from "@/lib/max-brief";
-import { containsChatSecret, redactChatSecrets, resolveChatCredential } from "@/lib/max-chat-credentials";
+import { containsChatSecret, resolveChatCredential } from "@/lib/max-chat-credentials";
+import { extractInitialCatalog } from "@/lib/max-catalog-brief";
+import { newMaxContentItem } from "@/lib/max-catalog";
+import { initialCatalogError, publicInitialCatalog, publicMaxBriefText } from "@/lib/max-initial-catalog";
 import { useOwnerChatQuota } from "@/hooks/useOwnerChatQuota";
 import { FREE_CHAT_UPGRADE_MESSAGE } from "@/lib/owner-chat-quota";
 import { OwnerChatQuotaNotice } from "@/components/workspace/OwnerChatQuotaNotice";
@@ -24,6 +27,7 @@ import { MaxStudioHeader } from "./MaxStudioHeader";
 import { MAX_STATUS_COPY } from "@/lib/max-status-copy";
 import { MaxStudioIdeas, type MaxStudioIdea } from "./MaxStudioIdeas";
 import { MaxProjectWizard } from "./MaxProjectWizard";
+import { MaxInitialCatalog } from "./MaxInitialCatalog";
 import "./max-studio.css";
 
 const STARTER_FEATURES: MaxFeature[] = ["Профиль пользователя", "История действий"];
@@ -68,6 +72,15 @@ export function MaxStudio({ email }: { email: string }) {
   const [style, setStyle] = useState<MaxStyleId>("brand");
   const [brandColors, setBrandColors] = useState("");
   const [managementModules, setManagementModules] = useState<ManagementModule[]>(() => defaultManagementModules("loyalty"));
+  const safeCatalogIdea = useMemo(() => publicMaxBriefText(idea), [idea]);
+  const proposedCatalog = useMemo(() => {
+    const result = extractInitialCatalog(safeCatalogIdea);
+    return { ...result, items: result.items.map(item => ({ ...newMaxContentItem(), ...item })) };
+  }, [safeCatalogIdea]);
+  const [catalogDraft, setCatalogDraft] = useState<{ source: string; items: MaxContentItem[]; tooManyItems: boolean } | null>(null);
+  const initialContent = catalogDraft?.items ?? proposedCatalog.items;
+  const tooManyItems = catalogDraft?.tooManyItems ?? proposedCatalog.tooManyItems;
+  const catalogError = initialCatalogError(publicInitialCatalog(initialContent), tooManyItems);
 
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const maxProjects = useMemo(() => {
@@ -82,6 +95,9 @@ export function MaxStudio({ email }: { email: string }) {
   const create = useMutation({
     mutationFn: async () => {
       if (quota.initialExhausted) throw new Error(FREE_CHAT_UPGRADE_MESSAGE);
+      const content = publicInitialCatalog(initialContent);
+      const contentError = initialCatalogError(content, tooManyItems);
+      if (contentError) throw new Error(contentError);
       const modules = newProjectManagementModules(appType, managementModules);
       const rawPrompt = buildMaxProjectPrompt({
         name,
@@ -93,22 +109,14 @@ export function MaxStudio({ email }: { email: string }) {
         style,
         brandColors,
         managementModules: modules,
+        catalogItemCount: content.length,
       });
       const hasCredential = containsChatSecret(rawPrompt);
-      const scrub = (value: string) =>
-        redactChatSecrets(value).replaceAll(
-          "[ключ сохранён в Yleum]",
-          "[секрет удалён из описания]",
-        );
-      const safeName = hasCredential ? scrub(name).trim() : name.trim();
-      const safeIdea = hasCredential ? scrub(idea).trim() : idea.trim();
-      const safeAudience = hasCredential ? scrub(audience).trim() : audience.trim();
-      const safePrimaryAction = hasCredential
-        ? scrub(primaryAction).trim()
-        : primaryAction.trim();
-      const safeBrandColors = hasCredential
-        ? scrub(brandColors).trim()
-        : brandColors.trim();
+      const safeName = publicMaxBriefText(name);
+      const safeIdea = publicMaxBriefText(idea);
+      const safeAudience = publicMaxBriefText(audience);
+      const safePrimaryAction = publicMaxBriefText(primaryAction);
+      const safeBrandColors = publicMaxBriefText(brandColors);
       let prompt = buildMaxProjectPrompt({
         name: safeName,
         idea: safeIdea,
@@ -119,6 +127,7 @@ export function MaxStudio({ email }: { email: string }) {
         style,
         brandColors: safeBrandColors,
         managementModules: modules,
+        catalogItemCount: content.length,
       });
       const project = await createProject({
         name: safeName, template: "max_miniapp",
@@ -131,7 +140,7 @@ export function MaxStudio({ email }: { email: string }) {
           features,
           style,
           brand_colors: safeBrandColors,
-          content: [],
+          content,
           operator: { legal_name: "" },
           support: { email: null, response_time: "Ответим в течение 2 рабочих дней" },
           legal: {
@@ -203,6 +212,7 @@ export function MaxStudio({ email }: { email: string }) {
     setIdea(idea.idea);
     setAppType(idea.appType);
     setManagementModules(defaultManagementModules(idea.appType));
+    setCatalogDraft(null);
     setAudience(idea.audience);
     setPrimaryAction(idea.primaryAction);
     setDialogOpen(true);
@@ -280,8 +290,17 @@ export function MaxStudio({ email }: { email: string }) {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         pending={create.isPending}
-        submitDisabled={quota.initialExhausted}
+        submitDisabled={quota.initialExhausted || Boolean(catalogError)}
         quotaNotice={<OwnerChatQuotaNotice {...quota} initialOnly />}
+        initialCatalog={<MaxInitialCatalog
+          items={initialContent}
+          pending={create.isPending}
+          tooManyItems={tooManyItems}
+          descriptionChanged={catalogDraft !== null && catalogDraft.source !== safeCatalogIdea}
+          error={catalogError}
+          onChange={(items) => setCatalogDraft({ source: safeCatalogIdea, items, tooManyItems: tooManyItems && items.length > 0 })}
+          onReset={() => setCatalogDraft(null)}
+        />}
         values={{ name, idea, appType, audience, primaryAction, features, style, brandColors, managementModules }}
         onChange={(patch) => {
           if (patch.name !== undefined) setName(patch.name);

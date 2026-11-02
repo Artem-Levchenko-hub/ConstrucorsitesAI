@@ -5,9 +5,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MaxStudio } from "@/components/max/MaxStudio";
 import type { Project } from "@/lib/api/types";
 
-const mocks = vi.hoisted(() => ({ list: vi.fn(), create: vi.fn(), save: vi.fn(), push: vi.fn(), readiness: vi.fn() }));
+const mocks = vi.hoisted(() => ({ list: vi.fn(), create: vi.fn(), save: vi.fn(), push: vi.fn(), readiness: vi.fn(), integrations: vi.fn(), connect: vi.fn() }));
 vi.mock("@/lib/api/projects", () => ({ listProjects: mocks.list, createProject: mocks.create }));
 vi.mock("@/lib/api/max-studio", () => ({ saveMaxProjectConfig: mocks.save, getMaxReadiness: mocks.readiness }));
+vi.mock("@/lib/api/app-integrations", () => ({ getIntegrationCatalog: mocks.integrations, connectAppIntegration: mocks.connect }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
 vi.mock("@/app/(auth)/actions", () => ({ logoutAction: async () => {} }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
@@ -114,6 +115,89 @@ it("keeps optional answers optional and locks duplicate submit and dismissal whi
   await click("Закрыть");
   await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
   expect(document.querySelector('[role="dialog"]')).toBeTruthy();
+});
+
+it("reviews prompt products, preserves manual edits through Back and creates the canonical catalog in one request", async () => {
+  await openWizard();
+  await change("#max-project-name", "Кофейня");
+  await change("#max-project-idea", "Создай кофейню в стиле брутализм, латте 300 ₽, капучино 200 ₽");
+  await click("Далее"); await click("Далее"); await click("Далее");
+  const titles = () => [...document.querySelectorAll<HTMLInputElement>('input[id$="-title"]')];
+  expect(titles().map(input => input.value)).toEqual(["латте", "капучино"]);
+  await change('input[id$="-price"]', "350 ₽");
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Убрать позицию 2"]')!.click());
+  await click("Назад"); await click("Назад"); await click("Назад");
+  await change("#max-project-idea", "Создай кофейню, латте 300 ₽, капучино 200 ₽, американо 180 ₽");
+  await click("Далее"); await click("Далее"); await click("Далее");
+  expect(titles().map(input => input.value)).toEqual(["латте"]);
+  expect(document.querySelector<HTMLInputElement>('input[id$="-price"]')!.value).toBe("350 ₽");
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain("Описание изменилось");
+  expect(mocks.create).not.toHaveBeenCalled();
+  await click("Создать проект");
+  await settle(() => expect(mocks.create).toHaveBeenCalledTimes(1));
+  const content = mocks.create.mock.calls[0][0].max_config.content;
+  expect(content).toHaveLength(1);
+  expect(content[0]).toMatchObject({ title: "латте", price: "350 ₽", active: true, availability: "in_stock" });
+  expect(content[0].id).toMatch(/^item-/);
+  expect(mocks.save).not.toHaveBeenCalled();
+  expect(sessionStorage.getItem("omnia:max:starter:coffee")).toContain("1 позиций уже сохранены");
+  expect(sessionStorage.getItem("omnia:max:starter:coffee")).toContain("не вшивай позиции в код");
+});
+
+it("honors the owner's explicit empty catalog even when the brief contains priced products", async () => {
+  await openWizard();
+  await change("#max-project-name", "Кофейня");
+  await change("#max-project-idea", "Создай кофейню, латте 300 ₽, капучино 200 ₽");
+  await click("Далее"); await click("Далее"); await click("Далее");
+  await click("Начать с пустого каталога");
+  expect(document.querySelectorAll('input[id$="-title"]')).toHaveLength(0);
+  await click("Назад"); await click("Далее");
+  expect(document.querySelectorAll('input[id$="-title"]')).toHaveLength(0);
+  await click("Создать проект");
+  await settle(() => expect(mocks.create).toHaveBeenCalledTimes(1));
+  expect(mocks.create.mock.calls[0][0].max_config.content).toEqual([]);
+  expect(sessionStorage.getItem("omnia:max:starter:coffee")).toContain("Владелец подтвердил пустой начальный каталог");
+});
+
+it("retains the reviewed empty-catalog decision after securely connecting a provider credential", async () => {
+  mocks.integrations.mockResolvedValue({ providers: [{
+    key: "aitunnel", name: "AITUNNEL", category: "ai", description: "ИИ", capabilities: [],
+    fields: [{ key: "api_key", label: "API-ключ", placeholder: "", help: "", secret: true, required: true }],
+    available: true, recommended: false, requirement: null, docs_url: "https://docs.aitunnel.ru/",
+    oauth_supported: false, oauth_available: false, connection_mode: "credentials",
+  }] });
+  mocks.connect.mockResolvedValue({});
+  const token = "sk-" + "e".repeat(24);
+  await openWizard();
+  await change("#max-project-name", "Кофейня");
+  await change("#max-project-idea", `Кофейня, латте 300 ₽, капучино 200 ₽\nAITUNNEL token: "${token}"`);
+  await click("Далее"); await click("Далее"); await click("Далее");
+  await click("Начать с пустого каталога");
+  await click("Создать проект");
+  await settle(() => expect(mocks.push).toHaveBeenCalledWith("/max/coffee?starter=1"));
+  expect(mocks.connect).toHaveBeenCalledTimes(1);
+  expect(mocks.create.mock.calls[0][0].max_config.content).toEqual([]);
+  expect(JSON.stringify(mocks.create.mock.calls[0][0])).not.toContain(token);
+  const prompt = sessionStorage.getItem("omnia:max:starter:coffee")!;
+  expect(prompt).toContain("Владелец подтвердил пустой начальный каталог");
+  expect(prompt).toContain("Интеграция AITUNNEL уже проверена");
+  expect(prompt).not.toContain(token);
+});
+
+it("blocks an unnamed position and an overflowing proposal until the owner explicitly resolves it", async () => {
+  await openWizard();
+  await change("#max-project-name", "Каталог");
+  await change("#max-project-idea", Array.from({ length: 101 }, (_, index) => `Товар ${index + 1}: 300 ₽`).join("; "));
+  await click("Далее"); await click("Далее"); await click("Далее");
+  expect(button("Создать проект").disabled).toBe(true);
+  await change('input[id$="-price"]', "350 ₽");
+  expect(button("Создать проект").disabled).toBe(true);
+  await click("Начать с пустого каталога");
+  await click("Добавить позицию");
+  expect(button("Создать проект").disabled).toBe(true);
+  await change('input[id$="-title"]', "Матча");
+  expect(button("Создать проект").disabled).toBe(false);
+  expect(mocks.create).not.toHaveBeenCalled();
 });
 
 it("retains the review after a failed create so the same answers can be retried", async () => {
