@@ -45,12 +45,17 @@ ARTIFACTS = os.path.join(STATE, "project-machines", "artifacts")
 
 def _all_references(root: Path, report: dict[str, Any]) -> tuple[set[str], int]:
     selections: dict[str, inventory.CheckpointSelection] = {}
-    referenced, active, declared, optional = scan_state(root, selections=selections)
+    busy_workspaces: set[str] = set()
+    referenced, active, declared, optional = scan_state(
+        root, selections=selections, busy_workspaces=busy_workspaces,
+    )
     checkpoints, volume_count, file_count, missing_planned = checkpoint_references(
         declared, optional, selections=selections, root=root,
     )
     referenced.update(checkpoints)
     report.update(
+        active_operations=active,
+        unresolved_workspaces=len(busy_workspaces),
         missing_planned_volumes=missing_planned,
         checkpoint_volumes=volume_count,
         checkpoint_files=file_count,
@@ -123,7 +128,7 @@ async def _apply(
             async with lock.hold(workspace_id):
                 referenced, active = _all_references(root, report)
                 if active:
-                    raise UnsafeStateError("active_publication")
+                    raise UnsafeStateError("active_operation")
                 for path, original in archives:
                     _directory(path.parent)
                     try:
@@ -184,14 +189,13 @@ def collect_archives(
         grouped, kept = candidates(root, referenced, min_age_seconds)
         report.update(
             referenced_names=len(referenced),
-            active_publications=active,
             candidate_files=sum(len(items) for items in grouped.values()),
             candidate_bytes=sum(info.st_size for items in grouped.values() for _, info in items),
             kept_bytes=kept,
         )
         if apply:
             if active:
-                raise UnsafeStateError("active_publication")
+                raise UnsafeStateError("active_operation")
             asyncio.run(_apply(root, grouped, min_age_seconds, report))
     except (
         UnsafeStateError,

@@ -616,6 +616,53 @@ def machine_envelope(path: Path) -> bytes:
     }}).encode()
 
 
+@pytest.mark.parametrize("fault", [
+    "historical_indeterminate", "historical_future_kind", "degraded", "future_phase",
+    "active_generation",
+])
+def test_unresolved_lifecycle_preserves_unreferenced_capture(tmp_path, monkeypatch, fault):
+    orphan = archive(tmp_path)
+    store = paused_cell(tmp_path)
+    path = store.workspace_path(UUID(WORKSPACE))
+    payload = json.loads(path.read_text())
+    workspace = payload["workspace"]
+    if fault == "historical_indeterminate":
+        workspace["operations"][0]["status"] = "indeterminate"
+    elif fault == "historical_future_kind":
+        workspace["operations"][0]["kind"] = "future_checkpoint_protocol"
+    elif fault == "degraded":
+        workspace["bundle_state"] = "degraded"
+    elif fault == "future_phase":
+        workspace["phase"] = "future_phase"
+    else:
+        workspace["active_generation_run_id"] = str(UUID(int=777))
+    path.write_text(json.dumps(payload))
+    assert run(tmp_path, monkeypatch) == 1
+    assert orphan.exists()
+
+
+def test_indeterminate_lifecycle_after_workspace_lock_preserves_capture(tmp_path, monkeypatch):
+    from contextlib import asynccontextmanager
+
+    orphan = archive(tmp_path)
+    store = paused_cell(tmp_path)
+    path = store.workspace_path(UUID(WORKSPACE))
+    prepare_workspace_lock(tmp_path)
+    original = gc.WorkspaceOperationLock.hold
+
+    @asynccontextmanager
+    async def becomes_indeterminate(self, workspace_id):
+        async with original(self, workspace_id):
+            payload = json.loads(path.read_text())
+            payload["workspace"]["operations"][0]["status"] = "indeterminate"
+            path.write_text(json.dumps(payload))
+            yield
+
+    monkeypatch.setattr(gc.WorkspaceOperationLock, "hold", becomes_indeterminate)
+    assert run(tmp_path, monkeypatch) == 1
+    assert orphan.exists()
+
+
 def test_checkpoint_docker_latest_pause_releases_only_obsolete_environment(
     tmp_path, monkeypatch, fake_docker,
 ):
@@ -664,7 +711,7 @@ def test_checkpoint_docker_corrupt_current_archive_preserves_previous_environmen
     assert previous.exists()
 
 
-def test_checkpoint_docker_missing_planned_allows_unreferenced_capture_cleanup(
+def test_checkpoint_docker_missing_planned_preserves_unresolved_capture(
     tmp_path,
     monkeypatch,
     fake_docker,
@@ -677,11 +724,11 @@ def test_checkpoint_docker_missing_planned_allows_unreferenced_capture_cleanup(
     healthy = healthy.rename(other / healthy.name)
     planned_cell(tmp_path)
     fake_docker.volumes = []
-    assert run(tmp_path, monkeypatch) == 0
-    assert not planned.exists()
-    assert not healthy.exists()
+    assert run(tmp_path, monkeypatch) == 1
+    assert planned.exists() and healthy.exists()
     report = json.loads(capsys.readouterr().out)
     assert report["missing_planned_volumes"] == 1
+    assert report["error"] == "active_operation"
 
 
 def test_checkpoint_docker_retained_missing_still_aborts(tmp_path, monkeypatch, fake_docker):
@@ -731,7 +778,7 @@ def test_checkpoint_docker_missing_planned_rechecked_under_lock(
             yield
 
     monkeypatch.setattr(gc.WorkspaceOperationLock, "hold", planned_while_waiting)
-    assert run(tmp_path, monkeypatch) == 0
+    assert run(tmp_path, monkeypatch) == 1
     assert orphan.exists()
 
 

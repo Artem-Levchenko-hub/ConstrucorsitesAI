@@ -46,6 +46,7 @@ def test_latest_successful_pause_is_the_current_resume_root(tmp_path: Path) -> N
     [
         "future_kind",
         "future_kind_no_reference",
+        "historical_future_kind",
         "future_phase",
         "reordered",
         "future_epoch",
@@ -58,6 +59,8 @@ def test_ambiguous_lifecycle_keeps_all_envelopes(tmp_path: Path, fault: str) -> 
         ops[-1]["kind"] = "future_checkpoint_protocol"
     elif fault == "future_kind_no_reference":
         ops[-1].update(kind="future_protocol", checkpoint_ref=None)
+    elif fault == "historical_future_kind":
+        ops[0]["kind"] = "future_checkpoint_protocol"
     elif fault == "future_phase":
         data["workspace"]["phase"] = "future_phase"
     elif fault == "reordered":

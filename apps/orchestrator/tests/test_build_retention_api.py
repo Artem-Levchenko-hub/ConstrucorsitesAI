@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 import os
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,27 +32,38 @@ def test_protected_roots_router_is_available():
 
 
 @pytest.mark.skipif(os.name == "nt", reason="orchestrator app imports Linux fcntl authority")
-async def test_actual_orchestrator_app_registers_authenticated_root_route(monkeypatch, routes):
-    from yleum_orchestrator.core.config import get_settings
+def test_actual_orchestrator_app_registers_authenticated_root_route():
+    # Importing the real app initializes process-wide settings and telemetry.
+    # Keep the authentication probe out of the other tests' cached authority.
+    source = """
+import asyncio
+from httpx import ASGITransport, AsyncClient
+from yleum_orchestrator.main import create_app
+from yleum_orchestrator.routers import build_retention
 
-    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@127.0.0.1/test")
-    monkeypatch.setenv("INTERNAL_TOKEN", "test-private-token")
-    monkeypatch.setenv("SENTRY_DSN", "")
-    get_settings.cache_clear()
-    try:
-        from yleum_orchestrator.main import create_app
+def forbidden(root):
+    raise AssertionError("unauthenticated live application route started inventory")
 
-        def forbidden(root):
-            pytest.fail("unauthenticated live application route started inventory")
+build_retention.collect_roots = forbidden
+async def check():
+    async with AsyncClient(
+        transport=ASGITransport(app=create_app()), base_url="http://test"
+    ) as client:
+        response = await client.get("/internal/build-retention/roots")
+    assert response.status_code == 401, response.status_code
 
-        monkeypatch.setattr(routes, "collect_roots", forbidden)
-        async with AsyncClient(
-            transport=ASGITransport(app=create_app()), base_url="http://test"
-        ) as c:
-            response = await c.get("/internal/build-retention/roots")
-        assert response.status_code == 401
-    finally:
-        get_settings.cache_clear()
+asyncio.run(check())
+"""
+    environment = dict(os.environ)
+    environment.update(
+        DATABASE_URL="postgresql://test:test@127.0.0.1/test",
+        INTERNAL_TOKEN="test-private-token",
+        SENTRY_DSN="",
+    )
+    subprocess.run(
+        [sys.executable, "-c", source], env=environment,
+        capture_output=True, check=True, timeout=30,
+    )
 
 
 @pytest.fixture

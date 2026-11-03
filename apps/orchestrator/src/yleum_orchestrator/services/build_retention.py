@@ -118,12 +118,12 @@ def checkpoint_selection(
         epochs != sorted(epochs)
         or any(epoch > state.fencing_epoch for epoch in epochs)
         or len({op.operation_id for op in state.operations}) != len(state.operations)
+        or any(op.kind not in LIFECYCLE_KINDS for op in state.operations)
     ):
         return all_envelopes
     current = state.operation(state.last_operation_id)
     if (
         current is None
-        or current.kind not in LIFECYCLE_KINDS
         or state.phase not in TERMINAL_LIFECYCLE_PHASES
         or current.phase not in TERMINAL_LIFECYCLE_PHASES
     ):
@@ -134,7 +134,6 @@ def checkpoint_selection(
         state.active_generation_run_id is not None
         or state.active_generation_fencing_epoch is not None
         or state.bundle_state not in {"resources_ready", "resources_paused"}
-        or current is None
         or current.fencing_epoch != state.fencing_epoch
         or any(op.status not in {"completed", "failed"} for op in state.operations)
         or (current.kind == "restore" and current.status == "failed")

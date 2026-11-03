@@ -18,6 +18,7 @@ from tests.test_cleanup_orphan_archives import (
 from tests.test_cleanup_orphan_archives import (
     fake_docker as fake_docker,
 )
+from yleum_orchestrator.schemas.runtime import DeployResponse
 from yleum_orchestrator.services import build_retention_inventory as inventory
 
 IMAGE_ID = "sha256:" + "1" * 64
@@ -283,6 +284,100 @@ def test_finished_publication_does_not_revive_older_pending_journal(
         "history": [{"response": {"phase": "queued"}}, {"response": {"phase": "done"}}],
     })
     assert collect(tmp_path).active_operations == 0
+
+
+def completed_publications(root: Path) -> Path:
+    history = []
+    for number, image_id in ((1, IMAGE_ID), (2, OTHER_IMAGE_ID)):
+        response = DeployResponse(
+            project_id=UUID(WORKSPACE), run_id=str(UUID(int=number)),
+            phase="done", image_tag=image_id,
+        )
+        history.append({
+            "idempotency_key": str(UUID(int=number)), "request_digest": str(number) * 64,
+            "response": response.model_dump(mode="json"),
+        })
+    return write_json(root / "cell-publications" / WORKSPACE / "publication.json", {
+        "project_id": WORKSPACE, "source_workspace_id": WORKSPACE,
+        "production_workspace_id": PRODUCTION, "history": history,
+        "active_release": {"release_id": str(UUID(int=2)), "image_id": OTHER_IMAGE_ID},
+        "prepared_release": None, "activation_pending": None, "recovery_required": False,
+    })
+
+
+def test_completed_publication_history_releases_old_registry_image(
+    tmp_path, without_checkpoints,
+):
+    from datetime import timedelta
+
+    from tests.test_registry_retention import NOW, REPO, Registry, image, retention
+
+    path = completed_publications(tmp_path)
+    original = path.read_bytes()
+    roots = collect(tmp_path)
+    registry = Registry({REPO: {"old": image(IMAGE_ID), "current": image(OTHER_IMAGE_ID)}})
+    policy = retention(tmp_path / "observations", registry)
+    protected = set(roots.image_ids | roots.image_refs)
+    assert not policy.plan(protected, NOW).candidates
+    plan = policy.plan(protected, NOW + timedelta(seconds=7201))
+    assert {item.digest for item in plan.candidates} == {registry.repositories[REPO]["old"].digest}
+    assert OTHER_IMAGE_ID in roots.image_ids and roots.active_operations == 0
+    assert path.read_bytes() == original
+
+
+async def test_completed_publication_history_releases_old_local_image(
+    tmp_path, without_checkpoints,
+):
+    from tests.test_local_image_retention import NOW, Docker, image
+    from yleum_orchestrator.services.local_image_retention import ImageRoots, collect_local_images
+
+    completed_publications(tmp_path)
+    client = Docker({IMAGE_ID: image(), OTHER_IMAGE_ID: image(image_id=OTHER_IMAGE_ID)})
+
+    def load():
+        roots = collect(tmp_path)
+        return ImageRoots(roots.image_ids, roots.image_refs, roots.busy_workspaces)
+
+    report = await collect_local_images(tmp_path, load, apply=True, client=client, now=NOW)
+    assert report["removed"] == 1
+    assert IMAGE_ID not in client.records and OTHER_IMAGE_ID in client.records
+
+
+def test_completed_history_still_preserves_prepared_publication_image(
+    tmp_path, without_checkpoints,
+):
+    path = completed_publications(tmp_path)
+    payload = json.loads(path.read_text())
+    payload["prepared_release"] = {"release_id": str(UUID(int=1)), "image_id": IMAGE_ID}
+    write_json(path, payload)
+    assert collect(tmp_path).image_ids == frozenset({IMAGE_ID, OTHER_IMAGE_ID})
+
+
+@pytest.mark.parametrize("change", [
+    "recovery", "activation", "unknown_field", "unknown_phase", "unknown_format",
+    "wrong_project", "missing_active",
+])
+def test_ambiguous_publication_history_keeps_old_image(
+    tmp_path, without_checkpoints, change,
+):
+    path = completed_publications(tmp_path)
+    payload = json.loads(path.read_text())
+    if change == "recovery":
+        payload["recovery_required"] = True
+    elif change == "activation":
+        payload["activation_pending"] = str(UUID(int=9))
+    elif change == "unknown_field":
+        payload["future_recovery_protocol"] = True
+    elif change == "unknown_phase":
+        payload["history"][0]["response"]["phase"] = "future-phase"
+    elif change == "unknown_format":
+        payload["history"][0]["response"]["format_version"] = 99
+    elif change == "wrong_project":
+        payload["project_id"] = str(UUID(int=777))
+    else:
+        del payload["active_release"]
+    write_json(path, payload)
+    assert IMAGE_ID in collect(tmp_path).image_ids
 
 
 def test_current_checkpoint_retains_image_roots_and_hash_validation(tmp_path, fake_docker):

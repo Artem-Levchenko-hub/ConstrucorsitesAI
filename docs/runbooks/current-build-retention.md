@@ -33,6 +33,9 @@ The private report is `/opt/omnia-runtime/retention/build-report.json`, outside
 the live-state metadata census. `status=aborted` and a nonzero service exit need
 investigation; an unreadable checkpoint is never treated as an empty inventory.
 An image error fails the run. Busy workspaces are preserved for a later sweep.
+An unresolved lifecycle also aborts the host archive sweep, including files
+whose checkpoint reference may not have been published before a crash. Reconcile
+the operation instead of deleting its metadata or bypassing this guard.
 
 Before the first run, archive only the frozen metadata of already deleted test
 projects through the separately reviewed, exact-path retirement manifest and

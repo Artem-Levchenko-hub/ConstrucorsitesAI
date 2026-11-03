@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import UUID, uuid4
 
+from yleum_orchestrator.schemas.runtime import DeployResponse
 from yleum_orchestrator.services.build_retention import (
     LIFECYCLE_KINDS as _LIFECYCLE_KINDS,
 )
@@ -239,6 +240,68 @@ def _publication_activity(data: Any, busy_workspaces: set[str] | None) -> int:
     return int(active)
 
 
+def _publication_image_payload(path: Path, data: Any) -> Any:
+    """A terminal response is evidence; current/prepared releases own images.
+
+    Recognize only the existing, project-bound journal protocol. Keep every
+    other field and fall back to all references for recovery or unknown formats.
+    """
+    known_keys = {
+        "project_id", "owner_id", "source_workspace_id", "production_workspace_id", "slug",
+        "history", "active_release", "prepared_release", "activation_pending", "recovery_required",
+        "data_seeded", "disabled", "disabled_at", "deletion_completed", "deletion_mutation",
+        "archive_path",
+    }
+    if (
+        not isinstance(data, dict) or not set(data) <= known_keys
+        or data.get("project_id") != path.parent.name or "active_release" not in data
+        or data.get("recovery_required") not in (None, False)
+        or data.get("activation_pending") not in (None, False)
+        or not isinstance(data.get("history"), list)
+    ):
+        return data
+    try:
+        project_id = UUID(path.parent.name)
+        if str(project_id) != path.parent.name:
+            return data
+        for name in ("active_release", "prepared_release"):
+            release = data.get(name)
+            if release is None:
+                continue
+            if (
+                not isinstance(release, dict)
+                or not isinstance(release.get("image_id"), str)
+                or not (IMAGE_ID.fullmatch(release["image_id"])
+                        or APPLICATION_IMAGE.fullmatch(release["image_id"]))
+                or str(UUID(release["release_id"])) != release["release_id"]
+            ):
+                return data
+        history = []
+        for entry in data["history"]:
+            if (
+                not isinstance(entry, dict)
+                or set(entry) != {"idempotency_key", "request_digest", "response"}
+                or not isinstance(entry["idempotency_key"], str) or not entry["idempotency_key"]
+                or not isinstance(entry["request_digest"], str)
+                or re.fullmatch(r"[0-9a-f]{64}", entry["request_digest"]) is None
+                or not isinstance(entry["response"], dict)
+            ):
+                return data
+            response = DeployResponse.model_validate(entry["response"])
+            if (
+                response.project_id != project_id or response.phase not in TERMINAL_PHASES
+                or response.format_version not in {1, 2}
+                or response.run_id is None or str(UUID(response.run_id)) != response.run_id
+            ):
+                return data
+            historical = dict(entry["response"])
+            historical.pop("image_tag", None)
+            history.append({**entry, "response": historical})
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return data
+    return {**data, "history": history}
+
+
 def scan_state(
     root: Path, *, selections: dict[str, CheckpointSelection] | None = None,
     image_ids: set[str] | None = None, image_refs: set[str] | None = None,
@@ -284,8 +347,15 @@ def scan_state(
             required.update(declarations - planned)
             # Parse first: escaped JSON strings can contain archive references too.
             names.update(ARCHIVE.findall(json.dumps(data, ensure_ascii=False)))
-            _image_roots(data, image_ids, image_refs)
-            if name != "publication.json" or path.relative_to(root).parts[0] != "cell-publications":
+            publication = (
+                name == "publication.json" and len(path.relative_to(root).parts) == 3
+                and path.relative_to(root).parts[0] == "cell-publications"
+            )
+            _image_roots(
+                _publication_image_payload(path, data) if publication else data,
+                image_ids, image_refs,
+            )
+            if not publication:
                 continue
             active += _publication_activity(data, busy_workspaces)
     return names, active, declared, optional - required
