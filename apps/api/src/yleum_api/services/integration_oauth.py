@@ -198,6 +198,30 @@ def _expires(payload: dict[str, Any]) -> datetime | None:
     return datetime.now(UTC) + timedelta(seconds=max(0, seconds - 60)) if seconds else None
 
 
+def _yookassa_token(payload: object) -> tuple[str, datetime]:
+    """Accept only a usable grant; YooKassa has no documented refresh grant."""
+    if not isinstance(payload, dict):
+        raise ValueError("invalid YooKassa token response")
+    access = payload.get("access_token")
+    seconds = payload.get("expires_in")
+    # The official table allows a decimal string; its JSON example uses a number.
+    if isinstance(seconds, str) and re.fullmatch(r"[0-9]+", seconds):
+        seconds = int(seconds)
+    token_type = payload.get("token_type", "bearer")
+    if (
+        not isinstance(access, str) or not access.strip()
+        or any(ord(char) < 32 or ord(char) == 127 for char in access)
+        or type(seconds) is not int or seconds <= 0
+        or not isinstance(token_type, str) or token_type.lower() != "bearer"
+    ):
+        raise ValueError("invalid YooKassa token response")
+    try:
+        expires_at = datetime.now(UTC) + timedelta(seconds=max(0, seconds - 60))
+    except OverflowError as exc:
+        raise ValueError("invalid YooKassa token expiry") from exc
+    return access, expires_at
+
+
 def _token_error(provider: str, response: httpx.Response) -> None:
     if response.status_code in {400, 401, 403}:
         raise IntegrationCredentialsInvalid(
@@ -241,27 +265,23 @@ async def exchange_code(
                     auth=(oauth.client_id, oauth.client_secret),
                 )
                 _token_error("ЮKassa", token_response)
-                token = token_response.json()
-                access = str(token.get("access_token") or "")
+                access, expires_at = _yookassa_token(token_response.json())
                 profile = await client.get(
                     "https://api.yookassa.ru/v3/me",
                     headers={**headers, "Authorization": f"Bearer {access}"},
                 )
                 _token_error("ЮKassa", profile)
                 me = profile.json()
-                account_id = str(me.get("account_id") or me.get("shop_id") or "")
+                if not isinstance(me, dict):
+                    raise ValueError("invalid YooKassa profile response")
+                account_id = me.get("account_id")
+                if not isinstance(account_id, str) or not account_id.strip():
+                    raise ValueError("invalid YooKassa account identity")
                 return OAuthResult(
-                    public_config={"shop_id": account_id} if account_id else {},
-                    secret_values={
-                        "access_token": access,
-                        **(
-                            {"refresh_token": str(token["refresh_token"])}
-                            if token.get("refresh_token")
-                            else {}
-                        ),
-                    },
-                    account_label=f"Магазин {account_id}" if account_id else "ЮKassa",
-                    expires_at=_expires(token),
+                    public_config={"shop_id": account_id},
+                    secret_values={"access_token": access},
+                    account_label=f"Магазин {account_id}",
+                    expires_at=expires_at,
                 )
 
             if provider == "yandex_metrica":
@@ -405,6 +425,10 @@ async def refresh_access_token(
     client_key: str | None = None,
 ) -> tuple[dict[str, str], datetime | None]:
     """Refresh an expiring OAuth token without exposing it to a generated app."""
+    if provider == "yookassa":
+        raise IntegrationCredentialsInvalid(
+            "Срок авторизации истёк. Переподключите ЮKassa в Integration Hub."
+        )
     oauth = resolve_client_profile(provider, client_key)
     refresh = secret_values.get("refresh_token")
     if oauth is None or not refresh:
@@ -417,13 +441,7 @@ async def refresh_access_token(
     }
     try:
         async with httpx.AsyncClient(timeout=15, headers=headers) as client:
-            if provider == "yookassa":
-                response = await client.post(
-                    "https://yookassa.ru/oauth/v2/token",
-                    data={"grant_type": "refresh_token", "refresh_token": refresh},
-                    auth=(oauth.client_id, oauth.client_secret),
-                )
-            elif provider == "yandex_metrica":
+            if provider == "yandex_metrica":
                 response = await client.post(
                     "https://oauth.yandex.ru/token",
                     data={

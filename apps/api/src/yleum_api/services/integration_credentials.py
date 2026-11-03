@@ -19,12 +19,12 @@ from yleum_api.services import integration_oauth, integration_providers
 
 
 async def lock_account_provider(session: AsyncSession, user_id: UUID, provider: str) -> None:
-    """Serialize amoCRM grants, including the period before a connection exists.
+    """Serialize shared amoCRM/YooKassa grants before a connection exists too.
 
     Always acquire this transaction lock before any state or connection row lock.
     A stable namespaced digest works across processes; collisions only serialize.
     """
-    if provider != "amocrm":
+    if provider not in {"amocrm", "yookassa"}:
         return
     digest = hashlib.sha256(f"integration-grant:v1:{user_id}:{provider}".encode()).digest()
     key = int.from_bytes(digest[:8], "big", signed=True)

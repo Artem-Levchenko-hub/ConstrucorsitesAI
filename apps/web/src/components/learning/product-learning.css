@@ -1,0 +1,31 @@
+.learning-launch { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 44px; flex-shrink: 0; padding: 8px 11px; border: 1px solid rgb(3 129 250 / .2); border-radius: 8px; background: transparent; color: inherit; font: inherit; font-size: 12px; font-weight: 550; cursor: pointer; transition: background .18s, border-color .18s; }
+.learning-launch:hover { background: rgb(3 129 250 / .08); border-color: rgb(3 129 250 / .48); }
+.learning-launch svg { flex-shrink: 0; color: var(--color-accent); }
+.max-editor-header-actions > .learning-launch { width: auto; }
+.account-user .learning-launch { display: inline-flex; width: auto; height: auto; }
+.learning-guide-launch { color: var(--color-fg-primary, #14141a); background: var(--color-surface, #fff); border-color: var(--color-border-strong, #c7ccd5); padding-inline: 16px; }
+.learning-launch:focus-visible, .learning-card :is(button,select):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.learning-overlay { position: fixed; inset: 0; z-index: 1010; background: transparent; pointer-events: auto; overflow: hidden; }
+.learning-overlay[data-dimmed] { background: rgb(12 22 39 / .62); }
+.learning-spotlight { position: fixed; box-sizing: border-box; border: 2px solid #55a9ff; border-radius: 10px; background: transparent; box-shadow: 0 0 0 150vmax rgb(12 22 39 / .62), 0 0 0 5px rgb(67 151 255 / .17); pointer-events: none; transition: left .28s ease, top .28s ease, width .28s ease, height .28s ease; animation: learning-outline 2.5s ease-in-out infinite; }
+.learning-card { position: fixed; z-index: 1011; box-sizing: border-box; width: min(358px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; overscroll-behavior: contain; border: 1px solid #d9e1ed; border-radius: 16px; padding: 20px; background: #fff; color: #192332; font-family: var(--font-sans); box-shadow: 0 18px 65px rgb(4 18 41 / .22); outline: none; animation: learning-appear .2s ease-out; transition: left .24s ease, top .24s ease; }
+.learning-card-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -6px -7px 8px 0; }
+.learning-card-top > span { display: inline-flex; align-items: center; gap: 8px; color: #406185; font-size: 12px; font-weight: 600; }
+.learning-close { display: grid; width: 44px; height: 44px; flex-shrink: 0; place-items: center; border: 0; border-radius: 8px; background: transparent; color: #58677b; cursor: pointer; }
+.learning-close:hover { background: #eff4fa; }
+.learning-progress { height: 3px; overflow: hidden; border-radius: 2px; background: #e9eff7; }
+.learning-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--color-accent); transition: width .24s ease; }
+.learning-counter { margin: 15px 0 8px; color: #62738b; font-size: 11px; font-weight: 550; }
+.learning-title { margin: 0; font-size: 21px; line-height: 1.22; font-weight: 600; letter-spacing: -.035em; }
+.learning-description { margin: 12px 0 20px; color: #4a596e; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.learning-missing { margin-bottom: 16px; padding: 10px; border-radius: 8px; background: #f3f6fa; color: #526179; font-size: 12px; line-height: 1.5; }
+.learning-select-label { display: grid; gap: 6px; color: #62738b; font-size: 11px; }
+.learning-select-label select { width: 100%; min-width: 0; min-height: 44px; padding: 9px; border: 1px solid #d6dfeb; border-radius: 8px; background: #fff; color: #263952; font: inherit; font-size: 12px; text-overflow: ellipsis; }
+.learning-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 20px; }
+.learning-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 10px 13px; border: 1px solid #d6dfeb; border-radius: 8px; background: #fff; color: #31435b; font-size: 12px; font-weight: 550; cursor: pointer; }
+.learning-actions button:disabled { opacity: .4; cursor: default; }
+.learning-actions button.learning-next { border-color: #0062dc; background: #0062dc; color: #fff; }
+.learning-actions button.learning-next:hover { background: #0054be; }
+@keyframes learning-appear { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes learning-outline { 50% { border-color: #9acfff; } }
+@media (prefers-reduced-motion: reduce) { .learning-card, .learning-spotlight, .learning-progress > span, .learning-launch { animation: none; transition: none; scroll-behavior: auto; } }

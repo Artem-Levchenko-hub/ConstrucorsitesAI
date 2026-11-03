@@ -219,7 +219,7 @@ export function MaxStudio({ email }: { email: string }) {
   }
 
   return (
-    <div data-max-studio className="max-studio-workspace">
+    <div data-max-studio data-learning-ready={!projects.isPending && !projects.isError ? "true" : "false"} className="max-studio-workspace">
       <MaxStudioHeader email={email} />
       <main className="max-projects-main">
         <div className="max-projects-content">
@@ -229,14 +229,14 @@ export function MaxStudio({ email }: { email: string }) {
               <h1>Мои приложения</h1>
               <p>Продолжите работу или запустите новую идею в MAX.</p>
             </div>
-            <Button size="lg" disabled={quota.initialExhausted} onClick={() => setDialogOpen(true)}>
+            <Button data-learning="create-project" size="lg" disabled={quota.initialExhausted} onClick={() => setDialogOpen(true)}>
               <Plus className="size-4" /> Создать приложение
             </Button>
           </div>
 
           <OwnerChatQuotaNotice {...quota} initialOnly />
           <div className="max-projects-toolbar">
-            <label className="max-projects-search">
+            <label data-learning="projects-search" className="max-projects-search">
               <Search className="size-4 shrink-0" aria-hidden="true" />
               <Input type="search" aria-label="Найти проект" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти проект" />
             </label>

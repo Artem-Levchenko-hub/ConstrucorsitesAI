@@ -32,6 +32,7 @@ it.each([
   ["Я забыла пароль", "password"],
   ["Сколько стоит Pro?", "plans"],
   ["Оплата прошла, но тариф не появился", "payment"],
+  ["Оплатил", "payment"],
   ["Как отменить подписку?", "renewal"],
   ["Как создать приложение?", "create"],
   ["Генерация долго висит в очереди", "waiting"],
@@ -56,6 +57,48 @@ it("offers typos and partial words as choices while automatic answers remain exa
   expect(findSupportAnswers("5030")).toEqual([]);
   const plans = supportAnswers.find(answer => answer.id === "plans")!;
   expect(relatedSupportAnswers(plans).map(answer => answer.id)).toEqual(["payment", "renewal"]);
+});
+it.each([
+  "Создать прилржение",
+  "Как создтаь приложение?",
+  "Хочу сделать прилжение",
+])("suggests application creation for %s without silently confirming a typo", question => {
+  expect(searchSupportAnswers(question).map(answer => answer.id)).toEqual(["create"]);
+  expect(findSupportAnswers(question)).toEqual([]);
+});
+it.each([
+  "Как создаются приложения?",
+  "Хочу сделать сайт",
+  "Как собрать свой проект?",
+  "Создание нового приложения",
+])("understands creation forms and synonyms in %s", question => {
+  expect(findSupportAnswers(question).map(answer => answer.id)).toEqual(["create"]);
+});
+it.each([
+  "Создать таблицу в Excel",
+  "Приложение для прогноза погоды",
+  "Что такое кодекс?",
+  "Что такое MAXimum?",
+  "Что такое максимум?",
+  "5030",
+])("does not turn an unrelated word or incomplete intent into advice: %s", question => {
+  expect(findSupportAnswers(question)).toEqual([]);
+  expect(searchSupportAnswers(question)).toEqual([]);
+});
+it("keeps account creation distinct from application creation", () => {
+  expect(findSupportAnswers("Хочу создать аккаунт").map(answer => answer.id)).toEqual(["register"]);
+});
+it("resolves the reported typo through a choice and retains the user's original question for handoff", async () => {
+  await mount(); await ask("Создать прилржение");
+  expect(host.querySelector('[role="log"]')?.textContent).toContain("Выберите");
+  expect(host.querySelector('[role="log"]')?.textContent).not.toContain("Здесь лучше поможет человек");
+  await click("Как создать приложение и внести правку?");
+  const answer = host.querySelector('[role="log"] > li:last-child')!;
+  expect(answer.textContent).toContain("В разделе «Мои приложения» создайте приложение");
+  expect(answer.querySelector('a[href="/max"]')).not.toBeNull();
+  await click("Не помогло — передать вопрос оператору");
+  expect(contact).toHaveBeenCalledWith("Создать прилржение");
+  expect(fetch).not.toHaveBeenCalled();
 });
 it("shows live suggestions without sending, and confirms a fuzzy match before displaying advice", async () => {
   await mount(); await fillQuestion("аплата");

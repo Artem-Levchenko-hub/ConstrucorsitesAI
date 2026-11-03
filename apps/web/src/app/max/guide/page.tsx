@@ -14,9 +14,11 @@ import {
 import type { ReactNode } from "react";
 
 import { BrandMark } from "@/components/marketing/BrandMark";
-import { GuideScreenshot } from "@/components/max/guide/GuideVisuals";
+import { GuideLearning } from "@/components/learning/ProductLearning";
+import { GoldenPathVisual, GuideScreenshot } from "@/components/max/guide/GuideVisuals";
 import "@/components/max/max-studio.css";
 import "@/components/marketing/max-public.css";
+import "./guide-page.css";
 
 export const metadata: Metadata = {
   title: "Полное руководство Yleum",
@@ -58,16 +60,13 @@ function GuideSection({
   children: ReactNode;
 }) {
   return (
-    <section id={id} className="scroll-mt-24 border-t border-[#2b2d32] py-14 sm:py-18 lg:py-20">
-      <div className="grid gap-5 lg:grid-cols-[70px_minmax(0,1fr)]">
-        <p className="font-mono text-xs text-[#828491]">{number}</p>
-        <div className="min-w-0">
-          <p className="omnia-kicker text-accent">{eyebrow}</p>
-          <h2 className="mt-3 max-w-[850px] text-[30px] font-semibold leading-[1.1] tracking-[-.04em] sm:text-[44px]">{title}</h2>
-          <p className="mt-5 max-w-[800px] text-[15px] leading-7 text-[#9fa1b1]">{lead}</p>
-          <div className="mt-8 space-y-7">{children}</div>
-        </div>
-      </div>
+    <section id={id} className="guide-chapter" aria-labelledby={`${id}-title`}>
+      <header className="guide-chapter-heading">
+        <p className="guide-chapter-eyebrow"><span>{number}</span>{eyebrow}</p>
+        <h2 id={`${id}-title`}>{title}</h2>
+        <p className="guide-chapter-lead">{lead}</p>
+      </header>
+      <div className="guide-chapter-body">{children}</div>
     </section>
   );
 }
@@ -78,19 +77,19 @@ function StepList({
   steps: Array<{ title: string; text: ReactNode; result?: string }>;
 }) {
   return (
-    <ol className="divide-y divide-[#25272b] overflow-hidden rounded-xl border border-[#2b2d32] bg-[#191b20]">
+    <ol className="guide-steps" role="list">
       {steps.map((step, index) => (
-        <li key={step.title} className="grid gap-3 p-5 sm:grid-cols-[36px_minmax(0,1fr)] sm:p-6">
-          <span className="grid size-8 place-items-center rounded-full border border-accent/40 bg-accent/[.06] text-xs font-semibold text-[#6a95fa]" aria-hidden="true">
+        <li key={step.title}>
+          <span className="guide-step-number" aria-hidden="true">
             {index + 1}
           </span>
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold">{step.title}</h3>
-            <div className="mt-2 text-sm leading-6 text-[#9fa1b1]">{step.text}</div>
+            <h3>{step.title}</h3>
+            <div className="guide-step-text">{step.text}</div>
             {step.result && (
-              <p className="mt-3 flex items-start gap-2 text-xs leading-5 text-success-fg">
+              <p className="guide-step-result">
                 <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-                <span><strong>Результат:</strong> {step.result}</span>
+                <span>{step.result}</span>
               </p>
             )}
           </div>
@@ -109,21 +108,13 @@ function Note({
   title: string;
   children: ReactNode;
 }) {
-  const styles = {
-    info: "border-[#2b2d32] bg-[#191b20] text-white",
-    warning: "border-[#e8c547]/50 bg-[#e8c547]/10 text-[#e8c547]",
-    success: "border-success/35 bg-success/[.06] text-success-fg",
-  }[tone];
   const Icon = tone === "warning" ? AlertTriangle : tone === "success" ? CheckCircle2 : CircleHelp;
 
   return (
-    <aside className={`rounded-xl border p-5 ${styles}`}>
-      <div className="flex gap-3">
-        <Icon className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
-        <div className="min-w-0">
-          <p className="text-sm font-semibold">{title}</p>
-          <div className="mt-2 text-sm leading-6 opacity-80">{children}</div>
-        </div>
+    <aside className={`guide-note guide-note--${tone}`} aria-label={title}>
+      <div className="guide-note-heading"><Icon size={16} aria-hidden="true" /><h3>{title}</h3></div>
+      <div className="guide-note-text">
+        {children}
       </div>
     </aside>
   );
@@ -131,7 +122,7 @@ function Note({
 
 function Checklist({ title, items }: { title: string; items: string[] }) {
   return (
-    <div className="rounded-xl border border-[#2b2d32] bg-[#191b20] p-5 sm:p-6">
+    <div className="guide-checklist">
       <h3 className="text-base font-semibold">{title}</h3>
       <ul className="mt-5 space-y-3">
         {items.map(item => (
@@ -147,9 +138,9 @@ function Checklist({ title, items }: { title: string; items: string[] }) {
 
 function ChapterLinks() {
   return (
-    <div className="space-y-0.5">
+    <div className="guide-chapter-links">
       {chapters.map(([id, label, number]) => (
-        <a key={id} href={`#${id}`} className="flex min-h-10 items-center gap-3 rounded-md px-3 py-2 text-xs text-[#9fa1b1] hover:bg-[#191b20] hover:text-white">
+        <a key={id} href={`#${id}`}>
           <span className="w-6 shrink-0 font-mono text-[10px] text-[#828491]">{number}</span>
           {label}
         </a>
@@ -160,7 +151,7 @@ function ChapterLinks() {
 
 export default function MaxGuidePage() {
   return (
-    <main data-max-studio className="max-docs min-h-screen">
+    <main data-max-studio className="max-docs max-guide-page min-h-screen">
       <header className="sticky top-0 z-50 border-b border-[#2b2d32] bg-[#191b20]/95 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between gap-4 px-4 sm:px-7">
           <div className="flex min-w-0 items-center gap-3">
@@ -183,9 +174,11 @@ export default function MaxGuidePage() {
             <h1 className="mt-6 max-w-[940px] text-[42px] font-semibold leading-[1.02] tracking-[-.05em] sm:text-[62px] lg:text-[76px]">Как создать приложение и запустить его в MAX</h1>
             <p className="mt-7 max-w-[750px] text-base leading-7 text-white/60 sm:text-lg">От регистрации и первой сборки до каталога, подключения бота и ежедневной работы. На настоящих экранах показываем, куда нажать, зачем это нужно и что проверить после.</p>
             <div className="mt-8 flex flex-wrap gap-3">
+              <div className="guide-learning-entry"><GuideLearning /></div>
               <Link href="/max/start" className="omnia-button omnia-button-primary min-h-11 px-5">Быстрый старт <ArrowRight className="size-4" aria-hidden="true" /></Link>
               <a href="#errors" className="omnia-button min-h-11 border border-white/20 px-5 text-white hover:bg-white/5">Нужна помощь <LifeBuoy className="size-4" aria-hidden="true" /></a>
             </div>
+            <p className="guide-learning-hint">Начинаете впервые? Идите по главам по порядку. К нужному этапу можно вернуться позже.</p>
           </div>
           <div className="rounded-[14px] border border-white/15 bg-white/[.04] p-6">
             <div className="flex items-center gap-3"><BookOpenText className="size-5 text-accent" aria-hidden="true" /><p className="text-sm font-semibold">Как пользоваться</p></div>
@@ -198,6 +191,7 @@ export default function MaxGuidePage() {
             <p className="mt-5 border-t border-white/10 pt-4 text-xs leading-5 text-white/45">Обновлено 30 октября 2026. Источник и дата каждого настоящего снимка указаны под ним.</p>
           </div>
         </div>
+        <div className="guide-journey-wrap"><GoldenPathVisual /></div>
       </section>
 
       <div className="mx-auto grid max-w-[1440px] gap-8 px-4 sm:px-7 lg:grid-cols-[225px_minmax(0,1fr)] lg:gap-10">
@@ -228,7 +222,7 @@ export default function MaxGuidePage() {
                 </article>
               ))}
             </div>
-            <Note title="Как устроен путь">Создайте проект → проверьте приложение в редакторе → подтвердите документы и подключите бота → опубликуйте → вставьте полученный адрес в MAX → проверьте приложение в самом MAX. Сервисы оплаты, CRM и аналитики добавляйте, если они нужны вашему сценарию.</Note>
+            <Note title="Подключайте только нужные сервисы">Сервисы оплаты, CRM и аналитики добавляйте, если они нужны вашему сценарию. Путь до первого запуска показан на карте выше; к каждому этапу можно перейти отдельно.</Note>
           </GuideSection>
 
           <GuideSection id="account" number="01" eyebrow="Регистрация и вход" title="Создайте аккаунт Yleum" lead="При регистрации нужны email, телефон и пароль. Номер подтверждается по SMS один раз; в дальнейшем вы входите по email и паролю.">

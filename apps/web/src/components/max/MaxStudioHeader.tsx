@@ -7,6 +7,7 @@ import { logoutAction } from "@/app/(auth)/actions";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { BrandMark } from "@/components/marketing/BrandMark";
+import { LearningButton } from "@/components/learning/ProductLearning";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -48,13 +49,14 @@ export function MaxStudioHeader({
       </div>
 
       <div className="flex items-center gap-2">
+        <LearningButton />
         <Button
           asChild
           variant="ghost"
           size="sm"
           className="min-h-11 px-2"
         >
-          <Link href="/max/start" aria-label="Помощь и быстрый старт">
+          <Link href="/max/start" aria-label="Помощь и быстрый старт" data-learning="projects-help">
             <CircleHelp className="h-4 w-4" />
             <span className="hidden sm:inline">Помощь</span>
           </Link>
@@ -66,6 +68,7 @@ export function MaxStudioHeader({
               variant="ghost"
               size="sm"
               aria-label="Аккаунт"
+              data-learning="account-menu"
               className="min-h-11 gap-2 px-1.5"
             >
               <Avatar className="h-8 w-8">

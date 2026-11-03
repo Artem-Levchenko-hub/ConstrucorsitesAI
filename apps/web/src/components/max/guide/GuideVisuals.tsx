@@ -1,4 +1,5 @@
 import Image from "next/image";
+import { ArrowRight, Bot, Eye, FileCheck2, Rocket, Smartphone } from "lucide-react";
 
 import { guideScreenshots, type GuideScreenshotData } from "./guide-screenshots";
 import "./GuideVisuals.css";
@@ -103,21 +104,23 @@ export function GuideScreenshot({ id }: { id: string }) {
   }).format(new Date(screenshot.capturedAt));
 
   return (
-    <figure className="guide-screenshot" data-guide-screenshot={id}>
-      <div className="guide-screenshot__image">
-        <Image
-          className="guide-screenshot__photo"
-          src={screenshot.src}
-          width={screenshot.width}
-          height={screenshot.height}
-          alt={screenshot.alt}
-          unoptimized
-        />
-        <ScreenshotAnnotations screenshot={screenshot} />
+    <figure className="guide-screenshot" data-guide-screenshot={id} aria-labelledby={`guide-${id}-title`} aria-describedby={`guide-${id}-source`}>
+      <div className="guide-screenshot__media">
+        <div className="guide-screenshot__image">
+          <Image
+            className="guide-screenshot__photo"
+            src={screenshot.src}
+            width={screenshot.width}
+            height={screenshot.height}
+            alt={screenshot.alt}
+            unoptimized
+          />
+          <ScreenshotAnnotations screenshot={screenshot} />
+        </div>
       </div>
       <figcaption className="guide-screenshot__caption">
         <div className="guide-screenshot__heading">
-          <h3 className="guide-screenshot__title">{screenshot.title}</h3>
+          <h3 className="guide-screenshot__title" id={`guide-${id}-title`}>{screenshot.title}</h3>
           <a
             className="guide-screenshot__original"
             href={screenshot.src}
@@ -136,7 +139,7 @@ export function GuideScreenshot({ id }: { id: string }) {
             </li>
           ))}
         </ol>
-        <p className="guide-screenshot__source">
+        <p className="guide-screenshot__source" id={`guide-${id}-source`}>
           Источник: <a href={screenshot.sourceUrl} target="_blank" rel="noopener noreferrer">{screenshot.sourceLabel}</a>
           {" · Снято "}<time dateTime={screenshot.capturedAt}>{capturedDate}</time>
           {" · Реальные данные скрыты"}
@@ -170,18 +173,35 @@ export function DashboardVisual() {
   return <GuideScreenshot id="management" />;
 }
 
-export function GoldenPathVisual() {
-  const steps = [
-    "Создайте проект в Yleum",
-    "Проверьте приложение",
-    "Опубликуйте приложение",
-    "Подключите мини-приложение в MAX",
-    "Проверьте запуск в MAX",
-  ];
+const journeySteps = [
+  { title: "Создайте проект", text: "Опишите идею и главное действие пользователя.", href: "#project", icon: Smartphone },
+  { title: "Проверьте в редакторе", text: "Пройдите путь клиента в мобильном превью.", href: "#builder", icon: Eye },
+  { title: "Подготовьте данные", text: "Заполните каталог и проверьте документы.", href: "#settings", icon: FileCheck2 },
+  { title: "Подключите бота", text: "Настройте безопасный вход через MAX.", href: "#max-bot", icon: Bot },
+  { title: "Опубликуйте", text: "Получите постоянную ссылку на приложение.", href: "#publish", icon: Rocket },
+  { title: "Откройте в MAX", text: "Добавьте ссылку в MAX Partner и проверьте запуск.", href: "#acceptance", icon: Smartphone },
+] as const;
 
+export function GoldenPathVisual() {
   return (
-    <ol className="guide-path" aria-label="Путь от проекта до запуска">
-      {steps.map((step) => <li key={step}>{step}</li>)}
-    </ol>
+    <nav className="guide-journey" aria-label="Путь от проекта до запуска" data-learning="guide-journey">
+      <div className="guide-journey__heading">
+        <div><p>Карта запуска</p><h2>От проекта до запуска в MAX</h2></div>
+        <span>Выберите этап, чтобы перейти к инструкции.</span>
+      </div>
+      <ol className="guide-path" role="list">
+        {journeySteps.map((step, index) => {
+          const Icon = step.icon;
+          return <li key={step.href}>
+            <a href={step.href}>
+              <span className="guide-path__top"><Icon size={21} aria-hidden="true" /><span>0{index + 1}</span></span>
+              <strong>{step.title}</strong>
+              <span className="guide-path__description">{step.text}</span>
+              <ArrowRight className="guide-path__arrow" size={17} aria-hidden="true" />
+            </a>
+          </li>;
+        })}
+      </ol>
+    </nav>
   );
 }

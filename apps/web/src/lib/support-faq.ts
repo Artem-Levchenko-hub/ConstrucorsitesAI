@@ -45,7 +45,7 @@ export const supportAnswers: readonly SupportAnswer[] = [
     id: "payment", topic: "billing", question: "Оплата прошла, а тариф или пакет не появился",
     paragraphs: ["Откройте «Операции» и проверьте статус платежа. Обновите страницу аккаунта: закрытие окна оплаты само по себе ещё не подтверждает успешный платёж.", "Если деньги списаны, а начисления нет, не оплачивайте ту же покупку повторно. Напишите оператору сумму, примерное время и идентификатор платежа, если он есть. Данные карты и банковские коды не отправляйте."],
     links: [{ href: "/billing/transactions", label: "История операций" }],
-    keywords: ["оплат", "платеж", "списал", "деньги", "оплата прошла", "деньги списаны", "не активиров", "не начисл", "возврат"],
+    keywords: ["оплата", "платеж", "списал", "деньги", "оплата прошла", "деньги списаны", "не активиров", "не начисл", "возврат"],
   },
   {
     id: "renewal", topic: "billing", question: "Как управлять подпиской и продлением?",
@@ -57,12 +57,12 @@ export const supportAnswers: readonly SupportAnswer[] = [
     id: "create", topic: "generation", question: "Как создать приложение и внести правку?",
     paragraphs: ["В разделе «Мои приложения» создайте приложение и опишите нужный результат. После готовности откройте редактор и отправьте конкретное изменение: что добавить, убрать или изменить.", "Дождитесь завершения запроса и проверьте результат в превью. Лучше описать одну понятную задачу и указать, что важно сохранить."],
     links: [{ href: "/max", label: "Мои приложения" }, { href: "/max/guide", label: "Руководство Yleum" }],
-    keywords: ["создать приложение", "создание", "сгенерир", "правк", "изменить", "поменять", "редактир"],
+    keywords: ["создать приложение", "сгенерир", "правк", "изменить", "поменять", "редактир"],
   },
   {
     id: "waiting", topic: "generation", question: "Генерация долго выполняется — что делать?",
     paragraphs: ["Генерация может занимать несколько минут; длительность зависит от задачи. Смотрите статус текущего запроса в редакторе. Пока он выполняется, не отправляйте тот же запрос повторно.", "Если статус долго не меняется или появилась ошибка, передайте оператору ссылку на приложение, время запуска и текст статуса. Автопомощник не запускает и не отменяет генерации."],
-    keywords: ["генерац", "долго", "завис", "очеред", "ожидан", "сколько ждать"],
+    keywords: ["генерация", "долго", "завис", "очеред", "ожидан", "сколько ждать"],
   },
   {
     id: "generation-error", topic: "generation", question: "Генерация или правка завершилась ошибкой",
@@ -92,7 +92,23 @@ function normalize(value: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
-/** At most one typo in a substantial word; short identifiers and error codes remain exact. */
+// A small product vocabulary, not a general Russian stemmer: an application noun
+// alone is never a creation intent, and arbitrary words are not reduced to stems.
+const wordForms: readonly (readonly string[])[] = [
+  ["создать", "создай", "создайте", "создаю", "создаем", "создаешь", "создает", "создаете", "создают", "создается", "создаются", "создавать", "создание", "создания", "создании", "созданием", "сделать", "сделай", "сделайте", "собрать", "собери", "соберите"],
+  ["приложение", "приложения", "приложению", "приложении", "приложением", "приложений", "приложениях", "приложениями", "проект", "проекта", "проекту", "проекте", "проектом", "проекты", "проектов", "сайт", "сайта", "сайту", "сайте", "сайтом", "сайты", "сайтов"],
+  ["оплата", "оплаты", "оплате", "оплату", "оплатой", "оплатить", "оплатил", "оплатила", "оплатили", "оплатите", "оплачу", "оплатим", "оплатят", "оплачивать"],
+  ["генерация", "генерации", "генерацию", "генерацией", "генераций"],
+];
+const canonicalWords = new Map(wordForms.flatMap(forms => forms.map(form => [form, forms[0]] as const)));
+const phraseModifiers = new Set(["новый", "новое", "новую", "новая", "новые", "нового", "новой", "новых", "свой", "свое", "свою", "своя", "свои", "своего", "своей", "своих"]);
+
+function tokenize(value: string): string[] {
+  return normalize(value).split(" ").filter(word => word && !phraseModifiers.has(word))
+    .map(word => canonicalWords.get(word) ?? word);
+}
+
+/** One insertion, deletion, substitution or adjacent transposition, over a whole word. */
 function oneEdit(sample: string, term: string): boolean {
   if (Math.abs(sample.length - term.length) > 1) return false;
   let left = 0, right = 0, edits = 0;
@@ -106,29 +122,43 @@ function oneEdit(sample: string, term: string): boolean {
   return edits + sample.length - left + term.length - right <= 1;
 }
 
-function nearWord(word: string, term: string): boolean {
-  return term.length >= 5 && word.length >= 4 && [term.length - 1, term.length, term.length + 1].some(size => oneEdit(word.slice(0, size), term));
+function matchesWord(word: string, term: string): boolean {
+  // Short words, Latin identifiers and numeric error codes must be whole tokens.
+  return term.length <= 3 || term === "макс" || /^[a-z0-9]+$/.test(term) ? word === term : word.startsWith(term);
 }
 
+function matchesPhrase(words: readonly string[], terms: readonly string[], fuzzy: boolean): boolean {
+  return words.some((_, start) => {
+    let typos = 0;
+    return terms.every((term, offset) => {
+      const word = words[start + offset];
+      if (!word) return false;
+      if (matchesWord(word, term)) return true;
+      return fuzzy && word.length >= 5 && term.length >= 5 && ++typos <= 1 && oneEdit(word, term);
+    });
+  });
+}
+
+const indexedAnswers = supportAnswers.map(answer => ({ answer, keywords: answer.keywords.map(tokenize) }));
+
 function rankedAnswers(question: string, partial: boolean) {
-  const text = normalize(question.slice(0, 500));
-  if (!text) return [];
-  const words = text.split(" ");
-  return supportAnswers.map(answer => ({
+  const words = tokenize(question.slice(0, 500));
+  if (words.join("").length < 3) return [];
+  return indexedAnswers.map(({ answer, keywords }) => ({
     answer,
-    score: answer.keywords.reduce((score, keyword) => {
-      const term = normalize(keyword);
-      if (term.includes(" ")) return score + (text.includes(term) ? 3 : 0);
-      if (words.some(word => term === "pro" || /^\d+$/.test(term) ? word === term : word.startsWith(term))) return score + 1;
-      if (partial && words.some(word => nearWord(word, term))) return score + 0.5;
-      return score + (partial && words.some(word => word.length >= 3 && term.startsWith(word)) ? 0.25 : 0);
+    score: keywords.reduce((score, terms) => {
+      if (matchesPhrase(words, terms, false)) return score + (terms.length > 1 ? 3 : 1);
+      if (!partial) return score;
+      if (matchesPhrase(words, terms, true)) return score + (terms.length > 1 ? 2.5 : 0.5);
+      // An unfinished word is useful while typing, but not evidence inside an
+      // unrelated sentence such as "создать таблицу в Excel".
+      return score + (words.length === 1 && words[0].length >= 3 && terms.some(term => term.startsWith(words[0])) ? 0.25 : 0);
     }, 0),
   })).filter(item => item.score > 0).sort((a, b) => b.score - a.score);
 }
 
 /** Suggestions are choices, never an automatic submission of a partial question. */
 export function searchSupportAnswers(question: string): readonly SupportAnswer[] {
-  if (normalize(question).length < 3) return [];
   return rankedAnswers(question, true).slice(0, 3).map(item => item.answer);
 }
 export function relatedSupportAnswers(answer: SupportAnswer): readonly SupportAnswer[] {

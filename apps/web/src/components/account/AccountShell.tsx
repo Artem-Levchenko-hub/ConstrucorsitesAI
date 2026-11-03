@@ -12,6 +12,7 @@ import Link from "next/link";
 
 import { logoutAction } from "@/app/(auth)/actions";
 import { BrandMark } from "@/components/marketing/BrandMark";
+import { LearningButton } from "@/components/learning/ProductLearning";
 import type { AccountView } from "@/components/account/AccountControlCenter";
 import { AccountPageTransition } from "./AccountPageTransition";
 import { getMaxAdminAccessServer } from "@/lib/auth-mock";
@@ -51,9 +52,10 @@ export async function AccountShell({
     <div data-max-studio className="account-shell">
       <header className="account-topbar">
         <BrandMark href="/max" />
-        <Link href="/max" className="account-back">
+        <Link data-learning="account-projects" href="/max" className="account-back">
           <LayoutGrid className="size-4" />К приложениям</Link>
         <div className="account-user">
+          {active !== "admin" && <LearningButton />}
           <span>{email}</span>
           <form action={logoutAction}>
             <button aria-label="Выйти из аккаунта">
@@ -65,7 +67,7 @@ export async function AccountShell({
       <div className="account-layout">
         <aside className="account-sidebar">
           <p>Аккаунт</p>
-          <nav aria-label="Разделы аккаунта">{navigation.map(([id, href, Icon, label]) => <Link key={id} href={href} aria-current={active === id ? "page" : undefined}>
+          <nav data-learning="account-navigation" aria-label="Разделы аккаунта">{navigation.map(([id, href, Icon, label]) => <Link key={id} href={href} aria-current={active === id ? "page" : undefined}>
             <Icon className="size-4" />{label}</Link>)}</nav>
           {isAdmin && <Link className="account-admin" href="/admin/max" aria-current={active === "admin" ? "page" : undefined}>
             <ScanSearch className="size-4" />Админ-центр</Link>}</aside>

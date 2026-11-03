@@ -417,23 +417,15 @@ Keep the installed MAX UI version; do not add a replacement UI library or bypass
 TypeScript errors.
 """.strip()
 
-MAX_MODEL_DIRECTIVE = (
-    """
-MAX PLATFORM CORE CONTRACT
-The existing MAX files are a secure runtime substrate, not a product UI template.
-Preserve the MAX bridge, authenticated session, legal/support routes, managed AI
-and integration clients, webhook security and generated business config. Do not
-rewrite platform-owned files.
-""".strip()
-    + "\n\n"
-    + MAX_UI_GUIDANCE
-    + "\n\n"
-    + """
+MAX_MANAGED_SDK_GUIDANCE = """
+MAX MANAGED SDK CONTRACT
 The owner edits business data in Yleum's Catalog and project settings.
 For a new app with `.omnia/management.json`, render its public name/description/
 support using `useYleumAppProfile()` from `@/lib/omnia/app-profile-client`.
 It returns {profile,configVersion,status,error,refresh}; profile contains app_name,
 summary and support.email/response_time. Handle loading/error; no bundled fallback.
+Use profile.app_name, never profile.name; catalog items use item.title, never
+item.name. Verify the actual SDK types before using other fields.
 Read the locked management manifest before implementing business flows. Selected
 orders/leads/bookings MUST use createManagedOrder/createManagedLead/
 createManagedBooking and getManagedRecords from `@/lib/omnia/business-client`.
@@ -469,15 +461,26 @@ rows behind useMemo, a pre-filter, a toDrink/helper projection or a copied const
 Render profile fields directly; map current SDK rows directly to visible JSX.
 For catalog categories, keep the condition INSIDE that JSX map:
 ```tsx
-const {profile} = useYleumAppProfile();
-const catalog = useYleumCatalog();
-const selection = useYleumCatalogSelection(catalog.items);
-const ready = catalog.status === "ready" && catalog.configVersion !== null;
-// Inside the real component's returned JSX:
-<h1>{profile?.app_name}</h1>
-{catalog.items.map(item => item.active &&
-  (selection.category === null || item.category === selection.category) ?
-  <article key={item.id}><h2>{item.title}</h2><span>{item.price}</span></article> : null)}
+"use client";
+
+import {useYleumAppProfile} from "@/lib/omnia/app-profile-client";
+import {useYleumCatalog, useYleumCatalogSelection} from "@/lib/omnia/catalog-client";
+
+export function ManagedCatalog() {
+  const {profile, status: profileStatus, error: profileError} = useYleumAppProfile();
+  const catalog = useYleumCatalog();
+  const selection = useYleumCatalogSelection(catalog.items);
+  const ready = catalog.status === "ready" && catalog.configVersion !== null;
+  return <section aria-busy={profileStatus === "loading" || catalog.status === "loading"}>
+    <h1>{profile?.app_name}</h1>
+    {profileStatus === "loading" || catalog.status === "loading" ? <p>Загрузка…</p> : null}
+    {profileError || catalog.error ? <p role="alert">{profileError || catalog.error}</p> : null}
+    {ready && catalog.items.length === 0 ? <p>Каталог пока пуст</p> : null}
+    {catalog.items.map(item => item.active &&
+      (selection.category === null || item.category === selection.category) ?
+      <article key={item.id}><h2>{item.title}</h2><span>{item.price}</span></article> : null)}
+  </section>;
+}
 ```
 This is a connection fragment, not a complete page: implement the real product,
 forms, loading/empty/error states and the intent/quote/retry rules above.
@@ -487,8 +490,6 @@ path, not a guessed checkout price. Keep loading/error messages visible even whe
 the cart is empty; never silently ignore an apparently enabled first tap.
 Keep cart/history navigation and recovery of an existing frozen intent available;
 do not make that recovery depend on today's catalog or a nonempty cart.
-Bind category/option controls to selection.setCategory/selection.selectOption and
-read selection.getOption(item) for the CURRENT item, not a stale local selection.
 For each selected business module use a literal resource, its own state and a
 direct records.map in visible JSX. For example, load orders in a useEffect:
 `const response = await getManagedRecords("orders", {limit: 50});`
@@ -515,7 +516,8 @@ user-scoped storage and must never become an owner-wide business registry.
 Read `src/lib/omnia/max-config.ts` to understand the saved brief. Product catalog
 screens MUST use `useYleumCatalog()` from `@/lib/omnia/catalog-client`, which
 refreshes on mount/focus from the same mounted public business file as the server.
-Pass its current items to `useYleumCatalogSelection(items)` from the same module.
+It returns {items,configVersion,status,error,refresh}; items are YleumMaxContentItem[].
+Pass catalog.items to useYleumCatalogSelection from the same module, as above.
 Use selection.category/setCategory for category filters (null means All),
 selection.selectOption(id,value) for option inputs, and selection.getOption(item)
 when adding a CURRENT item to the cart. The hook discards removed options and
@@ -547,7 +549,22 @@ never a silently parsed checkout total. Missing config fails closed, with no
 static fallback. Preserve `"app_config_protocol": 1` in `.omnia/cell.json`.
 Catalog saves in Yleum need neither generation nor source republish. The public
 app must not expose owner administration or the complete operator configuration.
+""".strip()
 
+MAX_MODEL_DIRECTIVE = (
+    """
+MAX PLATFORM CORE CONTRACT
+The existing MAX files are a secure runtime substrate, not a product UI template.
+Preserve the MAX bridge, authenticated session, legal/support routes, managed AI
+and integration clients, webhook security and generated business config. Do not
+rewrite platform-owned files.
+""".strip()
+    + "\n\n"
+    + MAX_UI_GUIDANCE
+    + "\n\n"
+    + MAX_MANAGED_SDK_GUIDANCE
+    + "\n\n"
+    + """
 On a FULL BUILD, there is deliberately no product home page or visual template.
 Create src/app/page.tsx, the product styling, domain screens, components and API
 behaviour required by the brief from scratch. A thin shell, decorative tabs,

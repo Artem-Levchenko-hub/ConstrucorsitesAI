@@ -12,6 +12,7 @@ from yleum_api.core.config import get_settings
 from yleum_api.services import (
     agent_builder,
 )
+from yleum_api.services.agent_build_feedback import build_compiler_repair_context
 from yleum_api.services.generation.contracts import (
     AgentRuntimeBindings,
     GenerationIds,
@@ -119,7 +120,23 @@ async def checked_fast_check(runtime: GenerationRuntime, ids: GenerationIds) -> 
     result = await runtime.coordinator.fast_check()
     if (collector := getattr(runtime, "verified_progress", None)) is not None:
         await collector.record(result.id)
-    return {"ok": result.outcome == "green", "detail": result.redacted_detail}
+    observation: dict[str, Any] = {
+        "ok": result.outcome == "green", "detail": result.redacted_detail,
+    }
+    # Only the coordinator's owned, terminal, current-source receipt may admit
+    # compiler context. This read-only feedback earns no progress or allowance.
+    source_failure = getattr(runtime.coordinator, "source_failure", None)
+    handle = getattr(runtime, "handle", None)
+    if result.outcome != "green" and source_failure is not None and handle is not None:
+        failure = await source_failure(result)
+        if failure is not None and failure.kind in {
+            "type_error", "relative_import", "workspace_alias",
+        }:
+            files = await handle.snapshot_files()
+            context = build_compiler_repair_context(result.redacted_detail, failure, files)
+            if context is not None:
+                observation["compiler_repair_context"] = context
+    return observation
 
 
 async def guard_native_source_contract(

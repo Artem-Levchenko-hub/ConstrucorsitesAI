@@ -6,6 +6,7 @@ import { Check, FileCheck2, Loader2, Settings2, CircleAlert, Circle } from "luci
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { LearningButton } from "@/components/learning/ProductLearning";
 import {
   Dialog,
   DialogContent,
@@ -200,6 +201,7 @@ export function MaxProjectSetupDialog({
         <DialogContent
           data-product-shell
           data-max-studio
+          data-learning-context="details"
           className="max-settings-dialog max-project-setup"
         >
           <DialogHeader className="max-setup-header">
@@ -207,6 +209,7 @@ export function MaxProjectSetupDialog({
               <FileCheck2 className="h-5 w-5 text-accent" />
               Данные приложения
             </DialogTitle>
+            <LearningButton className="self-start" />
             <DialogDescription className="max-setup-description">
               {/* Вкладки выглядели одинаково, хотя публикацию блокирует ровно
                   одна. Строка сразу отвечает, что ещё нужно, а что по желанию. */}

@@ -2,6 +2,7 @@ import { ArrowLeft, CircleHelp, Rocket, UserRound } from "lucide-react";
 import Link from "next/link";
 import { YleumMark } from "@/components/brand/YleumMark";
 import { MaxProjectNav, type MaxProjectNavKey } from "@/components/max/MaxProjectNav";
+import { LearningButton } from "@/components/learning/ProductLearning";
 import "@/components/max/max-studio.css";
 import "@/components/max/max-project-workspace.css";
 
@@ -26,16 +27,17 @@ export function MaxSectionShell({ projectId, projectName, active, eyebrow, title
           <span className="max-project-header-name" title={projectName}>{projectName}</span>
         </div>
         <div className="flex shrink-0 items-center gap-3">
+          <LearningButton />
           {active !== "publish" && <Link href={`/max/${projectId}?panel=publish`} className="max-project-launch"><Rocket className="size-4" />Запуск</Link>}
           <Link href="/account" aria-label="Аккаунт" className="max-project-back"><UserRound className="size-4" /></Link>
         </div>
       </header>
-      <div className="max-project-navigation"><MaxProjectNav projectId={projectId} active={active} showProgress={false} variant="mobile" /></div>
-      <main className="max-project-main">
+      <div data-learning="project-navigation" className="max-project-navigation"><MaxProjectNav projectId={projectId} active={active} showProgress={false} variant="mobile" /></div>
+      <main data-learning="project-section" className="max-project-main">
         <div className="max-project-content">
           <header className="max-project-page-heading">
             <div><p className="max-project-eyebrow">{eyebrow}</p><h1>{title}</h1><p className="max-project-lead">{lead}</p></div>
-            <Link href={helpHref[active]} aria-label="Помощь" className="max-project-help"><CircleHelp className="size-4" /><span>Помощь</span></Link>
+            <Link data-learning="project-help" href={helpHref[active]} aria-label="Помощь" className="max-project-help"><CircleHelp className="size-4" /><span>Помощь</span></Link>
           </header>
           {children}
         </div>

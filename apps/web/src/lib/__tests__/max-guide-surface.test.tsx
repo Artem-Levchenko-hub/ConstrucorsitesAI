@@ -10,6 +10,7 @@ import {
   BuilderVisual,
   DashboardVisual,
   GuideScreenshot,
+  GoldenPathVisual,
   IntegrationVisual,
   LaunchVisual,
   PartnerVisual,
@@ -25,6 +26,33 @@ function renderScreenshot(id: string) {
 }
 
 describe("MAX guide screenshots", () => {
+  it("connects the visual launch journey to real chapters in the order a new owner needs them", () => {
+    const page = new DOMParser().parseFromString(renderToStaticMarkup(<MaxGuidePage />), "text/html");
+    const journey = new DOMParser().parseFromString(renderToStaticMarkup(<GoldenPathVisual />), "text/html");
+    const links = [...journey.querySelectorAll('nav[aria-label="Путь от проекта до запуска"] a')];
+
+    expect(links.map(link => link.getAttribute("href"))).toEqual([
+      "#project", "#builder", "#settings", "#max-bot", "#publish", "#acceptance",
+    ]);
+    links.forEach(link => {
+      expect(link.textContent?.trim().length).toBeGreaterThan(10);
+      expect(page.querySelector(link.getAttribute("href")!)).not.toBeNull();
+    });
+    expect(page.querySelector('[data-learning="guide-journey"]')).not.toBeNull();
+  });
+
+  it("gives every real screenshot an accessible title and its dated source", () => {
+    for (const [id, screenshot] of Object.entries(guideScreenshots)) {
+      const page = renderScreenshot(id);
+      const figure = page.querySelector("figure")!;
+      const title = page.getElementById(figure.getAttribute("aria-labelledby") ?? "");
+      const source = page.getElementById(figure.getAttribute("aria-describedby") ?? "");
+      expect(title?.textContent).toBe(screenshot.title);
+      expect(source?.querySelector("time")?.getAttribute("datetime")).toBe(screenshot.capturedAt);
+      expect(source?.textContent).toContain("Реальные данные скрыты");
+    }
+  });
+
   it("renders all linked chapters with existing captures and current MAX field names", () => {
     const document = new DOMParser().parseFromString(renderToStaticMarkup(<MaxGuidePage />), "text/html");
     const anchors = ["start", "account", "project", "builder", "settings", "integrations", "amocrm", "max-bot", "publish", "partner", "acceptance", "operations", "billing", "errors", "checklists"];

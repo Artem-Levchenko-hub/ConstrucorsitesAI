@@ -13,6 +13,7 @@ import Link from "next/link";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import "@/components/max/max-studio.css";
 import "@/components/marketing/max-public.css";
+import "./quick-start.css";
 
 export const metadata: Metadata = {
   title: "Быстрый старт — Yleum",
@@ -25,7 +26,7 @@ const steps = [
     number: "01",
     title: "Создайте проект",
     text: "Назовите приложение и одним предложением опишите, что сможет делать пользователь.",
-    result: "Проект открыт в редакторе, первая сборка запускается автоматически.",
+    result: "Проект в редакторе, первая сборка уже запущена.",
     href: "/max/guide#project",
     icon: Smartphone,
   },
@@ -33,7 +34,7 @@ const steps = [
     number: "02",
     title: "Проверьте сборку",
     text: "Откройте основные экраны в мобильном предпросмотре и попросите агента исправить найденное.",
-    result: "Навигация, формы и главный сценарий работают без технических ошибок.",
+    result: "Основной сценарий проверен в превью.",
     href: "/max/guide#builder",
     icon: Check,
   },
@@ -41,7 +42,7 @@ const steps = [
     number: "03",
     title: "Заполните данные",
     text: "Добавьте сведения о продукте, владельце, поддержке, контенте и реальных функциях.",
-    result: "Обязательные страницы и политики собраны из проверенных данных.",
+    result: "Данные, контент и обязательные страницы заполнены.",
     href: "/max/guide#settings",
     icon: FileCheck2,
   },
@@ -49,7 +50,7 @@ const steps = [
     number: "04",
     title: "Подключите безопасный вход MAX",
     text: "Создайте и промодерируйте бота в MAX Partner, затем один раз добавьте его секрет через защищённую форму Yleum.",
-    result: "Сервер может проверять подпись MAX и разделять данные пользователей.",
+    result: "Безопасный вход MAX готов к запуску.",
     href: "/max/guide#max-bot",
     icon: Bot,
   },
@@ -57,7 +58,7 @@ const steps = [
     number: "05",
     title: "Опубликуйте",
     text: "Запустите production-развёртывание и дождитесь постоянного HTTPS-адреса.",
-    result: "Контейнер работает, health-check пройден, URL доступен.",
+    result: "Приложение доступно по постоянной HTTPS-ссылке.",
     href: "/max/guide#publish",
     icon: Rocket,
   },
@@ -65,7 +66,7 @@ const steps = [
     number: "06",
     title: "Проверьте запуск в MAX",
     text: "Вставьте production URL в MAX Partner и откройте приложение в реальном клиенте. Webhook Yleum подготовит автоматически.",
-    result: "Кнопка запуска открывает приложение внутри MAX.",
+    result: "Приложение открывается в MAX по кнопке запуска.",
     href: "/max/guide#acceptance",
     icon: ShieldCheck,
   },
@@ -73,7 +74,7 @@ const steps = [
 
 export default function MaxQuickStartPage() {
   return (
-    <main data-max-studio className="max-docs min-h-screen">
+    <main data-max-studio className="max-docs max-quick-start min-h-screen">
       <header className="border-b border-[#2b2d32] bg-[#191b20]">
         <div className="mx-auto flex min-h-16 max-w-[1120px] items-center justify-between gap-4 px-5 sm:px-8">
           <BrandMark href="/max/product" />
@@ -102,27 +103,28 @@ export default function MaxQuickStartPage() {
       </section>
 
       <section className="mx-auto max-w-[1120px] px-5 py-10 sm:px-8 sm:py-14">
-        <ol className="grid gap-4 md:grid-cols-2">
+        <ol className="max-start-grid">
           {steps.map((step) => {
             const Icon = step.icon;
             return (
-              <li key={step.number} className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-5 sm:p-7">
-                <div className="flex items-center justify-between gap-4">
-                  <span className="grid size-10 place-items-center rounded-[8px] bg-[#2b2d32] text-accent">
-                    <Icon className="size-4" />
+              <li key={step.number} className="max-start-card">
+                <div className="max-start-card-heading">
+                  <span className="max-start-icon">
+                    <Icon size={19} aria-hidden="true" />
                   </span>
-                  <span className="font-mono text-xs text-[#828491]">{step.number} / 06</span>
+                  <span className="max-start-number">{step.number}<span> / 06</span></span>
                 </div>
-                <h2 className="mt-6 text-xl font-semibold">{step.title}</h2>
-                <p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{step.text}</p>
-                <div className="mt-5 rounded-[8px] border border-[#25272b] bg-[#121519] p-4">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#828491]">Результат этапа</p>
-                  <p className="mt-2 text-xs leading-5 text-white">{step.result}</p>
+                <div className="max-start-copy">
+                  <h2>{step.title}</h2>
+                  <p>{step.text}</p>
                 </div>
-                <Link href={step.href} className="mt-5 inline-flex min-h-11 items-center gap-2 text-xs font-semibold text-[#6a95fa] hover:underline">
-                  Подробная инструкция
-                  <ArrowRight className="size-3.5" />
-                </Link>
+                <div className="max-start-card-footer">
+                  <Link href={step.href} className="max-start-instruction" aria-label={`Подробная инструкция: ${step.title}`}>
+                    Подробная инструкция
+                    <ArrowRight size={17} aria-hidden="true" />
+                  </Link>
+                  <p className="max-start-outcome"><span className="max-start-outcome-marker" aria-hidden="true" /><span>{step.result}</span></p>
+                </div>
               </li>
             );
           })}

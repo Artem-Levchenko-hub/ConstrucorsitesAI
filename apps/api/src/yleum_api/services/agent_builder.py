@@ -57,6 +57,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, ConfigDict, NonNegativeInt
 
 from yleum_api.services import llm_client
+from yleum_api.services.agent_build_feedback import render_model_observation
 from yleum_api.services.agent_output_budget import agent_output_tokens
 from yleum_api.services.agent_progress import bounded_redacted_diagnostic
 from yleum_api.services.generation.continuation import (
@@ -313,7 +314,7 @@ def _format_observation(action: Action, obs: dict[str, Any]) -> str:
             f"[read_file lines {read_range['start_line']}-{read_range['end_line']} "
             f"of {read_range['total_lines']}]\n"
         )
-    rendered = _truncate(body, _MAX_OBS_CHARS)
+    rendered = render_model_observation(obs, max_body_chars=_MAX_OBS_CHARS)
     if action.name == "read_file" and ok and (
         len(str(body)) > _MAX_OBS_CHARS
         or (isinstance(read_range, dict) and read_range.get("truncated"))

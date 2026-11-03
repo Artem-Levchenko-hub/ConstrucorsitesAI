@@ -398,7 +398,7 @@ async def build_max_agent_guide(
         if executor is not None
         else legacy
     )
-    from yleum_api.services.max_project_kit import MAX_UI_GUIDANCE
+    from yleum_api.services.max_project_kit import MAX_MANAGED_SDK_GUIDANCE, MAX_UI_GUIDANCE
 
     # Provider selection may replace the legacy stack entirely. Project
     # capabilities must be appended AFTER that replacement, never lost in it.
@@ -407,6 +407,7 @@ async def build_max_agent_guide(
         for part in (
             guide,
             MAX_UI_GUIDANCE if MAX_UI_GUIDANCE not in guide else "",
+            MAX_MANAGED_SDK_GUIDANCE if MAX_MANAGED_SDK_GUIDANCE not in guide else "",
             MAX_DATA_EVOLUTION_POLICY,
             integration_guide,
         )

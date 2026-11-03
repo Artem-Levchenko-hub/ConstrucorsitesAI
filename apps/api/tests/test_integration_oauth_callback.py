@@ -38,6 +38,9 @@ def callback_boundary(monkeypatch):
     class Session:
         commits = 0
 
+        def __init__(self):
+            self.added = []
+
         async def execute(self, statement, *args):
             expected = hashlib.sha256(raw_state.encode()).hexdigest()
             found = record if statement.compile().params.get("state_hash_1") == expected else None
@@ -51,10 +54,14 @@ def callback_boundary(monkeypatch):
             self.commits += 1
 
         def add(self, obj):
+            self.added.append(obj)
             obj.grant_revision = 0
             obj.id = uuid4()
 
         async def flush(self):
+            pass
+
+        async def refresh(self, obj):
             pass
 
     session = Session()
@@ -62,7 +69,10 @@ def callback_boundary(monkeypatch):
     async def database():
         yield session
 
-    connection = SimpleNamespace(user_id=owner.id, provider="amocrm", grant_revision=0)
+    connection = SimpleNamespace(
+        id=uuid4(), user_id=owner.id, provider="amocrm", grant_revision=0,
+        public_config={"shop_id": "123"}, credentials_enc="synthetic-working-ciphertext",
+    )
     find_connection = AsyncMock(return_value=None)
     bind = AsyncMock()
     exchange = AsyncMock(return_value=OAuthResult(
@@ -126,8 +136,13 @@ async def test_owner_cookie_callback_binds_original_project_and_rejects_replay(
 ):
     boundary = callback_boundary
     boundary.record.provider = provider
-    if provider != "amocrm":
+    if provider not in {"amocrm", "yookassa"}:
         boundary.find_connection.return_value = boundary.connection
+    if provider == "yookassa":
+        boundary.exchange.return_value = OAuthResult(
+            public_config={"shop_id": "123"}, secret_values={"access_token": "synthetic-access"},
+            account_label="Магазин 123",
+        )
     response = await callback(boundary, user=boundary.owner, provider=provider)
     assert response.status_code == 303
     assert response.headers["location"].endswith(

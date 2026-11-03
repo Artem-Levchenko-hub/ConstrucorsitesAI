@@ -10,6 +10,7 @@ import type { SetupSection } from "./MaxProjectSetupSections";
 import { maxEditorLinkEntry, type MaxEditorEntry } from "@/lib/max-editor-entry";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import { Button } from "@/components/ui/button";
+import { LearningButton } from "@/components/learning/ProductLearning";
 import type { Project } from "@/lib/api/types";
 import "./max-editor.css";
 import "./max-editor-modals.css";
@@ -73,31 +74,32 @@ export function MaxEditorLayout({ project, children, navigation, tools, preview,
       <header className="max-editor-header">
         <div className="max-editor-project">
           <div className="max-editor-brand"><BrandMark href="/max" /></div>
-          <button className="max-editor-project-trigger" data-testid="max-navigation-open" aria-label="Проекты и аккаунт"
+          <button className="max-editor-project-trigger" data-learning="editor-projects" data-testid="max-navigation-open" aria-label="Проекты и аккаунт"
             onClick={event => open("navigation", event.currentTarget)}>
             <span><strong>{project.name}</strong><small>Yleum</small></span><ChevronDown className="size-4 shrink-0" />
           </button>
         </div>
         <div className="max-editor-header-actions">
+          <LearningButton />
           <MaxEditorDataDialog projectId={project.id} controlled={{ section: dataSection, onOpenChange: value => select(value ? "data:details" : null) }} />
-          <Link href={`/max/${project.id}/catalog`} className="max-editor-catalog-link inline-flex min-h-11 items-center rounded-md border border-border-default px-3 text-sm">Каталог</Link>
-          <Button variant="outline" className="max-editor-integrations" data-testid="max-integrations-open" disabled={modalBusy} onClick={event => open("services", event.currentTarget)}>Интеграции</Button>
+          <Link data-learning="editor-catalog" href={`/max/${project.id}/catalog`} className="max-editor-catalog-link inline-flex min-h-11 items-center rounded-md border border-border-default px-3 text-sm">Каталог</Link>
+          <Button data-learning="editor-services" variant="outline" className="max-editor-integrations" data-testid="max-integrations-open" disabled={modalBusy} onClick={event => open("services", event.currentTarget)}>Интеграции</Button>
           <Button variant="outline" size="icon" aria-label="Инструменты редактора" onClick={event => open("tools", event.currentTarget)}><Ellipsis className="size-5" /></Button>
-          <Button variant="outline" size="icon" onClick={event => open("preview", event.currentTarget)} className="max-editor-mobile-preview-trigger" aria-label="Открыть живое превью" data-testid="max-mobile-preview-open"><PanelRightOpen className="size-4" /></Button>
-          <Button data-testid="max-launch-open" title={launchStatus} className="max-editor-publish" onClick={event => open("publish", event.currentTarget)}>Опубликовать <ArrowUpRight className="size-4" /></Button>
+          <Button data-learning="editor-preview" variant="outline" size="icon" onClick={event => open("preview", event.currentTarget)} className="max-editor-mobile-preview-trigger" aria-label="Открыть живое превью" data-testid="max-mobile-preview-open"><PanelRightOpen className="size-4" /></Button>
+          <Button data-learning="editor-publish" data-testid="max-launch-open" title={launchStatus} className="max-editor-publish" onClick={event => open("publish", event.currentTarget)}>Опубликовать <ArrowUpRight className="size-4" /></Button>
         </div>
       </header>
       <div className="max-editor-workspace">
-        <section className="max-editor-conversation" aria-label="Редактор приложения">
+        <section data-learning="editor-conversation" className="max-editor-conversation" aria-label="Редактор приложения">
           <div className="max-editor-section-heading"><h1>Редактор</h1><p>Создавайте и меняйте приложение в диалоге</p></div>
           <div className="max-studio-chat min-h-0 flex-1 overflow-hidden">{children}</div>
         </section>
-        {desktop && <div className="max-editor-desktop-preview">{previewContent}</div>}
+        {desktop && <div data-learning="editor-preview" className="max-editor-desktop-preview">{previewContent}</div>}
       </div>
       <Dialog.Root open={!!modal} onOpenChange={value => { if (!value) select(null); }}>
         <Dialog.Portal>
           <Dialog.Overlay className="max-editor-overlay" />
-          <Dialog.Content data-product-shell data-max-editor data-max-studio className={`max-editor-modal max-editor-modal-${modal}`}
+          <Dialog.Content data-product-shell data-max-editor data-max-studio data-learning-context={modal ?? undefined} className={`max-editor-modal max-editor-modal-${modal}`}
             data-testid={modal === "preview" ? "max-mobile-preview" : "max-editor-modal"} aria-describedby={undefined}
             onEscapeKeyDown={event => { if (modalBusy) event.preventDefault(); }}
             onPointerDownOutside={event => { if (modalBusy) event.preventDefault(); }}
@@ -111,10 +113,10 @@ export function MaxEditorLayout({ project, children, navigation, tools, preview,
             }}>
             <div className="max-editor-modal-heading">
               <div><span className="max-editor-modal-project">{project.name}</span><Dialog.Title>{titles[modal ?? ""]}</Dialog.Title></div>
-              <Dialog.Close asChild><Button variant="outline" size="icon" disabled={modalBusy} aria-label="Закрыть окно"><X className="size-5" /></Button></Dialog.Close>
+              <div className="flex items-center gap-2"><LearningButton /><Dialog.Close asChild><Button variant="outline" size="icon" disabled={modalBusy} aria-label="Закрыть окно"><X className="size-5" /></Button></Dialog.Close></div>
             </div>
             {modal && ["max", "services"].includes(modal) && <div className="max-editor-modal-back"><Button variant="outline" size="sm" disabled={modalBusy} onClick={() => select("publish")}><ArrowLeft className="size-4" />К публикации</Button></div>}
-            <div className="max-editor-modal-scroll" key={modal}>
+            <div data-learning="editor-panel" className="max-editor-modal-scroll" key={modal}>
               <Suspense fallback={<p role="status">Открываем настройки…</p>}>
               {modal === "navigation" && <div data-testid="max-navigation-scroll" className="max-editor-drawer-scroll">{navigation}</div>}
               {modal === "tools" && <div className="max-editor-tools"><p>Файлы, расход на генерацию и дополнительные сервисы.</p>{tools}</div>}

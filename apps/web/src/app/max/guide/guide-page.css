@@ -1,0 +1,204 @@
+.max-guide-page .guide-journey-wrap {
+  max-width: 1320px;
+  margin: 56px auto 0;
+}
+
+.max-guide-page .guide-learning-hint {
+  margin: 15px 0 0;
+  color: var(--color-fg-tertiary);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.max-guide-page .guide-chapter {
+  padding: 64px 0;
+  border-top: 1px solid var(--color-border-default);
+  scroll-margin-top: 92px;
+}
+
+.max-guide-page .guide-chapter-heading { max-width: 850px; }
+
+.max-guide-page .guide-chapter-eyebrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  color: var(--color-accent-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  line-height: 1.5;
+}
+
+.max-guide-page .guide-chapter-eyebrow span {
+  padding-right: 12px;
+  border-right: 1px solid var(--color-border-strong);
+  color: var(--color-fg-tertiary);
+  font-family: var(--font-mono);
+  font-weight: 400;
+}
+
+.max-guide-page .guide-chapter-heading h2 {
+  margin: 16px 0 0;
+  color: var(--color-fg-primary);
+  font-size: clamp(28px, 3.1vw, 40px);
+  font-weight: 600;
+  letter-spacing: -.04em;
+  line-height: 1.16;
+  text-wrap: balance;
+}
+
+.max-guide-page .guide-chapter-lead {
+  max-width: 780px;
+  margin: 20px 0 0;
+  color: var(--color-fg-secondary);
+  font-size: 15px;
+  line-height: 1.85;
+}
+
+.max-guide-page .guide-chapter-body {
+  display: grid;
+  min-width: 0;
+  gap: 28px;
+  margin-top: 32px;
+}
+
+.max-guide-page .guide-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.max-guide-page .guide-steps > li {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 16px;
+  padding: 22px 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.max-guide-page .guide-steps > li:first-child { padding-top: 0; }
+.max-guide-page .guide-steps > li:last-child { padding-bottom: 0; border-bottom: 0; }
+
+.max-guide-page .guide-step-number {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--color-accent-subtle);
+  color: var(--color-accent-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.max-guide-page .guide-steps h3 {
+  margin: 4px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.max-guide-page .guide-step-text {
+  max-width: 780px;
+  margin-top: 8px;
+  color: var(--color-fg-secondary);
+  font-size: 14px;
+  line-height: 1.85;
+}
+
+.max-guide-page :is(.guide-step-text, .guide-note-text) strong {
+  color: var(--color-fg-primary);
+  font-weight: 600;
+}
+
+.max-guide-page .guide-step-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 11px 0 0;
+  color: var(--color-fg-tertiary);
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.max-guide-page .guide-step-result svg { color: var(--color-success); }
+
+.max-guide-page .guide-note {
+  min-width: 0;
+  padding: 17px 20px;
+  border-left: 2px solid #b7c9eb;
+  border-radius: 0 8px 8px 0;
+  background: rgb(0 98 238 / 3%);
+}
+
+.max-guide-page .guide-note-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.max-guide-page .guide-note-heading svg { flex-shrink: 0; margin-top: 3px; color: var(--color-accent-secondary); }
+
+.max-guide-page .guide-note-heading h3 {
+  margin: 0;
+  color: var(--color-fg-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.65;
+}
+
+.max-guide-page .guide-note-text {
+  margin-top: 8px;
+  color: var(--color-fg-secondary);
+  font-size: 14px;
+  line-height: 1.85;
+}
+
+.max-guide-page .guide-note--warning { border-color: var(--color-warning); background: var(--color-surface-2); }
+.max-guide-page .guide-note--warning .guide-note-heading svg { color: var(--color-warning); }
+.max-guide-page .guide-note--success { border-color: #8db99e; background: rgb(24 116 67 / 3%); }
+.max-guide-page .guide-note--success .guide-note-heading svg { color: var(--color-success); }
+
+.max-guide-page .guide-checklist {
+  padding: 24px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 12px;
+  background: var(--color-surface);
+}
+
+.max-guide-page .guide-chapter-links { display: grid; gap: 2px; }
+
+.max-guide-page .guide-chapter-links a {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: 6px;
+  color: var(--color-fg-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.max-guide-page .guide-chapter-links a:hover {
+  background: var(--color-surface);
+  color: var(--color-accent-secondary);
+}
+
+.max-guide-page details > summary {
+  min-height: 44px;
+  padding-block: 11px;
+  line-height: 1.6;
+}
+
+@media (min-width: 1024px) {
+  .max-guide-page .guide-chapter { padding-block: 76px; }
+}
+
+@media (max-width: 599px) {
+  .max-guide-page .guide-journey-wrap { margin-top: 36px; }
+  .max-guide-page .guide-note { padding: 15px 17px; }
+  .max-guide-page .guide-steps > li { gap: 12px; }
+}

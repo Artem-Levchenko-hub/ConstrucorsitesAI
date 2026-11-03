@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth-mock";
 import { headers } from "next/headers";
 import { isMaxOwnerPreviewPath } from "@/lib/max-owner-preview-path";
+import { Suspense } from "react";
+import { ProductLearning } from "@/components/learning/ProductLearning";
 
 export default async function AppLayout({
   children,
@@ -28,6 +30,7 @@ export default async function AppLayout({
   return (
     <div className="flex h-dvh max-h-dvh min-h-0 flex-col overflow-hidden">
       {children}
+      {!session.registrationVerificationReason && <Suspense fallback={null}><ProductLearning userKey={session.id} /></Suspense>}
     </div>
   );
 }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -69,6 +70,39 @@ async def _account_connection(
     if for_update:
         query = query.with_for_update().execution_options(populate_existing=True)
     return (await session.execute(query)).scalar_one_or_none()
+
+
+def _connection_snapshot(connection: AccountIntegration | None) -> dict[str, object]:
+    return {
+        "version": 1,
+        "connection_id": str(connection.id) if connection is not None else None,
+        "grant_revision": connection.grant_revision if connection is not None else None,
+    }
+
+
+def _connection_snapshot_matches(snapshot: object, connection: AccountIntegration | None) -> bool:
+    return (
+        isinstance(snapshot, dict)
+        and type(snapshot.get("version")) is int
+        and (connection is None or type(snapshot.get("grant_revision")) is int)
+        and snapshot == _connection_snapshot(connection)
+    )
+
+
+def _same_yookassa_shop(
+    connection: AccountIntegration | None, public_config: Mapping[str, object],
+) -> bool:
+    if connection is None:
+        return True
+    existing = (
+        connection.public_config.get("shop_id")
+        if isinstance(connection.public_config, dict) else None
+    )
+    selected = public_config.get("shop_id")
+    return (
+        isinstance(existing, str) and bool(existing.strip())
+        and isinstance(selected, str) and existing.strip() == selected.strip()
+    )
 
 
 async def _binding(
@@ -402,6 +436,13 @@ async def connect_integration(
     connection = await _account_connection(
         session, current_user.id, provider_key, for_update=True,
     )
+    if provider_key == "yookassa" and not _same_yookassa_shop(connection, public_values):
+        raise ApiError(
+            "integration_operation_conflict",
+            "Подключение ЮKassa общее для всех ваших приложений. "
+            "Для повторного подключения выберите тот же магазин; другой магазин не заменён.",
+            status.HTTP_409_CONFLICT,
+        )
     if connection is None:
         connection = AccountIntegration(
             user_id=current_user.id,
@@ -650,19 +691,19 @@ async def start_integration_oauth(
         )
     client_key = integration_oauth.new_authorization_client_key(provider_key)
     snapshot = None
-    if provider_key == "amocrm":
+    if provider_key in {"amocrm", "yookassa"}:
         await lock_account_provider(session, current_user.id, provider_key)
         connection = await _account_connection(
             session, current_user.id, provider_key, for_update=True,
         )
-        if connection is not None:
+        if provider_key == "amocrm" and connection is not None:
             raise ApiError(
                 "account_connection_replacement_requires_confirmation",
                 "Подключение amoCRM общее для всех ваших проектов. "
                 "Повторная авторизация требует отдельного подтверждения замены.",
                 status.HTTP_409_CONFLICT,
             )
-        snapshot = {"version": 1, "connection_id": None, "grant_revision": None}
+        snapshot = _connection_snapshot(connection)
     raw_state = secrets.token_urlsafe(40)
     try:
         url = integration_oauth.authorization_url(provider_key, raw_state, client_key=client_key)
@@ -728,19 +769,16 @@ async def integration_oauth_callback(
         await session.commit()
         return _oauth_redirect(record.project_id, "cancelled")
     connection = None
-    if provider_key == "amocrm":
+    if provider_key in {"amocrm", "yookassa"}:
         await _owned_max_project(session, record.project_id, current_user.id)
         connection = await _account_connection(
             session, record.user_id, provider_key, for_update=True,
         )
-        snapshot = record.connection_snapshot
-        # This release supports new grants only. Existing grants require a
-        # separate account-wide confirmation flow before reconnect is enabled.
+        # Pin identity before exchanging the single-use code. An amoCRM grant
+        # still supports first connection only; YooKassa permits same-shop rotation.
         if (
-            not isinstance(snapshot, dict)
-            or type(snapshot.get("version")) is not int
-            or snapshot != {"version": 1, "connection_id": None, "grant_revision": None}
-            or connection is not None
+            not _connection_snapshot_matches(record.connection_snapshot, connection)
+            or (provider_key == "amocrm" and connection is not None)
         ):
             await session.commit()
             return _oauth_redirect(record.project_id, "conflict")
@@ -752,8 +790,12 @@ async def integration_oauth_callback(
         await session.commit()
         return _oauth_redirect(record.project_id, "error")
 
+    if provider_key == "yookassa" and not _same_yookassa_shop(connection, result.public_config):
+        await session.commit()
+        return _oauth_redirect(record.project_id, "conflict")
+
     provider = integration_providers.get_provider(provider_key)
-    if provider_key != "amocrm":
+    if provider_key not in {"amocrm", "yookassa"}:
         connection = await _account_connection(session, record.user_id, provider_key)
     if connection is None:
         connection = AccountIntegration(

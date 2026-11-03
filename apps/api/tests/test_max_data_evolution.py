@@ -474,12 +474,24 @@ async def test_agent_policy_survives_provider_replacement_and_all_prompt_protoco
     }
     prompt = builders[mode](guide)
     assert prompt.count(POLICY_HEADER) == 1
+    assert prompt.count("MAX MANAGED SDK CONTRACT") == 1
+    for required in (
+        "profile?.app_name", "item.title", "{profile,configVersion,status,error,refresh}",
+        "useYleumCatalogSelection(catalog.items)", "createManagedOrder",
+        "createManagedLead", "createManagedBooking", "loadPendingManagedIntent(resource)",
+        "getManagedRecords(resource,{limit,cursor})", "intent_storage_unavailable",
+        "quote_changed", "empty cart", "current customer's records",
+    ):
+        assert required in prompt, required
     assert guide.count("MAX UI 0.2.0: Typography is a namespace") == 1
     assert "Typography.Title has no level prop" in prompt
     assert '<Typography.Title variant="small" asChild><h2>' in prompt
     assert "INTEGRATION-SENTINEL" in prompt
     assert ("LEGACY-ONLY-INSTRUCTIONS" in prompt) == (provider != "portable")
     assert ("EXTENSIBLE MAIN STACK" in prompt) == (provider == "portable")
+    if provider == "portable":
+        assert "isolated\nproject container without network" not in prompt
+        assert "lifecycle scripts\ndisabled" not in prompt
     assert snapshot.await_count == (provider != "legacy")
     if mode == "native":
         assert "MAX VERIFICATION OVERRIDE" in prompt

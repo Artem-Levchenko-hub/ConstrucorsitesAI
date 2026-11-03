@@ -33,6 +33,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, NonNegativeInt
 
 from yleum_api.core.config import get_settings
+from yleum_api.services.agent_build_feedback import render_model_observation
 from yleum_api.services.agent_builder import _KNOWN_ACTIONS, Action, AgentResult
 from yleum_api.services.agent_output_budget import agent_output_tokens, is_sonnet55_model
 from yleum_api.services.generation.continuation import (
@@ -744,7 +745,9 @@ def _incomplete_tool_response(resp: dict[str, Any], content: list[Any]) -> str |
 def _obs_to_tool_result(tool_use_id: str, obs: dict[str, Any]) -> dict[str, Any]:
     ok = bool(obs.get("ok"))
     body = obs.get("content") or obs.get("detail") or obs.get("error") or ("ok" if ok else "error")
-    text = str(body)[:_MAX_TOOL_RESULT_CHARS]
+    text = render_model_observation(
+        {**obs, "content": body}, max_body_chars=_MAX_TOOL_RESULT_CHARS, prefer_content=True,
+    )
     block: dict[str, Any] = {"type": "tool_result", "tool_use_id": tool_use_id, "content": text}
     if not ok:
         block["is_error"] = True
@@ -1742,7 +1745,10 @@ async def _run_native_segment(
                     proof_after_write.add("build")
                     successful_tools["build"] = successful_tools.get("build", 0) + 1
                 detail = _step_detail("build", Action("build", {}, ""), checked)
-                convo.append({"role": "user", "content": "EARLY SOURCE CHECK:\n" + detail})
+                model_detail = render_model_observation(
+                    checked, max_body_chars=_MAX_TOOL_RESULT_CHARS, prefer_content=True,
+                )
+                convo.append({"role": "user", "content": "EARLY SOURCE CHECK:\n" + model_detail})
                 if emit:
                     await emit("agent.step", {
                         "step": step, "action": "build", "path": "",

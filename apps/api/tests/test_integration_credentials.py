@@ -29,8 +29,9 @@ async def _connection(session):
     connection = AccountIntegration(
         user_id=user.id,
         created_by_user_id=user.id,
-        provider="yookassa",
+        provider="amocrm",
         auth_mode="oauth",
+        public_config={"base_url": "https://synthetic.amocrm.ru"},
         credentials_enc=encrypt_strong(
             json.dumps(
                 {
@@ -189,7 +190,7 @@ async def test_verify_transient_failure_keeps_binding_ready(
     assert binding.enabled is True
 
 
-async def test_verify_refreshes_expired_oauth_before_profile_request(
+async def test_verify_expired_yookassa_requires_reauthorization_without_provider_calls(
     client, db_session, monkeypatch
 ):
     project_id = await _register_and_create(client, monkeypatch)
@@ -212,26 +213,16 @@ async def test_verify_refreshes_expired_oauth_before_profile_request(
     stored.token_expires_at = datetime.now(UTC) - timedelta(minutes=1)
     await db_session.commit()
 
+    original_ciphertext = stored.credentials_enc
+
     def provider(request):
-        if request.url.path == "/oauth/v2/token":
-            return httpx.Response(
-                200,
-                json={
-                    "access_token": "synthetic-new-access",
-                    "refresh_token": "synthetic-new-refresh",
-                    "expires_in": 3600,
-                },
-            )
-        if request.headers.get("authorization") != "Bearer synthetic-new-access":
-            return httpx.Response(401, json={"error": "expired"})
-        return httpx.Response(200, json={"account_id": "123"})
+        pytest.fail("Expired YooKassa authorization must not call the provider")
 
     _http(monkeypatch, provider)
     checked = await client.post(f"/api/projects/{project_id}/app-integrations/yookassa/verify")
-    assert checked.status_code == 200
-    assert checked.json()["status"] == "active"
+    assert checked.status_code == 409
+    assert checked.json()["error"]["code"] == "integration_credentials_invalid"
     assert "synthetic" not in checked.text
     await db_session.refresh(stored)
-    assert json.loads(decrypt_strong(stored.credentials_enc))["refresh_token"] == (
-        "synthetic-new-refresh"
-    )
+    assert stored.status == "error"
+    assert stored.credentials_enc == original_ciphertext
