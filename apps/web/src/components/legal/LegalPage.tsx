@@ -25,7 +25,7 @@ export function LegalPage({
       </header>
       <article className="mx-auto max-w-[720px] px-5 py-16 sm:px-8 sm:py-24">
         <p className="max-public-kicker">Документы</p>
-        <h1 className="mt-4 text-[40px] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[54px]">{title}</h1>
+        <h1 className="mt-4 break-words text-[clamp(26px,8vw,40px)] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[54px]">{title}</h1>
         <p className="mt-4 font-mono text-[10px] uppercase tracking-[.08em] text-fg-tertiary">Редакция от {updated}</p>
         <div className="legal-copy mt-12 space-y-9 border-t border-border-default pt-10 text-[15px] leading-7 text-fg-secondary">
           {children}
