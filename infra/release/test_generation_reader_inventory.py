@@ -914,39 +914,8 @@ class PhysicalWriterTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "posix", "release shell contract requires bash")
 class ReleaseIntegrationTests(unittest.TestCase):
-    def test_target_cannot_open_from_only_one_published_host(self):
-        source = Path(__file__).with_name("deploy-prod.sh").read_text()
-        function = (
-            "reader_target() {"
-            + source.split("reader_target() {", 1)[1].split("\n}\n", 1)[0]
-            + "\n}\n"
-        )
-        first = {"verified": True, "digest": "a" * 64, "epoch": "same"}
-        for second, passed in (
-            (first, True),
-            ({**first, "digest": "b" * 64}, False),
-            ({"verified": False}, False),
-        ):
-            mock = (
-                "reader_control() { if [ \"$1\" = core ]; then printf '%s' '"
-                + json.dumps(first)
-                + "'; else printf '%s' '"
-                + json.dumps(second)
-                + "'; fi; }\n"
-            )
-            result = subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    "set -eu\nSHA=fixture\nREADER_NONCE=fixture\n"
-                    + mock
-                    + function
-                    + "reader_target",
-                ],
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode == 0, passed)
+    # PinnedReaderPairTests in test_generation_reader_deploy.py exercises
+    # the current reader_target wrapper's two-host validation and freshness.
 
     def test_first_reader_bootstrap_rejects_terminal_saved_state(self):
         script = Path(__file__).with_name("check-active-generations.sh").read_text()
