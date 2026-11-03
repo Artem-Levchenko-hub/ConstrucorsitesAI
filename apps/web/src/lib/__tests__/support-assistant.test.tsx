@@ -30,11 +30,17 @@ async function ask(text: string) { await fillQuestion(text); await act(async () 
 it.each([
   ["НЕ ПРИХОДИТ СМС КОД", "verification"],
   ["Я забыла пароль", "password"],
+  ["сколько стоит", "plans"],
   ["Сколько стоит Pro?", "plans"],
   ["Оплата прошла, но тариф не появился", "payment"],
   ["Оплатил", "payment"],
   ["Как отменить подписку?", "renewal"],
+  ["Как поменять тариф?", "plans"],
+  ["Как изменить пароль?", "password"],
   ["Как создать приложение?", "create"],
+  ["Как поменять название приложения?", "create"],
+  ["Как изменить свой сайт?", "create"],
+  ["Хочу редактировать проект", "create"],
   ["Генерация долго висит в очереди", "waiting"],
   ["Сбой 503", "generation-error"],
   ["В превью белый экран", "preview"],
@@ -55,6 +61,8 @@ it("offers typos and partial words as choices while automatic answers remain exa
   expect(searchSupportAnswers("опл")[0]?.id).toBe("payment");
   expect(findSupportAnswers("аплата")).toEqual([]);
   expect(findSupportAnswers("5030")).toEqual([]);
+  expect(searchSupportAnswers("прилржение").map(answer => answer.id)).toEqual(["create"]);
+  expect(findSupportAnswers("прилржение")).toEqual([]);
   const plans = supportAnswers.find(answer => answer.id === "plans")!;
   expect(relatedSupportAnswers(plans).map(answer => answer.id)).toEqual(["payment", "renewal"]);
 });
@@ -81,9 +89,32 @@ it.each([
   "Что такое MAXimum?",
   "Что такое максимум?",
   "5030",
+  "Как поменять шины у самолёта?",
+  "Как изменить маршрут автобуса?",
+  "Как редактировать фотографии со спутника?",
 ])("does not turn an unrelated word or incomplete intent into advice: %s", question => {
   expect(findSupportAnswers(question)).toEqual([]);
   expect(searchSupportAnswers(question)).toEqual([]);
+});
+it.each([false, true])("keeps an unrelated edit question unknown after creation=%s", async followUp => {
+  await mount();
+  if (followUp) {
+    await ask("Создать прилржение");
+    await click("Как создать приложение и внести правку?");
+  }
+  const question = "Как поменять шины у самолёта?";
+  await fillQuestion(question);
+  expect(host.querySelector('[aria-label="Подходящие вопросы"]')).toBeNull();
+  await act(async () => host.querySelector("form")!.dispatchEvent(
+    new Event("submit", { bubbles: true, cancelable: true }),
+  ));
+  const answer = host.querySelector('[role="log"] > li:last-child')!;
+  expect(answer.textContent).toContain("пока нет точного совпадения");
+  expect(answer.textContent).not.toContain("В разделе «Мои приложения» создайте приложение");
+  expect(contact).not.toHaveBeenCalled();
+  await click("Не помогло — передать вопрос оператору");
+  expect(contact).toHaveBeenCalledWith(question);
+  expect(fetch).not.toHaveBeenCalled();
 });
 it("keeps account creation distinct from application creation", () => {
   expect(findSupportAnswers("Хочу создать аккаунт").map(answer => answer.id)).toEqual(["register"]);

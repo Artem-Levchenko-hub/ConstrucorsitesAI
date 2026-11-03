@@ -23,7 +23,7 @@ def _workflow_env(monkeypatch):
     )
     step = next(
         step for step in workflow["jobs"]["canary"]["steps"]
-        if step.get("run") == "uv run python scripts/production_generation_canary.py"
+        if step.get("name") == "Run disposable build, preview, and edit canary"
     )
     for name in ("PRODUCTION_CANARY_BASE_URL", "PRODUCTION_CANARY_PREVIEW_HOST_SUFFIXES"):
         monkeypatch.delenv(name, raising=False)

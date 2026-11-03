@@ -11,12 +11,17 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import time
 from collections.abc import Callable
 from pathlib import Path
+from shutil import which
+from subprocess import run
+from typing import Any
 
 import httpx
 import pytest
+import yaml
 
 from tests.production_canary_fakes import (
     BUILD_RUN_ID,
@@ -261,17 +266,155 @@ def test_events_and_result_never_carry_secrets_or_signed_preview_urls(
 def test_workflow_uploads_the_diagnostic_result_even_when_the_canary_fails() -> None:
     """A red run is the run whose artifact matters most."""
 
+    steps = _canary_workflow()["jobs"]["canary"]["steps"]
+    upload = next(step for step in steps
+                  if step.get("with", {}).get("name") == "production-canary-result")
+    assert upload["uses"] == "actions/upload-artifact@v4"
+    assert upload["if"] == "always()"
+    assert upload["with"]["if-no-files-found"] == "error"
+    assert upload["with"]["path"] == "${{ runner.temp }}/production-canary-result.json"
+    canary = next(step for step in steps
+                  if step.get("name") == "Run disposable build, preview, and edit canary")
+    assert "PRODUCTION_EXPECTED_RELEASE_SHA" not in canary["env"]
+    for component in ("WEB", "API", "WORKER", "ORCHESTRATOR"):
+        name = f"PRODUCTION_EXPECTED_{component}_RELEASE_SHA"
+        assert canary["env"][name] == "${{ vars." + name + " }}"
+
+
+def _canary_workflow() -> dict[str, Any]:
     workflow = Path(__file__).resolve().parents[3] / (
         ".github/workflows/production-generation-canary.yml"
     )
-    content = workflow.read_text(encoding="utf-8")
+    return yaml.safe_load(workflow.read_text(encoding="utf-8"))
 
-    assert "actions/upload-artifact" in content
-    assert "if-no-files-found: error" in content
-    assert "if: always()" in content
-    assert "PRODUCTION_EXPECTED_RELEASE_SHA" not in content
-    for component in ("WEB", "API", "WORKER", "ORCHESTRATOR"):
-        assert f"PRODUCTION_EXPECTED_{component}_RELEASE_SHA" in content
+
+@pytest.mark.parametrize("input_name", ["report_incident", "catalog_acceptance"])
+def test_manual_canary_options_default_to_boolean_false(input_name) -> None:
+    workflow = _canary_workflow()
+    # PyYAML's YAML 1.1 loader reads GitHub's unquoted `on` key as True.
+    triggers = workflow.get("on", workflow.get(True))
+    dispatch = triggers.get("workflow_dispatch") or {}
+    report = dispatch.get("inputs", {}).get(input_name, {})
+    assert report.get("type") == "boolean"
+    assert report.get("default") is False
+
+
+def _workflow_decisions(expression, cases):
+    node = which("node")
+    if node is None:
+        pytest.skip("Node is required to evaluate the workflow's boolean expression")
+    # These status functions, boolean inputs, ==, && and || have the same
+    # semantics in JavaScript and the GitHub expression subset used by this gate.
+    expression = expression.removeprefix("${{").removesuffix("}}").strip()
+    result = run([node, "-e", """
+const {expression, cases} = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+const evaluate = new Function("github", "inputs", "success", "failure", "always",
+  `return (${expression});`);
+console.log(JSON.stringify(cases.map(test => Boolean(evaluate(
+  {event_name: test.event}, test.inputs || {},
+  () => test.status === "success", () => test.status === "failure", () => true,
+)))));
+"""], input=json.dumps({"expression": expression, "cases": cases}),
+        capture_output=True, text=True, check=False, timeout=10)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize(("step_name", "expected"), [
+    ("Open one generation-canary incident", [False, True, False, False, False, False,
+                                           False, True, False]),
+    ("Close generation-canary incident after recovery", [True, False, False, False, False,
+                                                        False, True, False, False]),
+])
+def test_manual_incident_mutations_require_explicit_opt_in(step_name, expected) -> None:
+    workflow = _canary_workflow()
+    step = next(step for step in workflow["jobs"]["canary"]["steps"]
+                if step.get("name") == step_name)
+    cases = [
+        {"event": event, "inputs": {} if report is None else {"report_incident": report},
+         "status": status}
+        for event, report, status in (
+            ("schedule", None, "success"), ("schedule", None, "failure"),
+            ("workflow_dispatch", None, "success"), ("workflow_dispatch", None, "failure"),
+            ("workflow_dispatch", False, "success"), ("workflow_dispatch", False, "failure"),
+            ("workflow_dispatch", True, "success"), ("workflow_dispatch", True, "failure"),
+            ("workflow_dispatch", True, "cancelled"),
+        )
+    ]
+    assert _workflow_decisions(step["if"], cases) == expected
+
+
+@pytest.mark.parametrize(("event", "catalog", "expected_cli"), [
+    ("schedule", True, "production_generation_canary.py"),
+    ("workflow_dispatch", False, "production_generation_canary.py"),
+    ("workflow_dispatch", True, "production_catalog_canary.py"),
+])
+@pytest.mark.parametrize("exit_code", [0, 17])
+def test_catalog_mode_routes_only_explicit_manual_runs_and_preserves_failure(
+    event, catalog, expected_cli, exit_code,
+):
+    workflow = _canary_workflow()
+    step = next(step for step in workflow["jobs"]["canary"]["steps"]
+                if step.get("name") == "Run disposable build, preview, and edit canary")
+    cases = [{"event": event, "inputs": {"catalog_acceptance": catalog}, "status": "success"}]
+    enabled = _workflow_decisions(step["env"].get("CATALOG_ACCEPTANCE", "false"), cases)[0]
+    bash = which("bash")
+    git = which("git")
+    if os.name == "nt" and git:
+        git_bash = Path(git).resolve().parents[1] / "bin/bash.exe"
+        if git_bash.is_file():
+            bash = str(git_bash)
+    if bash is None:
+        pytest.skip("Bash is required to execute the fixed workflow routing script")
+    result = run([bash, "-c", """
+uv() { printf '%s\\n' "$*"; return "$TEST_CLI_EXIT"; }
+""" + step["run"]], env={**os.environ, "CATALOG_ACCEPTANCE": str(enabled).lower(),
+                         "TEST_CLI_EXIT": str(exit_code)},
+        capture_output=True, text=True, check=False, timeout=10)
+    assert result.stdout.splitlines() == [f"run --frozen python scripts/{expected_cli}"]
+    assert result.returncode == exit_code
+
+
+def test_catalog_browser_and_evidence_are_manual_only_and_keep_the_production_boundary():
+    workflow = _canary_workflow()
+    job = workflow["jobs"]["canary"]
+    assert job["needs"] == "authorize-ref"
+    assert job["environment"] == "production"
+    assert job["timeout-minutes"] == 50
+    rejection = workflow["jobs"]["authorize-ref"]["steps"][0]
+    assert rejection["if"] == "github.ref != 'refs/heads/main'"
+    assert "exit 1" in rejection["run"]
+    steps = job["steps"]
+    browser = next((step for step in steps if "playwright install" in step.get("run", "")), None)
+    assert browser is not None, "Catalog acceptance must install the frozen Chromium browser"
+    assert browser["run"] == "uv run --frozen playwright install --with-deps chromium"
+    assert browser["working-directory"] == "apps/api"
+    evidence = next((step for step in steps if step.get("with", {}).get("name")
+                     == "production-catalog-evidence"), None)
+    assert evidence is not None, "Catalog acceptance must upload its sanitized evidence"
+    assert evidence["uses"] == "actions/upload-artifact@v4"
+    assert evidence["with"]["path"].splitlines() == [
+        "${{ runner.temp }}/production-catalog-evidence/evidence.json",
+        "${{ runner.temp }}/production-catalog-evidence/*.png",
+    ]
+    assert evidence["with"]["if-no-files-found"] == "error"
+    cases = [{"event": event, "inputs": {"catalog_acceptance": catalog}, "status": status}
+             for event, catalog, status in (
+                 ("schedule", True, "success"), ("workflow_dispatch", False, "success"),
+                 ("workflow_dispatch", True, "success"), ("workflow_dispatch", True, "failure"),
+             )]
+    assert _workflow_decisions(browser["if"], cases[:3]) == [False, False, True]
+    assert _workflow_decisions(evidence["if"], cases) == [False, False, True, True]
+    canary = next(step for step in steps
+                  if step.get("name") == "Run disposable build, preview, and edit canary")
+    for name in ("PRODUCTION_CANARY_EMAIL", "PRODUCTION_CANARY_PASSWORD"):
+        assert canary["env"][name] == "${{ secrets." + name + " }}"
+    assert canary["env"]["PRODUCTION_CANARY_RESULT_FILE"] == (
+        "${{ runner.temp }}/production-canary-result.json"
+    )
+    assert canary["env"]["PRODUCTION_CATALOG_ARTIFACT_DIR"] == (
+        "${{ runner.temp }}/production-catalog-evidence"
+    )
 
 
 def test_capacity_queue_is_a_waiting_state_not_an_invalid_response(

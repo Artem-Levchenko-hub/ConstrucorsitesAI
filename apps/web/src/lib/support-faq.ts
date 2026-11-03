@@ -17,6 +17,8 @@ export type SupportAnswer = {
   keywords: readonly string[];
 };
 
+const applicationEditKeywords: readonly string[] = ["изменить", "поменять", "редактир"];
+
 export const supportAnswers: readonly SupportAnswer[] = [
   {
     id: "register", topic: "account", question: "Как зарегистрироваться и войти?",
@@ -57,7 +59,7 @@ export const supportAnswers: readonly SupportAnswer[] = [
     id: "create", topic: "generation", question: "Как создать приложение и внести правку?",
     paragraphs: ["В разделе «Мои приложения» создайте приложение и опишите нужный результат. После готовности откройте редактор и отправьте конкретное изменение: что добавить, убрать или изменить.", "Дождитесь завершения запроса и проверьте результат в превью. Лучше описать одну понятную задачу и указать, что важно сохранить."],
     links: [{ href: "/max", label: "Мои приложения" }, { href: "/max/guide", label: "Руководство Yleum" }],
-    keywords: ["создать приложение", "сгенерир", "правк", "изменить", "поменять", "редактир"],
+    keywords: ["создать приложение", "сгенерир", "правк", ...applicationEditKeywords],
   },
   {
     id: "waiting", topic: "generation", question: "Генерация долго выполняется — что делать?",
@@ -144,15 +146,23 @@ const indexedAnswers = supportAnswers.map(answer => ({ answer, keywords: answer.
 function rankedAnswers(question: string, partial: boolean) {
   const words = tokenize(question.slice(0, 500));
   if (words.join("").length < 3) return [];
+  // An edit verb does not identify what is being changed. Use the existing
+  // normalized app/site/project vocabulary, never the preceding conversation.
+  const applicationContext = words.some(word => word === "приложение"
+    || (partial && oneEdit(word, "приложение")));
+  const singleWord = words.length === 1 ? words[0] : "";
   return indexedAnswers.map(({ answer, keywords }) => ({
     answer,
     score: keywords.reduce((score, terms) => {
+      if (terms.length === 1 && applicationEditKeywords.includes(terms[0])
+        && !applicationContext && !(partial && singleWord)) return score;
       if (matchesPhrase(words, terms, false)) return score + (terms.length > 1 ? 3 : 1);
       if (!partial) return score;
       if (matchesPhrase(words, terms, true)) return score + (terms.length > 1 ? 2.5 : 0.5);
       // An unfinished word is useful while typing, but not evidence inside an
       // unrelated sentence such as "создать таблицу в Excel".
-      return score + (words.length === 1 && words[0].length >= 3 && terms.some(term => term.startsWith(words[0])) ? 0.25 : 0);
+      return score + (singleWord.length >= 3 && terms.some(term => term.startsWith(singleWord)
+        || (singleWord.length >= 5 && term.length >= 5 && oneEdit(singleWord, term))) ? 0.25 : 0);
     }, 0),
   })).filter(item => item.score > 0).sort((a, b) => b.score - a.score);
 }
