@@ -1748,15 +1748,14 @@ def ensure_release_image(
 def push_image(
     docker_client: Any, image_id: str, repository: str, tag: str, *, auth: dict[str, str] | None
 ) -> str:
-    """Tag a local image and push it; returns the pullable `repository:tag`."""
-    image = docker_client.images.get(image_id)
-    image.tag(repository, tag)
-    for line in docker_client.images.push(
-        repository, tag=tag, stream=True, decode=True, auth_config=auth
-    ):
-        if isinstance(line, dict) and line.get("error"):
-            raise PublicationPlacementError(f"image push failed: {line['error']}", status_code=500)
-    return f"{repository}:{tag}"
+    """Push without abandoning a release during bounded registry maintenance."""
+    from yleum_orchestrator.services.registry_push import RegistryPushError
+    from yleum_orchestrator.services.registry_push import push_image as push_with_retry
+
+    try:
+        return push_with_retry(docker_client, image_id, repository, tag, auth=auth)
+    except RegistryPushError as exc:
+        raise PublicationPlacementError(str(exc), status_code=exc.status_code) from None
 
 
 # ------------------------------------------------------------------ runtime
