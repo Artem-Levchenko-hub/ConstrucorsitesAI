@@ -2,11 +2,12 @@ import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
 
 export default function PersonalDataPage() {
   return (
-    <LegalPage title="Согласие на обработку персональных данных" updated="27 октября 2026">
+    <LegalPage
+      title="Согласие на обработку персональных данных"
+      updated="27 октября 2026"
+      previousEdition={{ href: "/legal/archive/2026-10-26/personal-data", date: "26 октября 2026" }}
+    >
       <LegalSection title="Состав согласия">
-        <p>
-          <a href="/legal/archive/2026-10-26/personal-data">Предыдущая редакция согласия</a>.
-        </p>
         <p>
           Пользователь свободно и отдельно от иных документов даёт ООО «Кортэл»
           (ИНН 7816246925, ОГРН 1157847049788; 630099, г. Новосибирск,

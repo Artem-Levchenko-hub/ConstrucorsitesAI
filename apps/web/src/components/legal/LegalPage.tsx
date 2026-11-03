@@ -7,10 +7,12 @@ import "@/components/marketing/max-public.css";
 export function LegalPage({
   title,
   updated = "30 июля 2026",
+  previousEdition,
   children,
 }: {
   title: string;
   updated?: string;
+  previousEdition?: { href: string; date: string };
   children: React.ReactNode;
 }) {
   return (
@@ -28,10 +30,20 @@ export function LegalPage({
         <div className="legal-copy mt-12 space-y-9 border-t border-border-default pt-10 text-[15px] leading-7 text-fg-secondary">
           {children}
         </div>
-        <div className="mt-14 border-t border-border-default pt-7 text-sm text-fg-tertiary">
-          Вопросы по документу:{" "}
-          <a className="font-medium text-accent-secondary" href="mailto:support@yleum.ru">support@yleum.ru</a>
-        </div>
+        <footer className="mt-14 space-y-3 border-t border-border-default pt-7 text-sm text-fg-tertiary">
+          {previousEdition && (
+            <nav aria-label="Архив документа">
+              Архив документа:{" "}
+              <Link className="font-medium text-accent-secondary underline underline-offset-4" href={previousEdition.href}>
+                редакция от {previousEdition.date}
+              </Link>
+            </nav>
+          )}
+          <p>
+            Вопросы по документу:{" "}
+            <a className="font-medium text-accent-secondary" href="mailto:support@yleum.ru">support@yleum.ru</a>
+          </p>
+        </footer>
       </article>
     </main>
   );
