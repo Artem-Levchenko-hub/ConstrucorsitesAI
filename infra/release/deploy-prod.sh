@@ -218,15 +218,133 @@ reader_before() {
 }
 
 reader_target() {
-  local core_result commerce_result
-  core_result=$(reader_control core verify-target --release "$SHA" --owner-nonce "$READER_NONCE") || return
-  commerce_result=$(reader_control commerce verify-target --release "$SHA" --owner-nonce "$READER_NONCE") || return
-  python3 - "$core_result" "$commerce_result" <<'READER_MATCH'
-import json, sys
-left, right = (json.loads(value) for value in sys.argv[1:])
-assert left == right and left.get("verified") is True, "reader host snapshots differ"
-print("both reader inventories and retirement verified")
-READER_MATCH
+  local source_payload
+  source_payload=$(git -C "$REPO" show "$SHA:infra/release/generation-reader-inventory.py" \
+    | python3 -c 'import base64,hashlib,sys
+source = sys.stdin.buffer.read()
+assert source, "target reader source is missing"
+print("TARGET_SOURCE_B64 =", repr(base64.b64encode(source).decode()))
+print("TARGET_SOURCE_SHA256 =", repr(hashlib.sha256(source).hexdigest()))') || return
+  {
+    printf '%s\n' "$source_payload"
+    cat <<'READER_TARGET_PAIR'
+import argparse
+import base64
+import hashlib
+import io
+import json
+import os
+import pwd
+import re
+import signal
+import subprocess
+import sys
+import types
+from contextlib import redirect_stdout
+from pathlib import PurePosixPath
+from uuid import UUID
+
+
+def verify_pair():
+    phase = "source"
+    try:
+        source = base64.b64decode(TARGET_SOURCE_B64, validate=True)
+        if hashlib.sha256(source).hexdigest() != TARGET_SOURCE_SHA256:
+            raise ValueError("target reader source checksum differs")
+        release, nonce = sys.argv[1:]
+        if re.fullmatch(r"[0-9a-f]{40}", release) is None or str(UUID(nonce)) != nonce:
+            raise ValueError("invalid owned target")
+        module = types.ModuleType("owned_target_reader_inventory")
+        sys.modules[module.__name__] = module
+        exec(compile(source, "<owned-target-reader-inventory>", "exec"), module.__dict__)
+
+        phase = "actor"
+        raw_uid = os.environ.get("SUDO_UID", "")
+        if os.geteuid() != 0 or re.fullmatch(r"[1-9][0-9]*", raw_uid) is None:
+            raise ValueError("original non-root operator is unconfirmed")
+        actor = pwd.getpwuid(int(raw_uid))
+        if (actor.pw_uid != int(raw_uid) or actor.pw_name != os.environ.get("SUDO_USER")
+                or not PurePosixPath(actor.pw_dir).is_absolute()):
+            raise ValueError("original operator identity differs")
+        environment = {**os.environ, "HOME": actor.pw_dir,
+                       "USER": actor.pw_name, "LOGNAME": actor.pw_name}
+
+        def expired(_signal, _frame):
+            raise TimeoutError("reader pair deadline exceeded")
+
+        previous_handler = signal.signal(signal.SIGALRM, expired)
+        signal.alarm(25)
+        try:
+            phase = "pin"
+            with module.observer_lock(readonly=True):
+                peer = None
+                try:
+                    phase = "commerce_start"
+                    peer = subprocess.Popen([
+                        "/usr/sbin/runuser", "-u", actor.pw_name, "--", "/usr/bin/ssh",
+                        "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
+                        "-o", "ConnectTimeout=5", "-o", "ConnectionAttempts=1",
+                        "-o", "ControlMaster=no", "-o", "ControlPath=none", "commerce",
+                        "sudo", "-n", "timeout", "--signal=TERM", "--kill-after=2s", "20s",
+                        "/opt/omnia/apps/orchestrator/.venv/bin/python", "-B", "-",
+                        "verify-target", "--host", "commerce", "--release", release,
+                        "--owner-nonce", nonce,
+                    ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        env=environment, start_new_session=True)
+                    peer.stdin.write(source)
+                    peer.stdin.close()
+                    peer.stdin = None
+                    phase = "core"
+                    output = io.StringIO()
+                    with redirect_stdout(output):
+                        # main() would reacquire the same exclusive flock and deadlock.
+                        module.run_action(argparse.Namespace(
+                            action="verify-target", host="core", release=release,
+                            owner_nonce=nonce, ssh_user="",
+                        ))
+                    left = json.loads(output.getvalue())
+                    phase = "commerce"
+                    raw, _stderr = peer.communicate(timeout=20)
+                    if peer.returncode != 0:
+                        raise ValueError("commerce target verification failed")
+                    right = json.loads(raw)
+                    phase = "match"
+                    if (not isinstance(left, dict) or set(left) != {"verified", "digest", "epoch"}
+                            or left != right or left["verified"] is not True):
+                        raise ValueError("reader host snapshots differ")
+                    phase = "freshness"
+                    current = module.read_root_json(module.DIRECTORY / "current.json")
+                    if (current["state"] != "ready" or current["release_sha"] != release
+                            or current["digest"] != left["digest"] or current["epoch"] != left["epoch"]):
+                        raise ValueError("pinned reader snapshot changed")
+                    module.check_live(current, module.redis_connection())
+                finally:
+                    signal.alarm(0)
+                    if peer is not None:
+                        if peer.poll() is None:
+                            try:
+                                os.killpg(peer.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            peer.wait(timeout=2)
+                        for stream in (peer.stdin, peer.stdout, peer.stderr):
+                            if stream is not None:
+                                stream.close()
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, previous_handler)
+        print("both reader inventories and retirement verified")
+        return 0
+    except Exception as error:
+        print(json.dumps({"verified": False, "phase": phase,
+                          "error_class": type(error).__name__}), file=sys.stderr)
+        return 75
+
+
+raise SystemExit(verify_pair())
+READER_TARGET_PAIR
+  } | ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 max-core \
+    "sudo -n /opt/omnia/apps/orchestrator/.venv/bin/python -B - '$SHA' '$READER_NONCE'"
 }
 
 gateway_capture_identity() {

@@ -501,6 +501,45 @@ reader_control() { record "$2-$1"; }
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(calls.splitlines()[-4:], ["ingress-end", "sql-end", "clear-core", "clear-commerce"])
 
+    def test_reader_pair_retries_are_bounded_and_final_failure_never_starts_ending(self):
+        functions = self.function("finish_owned_release")
+        for mode, expected in (("recover", 0), ("exhaust", 75), ("final", 75)):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                script = '''set -euo pipefail
+SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+READER_NONCE=11111111-1111-4111-8111-111111111111
+GW=0
+COUNT=0
+record() { printf '%s\\n' "$1" >> calls; }
+verify_billing_runtime() { record billing; }
+api_maintenance() { if [ "$1" = - ]; then cat >/dev/null; fi; record "api-$1"; }
+ssh() { record gateway; }
+seq() { [ "$*" = '1 18' ]; printf '%s\\n' {1..18}; }
+sleep() { [ "$1" = 5 ]; }
+reader_target() {
+ COUNT=$((COUNT+1)); record "target-$COUNT";
+ case "$MODE" in
+  recover) [ "$COUNT" -gt 2 ] || return 75 ;;
+  exhaust) return 75 ;;
+  final) [ "$COUNT" = 1 ] || return 75 ;;
+ esac
+}
+ingress_drain() { record "ingress-$1"; }
+quiescence_gate() { record physical; }
+reader_control() { record "$2-$1"; }
+''' + functions + "\nfinish_owned_release\n"
+                result = self.shell("MODE=" + mode + "\n" + script, cwd=temp)
+                self.assertEqual(result.returncode, expected, result.stderr)
+                calls = (root / "calls").read_text().splitlines()
+                target_checks = [item for item in calls if item.startswith("target-")]
+                self.assertEqual(len(target_checks), {"recover": 4, "exhaust": 18, "final": 2}[mode])
+                if expected:
+                    self.assertNotIn("ingress-end", calls)
+                    self.assertFalse(any(item.startswith("clear-") for item in calls))
+                else:
+                    self.assertEqual(calls[-4:], ["ingress-end", "api--m", "clear-core", "clear-commerce"])
+
     def test_finalize_main_path_exits_before_rollout_and_holds_mutex_until_end(self):
         main = 'say "выкатка' + self.source().split('say "выкатка', 1)[1]
         with tempfile.TemporaryDirectory() as temp:
@@ -583,7 +622,7 @@ reader_before() { [ "$READER_RETRY" = 1 ]; record before; }
         publication = self.function("publication_drain")
         self.assertIn('gate_revision="${CONTROL_SHA:-$SHA}"', publication)
         self.assertIn('$gate_revision:infra/release/generation-publication-drain.py', publication)
-        for name in ("api_maintenance", "ingress_drain", "reader_control", "reader_resume_check"):
+        for name in ("api_maintenance", "ingress_drain", "reader_control", "reader_resume_check", "reader_target"):
             with self.subTest(name=name):
                 helper = self.function(name)
                 self.assertNotIn("CONTROL_SHA", helper)

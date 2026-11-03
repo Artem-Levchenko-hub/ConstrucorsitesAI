@@ -180,6 +180,28 @@ quiescence, and both matching target inventories must prove all five readers
 and old-supervisor retirement. Missing authority fails closed; this mode never
 reconstructs it from checkpoint JSON or from the current processes.
 
+Target reader verification uses one SSH invocation to core and holds the exact
+target module's canonical **exclusive** read-only observer lock across both
+normal host validations. This prevents an observer publication between two
+individually valid results; comparing different fresh snapshots is still denied.
+The committed owning target's inventory source arrives on stdin with its SHA-256
+checksum, is verified and loaded only in memory. The core action runs directly
+under that single lock; calling its `main()` again would reacquire the same lock.
+Commerce receives those same target bytes through its normal `verify-target`
+CLI. Its SSH process runs as the original non-root sudo operator, validated by
+`SUDO_UID`, `SUDO_USER` and the local passwd entry, with that operator's home and
+strict, non-interactive host verification. The privileged observer's restricted
+peer identity is not substituted for the operator's full verification transport.
+
+The pair requires complete identical `{verified,digest,epoch}` results and a final
+canonical freshness/registration/epoch check while still pinned. The helper has
+a 25-second deadline, bounds the remote CLI to 20 seconds, and releases the lock
+and reaps its peer on failure. Neither observation timestamps nor the 30-second
+snapshot lifetime are changed. Each of the existing 18 retries obtains a new
+complete pair; the separate final pair check before ending remains mandatory.
+Failures retain the original barriers. No observer is stopped, readiness is not
+cached, and no installed source, capture, marker, nonce or authority is rewritten.
+
 The script reads back repository API/worker/generation-worker/controller and
 common expected revision variables plus the production environment's common
 expected revision. It verifies the unchanged web process against its separately
