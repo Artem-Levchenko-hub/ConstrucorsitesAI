@@ -24,6 +24,7 @@ from yleum_orchestrator.core.errors import (
 )
 from yleum_orchestrator.core.sentry import init_sentry
 from yleum_orchestrator.routers import (
+    build_retention,
     cell_publication,
     code_restorations,
     font_validation,
@@ -172,6 +173,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(Exception, unhandled_error_handler)
 
     app.include_router(health.router)
+    app.include_router(build_retention.router)
     app.include_router(font_validation.router)
     app.include_router(runtime.router)
     app.include_router(ingress.router)
