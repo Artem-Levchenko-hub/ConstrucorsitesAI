@@ -25,11 +25,13 @@ from uuid import UUID
 import yaml  # type: ignore[import-untyped]
 
 OWNER_ANNOTATION = "yleum.io/registry-maintenance-owner"
-READ_ONLY = "REGISTRY_STORAGE_MAINTENANCE_READONLY_ENABLED"
-UPLOAD_PURGING = "REGISTRY_STORAGE_MAINTENANCE_UPLOADPURGING_ENABLED"
+READ_ONLY = "REGISTRY_STORAGE_MAINTENANCE_READONLY"
+UPLOAD_PURGING = "REGISTRY_STORAGE_MAINTENANCE_UPLOADPURGING"
 CONFIG_PATH = "/etc/docker/registry/config.yml"
 STORAGE_PATH = "/var/lib/registry"
-_FLAGS = {READ_ONLY: "true", UPLOAD_PURGING: "false"}
+# Distribution v2 creates an incompatible Go map for a missing branch when
+# *_ENABLED is overridden alone. Unmarshal each complete branch instead.
+_FLAGS = {READ_ONLY: '{"enabled":true}', UPLOAD_PURGING: '{"enabled":false}'}
 _DNS = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 _NONCE = re.compile(r"[a-f0-9]{32}")
 _DIGEST = re.compile(r"sha256:[a-f0-9]{64}")
@@ -213,9 +215,9 @@ case "$(tr '\000' ' ' < /proc/1/cmdline)" in
 esac
 if test "$action" != preflight; then
   tr '\000' '\n' < /proc/1/environ |
-    grep -Fxq 'REGISTRY_STORAGE_MAINTENANCE_READONLY_ENABLED=true' || die
+    grep -Fxq 'REGISTRY_STORAGE_MAINTENANCE_READONLY={"enabled":true}' || die
   tr '\000' '\n' < /proc/1/environ |
-    grep -Fxq 'REGISTRY_STORAGE_MAINTENANCE_UPLOADPURGING_ENABLED=false' || die
+    grep -Fxq 'REGISTRY_STORAGE_MAINTENANCE_UPLOADPURGING={"enabled":false}' || die
 fi
 test ! -L "$marker" || die
 pid=0
@@ -241,12 +243,12 @@ load() {
         tr '\000' '\n' < "/proc/$pid/environ" |
           grep -Fxq "YLEUM_REGISTRY_MAINTENANCE_OWNER=$owner" || die
         tr '\000' '\n' < "/proc/$pid/environ" |
-          grep -Fxq 'REGISTRY_STORAGE_MAINTENANCE_UPLOADPURGING_ENABLED=false' || die
+          grep -Fxq 'REGISTRY_STORAGE_MAINTENANCE_UPLOADPURGING={"enabled":false}' || die
         if test "$kind" = serve; then
           tr '\000' '\n' < "/proc/$pid/environ" |
             grep -Fxq 'REGISTRY_HTTP_ADDR=127.0.0.1:5001' || die
           tr '\000' '\n' < "/proc/$pid/environ" |
-            grep -Fxq 'REGISTRY_STORAGE_MAINTENANCE_READONLY_ENABLED=false' || die
+            grep -Fxq 'REGISTRY_STORAGE_MAINTENANCE_READONLY={"enabled":false}' || die
         fi
       elif test -d "/proc/$pid"; then
         # An orphaned child may remain a zombie until PID 1 reaps it.
@@ -319,8 +321,8 @@ case "$action" in
       printf "%s\n" "$$" > "$marker/pid"
       export YLEUM_REGISTRY_MAINTENANCE_OWNER="$owner"
       export REGISTRY_HTTP_ADDR=127.0.0.1:5001
-      export REGISTRY_STORAGE_MAINTENANCE_READONLY_ENABLED=false
-      export REGISTRY_STORAGE_MAINTENANCE_UPLOADPURGING_ENABLED=false
+      export REGISTRY_STORAGE_MAINTENANCE_READONLY="{\"enabled\":false}"
+      export REGISTRY_STORAGE_MAINTENANCE_UPLOADPURGING="{\"enabled\":false}"
       exec /bin/registry serve /etc/docker/registry/config.yml
     ' registry-private-writer "$marker" "$owner" </dev/null >/dev/null 2>&1 &
     attempts=0
@@ -390,6 +392,24 @@ def _env(container: dict[str, Any]) -> dict[str, dict[str, Any]]:
         _require(name not in result, "duplicate registry environment")
         result[name] = item
     return result
+
+
+def _valid_flag(entry: object, name: str) -> bool:
+    if not (
+        isinstance(entry, dict)
+        and set(entry) == {"name", "value"}
+        and entry["name"] == name
+        and isinstance(entry["value"], str)
+        and len(entry["value"]) <= 1024
+    ):
+        return False
+    try:
+        branch = yaml.safe_load(entry["value"])
+    except yaml.YAMLError:
+        return False
+    return (
+        isinstance(branch, dict) and set(branch) == {"enabled"} and type(branch["enabled"]) is bool
+    )
 
 
 def _layout(deployment: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
@@ -462,7 +482,7 @@ def _layout(deployment: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     )
     for flag in _FLAGS:
         _require(
-            flag not in environment or values[flag] in {"true", "false"},
+            flag not in environment or _valid_flag(environment[flag], flag),
             "unsupported registry maintenance flag",
         )
     mounts = container.get("volumeMounts") or []
@@ -577,12 +597,7 @@ def _saved_flags(value: object) -> bool:
     return (
         isinstance(value, dict)
         and set(value) == set(_FLAGS)
-        and all(
-            entry is None
-            or entry == {"name": name, "value": "true"}
-            or entry == {"name": name, "value": "false"}
-            for name, entry in value.items()
-        )
+        and all(entry is None or _valid_flag(entry, name) for name, entry in value.items())
     )
 
 

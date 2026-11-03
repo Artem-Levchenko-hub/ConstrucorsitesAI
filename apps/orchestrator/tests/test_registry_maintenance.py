@@ -13,8 +13,8 @@ from typing import Any
 import pytest
 
 OWNER = "yleum.io/registry-maintenance-owner"
-READ_ONLY = "REGISTRY_STORAGE_MAINTENANCE_READONLY_ENABLED"
-PURGING = "REGISTRY_STORAGE_MAINTENANCE_UPLOADPURGING_ENABLED"
+READ_ONLY = "REGISTRY_STORAGE_MAINTENANCE_READONLY"
+PURGING = "REGISTRY_STORAGE_MAINTENANCE_UPLOADPURGING"
 PROJECT = "76e94c8e-006c-435c-9a8e-923a564ac679"
 REPOSITORY = f"max-app/{PROJECT}"
 DIGEST = "sha256:" + "a" * 64
@@ -214,7 +214,7 @@ class FakeApi:
         if action == "preflight":
             return (1, "writer exists") if self.writer else (0, "ok\n")
         if action in {"probe", "writer"}:
-            assert env(self.deployment)[READ_ONLY]["value"] == "true"
+            assert env(self.deployment)[READ_ONLY]["value"] == '{"enabled":true}'
             return 0, f"{self.writer_pid if self.writer else 0}\n"
         if action == "start":
             self.writer = owner
@@ -265,13 +265,72 @@ def lease(tmp_path: Path, api: FakeApi | None = None) -> Any:
     )
 
 
+def test_maintenance_exports_typed_branches_when_base_config_has_no_maintenance(
+    tmp_path: Path,
+) -> None:
+    """Leaf overrides create the wrong Go map type in Distribution v2.8.3."""
+    api = FakeApi()
+    with lease(tmp_path, api):
+        environment = env(api.deployment)
+        for branch, enabled in (("READONLY", True), ("UPLOADPURGING", False)):
+            name = "REGISTRY_STORAGE_MAINTENANCE_" + branch
+            assert name in environment, "Distribution requires an entire typed YAML branch"
+            assert json.loads(environment[name]["value"]) == {"enabled": enabled}
+            assert name + "_ENABLED" not in environment
+
+
+def test_recovery_restores_original_typed_maintenance_branches(tmp_path: Path) -> None:
+    api = FakeApi()
+    original_flags = [
+        {"name": "REGISTRY_STORAGE_MAINTENANCE_READONLY", "value": '{"enabled": false}'},
+        {"name": "REGISTRY_STORAGE_MAINTENANCE_UPLOADPURGING", "value": "{enabled: true}"},
+    ]
+    api.deployment["spec"]["template"]["spec"]["containers"][0]["env"].extend(original_flags)
+    api.pods = [pod(api.deployment, "old")]
+    with lease(tmp_path, api):
+        pass
+    restored = env(api.deployment)
+    assert all(restored[entry["name"]] == entry for entry in original_flags)
+
+
+@pytest.mark.parametrize("name", [READ_ONLY, PURGING])
+@pytest.mark.parametrize("value", ['{"enabled":"false"}', '{"enabled":1}', "false"])
+def test_invalid_maintenance_branch_never_mutates_registry(
+    tmp_path: Path, name: str, value: str
+) -> None:
+    api = FakeApi()
+    api.deployment["spec"]["template"]["spec"]["containers"][0]["env"].append(
+        {"name": name, "value": value}
+    )
+    with pytest.raises(RuntimeError, match="maintenance flag"):
+        lease(tmp_path, api).__enter__()
+    assert api.patches == []
+    assert not api.journal.exists()
+
+
+def test_legacy_leaf_flag_journal_cannot_replay_ambiguous_configuration(tmp_path: Path) -> None:
+    api = FakeApi()
+    lease(tmp_path, api).__enter__()
+    payload = json.loads(api.journal.read_text())
+    payload["original"] = {
+        "REGISTRY_STORAGE_MAINTENANCE_READONLY_ENABLED": None,
+        "REGISTRY_STORAGE_MAINTENANCE_UPLOADPURGING_ENABLED": None,
+    }
+    api.journal.write_text(json.dumps(payload), encoding="utf-8")
+    patches = len(api.patches)
+    with pytest.raises(RuntimeError, match="journal"):
+        module().recover("unused-kubeconfig", api.journal, api=api)
+    assert len(api.patches) == patches
+    assert api.journal.is_file()
+
+
 def test_read_only_rollout_precedes_private_deletion_and_physical_gc(tmp_path: Path) -> None:
     api = FakeApi()
     original = deepcopy(api.deployment["spec"]["template"])
     with lease(tmp_path, api) as maintenance:
         assert len(api.pods) == 1 and api.pods[0]["metadata"]["uid"] != "old"
-        assert env(api.deployment)[READ_ONLY]["value"] == "true"
-        assert env(api.deployment)[PURGING]["value"] == "false"
+        assert env(api.deployment)[READ_ONLY]["value"] == '{"enabled":true}'
+        assert env(api.deployment)[PURGING]["value"] == '{"enabled":false}'
         maintenance.start_private_writer()
         assert maintenance.delete_manifest(REPOSITORY, DIGEST, AUTHORIZATION) == 202
         with pytest.raises(RuntimeError, match="writer"):
@@ -377,13 +436,13 @@ def test_unrelated_concurrent_changes_and_original_manual_read_only_survive_rest
 ) -> None:
     api = FakeApi()
     api.deployment["spec"]["template"]["spec"]["containers"][0]["env"].append(
-        {"name": READ_ONLY, "value": "true"}
+        {"name": READ_ONLY, "value": '{"enabled":true}'}
     )
     api.pods = [pod(api.deployment, "old")]
     with lease(tmp_path, api):
         api.deployment["metadata"]["annotations"]["concurrent"] = "preserved"
         api.deployment["metadata"]["resourceVersion"] = "99"
-    assert env(api.deployment)[READ_ONLY]["value"] == "true"
+    assert env(api.deployment)[READ_ONLY]["value"] == '{"enabled":true}'
     assert api.deployment["metadata"]["annotations"]["concurrent"] == "preserved"
     assert PURGING not in env(api.deployment)
 
@@ -405,7 +464,7 @@ def test_failed_writer_stop_retains_read_only_and_recoverable_journal(tmp_path: 
         with lease(tmp_path, api) as maintenance:
             maintenance.start_private_writer()
             api.fail_action = "stop"
-    assert env(api.deployment)[READ_ONLY]["value"] == "true"
+    assert env(api.deployment)[READ_ONLY]["value"] == '{"enabled":true}'
     assert api.journal.is_file() and api.writer is not None
     assert api.gc_runs == 0
 
@@ -659,7 +718,10 @@ def test_corrupt_recovery_flags_never_get_replayed_into_a_deployment(tmp_path: P
     patches = len(api.patches)
     with pytest.raises(RuntimeError):
         module().recover("unused-kubeconfig", api.journal, api=api)
-    assert len(api.patches) == patches and env(api.deployment)[READ_ONLY]["value"] == "true"
+    assert (
+        len(api.patches) == patches
+        and env(api.deployment)[READ_ONLY]["value"] == '{"enabled":true}'
+    )
 
 
 def test_official_exec_transports_authorization_over_stdin_and_discards_stderr(
@@ -776,8 +838,8 @@ def test_private_helper_and_gc_keep_authentication_storage_and_exclusive_loopbac
         maintenance.garbage_collect()
     scripts = "\n".join(command[2] for command, _ in api.commands if command[0] == "/bin/sh")
     assert "REGISTRY_HTTP_ADDR=127.0.0.1:5001" in scripts
-    assert "REGISTRY_STORAGE_MAINTENANCE_READONLY_ENABLED=false" in scripts
-    assert "REGISTRY_STORAGE_MAINTENANCE_UPLOADPURGING_ENABLED=false" in scripts
+    assert 'REGISTRY_STORAGE_MAINTENANCE_READONLY="{\\"enabled\\":false}"' in scripts
+    assert 'REGISTRY_STORAGE_MAINTENANCE_UPLOADPURGING="{\\"enabled\\":false}"' in scripts
     assert "/bin/registry garbage-collect /etc/docker/registry/config.yml" in scripts
     assert "--delete-untagged" not in scripts
     assert "REGISTRY_AUTH=" not in scripts
@@ -838,8 +900,8 @@ def shell_probe(
     main.mkdir(parents=True, exist_ok=True)
     (main / "exe").touch()
     (main / "cmdline").write_bytes(f"{argv0}\0serve\0/etc/docker/registry/config.yml\0".encode())
-    value = "false" if problem == "read-write" else "true"
-    (main / "environ").write_bytes(f"{READ_ONLY}={value}\0{PURGING}=false\0".encode())
+    value = '{"enabled":false}' if problem == "read-write" else '{"enabled":true}'
+    (main / "environ").write_bytes(f'{READ_ONLY}={value}\0{PURGING}={{"enabled":false}}\0'.encode())
     net = proc / "net"
     net.mkdir(exist_ok=True)
     listener = " 0: 00000000:1389 00000000:0000 0A\n" if problem == "wildcard-listener" else ""
