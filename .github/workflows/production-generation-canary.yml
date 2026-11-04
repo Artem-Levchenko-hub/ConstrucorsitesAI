@@ -36,7 +36,8 @@ jobs:
   canary:
     needs: authorize-ref
     if: github.event_name == 'workflow_dispatch' || vars.PRODUCTION_GENERATION_CANARY_ENABLED == 'true'
-    runs-on: ubuntu-latest
+    # The frozen Playwright 1.60 browser supports Ubuntu 24.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 50
     environment: production
     steps:
