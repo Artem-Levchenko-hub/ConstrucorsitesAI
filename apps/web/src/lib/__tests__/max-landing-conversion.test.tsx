@@ -29,14 +29,12 @@ describe("Yleum landing conversion", () => {
     const tab = Array.from(host.querySelectorAll('button')).find(el => el.textContent === "Услуги");
     expect(tab).toBeDefined();
     await act(async () => tab?.click());
-    // Выбор сценария пересоздаёт витрину (у неё новый key), поэтому кнопку
-    // ищем заново: прежняя ссылка указывает на уже удалённый узел.
     const pressed = Array.from(host.querySelectorAll("button")).find(el => el.textContent === "Услуги");
     expect(pressed?.getAttribute("aria-pressed")).toBe("true");
     expect(host.querySelector('[data-testid="landing-example"]')?.textContent).toContain("Записаться на");
     expect(events).toContainEqual({ event: "max_scenario_select", page: "landing", placement: "services" });
   });
-  it("shows the staff view of the same order and preserves the client cart", async () => {
+  it("preserves independent cafe and shop carts while the coverflow loops", async () => {
     const example = host.querySelector('[data-testid="landing-example"]')!;
     const button = (name: string) => {
       const control = Array.from(example.querySelectorAll("button")).find(el => el.textContent === name || el.getAttribute("aria-label") === name);
@@ -45,21 +43,18 @@ describe("Yleum landing conversion", () => {
     };
     await act(async () => button("Добавить Капучино")?.click());
     await act(async () => button("Добавить Круассан с миндалём").click());
-    const staff = button("Персонал");
-    expect(staff).toBeDefined();
-    await act(async () => staff?.click());
-    const slide = example.querySelector('[aria-roledescription="слайд"]');
-    expect(slide?.getAttribute("aria-label")).toContain("2 из 2");
-    expect(slide?.textContent).toContain("430");
-    expect(slide?.textContent).toContain("Капучино");
-    expect(slide?.textContent).toContain("Круассан");
-    expect(example.querySelector('[aria-label="Добавить Капучино"]')).toBeNull();
-    await act(async () => button("Следующий экран")?.click());
-    expect(button("Клиент")?.getAttribute("aria-pressed")).toBe("true");
-    expect(example.textContent).toContain("Корзина · 2");
-    expect(example.textContent).toContain("Оформить · 430");
+    for (let index = 0; index < 3; index++) await act(async () => button("Следующий экран").click());
+    await act(async () => button("Добавить Фикус").click());
+    await act(async () => button("Следующий экран").click());
+    const cafe = example.querySelector('[data-position="active"]');
+    expect(cafe?.textContent).toContain("Корзина · 2");
+    expect(cafe?.textContent).toContain("Оформить · 430");
+    await act(async () => button("Предыдущий экран").click());
+    const shop = example.querySelector('[data-position="active"]');
+    expect(shop?.textContent).toContain("Корзина · 1");
+    expect(shop?.textContent).toContain("Оформить · 980");
   });
-  it("uses the selected appointment time in the staff view", async () => {
+  it("retains the selected appointment time after leaving and returning", async () => {
     const example = host.querySelector('[data-testid="landing-example"]')!;
     const click = async (name: string) => {
       const button = Array.from(example.querySelectorAll("button")).find(el => el.textContent === name);
@@ -68,13 +63,13 @@ describe("Yleum landing conversion", () => {
     };
     await click("Услуги");
     await click("16:30");
-    await click("Персонал");
-    expect(example.querySelector('[aria-roledescription="слайд"]')?.textContent).toContain("16:30");
-    expect(example.textContent).not.toContain("Капучино");
-    await click("Клиент");
-    expect(example.textContent).toContain("Записаться на 16:30");
+    await click("Клуб");
+    await click("Услуги");
+    const active = example.querySelector('[data-position="active"]');
+    expect(active?.textContent).toContain("Записаться на 16:30");
+    expect(active?.querySelector('button[aria-pressed="true"]')?.textContent).toBe("16:30");
   });
-  it("keeps the same participant count after joining and switching roles", async () => {
+  it("keeps the same participant count after joining and switching scenarios", async () => {
     const example = host.querySelector('[data-testid="landing-example"]')!;
     const click = async (name: string) => {
       const button = Array.from(example.querySelectorAll("button")).find(el => el.textContent === name);
@@ -83,13 +78,13 @@ describe("Yleum landing conversion", () => {
     };
     await click("Клуб");
     await click("Участвовать");
-    await click("Персонал");
-    expect(example.querySelector('[aria-roledescription="слайд"]')?.textContent).toContain("15 чел.");
-    await click("Клиент");
-    expect(example.textContent).toContain("идут 15 человек");
-    expect(example.textContent).toContain("Вы записаны");
+    await click("Магазин");
+    await click("Клуб");
+    const active = example.querySelector('[data-position="active"]');
+    expect(active?.textContent).toContain("идут 15 человек");
+    expect(active?.textContent).toContain("Вы записаны");
   });
-  it("shows plant orders in the shop staff view and preserves an authored prompt", async () => {
+  it("preserves an authored prompt and the shop selection across scenario changes", async () => {
     const example = host.querySelector('[data-testid="landing-example"]')!;
     const input = example.querySelector<HTMLTextAreaElement>("textarea")!;
     await act(async () => {
@@ -103,12 +98,41 @@ describe("Yleum landing conversion", () => {
     };
     await click("Магазин");
     await click("Добавить Фикус");
-    await click("Персонал");
-    const slide = example.querySelector('[aria-roledescription="слайд"]');
+    await click("Кофейня");
+    expect(example.querySelector('[data-position="active"]')?.textContent).not.toContain("Фикус");
+    await click("Магазин");
+    const slide = example.querySelector('[data-position="active"]');
     expect(slide?.textContent).toContain("Фикус");
     expect(slide?.textContent).toContain("980");
     expect(slide?.textContent).not.toContain("Капучино");
     expect(example.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Приложение моей пекарни");
+  });
+  it("tracks the destination scenario for arrow and side-phone selection with legacy event names", async () => {
+    const example = host.querySelector('[data-testid="landing-example"]')!;
+    const click = async (name: string) => {
+      const control = [...example.querySelectorAll<HTMLButtonElement>("button")].find(button => button.getAttribute("aria-label") === name || button.textContent === name);
+      expect(control, name).toBeDefined();
+      await act(async () => control!.click());
+    };
+    await click("Следующий экран");
+    await click("Показать: Клуб");
+    await click("Магазин");
+    await click("Следующий экран");
+    expect(events.filter(value => (value as { event?: string }).event === "max_scenario_select")).toEqual([
+      { event: "max_scenario_select", page: "landing", placement: "services" },
+      { event: "max_scenario_select", page: "landing", placement: "community" },
+      { event: "max_scenario_select", page: "landing", placement: "shop" },
+      { event: "max_scenario_select", page: "landing", placement: "coffee" },
+    ]);
+  });
+  it("captures the requested scenario before a click handler updates the next destination", async () => {
+    const next = host.querySelector<HTMLButtonElement>('.ys-coverflow-navigation [aria-label="Следующий экран"]')!;
+    expect(next.dataset.placement).toBe("services");
+    next.addEventListener("click", () => { next.dataset.placement = "community"; }, { once: true });
+    await act(async () => next.click());
+    expect(events.filter(value => (value as { event?: string }).event === "max_scenario_select")).toEqual([
+      { event: "max_scenario_select", page: "landing", placement: "services" },
+    ]);
   });
   it("describes generation and edits without promising customer version restoration", () => {
     expect(host.querySelector("#process")?.textContent).toContain("обычными словами");

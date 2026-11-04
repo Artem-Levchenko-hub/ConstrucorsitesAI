@@ -7,8 +7,7 @@ import { LANDING_PROMPT_MAX_LENGTH, startWithPrompt } from "@/lib/landing-prompt
 
 import { Chips, PhoneFrame, Promo, Strip } from "./AppScreens";
 import { ProductArt, type ArtKind } from "./ProductArt";
-import { HeroStaffScreen } from "./HeroStaffScreen";
-import { CAFE_DEMO, ROLE_COPY, type DemoRole, type DemoScenario as Scenario } from "./demo-content";
+import { CAFE_DEMO, type DemoScenario as Scenario } from "./demo-content";
 
 /**
  * Первый экран витрины: запрос владельца печатается сам, а рядом появляется
@@ -16,9 +15,8 @@ import { CAFE_DEMO, ROLE_COPY, type DemoRole, type DemoScenario as Scenario } fr
  * выбрать время, записаться. Это не картинка приложения, а работающий сценарий:
  * посетитель видит не обещание, а результат, и может его потрогать.
  *
- * Состояние сценария живёт в отдельном компоненте с `key`: при смене вкладки он
- * пересоздаётся, поэтому корзина и печать сбрасываются сами, без ручного сброса
- * в эффекте.
+ * Все четыре экрана смонтированы постоянно: карусель меняет только положение,
+ * а корзина, выбранное время и участие сохраняются отдельно для каждого примера.
  */
 
 /* `event` — историческая метка сценария в статистике переходов. Ключи сценариев
@@ -84,10 +82,8 @@ function useReducedMotion() {
   return useSyncExternalStore(store.subscribe, store.get, () => false);
 }
 
-function ScenarioStage({ scenario }: { scenario: Scenario }) {
+function ScenarioScreen({ scenario }: { scenario: Scenario }) {
   const current = scenarios[scenario];
-  const slideId = useId();
-  const [role, setRole] = useState<DemoRole>("client");
   const [cart, setCart] = useState<Record<string, number>>({});
   const [slot, setSlot] = useState("12:30");
   const [joined, setJoined] = useState(false);
@@ -109,33 +105,9 @@ function ScenarioStage({ scenario }: { scenario: Scenario }) {
     return sum + (item ? item.price * n : 0);
   }, 0);
   const items = Object.values(cart).reduce((a, b) => a + b, 0);
-  const orderLines = catalogue.filter(item => cart[item.id]).map(item => ({ title: item.title, price: item.price, quantity: cart[item.id] }));
-  const demoLines = [catalogue[0], catalogue[scenario === "cafe" ? 2 : 1]].map(item => ({ title: item.title, price: item.price, quantity: 1 }));
-  const copy = ROLE_COPY[scenario][role];
-  const toggleRole = () => setRole(prev => prev === "client" ? "staff" : "client");
 
   return (
-    <section className="ys-role-carousel" aria-label="Приложение глазами клиента и персонала" aria-roledescription="карусель">
-      <div className="ys-role-switch" role="group" aria-label="Кому показан экран">
-        <button type="button" aria-pressed={role === "client"} aria-controls={slideId} onClick={() => setRole("client")}>Клиент</button>
-        <button type="button" aria-pressed={role === "staff"} aria-controls={slideId} onClick={() => setRole("staff")}>Персонал</button>
-      </div>
-      <div className="ys-role-layout">
-        <div className="ys-role-copy">
-          <div aria-live="polite" aria-atomic="true">
-            <span className="ys-role-kicker">{role === "client" ? "Клиент · в MAX" : "Персонал · своя панель"}</span>
-            <h3>{copy.title}</h3>
-            <p>{copy.text}</p>
-          </div>
-          <div className="ys-role-navigation">
-            <button type="button" aria-label="Предыдущий экран" aria-controls={slideId} onClick={toggleRole}><ChevronLeft size={18} /></button>
-            <span>{role === "client" ? "01" : "02"}<i aria-hidden="true"> / </i>02</span>
-            <button type="button" aria-label="Следующий экран" aria-controls={slideId} onClick={toggleRole}><ChevronRight size={18} /></button>
-          </div>
-        </div>
-      <div className="ys-phone" id={slideId} role="group" aria-roledescription="слайд" aria-label={role === "client" ? "1 из 2. Экран клиента" : "2 из 2. Экран персонала"}>
-        <PhoneFrame>
-        {role === "staff" ? <HeroStaffScreen scenario={scenario} brand={current.brand} lines={orderLines.length ? orderLines : demoLines} slot={slot} joined={joined} participants={participants} /> : (
+    <PhoneFrame>
         <div className="ys-screen">
           <div className="ys-screen-top">
             <ChevronLeft size={15} />
@@ -274,11 +246,7 @@ function ScenarioStage({ scenario }: { scenario: Scenario }) {
             )}
           </div>
         </div>
-        )}
-        </PhoneFrame>
-      </div>
-      </div>
-    </section>
+    </PhoneFrame>
   );
 }
 
@@ -290,8 +258,7 @@ function ScenarioStage({ scenario }: { scenario: Scenario }) {
  * Как только он начинает печатать, подсказка замолкает и больше не возвращается —
  * подменять или дописывать чужой текст недопустимо.
  *
- * Форма живёт ВЫШЕ демонстрации сценария: та пересоздаётся при переключении
- * вкладок, и написанное внутри неё стиралось бы на каждом переключении.
+ * Форма одна для всех сценариев и сохраняет собственный текст при перелистывании.
  *
  * По отправке текст сохраняется у посетителя и происходит переход на регистрацию.
  * Подхватывает его кабинет: см. `takeLandingPrompt`.
@@ -373,6 +340,11 @@ function PromptComposer({ demo }: { demo: string }) {
 
 export function HeroStage() {
   const [scenario, setScenario] = useState<Scenario>("cafe");
+  const carouselId = useId();
+  const activeIndex = order.indexOf(scenario);
+  const previous = order[(activeIndex + order.length - 1) % order.length];
+  const next = order[(activeIndex + 1) % order.length];
+  const slideId = (key: Scenario) => `${carouselId}-${key}`;
 
   return (
     <div className="ys-stage" data-testid="landing-example">
@@ -384,6 +356,7 @@ export function HeroStage() {
             <button
               type="button"
               aria-pressed={scenario === key}
+              aria-controls={slideId(key)}
               data-marketing="scenario_select"
               data-placement={scenarios[key].event}
               onClick={() => setScenario(key)}
@@ -393,7 +366,31 @@ export function HeroStage() {
           </div>
         ))}
       </div>
-      <ScenarioStage key={scenario} scenario={scenario} />
+      <section className="ys-coverflow" aria-label="Примеры приложений" aria-roledescription="карусель">
+        <div className="ys-coverflow-track">
+          {order.map((key, index) => {
+            const distance = (index - activeIndex + order.length) % order.length;
+            const position = distance === 0 ? "active" : distance === 1 ? "next" : distance === order.length - 1 ? "previous" : "hidden";
+            return <div key={key} id={slideId(key)} className="ys-coverflow-slide" data-scenario={key} data-position={position}
+              role="group" aria-roledescription="слайд" aria-label={`${index + 1} из ${order.length}. ${scenarios[key].tab}`}
+              aria-hidden={position === "hidden" ? true : undefined} inert={position === "hidden"}>
+              <div data-phone-content aria-hidden={position === "active" ? undefined : true} inert={position !== "active"}>
+                <ScenarioScreen scenario={key} />
+              </div>
+            </div>;
+          })}
+          <button type="button" className="ys-coverflow-select ys-coverflow-select--previous" aria-label={`Показать: ${scenarios[previous].tab}`}
+            aria-controls={slideId(previous)} data-marketing="scenario_select" data-placement={scenarios[previous].event} onClick={() => setScenario(previous)} />
+          <button type="button" className="ys-coverflow-select ys-coverflow-select--next" aria-label={`Показать: ${scenarios[next].tab}`}
+            aria-controls={slideId(next)} data-marketing="scenario_select" data-placement={scenarios[next].event} onClick={() => setScenario(next)} />
+        </div>
+        <div className="ys-coverflow-navigation">
+          <button type="button" aria-label="Предыдущий экран" aria-controls={slideId(previous)} data-marketing="scenario_select" data-placement={scenarios[previous].event} onClick={() => setScenario(previous)}><ChevronLeft size={18} aria-hidden="true" /></button>
+          <span aria-hidden="true">0{activeIndex + 1}<i> / </i>04</span>
+          <button type="button" aria-label="Следующий экран" aria-controls={slideId(next)} data-marketing="scenario_select" data-placement={scenarios[next].event} onClick={() => setScenario(next)}><ChevronRight size={18} aria-hidden="true" /></button>
+        </div>
+        <p className="sr-only" aria-live="polite" aria-atomic="true">{activeIndex + 1} из {order.length}: {scenarios[scenario].tab}</p>
+      </section>
 
       <p className="ys-stage-caption">
         Пример интерфейса с демонстрационными данными. Товары, запись и участие можно попробовать; реальные заказы и платежи не создаются.

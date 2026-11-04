@@ -558,42 +558,96 @@ button.ys-action { cursor: pointer; }
   transform: translateX(-50%);
 }
 
-/* Два подписанных вида одного приложения. Переключение только ручное: человек
-   может спокойно сравнить экраны, не теряя корзину или выбранное время. */
-.ys-role-carousel { display: grid; justify-items: center; gap: 28px; width: 100%; }
-.ys-role-switch { display: flex; width: min(100%, 320px); padding: 4px; border: 1px solid #e6e2dd; border-radius: 999px; background: #efede9; }
-.ys-role-switch button { flex: 1; min-height: 44px; padding: 10px 20px; border: 0; border-radius: 999px; background: transparent; color: #62616a; font: inherit; font-size: 14px; cursor: pointer; transition: color 0.2s, background-color 0.2s, box-shadow 0.2s; }
-.ys-role-switch button[aria-pressed="true"] { background: #fff; color: #14141a; box-shadow: 0 2px 7px rgb(20 20 26 / 0.07); }
-.ys-role-layout { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 320px); align-items: center; justify-content: center; gap: 64px; width: 100%; }
-.ys-role-copy { text-align: left; }
-.ys-role-kicker { display: block; margin-bottom: 12px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #68656f; }
-.ys-role-copy h3 { margin: 0; font-size: clamp(23px, 2.2vw, 28px); line-height: 1.2; letter-spacing: -0.035em; text-wrap: balance; }
-.ys-role-copy p { margin: 16px 0 0; font-size: 15px; line-height: 1.65; color: #62616a; }
-.ys-role-navigation { display: flex; align-items: center; gap: 16px; margin-top: 28px; }
-.ys-role-navigation button { display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid #e0dcd6; border-radius: 50%; background: transparent; color: #14141a; cursor: pointer; transition: background-color 0.2s; }
-.ys-role-navigation button:hover { background: #efede9; }
-.ys-role-navigation span { min-width: 51px; font-size: 12px; font-variant-numeric: tabular-nums; color: #62616a; }
-.ys-role-navigation i { font-style: normal; color: #a5a29c; }
-.ys-role-switch button:focus-visible, .ys-role-navigation button:focus-visible, .ys-tabs button:focus-visible { outline: 2px solid var(--color-brand-blue, #0062ee); outline-offset: 4px; }
-.ys-role-carousel .ys-screen { animation: ys-role-enter 0.24s ease-out; }
-.ys-role-carousel .ys-screen-body { overflow-y: auto; scrollbar-width: thin; }
-.ys-role-carousel .ys-stepper { gap: 4px; }
-.ys-role-carousel .ys-stepper button { flex: none; width: 44px; height: 44px; }
-.ys-role-carousel .ys-slots button, .ys-role-carousel .ys-bar-button { min-height: 44px; }
-.ys-staff-card { padding: 12px; border: 1px solid #e9e5df; border-radius: 12px; background: #faf9f7; }
-.ys-staff-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; font-size: 12px; }
-.ys-staff-heading > span { padding: 4px 7px; border-radius: 6px; background: #e8f3eb; color: #21653c; font-size: 10px; }
-.ys-staff-total { border-top: 1px solid #e9e5df; margin-top: 6px; padding-top: 10px; }
-@keyframes ys-role-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+/* Четыре постоянных экрана: двигается рамка, состояние приложения сохраняется.
+   Два боковых оверлея — соседи телефонов, поэтому кнопки не вложены в кнопки
+   и фокус не исчезает при активации выбранного экрана. */
+.ys-coverflow {
+  --ys-coverflow-width: clamp(230px, 72vw, 278px);
+  --ys-coverflow-shift: clamp(118px, 28vw, 232px);
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+}
+.ys-coverflow-track {
+  position: relative;
+  isolation: isolate;
+  width: calc(100% + 80px);
+  height: calc(var(--ys-coverflow-width) * 2.1666667 + 96px);
+  overflow: clip;
+  perspective: 1200px;
+}
+.ys-coverflow-slide,
+.ys-coverflow-select {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  width: var(--ys-coverflow-width);
+  aspect-ratio: 9 / 19.5;
+  transform-origin: center;
+}
+.ys-coverflow-slide {
+  z-index: 1;
+  opacity: .68;
+  transition: transform 620ms cubic-bezier(.22, .68, .2, 1), opacity 420ms ease, visibility 0s;
+}
+.ys-coverflow-slide[data-position="active"] {
+  z-index: 3;
+  opacity: 1;
+  transform: translate3d(-50%, 0, 0) scale(1) rotateY(0deg);
+}
+.ys-coverflow-slide:not([data-position="active"]) { pointer-events: none; }
+.ys-coverflow-slide[data-position="previous"],
+.ys-coverflow-select--previous { transform: translate3d(calc(-50% - var(--ys-coverflow-shift)), 44px, 0) scale(.82) rotateY(10deg); }
+.ys-coverflow-slide[data-position="next"],
+.ys-coverflow-select--next { transform: translate3d(calc(-50% + var(--ys-coverflow-shift)), 44px, 0) scale(.82) rotateY(-10deg); }
+.ys-coverflow-slide[data-position="hidden"] {
+  z-index: 0;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translate3d(-50%, 56px, 0) scale(.64) rotateY(0deg);
+  transition: transform 620ms cubic-bezier(.22, .68, .2, 1), opacity 420ms ease, visibility 0s linear 620ms;
+}
+.ys-coverflow-select {
+  z-index: 2;
+  padding: 0;
+  border: 0;
+  border-radius: 30px;
+  background: transparent;
+  cursor: pointer;
+}
+.ys-coverflow-navigation { display: flex; align-items: center; justify-content: center; gap: 20px; }
+.ys-coverflow-navigation button { display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid #e0dcd6; border-radius: 50%; background: transparent; color: #14141a; cursor: pointer; transition: background-color 160ms ease; }
+.ys-coverflow-navigation button:hover { background: #efede9; }
+.ys-coverflow-navigation span { min-width: 51px; font-size: 12px; font-variant-numeric: tabular-nums; color: #62616a; text-align: center; }
+.ys-coverflow-navigation i { font-style: normal; color: #a5a29c; }
+.ys-coverflow-select:focus-visible,
+.ys-coverflow-navigation button:focus-visible,
+.ys-tabs button:focus-visible { outline: 2px solid var(--color-brand-blue, #0062ee); outline-offset: 4px; }
+.ys-coverflow-slide[data-position="active"] .ys-screen-body { overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; }
+.ys-coverflow .ys-stepper { gap: 4px; }
+.ys-coverflow .ys-stepper button { flex: none; width: 44px; height: 44px; }
+.ys-coverflow .ys-slots button,
+.ys-coverflow .ys-bar-button { min-height: 44px; }
+@media (min-width: 720px) {
+  .ys-coverflow { --ys-coverflow-width: 320px; }
+}
 @media (max-width: 720px) {
-  .ys-role-carousel { gap: 24px; }
-  .ys-role-layout { grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 24px; }
-  .ys-role-copy { width: min(100%, 360px); text-align: center; }
-  .ys-role-copy p { margin-top: 10px; font-size: 14px; }
-  .ys-role-kicker { margin-bottom: 8px; }
-  .ys-role-navigation { justify-content: center; margin-top: 16px; }
+  .ys-coverflow-track { width: calc(100% + 32px); }
+}
+@media (max-width: 360px) {
+  .ys-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
+  .ys-tabs > div { justify-content: center; }
+  .ys-tabs-dot { display: none; }
+  .ys-coverflow .ys-row--art { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: start; }
+  .ys-coverflow .ys-row--art .ys-art { grid-column: 1; grid-row: 1 / 3; }
+  .ys-coverflow .ys-row-text { grid-column: 2; grid-row: 1; overflow-wrap: anywhere; }
+  .ys-coverflow .ys-stepper { grid-column: 2; grid-row: 2; justify-self: end; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ys-role-carousel .ys-screen { animation: none; }
-  .ys-role-switch button, .ys-role-navigation button { transition: none; }
+  .ys-coverflow-slide,
+  .ys-coverflow-slide[data-position="hidden"],
+  .ys-coverflow-navigation button { transition: none; }
 }

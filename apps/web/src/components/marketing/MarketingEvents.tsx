@@ -24,8 +24,9 @@ export function MarketingEvents({ page }: { page: MarketingEvent["page"] }) {
       });
     }, { threshold: 0.25 });
     document.querySelectorAll("[data-marketing-section]").forEach(el => observer?.observe(el));
-    document.addEventListener("click", click); document.addEventListener("toggle", toggle, true);
-    return () => { document.removeEventListener("click", click); document.removeEventListener("toggle", toggle, true); observer?.disconnect(); };
+    // Read the chosen destination before a stateful control updates its label.
+    document.addEventListener("click", click, true); document.addEventListener("toggle", toggle, true);
+    return () => { document.removeEventListener("click", click, true); document.removeEventListener("toggle", toggle, true); observer?.disconnect(); };
   }, [page]);
   return null;
 }

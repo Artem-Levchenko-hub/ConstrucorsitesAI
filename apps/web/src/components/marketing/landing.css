@@ -459,6 +459,11 @@
 /* ── подзаголовок внутри секции ─────────────────────────────────────────── */
 .yl-subhead { font-size: 19px; letter-spacing: -0.02em; text-align: center; }
 .yl-head--sub { margin-top: 28px; }
+@media (max-width: 360px) {
+  .yl-header__inner, .yl-header__actions { gap: 8px; }
+  .yl-header .yl-cta { padding-inline: 10px; font-size: 12px; }
+  .yl-header .yl-login { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; font-size: 13px; }
+}
 
 /* ── то, что обычно настраивают неделями ────────────────────────────────── */
 .yl-platform { margin-top: 44px; }

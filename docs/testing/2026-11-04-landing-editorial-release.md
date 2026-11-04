@@ -8,7 +8,7 @@
 - [x] 19–21: заголовок шагов, понятный заголовок доработок после запуска, удалить лишнюю секцию фактов.
 - [x] 22–29: ясный тарифный заголовок и условия; три актуальных плана из публичного API прямо на странице, русский Free, без прежних бейджей; «Часто задаваемые вопросы»; убрать произношение из футера.
 - [x] Regression tests, independent review, lint/types/build, live 390/768/1440 и repeated flow.
-- [ ] Intended commit → upstream push → exact CI → canonical production `--web-only` → health и live proof.
+- [x] Intended commit `770d30db9252c40c84ef2c79340064199207db6d` → upstream push → exact CI `41879282971` (13/13) → canonical production `--web-only` (21:15 МСК, exit 0) → public web health 200 с тем же SHA; API health 200 на `07706538`.
 
 Владение: root — YleumLanding/AppScreens/HeroStage/landing.css/screens.css, route loaders, общие тесты, Git/deploy; sdk_contract_worker — новые LandingPricing и его тесты; help_ui_worker — Capabilities, новый payment-connection.css. Никто не меняет billing policy/ключи/данные/lockfiles. Цены и лимиты берутся из действующего публичного каталога; Pro=1 ₽ подтверждён API, не заменяется предположением.
 
@@ -16,3 +16,5 @@
 
 Локально: полный web suite 166 файлов / 1720 тестов; после финальной небольшой правки — 18 целевых тестов. Lint без ошибок (одно прежнее apple-icon предупреждение), types и production build прошли. Независимый review закрыт после исправления Free CTA/аналитики и единого имени товара. Живой локальный браузер: реальные CSS-ширины 390/768/1440 без переполнения; все пять подписей над экранами, клавиатурная прокрутка галереи, одна плитка ЮKassa, три действующих тарифа, увеличенный блок заказа 87 px вместо 50 px. Аудит Free отдельно прошёл read-only review; политика тарифа не менялась.
 Ограничение локальной упаковки: Next build завершился кодом 0, но Windows junction зависимостей дал EPERM при копировании standalone node_modules. Этот артефакт на сервер не переносится; обязательны отдельные Linux CI image-build и штатная production-сборка реальных зависимостей.
+
+Linux image-build CI и штатная production-сборка завершились успешно. Следующее уточнение hero-карусели поставляется отдельно и сохраняет этот пакет. Итоговая живая проверка всех изменений входит в приёмку следующего релиза.
