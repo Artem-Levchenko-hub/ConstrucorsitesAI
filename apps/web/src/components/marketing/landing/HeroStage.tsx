@@ -42,8 +42,8 @@ type Item = { id: string; title: string; note: string; price: number; art: ArtKi
 const menu: Item[] = [
   { id: "cap", title: "Капучино", note: "250 мл · на обычном молоке", price: 240, art: "cappuccino" },
   { id: "flat", title: "Флэт уайт", note: "Больше кофе, меньше молока", price: 260, art: "flatwhite" },
-  { id: "cro", title: "Круассан", note: "С миндалём · из печи в 7:30", price: 190, art: "croissant" },
-  { id: "che", title: "Чизкейк", note: "Кусок · нью-йорк", price: 290, art: "cheesecake" },
+  { id: "cro", title: "Круассан с миндалём", note: "Испекли в 7:30", price: 190, art: "croissant" },
+  { id: "che", title: "Чизкейк", note: "1 порция · нью-йорк", price: 290, art: "cheesecake" },
 ];
 const goods: Item[] = [
   { id: "mon", title: "Монстера", note: "В кашпо 17 см · в наличии", price: 1400, art: "monstera" },

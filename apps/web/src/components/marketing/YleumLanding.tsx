@@ -2,11 +2,13 @@ import { ArrowRight, Check } from "lucide-react";
 import Link from "next/link";
 
 import { YleumMark } from "@/components/brand/YleumMark";
+import type { BillingPlan } from "@/lib/api/account";
 import "./landing.css";
 import "./landing/screens.css";
 import { AppScreen, ScreenCollage } from "./landing/AppScreens";
 import { Capabilities, Integrations } from "./landing/Capabilities";
 import { HeroStage } from "./landing/HeroStage";
+import { LandingPricing } from "./landing/LandingPricing";
 import { MarketingEvents } from "./MarketingEvents";
 
 /** Что включено в платформу. Формулировки короткие: секция показывает, а не рассказывает. */
@@ -15,34 +17,22 @@ const stack = [
   ["Вход через MAX", "Без регистрации и паролей"],
   ["Адрес по HTTPS", "Готов для кабинета бота"],
   ["Статистика", "Кто открыл и докуда дошёл"],
-  ["Интеграции", "Оплата подключается отдельно"],
-  ["Изоляция", "Чужие данные недоступны"],
-] as const;
-
-const useCases = [
-  ["Заказ", "Гость выбирает и забирает к нужному времени."],
-  ["Запись", "Клиент сам находит свободное время."],
-  ["Сообщество", "Встречи и материалы — только для своих."],
+  ["Оплата", "Подключение магазина ЮKassa"],
+  ["Конфиденциальность", "Другие владельцы приложений не видят данные вашего проекта"],
 ] as const;
 
 const afterLaunch = [
   ["Обновление", "Меняйте приложение после запуска — публикуйте обновления, когда готовы."],
   ["Доработка", "Опишите нужные изменения в чате и проверьте результат."],
-  ["Рост", "Добавляйте сервисы тогда, когда они понадобятся."],
-] as const;
-
-const facts = [
-  ["Своя база", "Отдельная база данных, а не общая таблица с чужими записями."],
-  ["Свой адрес", "Постоянный HTTPS-адрес, готовый к вставке в кабинет MAX."],
-  ["Правки словами", "Добавляйте экраны и меняйте поведение приложения через чат."],
+  ["Развитие", "Расширяйте каталог и добавляйте новые разделы по мере роста бизнеса."],
 ] as const;
 
 const faqs = [
   ["code", "Я не программист. У меня получится?", "Начните с того, что должен сделать ваш клиент: выбрать товар, записаться или открыть материал. Пошаговый опрос поможет описать задачу. Yleum соберёт приложение, а вы проверите его и попросите изменения обычным сообщением."],
-  ["free", "Что значит «начать бесплатно»?", "Вы регистрируетесь на тарифе Free без оплаты и привязки карты. Генерация расходует доступный баланс; лимиты и условия публикации зависят от тарифа. Актуальные условия вы увидите в аккаунте до оплаты. Free — не обещание безлимитной генерации или бесплатного публичного хостинга."],
+  ["free", "Что значит «начать бесплатно»?", "Регистрация на бесплатном тарифе не требует оплаты. В нём есть ограничения на проекты, генерации и правки. Сравнение актуальных тарифов находится прямо на этой странице; выбранные условия вы увидите в аккаунте до оплаты."],
   ["max", "Бот MAX нужен сразу?", "Нет. Сначала можно описать идею и работать над приложением. Для запуска внутри MAX нужно создать бота в кабинете MAX, пройти необходимые проверки на стороне платформы и подключить его в Yleum. Помощник проведёт по шагам."],
   ["change", "Можно менять приложение после запуска?", "Да. Продолжайте работу в редакторе, проверяйте результат в превью и публикуйте обновление, когда готовы."],
-  ["payments", "Можно добавить оплату и другие сервисы?", "В Yleum есть раздел интеграций. Доступность конкретного сервиса зависит от его поддержки и вашего тарифа. Подключение платёжного провайдера и его условия оформляются отдельно — сама генерация приложения не подключает приём платежей автоматически."],
+  ["payments", "Как подключить приём оплаты?", "Откройте раздел интеграций в редакторе проекта и подключите свой магазин ЮKassa. Подключение магазина и проверка оплаты выполняются отдельно от создания приложения."],
   ["ready", "Что проверить перед публикацией?", "Пройдите путь своего клиента в предпросмотре, проверьте тексты, формы и нужные функции. Затем выполните обязательные пункты в окне запуска. Созданный ИИ результат требует вашей проверки перед тем, как им начнут пользоваться клиенты."],
   ["how", "Как вообще сделать приложение для MAX?", "Коротко: опишите задачу словами, получите готовое приложение, проверьте его в предпросмотре, создайте бота в кабинете MAX и вставьте туда адрес опубликованного приложения. Подробный разбор каждого шага — в руководстве."],
   ["time", "Сколько времени занимает первая сборка?", "Первый работающий результат вы видите в том же разговоре, в котором описали идею. Доводка до запуска зависит от того, сколько экранов и правил нужно вашему бизнесу."],
@@ -75,7 +65,7 @@ function Brand() {
   );
 }
 
-export function YleumLanding() {
+export function YleumLanding({ plans = null }: { plans?: BillingPlan[] | null } = {}) {
   return (
     <main data-max-studio className="yl">
       <MarketingEvents page="landing" />
@@ -114,7 +104,7 @@ export function YleumLanding() {
           </div>
           <div className="yl-actions">
             <Signup placement="hero" />
-            <span className="yl-note">Тариф Free · Без карты</span>
+            <span className="yl-note">Бесплатный тариф</span>
           </div>
         </div>
         <div className="yl-wrap"><HeroStage /></div>
@@ -123,20 +113,18 @@ export function YleumLanding() {
       {/* 2 — что отсюда выходит */}
       <section id="examples" className="yl-section" data-marketing-section="examples">
         <div className="yl-wrap yl-head yl-head--center">
-          <h2>Что вы запустите.</h2>
+          <h2>Функции, которые вас ждут</h2>
         </div>
         <ScreenCollage
-          screens={["status", "cafe", "salon", "club", "loyalty"]}
+          screens={[
+            { kind: "status", description: "Клиент следит за статусом и временем выдачи заказа" },
+            { kind: "cafe", description: "Гость выбирает товары из меню и собирает корзину" },
+            { kind: "salon", description: "Клиент выбирает мастера и свободное время" },
+            { kind: "club", description: "Участник записывается на встречу и читает программу" },
+            { kind: "loyalty", description: "Клиент видит свои бонусы и историю покупок" },
+          ]}
           caption="Примеры экранов. Содержание и функции вы задаёте для своего бизнеса."
         />
-        <div className="yl-wrap yl-usecases">
-          {useCases.map(([title, text]) => (
-            <article key={title}>
-              <h3>{title}</h3>
-              <p>{text}</p>
-            </article>
-          ))}
-        </div>
       </section>
 
       {/* 3 — возможности показаны, а не перечислены */}
@@ -147,7 +135,7 @@ export function YleumLanding() {
         </div>
         <Capabilities />
         <div className="yl-wrap yl-head yl-head--center yl-head--sub">
-          <h3 className="yl-subhead">Сервисы, которые уже подключаются</h3>
+          <h3 className="yl-subhead">Подключите приём оплаты</h3>
         </div>
         <Integrations />
         <div className="yl-wrap yl-platform">
@@ -167,7 +155,7 @@ export function YleumLanding() {
       {/* 4 — редактор: правка показана на самом приложении */}
       <section id="process" className="yl-section" data-marketing-section="editor">
         <div className="yl-wrap yl-head yl-head--center">
-          <h2>Меняется как разговор.<br /><em className="yl-grad-text">Не как настройки.</em></h2>
+          <h2>Меняйте приложение<br /><em className="yl-grad-text">обычными словами</em></h2>
         </div>
         <div className="yl-wrap yl-diff">
           <figure>
@@ -176,7 +164,7 @@ export function YleumLanding() {
           </figure>
           <div className="yl-diff-ask">
             <p className="ys-stage-label">Вы пишете</p>
-            <p className="yl-diff-text">Добавь поиск по меню и сделай кнопку заказа заметнее.</p>
+            <p className="yl-diff-text">Добавь поиск по меню и сделай кнопку заказа заметнее</p>
             <ArrowRight size={20} />
           </div>
           <figure>
@@ -184,10 +172,13 @@ export function YleumLanding() {
             <AppScreen kind="cafe-after" />
           </figure>
         </div>
+        <div className="yl-wrap yl-head yl-head--steps">
+          <h3 className="yl-subhead">Как создать и опубликовать приложение</h3>
+        </div>
         <div className="yl-wrap yl-steps">
           {[
             ["Опишите бизнес", "Обычными словами: что продаёте, какие услуги, цены и адреса"],
-            ["Yleum соберёт приложение", "Каталог, запись и оплата — без настроек и полей"],
+            ["Yleum соберёт приложение", "Экраны и функции на основе вашего описания"],
             ["Проверьте и поправьте", "Правки тоже пишете словами, а не ищете в настройках"],
             ["Опубликуйте в боте MAX", "Клиентам не нужно ничего устанавливать"],
           ].map(([title, text], i) => (
@@ -204,7 +195,7 @@ export function YleumLanding() {
       <section className="yl-section yl-section--tint" data-marketing-section="after">
         <div className="yl-wrap yl-after">
           <div className="yl-after-copy">
-            <h2>Запуск —<br />не финиш.</h2>
+            <h2>Развивайте приложение<br />после запуска</h2>
             <ul>
               {afterLaunch.map(([title, text]) => (
                 <li key={title}><strong>{title}</strong><span>{text}</span></li>
@@ -218,59 +209,14 @@ export function YleumLanding() {
         </div>
       </section>
 
-      {/* 6 — честные факты вместо отзыва */}
-      <section className="yl-section" data-marketing-section="proof">
-        <div className="yl-wrap yl-head yl-head--center">
-          <h2>Не обещания.<br />Устройство платформы.</h2>
-          <p className="yl-lead">Чужих историй успеха пока не показываем — вот то, что проверяется в свой первый день.</p>
-        </div>
-        <div className="yl-wrap yl-facts">
-          {facts.map(([title, text]) => (
-            <div className="yl-fact" key={title}><strong>{title}</strong><span>{text}</span></div>
-          ))}
-        </div>
-      </section>
-
       {/* 7 — тарифы */}
-      <section id="pricing" className="yl-section yl-section--tint" data-marketing-section="pricing">
-        <div className="yl-wrap yl-head yl-head--center">
-          <h2>Подписка,<br /><em className="yl-grad-text">а не смета.</em></h2>
-          <p className="yl-lead">
-            Никакой оценки работ и счёта за разработку: цена не зависит от числа
-            экранов и не растёт от того, что вы передумали на третий день.
-          </p>
-        </div>
-        <div className="yl-wrap yl-plans">
-          <div className="yl-plan">
-            <div className="yl-plan-top"><span>Free</span><span>Без карты</span></div>
-            <p className="yl-price">0 ₽<span>за тариф</span></p>
-            <ul>
-              <li><Check />Личное рабочее пространство</li>
-              <li><Check />Пошаговое описание проекта</li>
-              <li><Check />Редактор в рамках лимитов</li>
-            </ul>
-            <Signup placement="free">Зарегистрироваться</Signup>
-            <p className="yl-note">Генерация расходует баланс. Публикация зависит от тарифа.</p>
-          </div>
-          <div className="yl-plan">
-            <div className="yl-plan-top"><span>Платные тарифы</span><span>Когда пойдут клиенты</span></div>
-            <p className="yl-price">По тарифу<span>условия в кабинете</span></p>
-            <ul>
-              <li><Check />Больше генераций и публикаций</li>
-              <li><Check />Раздел интеграций</li>
-              <li><Check />Обновление после запуска</li>
-            </ul>
-            <Link href="/pricing" className="yl-cta yl-cta--lg yl-cta--outline">Посмотреть тарифы<ArrowRight size={18} /></Link>
-            <p className="yl-note">Состав и сумма — из действующей конфигурации в кабинете до оплаты.</p>
-          </div>
-        </div>
-      </section>
+      <LandingPricing plans={plans} />
 
       {/* 8 — вопросы */}
       <section id="faq" className="yl-section yl-section--white" data-marketing-section="faq">
         <div className="yl-wrap yl-faq-layout">
           <div>
-            <h2>Хорошие вопросы.<br />Прямые ответы.</h2>
+            <h2>Часто задаваемые вопросы</h2>
             <Link href="/max/guide" className="yl-quiet" data-marketing="guide_click" data-placement="faq">
               Открыть руководство <ArrowRight size={17} />
             </Link>
@@ -291,7 +237,7 @@ export function YleumLanding() {
         <div className="yl-wrap">
           <h2>Ваша идея —<br />следующая.</h2>
           <Signup placement="final" tone="light">Создать приложение</Signup>
-          <small>Регистрация на Free · Без привязки карты</small>
+          <small>Регистрация на бесплатном тарифе</small>
         </div>
       </section>
 
@@ -300,7 +246,7 @@ export function YleumLanding() {
           <div className="yl-footer-grid">
             <div className="yl-footer-brand">
               <Brand />
-              <p>Приложения для бизнеса внутри MAX. Произносится «Илиум».</p>
+              <p>Приложения для бизнеса внутри MAX.</p>
             </div>
             <div>
               <h3>Продукт</h3>

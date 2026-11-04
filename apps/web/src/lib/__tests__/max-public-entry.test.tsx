@@ -1,10 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import HomePage from "@/app/page";
 import MaxProductPage from "@/app/max/product/page";
 
-function render(page: ReturnType<typeof HomePage>) {
+vi.mock("@/lib/public-billing-plans", () => ({ getPublicBillingPlans: vi.fn(async () => null) }));
+
+function render(page: Awaited<ReturnType<typeof HomePage>>) {
   return renderToStaticMarkup(page);
 }
 
@@ -12,8 +14,8 @@ describe("public MAX entry", () => {
   it.each([
     ["/", HomePage],
     ["/max/product", MaxProductPage],
-  ])("keeps %s focused on the authenticated MAX journey", (_route, Page) => {
-    const html = render(Page());
+  ])("keeps %s focused on the authenticated MAX journey", async (_route, Page) => {
+    const html = render(await Page());
 
     expect(html).toContain("data-max-studio");
     expect(html).toContain("Пример интерфейса");

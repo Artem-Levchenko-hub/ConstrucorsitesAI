@@ -1,17 +1,10 @@
 /**
- * Возможности платформы, показанные работающими фрагментами интерфейса.
- *
- * Список с галочками сообщает, что возможность заявлена. Маленький кусочек
- * настоящего экрана сообщает, что она существует: видно цену и остаток, видно
- * свободное время, видно способ оплаты, видно ответ на просьбу «добавь позицию».
- * Разница между «у нас есть онлайн-запись» и картинкой календаря со свободными
- * окнами — это разница между обещанием и доказательством.
- *
- * Фрагменты намеренно маленькие и неинтерактивные: их работа — узнаваемость за
- * полсекунды, а не второй продукт внутри витрины. Всё нарисовано разметкой,
- * поэтому остаётся чётким на любом экране и не тянет ни байта со стороны.
+ * Неинтерактивные примеры возможностей: каталог, запись, оплата и управление.
+ * Подключение магазина ЮKassa показано отдельно от примера клиентской оплаты.
  */
-import { Check, CreditCard, RefreshCw } from "lucide-react";
+import { CreditCard, EyeOff } from "lucide-react";
+
+import "./payment-connection.css";
 
 function Card({
   title,
@@ -37,7 +30,7 @@ export function Capabilities() {
       <Card title="Каталог и заказы" note="Позиции, цены и остаток — клиент выбирает и оплачивает не выходя из MAX.">
         {[
           ["Капучино", "в наличии", "240 ₽"],
-          ["Круассан", "в наличии", "190 ₽"],
+          ["Круассан с миндалём", "в наличии", "190 ₽"],
           ["Чизкейк", "осталось 3", "290 ₽"],
         ].map(([title, stock, price]) => (
           <div className="yl-cap-row" key={title}>
@@ -73,14 +66,14 @@ export function Capabilities() {
         </div>
       </Card>
 
-      <Card title="Оплата внутри MAX" note="Приём платежей подключается через ЮKassa — на ваш договор и ваш счёт.">
+      <Card title="Оплата внутри MAX" note="Клиент оплачивает заказ через ЮKassa. Для приёма оплаты нужно подключить магазин.">
         <div className="yl-cap-total">
           <span>К оплате</span>
           <strong>2 490 ₽</strong>
         </div>
         <div className="yl-cap-pay">
           <span className="is-on">
-            <CreditCard size={13} />
+            <CreditCard size={13} aria-hidden="true" />
             Карта
           </span>
           <span>СБП</span>
@@ -97,7 +90,7 @@ export function Capabilities() {
         </div>
       </Card>
 
-      <Card title="Бонусы и лояльность" note="Возвращают того клиента, который уже купил однажды.">
+      <Card title="Бонусы и лояльность" note="Бонусы и скидки помогают клиентам возвращаться за следующей покупкой.">
         <div className="yl-cap-loyal">
           <span>Бонусная карта</span>
           <strong>4 из 6</strong>
@@ -110,26 +103,21 @@ export function Capabilities() {
         <p className="yl-cap-hint">Шестой кофе в подарок</p>
       </Card>
 
-      <Card title="Заявки уходят в вашу систему" note="Заказ появляется там, где вы уже работаете, а остаток не расходится.">
-        <div className="yl-cap-event">
-          <span className="yl-cap-dot" />
-          <div>
-            <strong>Сделка создана</strong>
-            <small>amoCRM · воронка «Заказы»</small>
+      <Card title="Управление каталогом" note="Меняйте цены и наличие, скрывайте товары в панели управления.">
+        <div className="yp-catalog-preview">
+          <div className="yp-catalog-caption"><span>Каталог</span><span>Пример</span></div>
+          <div className="yp-catalog-row">
+            <div><strong>Капучино</strong><small>В наличии</small></div>
+            <span>240 ₽</span>
           </div>
-          <b>1 500 ₽</b>
-        </div>
-        <div className="yl-cap-event">
-          <span className="yl-cap-dot yl-cap-dot--sync">
-            <RefreshCw size={9} />
-          </span>
-          <div>
-            <strong>Остаток обновлён</strong>
-            <small>МойСклад</small>
+          <div className="yp-catalog-row">
+            <div><strong>Круассан с миндалём</strong><small>Нет в наличии</small></div>
+            <span>190 ₽</span>
           </div>
-          <b className="yl-cap-ok">
-            <Check size={12} />
-          </b>
+          <div className="yp-catalog-hidden">
+            <EyeOff size={12} aria-hidden="true" />
+            <span>Чизкейк скрыт с витрины</span>
+          </div>
         </div>
       </Card>
     </div>
@@ -137,63 +125,50 @@ export function Capabilities() {
 }
 
 /**
- * Настоящие интеграции платформы. Список взят из каталога провайдеров в коде,
- * а не придуман для красоты: называть чужой сервис, которого нет, — это обещание,
- * за которое потом отвечать перед человеком, уже заплатившим за подписку.
- *
- * Знаки лежат у нас в `public/integrations/`, а не грузятся с чужих сайтов:
- * страница не должна зависеть от того, работает ли сейчас сайт партнёра, и не
- * должна сообщать ему, кто открыл нашу витрину. Откуда взят каждый файл и на
- * каком основании — в `public/integrations/README.md`; менять знак нужно там,
- * здесь ссылка идёт на имя файла.
- *
- * Последнее поле — квадратный ли знак. Логотип-надпись («ЮKassa», «Битрикс24»)
- * и квадратная иконка («МойСклад», YCLIENTS) при одной высоте выглядят по-разному:
- * квадрат кажется вдвое мельче надписи. Поэтому квадратным даётся высота побольше.
+ * На витрине предлагаем только подключение ЮKassa. Локальный знак и его
+ * происхождение — в public/integrations/README.md; внешних загрузок здесь нет.
  */
 export const INTEGRATIONS = [
   ["ЮKassa", "Приём оплаты", "yookassa", false],
-  ["amoCRM", "Заявки и сделки", "amocrm", false],
-  ["Битрикс24", "Заявки и сделки", "bitrix24", false],
-  ["МойСклад", "Товары и остатки", "moysklad", true],
-  ["1С", "Товары, цены, документы", "1c", false],
-  ["iiko", "Меню и заказы", "iiko", false],
-  ["r_keeper", "Меню, стоп-лист, заказы", "rkeeper", false],
-  ["YCLIENTS", "Услуги и расписание", "yclients", true],
-  ["СДЭК", "Доставка и статусы", "cdek", false],
-  ["Яндекс Метрика", "Статистика посещений", "metrica", true],
 ] as const satisfies readonly (readonly [string, string, string, boolean])[];
 
 export function Integrations() {
+  const [name, , file] = INTEGRATIONS[0];
+
   return (
-    <div className="yl-wrap yl-integrations">
-      {INTEGRATIONS.map(([name, note, file, square]) => (
-        <div className="yl-integration" key={name}>
-          {/* Знак декоративный: название сервиса стоит текстом строкой ниже,
-              и озвучивать его дважды для экранного диктора не нужно. */}
-          <span className="yl-integration-logobox" aria-hidden="true">
-            {/* Обычный img, а не next/image: это SVG размером в пару килобайт,
-                оптимизатор картинок с ним ничего не делает и только добавляет
-                прослойку. Размер знака задан стилями, так что вёрстка не прыгает. */}
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              className={`yl-integration-logo${square ? " yl-integration-logo--square" : ""}`}
-              src={`/integrations/${file}.svg`}
-              alt=""
-              loading="lazy"
-              decoding="async"
-            />
-          </span>
-          <div>
-            <strong>{name}</strong>
-            <span>{note}</span>
-          </div>
+    <div className="yl-wrap">
+      <article className="yp-payment" aria-label={`Подключение магазина ${name}`}>
+        <div className="yp-payment-intro">
+          {/* Локальный декоративный знак: название сервиса есть в тексте. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img className="yp-payment-logo" src={`/integrations/${file}.svg`} alt="" width={164} height={40} loading="lazy" decoding="async" />
+          <p className="yp-payment-lead">Подключите свой магазин ЮKassa, чтобы клиенты могли оплачивать заказы.</p>
+          <p className="yp-payment-note">Создание приложения само по себе не включает приём оплаты.</p>
         </div>
-      ))}
-      <p className="yl-note yl-integrations-note">
-        Подключение сервиса зависит от вашего тарифа и от вашего договора с этим
-        сервисом. Генерация приложения сама по себе не включает приём платежей.
-      </p>
+        <ol className="yp-payment-steps" aria-label="Как подключить приём оплаты" role="list">
+          <li>
+            <span className="yp-payment-number" aria-hidden="true">01</span>
+            <div>
+              <strong>Выберите свой магазин в ЮKassa</strong>
+              <p>Можно использовать действующий магазин или зарегистрировать новый.</p>
+            </div>
+          </li>
+          <li>
+            <span className="yp-payment-number" aria-hidden="true">02</span>
+            <div>
+              <strong>Разрешите подключение в редакторе проекта</strong>
+              <p>Нажмите «Подключить ЮKassa» и подтвердите доступ к магазину.</p>
+            </div>
+          </li>
+          <li>
+            <span className="yp-payment-number" aria-hidden="true">03</span>
+            <div>
+              <strong>Проверьте оплату перед запуском</strong>
+              <p>Убедитесь, что клиент может перейти от заказа к оплате.</p>
+            </div>
+          </li>
+        </ol>
+      </article>
     </div>
   );
 }

@@ -19,6 +19,7 @@
  */
 import {
   Check,
+  ArrowRight,
   ChevronLeft,
   Clock,
   MapPin,
@@ -144,60 +145,47 @@ export function Strip({ title, note, value }: { title: string; note: string; val
 const CAFE_MENU = [
   ["Капучино", "250 мл", "240 ₽", "cappuccino"],
   ["Флэт уайт", "200 мл", "260 ₽", "flatwhite"],
-  ["Круассан", "с миндалём", "190 ₽", "croissant"],
-  ["Чизкейк", "кусок", "290 ₽", "cheesecake"],
+  ["Круассан с миндалём", "1 штука", "190 ₽", "croissant"],
+  ["Чизкейк", "1 порция", "290 ₽", "cheesecake"],
 ] as const;
 
-/** Каталог с ценами — самый частый первый сценарий. */
-export function CafeScreen() {
+/** Общее меню сохраняет одинаковые товары, название и время в обоих превью. */
+function CafePreview({ enhanced = false }: { enhanced?: boolean }) {
   return (
     <ScreenChrome
       name={CAFE_DEMO.name}
       section="Кофейня"
       bar={
-        <>
-          <span>Корзина · 2</span>
-          <b>Оплатить 430 ₽</b>
-        </>
+        enhanced ? (
+          <div className="ys-checkout">
+            <div><small>Корзина · 2</small><strong>К оплате 430 ₽</strong></div>
+            <span>Оформить заказ<ArrowRight size={18} aria-hidden="true" /></span>
+          </div>
+        ) : (
+          <><span>Корзина · 2</span><b>К оплате 430 ₽</b></>
+        )
       }
     >
       <Promo kicker="Заберите без очереди" title={`Будет готово к ${CAFE_DEMO.readyAt}`} pill={CAFE_DEMO.wait} tone="cafe" />
+      {enhanced && <div className="ys-search"><Search size={12} />Поиск по меню</div>}
       <Chips items={["Кофе", "Выпечка", "Десерты", "Чай"]} />
       <Tiles items={CAFE_MENU} />
       <p className="ys-kicker">Часто берут вместе</p>
-      <PickRow art="croissant" title="Круассан с миндалём" note="Из печи в 7:30" price="190 ₽" />
-      <PickRow art="cheesecake" title="Чизкейк нью-йорк" note="Кусок 120 г" price="290 ₽" />
+      <PickRow art="croissant" title="Круассан с миндалём" note="Испекли в 7:30" price="190 ₽" />
+      <PickRow art="cheesecake" title="Чизкейк нью-йорк" note="1 порция · 120 г" price="290 ₽" />
       <Strip title="Бонусная карта" note="Шестой кофе в подарок" value="4 из 6" />
     </ScreenChrome>
   );
 }
 
+/** Каталог с ценами — самый частый первый сценарий. */
+export function CafeScreen() {
+  return <CafePreview />;
+}
+
 /** Тот же экран после одной просьбы в чате: поиск по меню и заметная кнопка заказа. */
 export function CafeAfterScreen() {
-  return (
-    <ScreenChrome
-      name={CAFE_DEMO.name}
-      section="Кофейня"
-      bar={
-        <>
-          <span>Корзина · 2</span>
-          <b className="is-on">Оплатить 430 ₽</b>
-        </>
-      }
-    >
-      <Promo kicker="Заберите без очереди" title={`Будет готово к ${CAFE_DEMO.readyAt}`} pill={CAFE_DEMO.wait} tone="cafe" />
-      <div className="ys-search">
-        <Search size={12} />
-        Поиск по меню
-      </div>
-      <Chips items={["Кофе", "Выпечка", "Десерты", "Чай"]} />
-      <Tiles items={CAFE_MENU} />
-      <p className="ys-kicker">Часто берут вместе</p>
-      <PickRow art="croissant" title="Круассан с миндалём" note="Из печи в 7:30" price="190 ₽" />
-      <PickRow art="cheesecake" title="Чизкейк нью-йорк" note="Кусок 120 г" price="290 ₽" />
-      <Strip title="Бонусная карта" note="Шестой кофе в подарок" value="4 из 6" />
-    </ScreenChrome>
-  );
+  return <CafePreview enhanced />;
 }
 
 /** Запись на услугу: мастер, день, время, подтверждение. */
@@ -338,7 +326,7 @@ export function StatusScreen() {
       <p className="ys-kicker">В заказе</p>
       {[
         ["Капучино", "240 ₽"],
-        ["Круассан", "190 ₽"],
+        ["Круассан с миндалём", "190 ₽"],
       ].map(([title, price]) => (
         <div className="ys-row" key={title}>
           <div>
@@ -407,11 +395,11 @@ export function LoyaltyScreen() {
  * Для экранного диктора рамка невидима — она декорация вокруг уже описанного
  * содержимого.
  */
-export function PhoneFrame({ children }: { children: React.ReactNode }) {
+export function PhoneFrame({ children, time = "9:41" }: { children: React.ReactNode; time?: string }) {
   return (
     <div className="ys-phone-frame">
       <div className="ys-phone-status" aria-hidden="true">
-        <span className="ys-phone-time">9:41</span>
+        <span className="ys-phone-time">{time}</span>
         <span className="ys-phone-island" />
         <span className="ys-phone-meters">
           <i className="ys-phone-signal" />
@@ -439,7 +427,7 @@ export function AppScreen({ kind, framed = true }: { kind: ScreenKind; framed?: 
   // Рамка по умолчанию: все превью на витрине — это мини-приложения в телефоне.
   // Отключается там, где телефон уже нарисован снаружи.
   return framed ? (
-    <PhoneFrame>
+    <PhoneFrame time={kind === "status" ? "10:28" : undefined}>
       <Screen />
     </PhoneFrame>
   ) : (
@@ -452,15 +440,16 @@ export function ScreenCollage({
   screens,
   caption,
 }: {
-  screens: ScreenKind[];
+  screens: { kind: ScreenKind; description: string }[];
   caption?: string;
 }) {
   return (
-    <figure className="ys-collage" aria-hidden="true">
+    <figure className="ys-collage" tabIndex={0} aria-label="Примеры функций приложения">
       <div className="ys-collage-track">
-        {screens.map((kind, i) => (
-          <div className={`ys-collage-item ys-collage-item--${i % 5}`} key={`${kind}-${i}`}>
-            <AppScreen kind={kind} />
+        {screens.map(({ kind, description }, i) => (
+          <div className="ys-collage-item" key={`${kind}-${i}`}>
+            <p className="ys-collage-description">{description}</p>
+            <div aria-hidden="true"><AppScreen kind={kind} /></div>
           </div>
         ))}
       </div>

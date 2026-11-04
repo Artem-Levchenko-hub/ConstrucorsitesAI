@@ -310,6 +310,12 @@ button.ys-action { cursor: pointer; }
 }
 .ys-bar b.is-on { background: var(--color-brand-blue, #0062ee); }
 .ys-bar > b:only-child { flex: 1; text-align: center; }
+.ys-checkout { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; padding: 14px; border-radius: 12px; background: var(--color-brand-blue, #0062ee); color: #fff; box-shadow: 0 5px 14px rgb(0 98 238 / 0.18); }
+.ys-checkout > div { display: grid; gap: 4px; }
+.ys-checkout small { font-size: 9px; color: #e5efff; }
+.ys-checkout strong { font-size: 14px; color: #fff; }
+.ys-checkout > span { display: flex; align-items: center; gap: 7px; font-size: 10px; font-weight: 600; color: #fff; }
+.ys-checkout svg { flex: none; }
 /* Кнопка в нижней полосе — та же плашка, но нажимаемая: на первом экране
    витрины этот элемент настоящий, посетитель им пользуется. */
 .ys-bar-button {
@@ -418,6 +424,7 @@ button.ys-action { cursor: pointer; }
 
 /* ── коллаж во всю ширину ────────────────────────────────────────────────── */
 .ys-collage { width: 100%; overflow: hidden; }
+.ys-collage:focus-visible { outline: 2px solid var(--color-brand-blue, #0062ee); outline-offset: -3px; }
 .ys-collage-track {
   display: flex;
   gap: 18px;
@@ -430,12 +437,8 @@ button.ys-action { cursor: pointer; }
   min-width: max-content;
   margin-inline: auto;
 }
-.ys-collage-item { width: 208px; flex-shrink: 0; }
-.ys-collage-item--0 { transform: translateY(26px) rotate(-2deg); }
-.ys-collage-item--1 { transform: translateY(-10px) rotate(1.4deg); }
-.ys-collage-item--2 { transform: translateY(32px) rotate(2.2deg); }
-.ys-collage-item--3 { transform: translateY(-4px) rotate(-1.6deg); }
-.ys-collage-item--4 { transform: translateY(20px) rotate(1deg); }
+.ys-collage-item { display: grid; grid-template-rows: minmax(64px, auto) auto; align-content: start; gap: 16px; width: 208px; flex-shrink: 0; }
+.ys-collage-description { margin: 0; font-size: 13px; line-height: 1.6; color: #55555f; text-align: center; text-wrap: balance; }
 .ys-collage figcaption { margin-top: 30px; font-size: 12px; color: #8a8a93; text-align: center; }
 
 /* Телефон в ленте уже настоящего, но экран внутри должен остаться ТЕМ ЖЕ.
@@ -467,7 +470,6 @@ button.ys-action { cursor: pointer; }
 
 @media (prefers-reduced-motion: reduce) {
   .ys-caret { animation: none; }
-  .ys-collage-item { transform: none; }
 }
 
 /* ── рамка телефона ──────────────────────────────────────────────────────────

@@ -38,9 +38,13 @@ describe("Yleum landing conversion", () => {
   });
   it("shows the staff view of the same order and preserves the client cart", async () => {
     const example = host.querySelector('[data-testid="landing-example"]')!;
-    const button = (name: string) => Array.from(example.querySelectorAll("button")).find(el => el.textContent === name || el.getAttribute("aria-label") === name);
+    const button = (name: string) => {
+      const control = Array.from(example.querySelectorAll("button")).find(el => el.textContent === name || el.getAttribute("aria-label") === name);
+      expect(control, `Missing control: ${name}`).toBeDefined();
+      return control!;
+    };
     await act(async () => button("Добавить Капучино")?.click());
-    await act(async () => button("Добавить Круассан")?.click());
+    await act(async () => button("Добавить Круассан с миндалём").click());
     const staff = button("Персонал");
     expect(staff).toBeDefined();
     await act(async () => staff?.click());
@@ -107,7 +111,7 @@ describe("Yleum landing conversion", () => {
     expect(example.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Приложение моей пекарни");
   });
   it("describes generation and edits without promising customer version restoration", () => {
-    expect(host.textContent).toContain("Правки словами");
+    expect(host.querySelector("#process")?.textContent).toContain("обычными словами");
     expect(host.textContent).not.toContain("Откат за секунды");
     expect(host.textContent).not.toContain("Вернитесь к предыдущей версии");
     expect(host.textContent).not.toContain("История версий");
