@@ -711,26 +711,54 @@ class _CatalogScenario:
         self.logged_in = True
         self._healthy_browser()
 
-    def _dismiss_learning(self, page: Page, *, required: bool = False) -> None:
-        # The normal first-visit tour can open after hydration. Dismiss through
-        # its public control, never by changing persisted state or auth guards.
+    def _dismiss_learning(self, page: Page) -> None:
+        # Optional editor/panel tours do not gate creation. Dismiss only through
+        # the public control, never by changing persisted state or auth guards.
         close = page.get_by_role("button", name="Закрыть обучение", exact=True)
-        if required:
-            expect(close).to_be_visible(timeout=self._timeout(15))
-            close.click(timeout=self._timeout(10))
-            self.evidence.checks.append("first_visit_learning")
-            return
         page.wait_for_timeout(min(800, self._timeout(1)))
         if close.is_visible():
             close.click(timeout=self._timeout(10))
 
+    def _complete_first_visit_learning(self, page: Page) -> bool:
+        close = page.get_by_role("button", name="Закрыть обучение", exact=True)
+        if not close.is_visible():
+            # Existing owners may legitimately have no mandatory tour.
+            return False
+        dialog = page.get_by_role("dialog").filter(has=close)
+        start = dialog.get_by_role("button", name="Начать обучение", exact=True)
+        if start.is_visible():
+            start.click(timeout=self._timeout(10))
+        # The cabinet currently has four steps. Bound UI progress so a broken
+        # tour cannot loop forever or fall through to a paid creation attempt.
+        for _ in range(8):
+            finish = dialog.get_by_role("button", name="Завершить", exact=True)
+            if finish.is_visible():
+                finish.click(timeout=self._timeout(10))
+                expect(close).not_to_be_visible(timeout=self._timeout(10))
+                self.evidence.checks.append("first_visit_learning")
+                return True
+            next_step = dialog.get_by_role("button", name="Далее", exact=True)
+            expect(next_step).to_be_visible(timeout=self._timeout(10))
+            next_step.click(timeout=self._timeout(10))
+        raise ValueError("first-visit learning exceeded its bounded step limit")
+
     def _wizard(self, page: Page) -> None:
         self.phase = "creation_unconfirmed"
         page.goto("/max", wait_until="domcontentloaded", timeout=self._timeout(30))
-        expect(page.get_by_role("button", name="Создать приложение", exact=True)).to_be_visible()
-        self._dismiss_learning(page, required=True)
-        page.get_by_role("button", name="Создать приложение", exact=True).click()
+        expect(page.locator('[data-max-studio][data-learning-ready="true"]')).to_be_visible(
+            timeout=self._timeout(15)
+        )
+        create = page.get_by_role("button", name="Создать приложение", exact=True)
+        expect(create).to_be_visible()
+        # Allow the automatic first-visit entry, then handle a dismissed/resumed
+        # mandatory tour which opens only when Create is pressed.
+        page.wait_for_timeout(min(800, self._timeout(1)))
+        self._complete_first_visit_learning(page)
+        create.click(timeout=self._timeout(10))
         dialog = page.get_by_role("dialog")
+        expect(dialog).to_be_visible(timeout=self._timeout(10))
+        if self._complete_first_visit_learning(page):
+            create.click(timeout=self._timeout(10))
         dialog.locator("#max-project-name").fill(self.scope.name)
         dialog.locator("#max-project-idea").fill(_BRIEF)
         dialog.get_by_role("button", name="Каталог", exact=False).click()

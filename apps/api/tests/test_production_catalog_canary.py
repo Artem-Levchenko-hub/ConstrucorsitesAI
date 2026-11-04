@@ -767,10 +767,59 @@ def offline_browser():
             browser.close()
 
 
+def gated_studio_document(fields="", *, learning="welcome"):
+    """Closing is not completion: Create reopens the real first-visit UI gate."""
+    return """<meta charset="utf-8"><div id="workspace" data-max-studio>
+    <button id="open">Создать приложение</button>
+    <div role="dialog" id="wizard" hidden><input id="max-project-name">
+    <textarea id="max-project-idea"></textarea><button>Каталог</button>
+    <button onclick="window.steps=(window.steps||0)+1">Далее</button>FIELDS
+    <button id="create">Создать проект</button></div></div>
+    <div role="dialog" id="learning" hidden></div><script>
+    const mode=MODE, workspace=document.querySelector('#workspace');
+    const learning=document.querySelector('#learning'), wizard=document.querySelector('#wizard');
+    const exempt=mode.startsWith('exempt'); let ready=mode!=='exempt_loading';
+    workspace.dataset.learningReady=String(ready);
+    if(!ready)setTimeout(()=>{ready=true; workspace.dataset.learningReady='true';},1200);
+    window.learningCompleted=exempt; window.learningTrace=[];
+    let step=mode==='resumed'?1:0, started=mode==='resumed';
+    function renderLearning(){
+      learning.hidden=false; workspace.inert=true;
+      learning.innerHTML='<button aria-label="Закрыть обучение" id="close">'
+        +'Закрыть обучение</button>';
+      document.querySelector('#close').onclick=()=>{
+        window.learningTrace.push('close'); learning.hidden=true; workspace.inert=false;
+      };
+      const action=document.createElement('button'); learning.append(action);
+      if(!started){
+        action.textContent='Начать обучение'; action.onclick=()=>{
+          window.learningTrace.push('start'); started=true; renderLearning();
+        };
+      }else if(step<3 || mode==='endless'){
+        action.textContent='Далее'; action.onclick=()=>{
+          window.learningTrace.push('next'); step++; renderLearning();
+        };
+      }else{
+        action.textContent='Завершить'; action.onclick=()=>{
+          window.learningTrace.push('finish'); window.learningCompleted=true;
+          learning.hidden=true; workspace.inert=false;
+        };
+      }
+    }
+    document.querySelector('#open').onclick=()=>{
+      if(!ready)return;
+      if(!window.learningCompleted)renderLearning(); else wizard.hidden=false;
+    };
+    if(!exempt && mode!=='gate')renderLearning();
+    </script>""".replace("FIELDS", fields).replace("MODE", json.dumps(learning))
+
+
+@pytest.mark.parametrize("learning", ["welcome", "resumed", "exempt", "gate", "exempt_loading"])
 @pytest.mark.parametrize("wrong_price", [False, True])
 def test_real_browser_wizard_reviews_extracted_dom_before_creating(
     offline_browser,
     wrong_price,
+    learning,
 ):
     """A wrong reviewed price must stop BEFORE a project or paid prompt is sent."""
     source = module()
@@ -794,15 +843,8 @@ def test_real_browser_wizard_reviews_extracted_dom_before_creating(
         f'<label>Цена позиции {index}<input value="{row["price"]}"></label>'
         for index, row in enumerate(display, 1)
     )
-    document = """<meta charset="utf-8"><div role="dialog" id="tour">
-    <button aria-label="Закрыть обучение" onclick="document.querySelector('#tour').remove()">
-    Закрыть обучение</button></div><button
-    onclick="document.querySelector('[role=dialog]').hidden=false">Создать приложение</button>
-    <div role="dialog" hidden><input id="max-project-name">
-    <textarea id="max-project-idea"></textarea>
-    <button>Каталог</button><button onclick="window.steps=(window.steps||0)+1">Далее</button>"""
-    document += fields
-    document += """<button id="create">Создать проект</button></div><script>
+    document = gated_studio_document(fields, learning=learning)
+    document += """<script>
     document.querySelector('#create').onclick=async()=>{
       const headers={'Content-Type':'application/json'};
       const response=await fetch('/api/projects',{method:'POST',headers,
@@ -851,6 +893,7 @@ def test_real_browser_wizard_reviews_extracted_dom_before_creating(
 
     context.route("**/*", provider)
     page = context.new_page()
+    page.set_default_timeout(1000)
     scenario._attach_page(page)
     try:
         if wrong_price:
@@ -864,6 +907,17 @@ def test_real_browser_wizard_reviews_extracted_dom_before_creating(
                 "https://yleum.ru/api/projects",
                 f"https://yleum.ru/api/projects/{project}/prompt",
             ]
+        exempt = learning.startswith("exempt")
+        if exempt:
+            expected = []
+        elif learning == "resumed":
+            expected = ["next", "next", "finish"]
+        else:
+            expected = ["start", "next", "next", "next", "finish"]
+        assert page.evaluate("window.learningTrace") == expected
+        assert ("first_visit_learning" in scenario.evidence.checks) == (not exempt)
+        assert page.evaluate("[localStorage.length,sessionStorage.length]") == [0, 0]
+        assert context.cookies() == []
     finally:
         context.close()
 
@@ -960,7 +1014,28 @@ def test_real_browser_catalog_prices_belong_to_their_own_cards(offline_browser, 
         page.close()
 
 
-def test_fresh_studio_requires_first_visit_learning_before_wizard(offline_browser):
+def test_first_visit_learning_fails_closed_when_next_never_finishes(offline_browser):
+    source = module()
+    scenario = object.__new__(source._CatalogScenario)
+    scenario.api = SimpleNamespace(_deadline=time.monotonic() + 10)
+    scenario.evidence = source.CatalogEvidence()
+    page = offline_browser.new_page()
+    page.set_content(gated_studio_document(learning="endless"))
+    try:
+        with pytest.raises(ValueError, match="bounded step limit"):
+            scenario._complete_first_visit_learning(page)
+        assert page.evaluate("window.learningTrace") == ["start", *(["next"] * 8)]
+        assert not page.evaluate("window.learningCompleted")
+        assert not page.locator("#wizard").is_visible()
+        assert scenario.evidence.checks == []
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize("visible", [False, True])
+def test_optional_panel_learning_can_still_be_dismissed_without_first_visit_evidence(
+    offline_browser, visible,
+):
     source = module()
     scenario = object.__new__(source._CatalogScenario)
     scenario.api = SimpleNamespace(_deadline=time.monotonic() + 10)
@@ -969,10 +1044,11 @@ def test_fresh_studio_requires_first_visit_learning_before_wizard(offline_browse
     page.set_content(
         '<div role="dialog"><button aria-label="Закрыть обучение" '
         'onclick="this.parentElement.remove()">Закрыть обучение</button></div>'
+        if visible else "<main>Панель без обучения</main>"
     )
     try:
-        scenario._dismiss_learning(page, required=True)
-        assert "first_visit_learning" in scenario.evidence.checks
+        scenario._dismiss_learning(page)
+        assert scenario.evidence.checks == []
         assert page.get_by_role("dialog").count() == 0
     finally:
         page.close()
