@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { Fragment, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
@@ -13,6 +13,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
+import { RequiredCheckboxMessage, useRequiredCheckboxValidation } from "@/components/forms/required-checkbox-validation";
 import {
   acceptMaxDocuments,
   getMaxAccess,
@@ -34,6 +35,7 @@ export function MaxOnboarding({ email, next = "/max" }: { email: string; next?: 
     queryFn: getMaxAccess,
     refetchInterval: 15_000,
   });
+  const validation = useRequiredCheckboxValidation(access.data?.legal_document_version);
 
   useEffect(() => {
     if (access.data?.can_create_project) {
@@ -148,12 +150,10 @@ export function MaxOnboarding({ email, next = "/max" }: { email: string; next?: 
                 ["privacy_accepted", "/legal/privacy", "Ознакомлен с политикой конфиденциальности"],
                 ["personal_data_accepted", "/legal/personal-data", "Даю согласие на обработку персональных данных"],
               ].map(([name, href, label]) => (
-                <label key={name} className="flex cursor-pointer items-start gap-3">
-                  <input name={name} type="checkbox" required className="mt-1 size-4 accent-[#0062ee]" />
-                  <Link href={href} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
-                    {label}
-                  </Link>
-                </label>
+                <Fragment key={name}><label className="flex cursor-pointer items-start gap-3">
+                  <input name={name} type="checkbox" required {...validation.propsFor(name)} className="mt-1 size-4 accent-[#0062ee]" />
+                  <Link href={href} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">{label}</Link>
+                </label><RequiredCheckboxMessage error={validation.errorFor(name)} /></Fragment>
               ))}
               {acceptDocuments.error && (
                 <p role="alert" className="text-warning">{errorMessage(acceptDocuments.error)}</p>

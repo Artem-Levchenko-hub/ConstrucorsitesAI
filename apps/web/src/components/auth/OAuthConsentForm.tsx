@@ -8,6 +8,7 @@ import { ArrowRight } from "lucide-react";
 
 import { oauthCompleteAction } from "@/app/(auth)/actions";
 import { Button } from "@/components/ui/button";
+import { RequiredCheckboxMessage, useRequiredCheckboxValidation } from "@/components/forms/required-checkbox-validation";
 
 /**
  * Экран подтверждения документов для нового аккаунта, который входит через
@@ -29,6 +30,7 @@ export function OAuthConsentForm({
   next: string;
   documentVersion: string;
 }) {
+  const validation = useRequiredCheckboxValidation(documentVersion);
   const [state, action, pending] = useActionState(recoverableAction, {
     error: null,
   });
@@ -55,6 +57,7 @@ export function OAuthConsentForm({
             name="terms_accepted"
             type="checkbox"
             required
+            {...validation.propsFor("terms_accepted")}
             className="mt-1 size-4 accent-[#0062ee]"
           />
           <span className="text-fg-secondary">
@@ -64,11 +67,13 @@ export function OAuthConsentForm({
             </Link>
           </span>
         </label>
+        <RequiredCheckboxMessage error={validation.errorFor("terms_accepted")} />
         <label className="flex cursor-pointer items-start gap-3">
           <input
             name="privacy_accepted"
             type="checkbox"
             required
+            {...validation.propsFor("privacy_accepted")}
             className="mt-1 size-4 accent-[#0062ee]"
           />
           <span className="text-fg-secondary">
@@ -78,11 +83,13 @@ export function OAuthConsentForm({
             </Link>
           </span>
         </label>
+        <RequiredCheckboxMessage error={validation.errorFor("privacy_accepted")} />
         <label className="flex cursor-pointer items-start gap-3">
           <input
             name="personal_data_accepted"
             type="checkbox"
             required
+            {...validation.propsFor("personal_data_accepted")}
             className="mt-1 size-4 accent-[#0062ee]"
           />
           <span className="text-fg-secondary">
@@ -95,6 +102,7 @@ export function OAuthConsentForm({
             </Link>
           </span>
         </label>
+        <RequiredCheckboxMessage error={validation.errorFor("personal_data_accepted")} />
         <label className="flex cursor-pointer items-start gap-3">
           <input
             name="marketing_accepted"

@@ -205,6 +205,18 @@ it("collects current legal acceptances before exposing the phone SMS request", a
   expect(container.querySelector("#phone-verification-code")).toBeNull();
   const boxes = Array.from(container.querySelectorAll<HTMLInputElement>("input[type=checkbox]"));
   expect(boxes).toHaveLength(3);
+  await act(async () => container.querySelector<HTMLFormElement>("form")!.requestSubmit());
+  expect(accepted).toBe(false);
+  for (const box of boxes) {
+    expect(box.validationMessage).toContain("галочку");
+    expect(document.getElementById(box.getAttribute("aria-describedby")!)?.textContent).toContain("галочку");
+  }
+  await act(async () => boxes[0].click());
+  expect(boxes[0].validationMessage).toBe("");
+  expect(boxes[1].validationMessage).toContain("галочку");
+  await act(async () => boxes[0].click());
+  await act(async () => container.querySelector<HTMLFormElement>("form")!.requestSubmit());
+  expect(boxes[0].validationMessage).toContain("галочку");
   for (const box of boxes) await act(async () => box.click());
   await submit("form");
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });

@@ -31,13 +31,12 @@ export default async function MaxRegisterPage({ searchParams }: { searchParams?:
 
       <div className="max-auth-layout">
         <section className="max-auth-card">
-          <h1>Начать на Free</h1>
-          {/* Оставлена одна фраза с фактом: бесплатна регистрация, а не генерация.
-              Остальное человек и так понимает или прочтёт на витрине. */}
-          <p>Без карты. Генерация расходует баланс, публикация зависит от тарифа.</p>
-          <MaxRegisterForm next={next} existingSession={Boolean(session && !session.isAnon)}>
-            <div className="mt-6"><OAuthButtons providers={providers} next={next} /></div>
-          </MaxRegisterForm>
+          <h1>Регистрация</h1>
+          <div className="mt-6">
+            <MaxRegisterForm next={next} existingSession={Boolean(session && !session.isAnon)}>
+              <div className="mt-6"><OAuthButtons providers={providers} next={next} /></div>
+            </MaxRegisterForm>
+          </div>
         </section>
       </div>
     </main>

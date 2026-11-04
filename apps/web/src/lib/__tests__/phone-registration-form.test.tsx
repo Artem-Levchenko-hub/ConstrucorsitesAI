@@ -43,7 +43,84 @@ it("preserves credentials, phone and chosen legal consents when signup is reject
 
 it("keeps the cookie-updated registration page available to its client action state", async () => {
   const page = await MaxRegisterPage({});
-  expect(renderToStaticMarkup(page)).toContain("Открываем аккаунт");
+  const html = renderToStaticMarkup(page);
+  expect(html).toContain("Открываем аккаунт");
+  const document = new DOMParser().parseFromString(html, "text/html");
+  expect([...document.querySelectorAll("h1")].map(heading => heading.textContent)).toEqual(["Регистрация"]);
+  expect(document.querySelector(".max-auth-card > p:not([role])")).toBeNull();
+});
+
+async function registration(run: (container: HTMLDivElement) => Promise<void>) {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<MaxRegisterForm />));
+    for (const [name, value] of Object.entries({ email: "example@example.test", phone: "+79990000000", password: "fixture123", confirm: "fixture123" })) await act(async () => {
+      const input = container.querySelector<HTMLInputElement>(`input[name=${name}]`)!;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await run(container);
+  } finally { await act(async () => root.unmount()); container.remove(); }
+}
+
+it("toggles each password independently without submitting, replacing inputs or changing their form values", async () => {
+  await registration(async container => {
+    const password = container.querySelector<HTMLInputElement>('input[name="password"]')!;
+    const confirm = container.querySelector<HTMLInputElement>('input[name="confirm"]')!;
+    const toggle = async (label: string) => {
+      const button = container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+      expect(button, label).not.toBeNull();
+      expect(button!.type).toBe("button");
+      await act(async () => button!.click());
+      return button!;
+    };
+    password.focus();
+    expect(password.type).toBe("password"); expect(confirm.type).toBe("password");
+    const first = await toggle("Показать пароль");
+    expect(password.type).toBe("text"); expect(confirm.type).toBe("password");
+    expect(document.activeElement).toBe(password);
+    expect(first.getAttribute("aria-pressed")).toBe("true");
+    await toggle("Показать повтор пароля");
+    expect(confirm.type).toBe("text");
+    first.focus();
+    await toggle("Скрыть пароль");
+    expect(password.type).toBe("password"); expect(confirm.type).toBe("text");
+    expect(document.activeElement).toBe(first);
+    expect(container.querySelector('input[name="password"]')).toBe(password);
+    expect(container.querySelector('input[name="confirm"]')).toBe(confirm);
+    for (const input of [password, confirm]) {
+      expect(input.required).toBe(true); expect(input.minLength).toBe(8); expect(input.autocomplete).toBe("new-password");
+    }
+    const data = new FormData(container.querySelector("form")!);
+    expect(data.get("password")).toBe("fixture123"); expect(data.get("confirm")).toBe("fixture123");
+    expect(mocks.action).not.toHaveBeenCalled();
+  });
+});
+
+it.each(["terms_accepted", "privacy_accepted", "personal_data_accepted"])("localizes required %s and clears validation on check without making marketing required", async missing => {
+  await registration(async container => {
+    const form = container.querySelector("form")!;
+    const box = container.querySelector<HTMLInputElement>(`input[name="${missing}"]`)!;
+    for (const other of container.querySelectorAll<HTMLInputElement>('input[type="checkbox"][required]')) if (other !== box) await act(async () => other.click());
+    await act(async () => form.requestSubmit());
+    expect(mocks.action).not.toHaveBeenCalled();
+    expect(box.validationMessage).toContain("галочку"); expect(box.validationMessage).not.toContain("флажок");
+    expect(document.getElementById(box.getAttribute("aria-describedby")!)?.textContent).toContain("галочку");
+    expect(box.labels?.[0].textContent).not.toContain("галочку");
+    expect(box.getAttribute("aria-invalid")).toBe("true");
+    await act(async () => box.click());
+    expect(box.validationMessage).toBe(""); expect(box.getAttribute("aria-invalid")).toBeNull();
+    await act(async () => box.click());
+    await act(async () => form.requestSubmit());
+    expect(box.validationMessage).toContain("галочку"); expect(mocks.action).not.toHaveBeenCalled();
+    await act(async () => box.click());
+    await act(async () => form.requestSubmit());
+    expect(mocks.action).toHaveBeenCalledTimes(1);
+    const data = mocks.action.mock.calls[0][1] as FormData;
+    for (const name of ["terms_accepted", "privacy_accepted", "personal_data_accepted"]) expect(data.get(name)).toBe("on");
+    expect(data.has("marketing_accepted")).toBe(false);
+  });
 });
 
 it("routes a previously signed-in account through its existing onboarding flow", async () => {

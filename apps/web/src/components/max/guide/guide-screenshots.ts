@@ -466,7 +466,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
     "src": "/guide/2026-10-30-redacted/max-address.png",
     "width": 710,
     "height": 180,
-    "alt": "Фрагмент реального мастера: флажок сохранения адреса и кнопка подтверждения",
+    "alt": "Фрагмент реального мастера: галочка сохранения адреса и кнопка подтверждения",
     "title": "Yleum · Подтверждение сохранения в MAX",
     "sourceLabel": "Yleum",
     "sourceUrl": "https://yleum.ru/max",
@@ -477,7 +477,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
         "y": 49,
         "targetX": 2,
         "targetY": 16,
-        "text": "Отметьте флажок только после того, как действительно сохранили адрес в кабинете MAX."
+        "text": "Поставьте галочку только после того, как действительно сохранили адрес в кабинете MAX."
       },
       {
         "x": 62,

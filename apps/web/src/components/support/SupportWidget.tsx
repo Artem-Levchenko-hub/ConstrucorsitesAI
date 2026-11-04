@@ -10,6 +10,7 @@ import { SupportThread } from "./SupportThread";
 import { SupportAssistant } from "./SupportAssistant";
 import { useSupportAssistant } from "@/hooks/useSupportAssistant";
 import { YleumMark } from "@/components/brand/YleumMark";
+import { RequiredCheckboxMessage, useRequiredCheckboxValidation } from "@/components/forms/required-checkbox-validation";
 import { supportHours, supportPromise, takeSupportRecovery } from "@/lib/api/support";
 import "@/components/max/max-studio.css";
 import "./support.css";
@@ -128,6 +129,7 @@ function SupportSession({ context, available, open, checking, newCount, recovery
   const [message, setMessage] = useState(draft?.message ?? "");
   const [email, setEmail] = useState(draft?.email ?? "");
   const [consent, setConsent] = useState(draft?.privacy_accepted ?? false);
+  const validation = useRequiredCheckboxValidation();
   const [website, setWebsite] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -189,7 +191,7 @@ function SupportSession({ context, available, open, checking, newCount, recovery
             <form hidden={view !== "contact"} className="support-form" onSubmit={event => { event.preventDefault(); void submit(); }}>
               <label>Тема<input aria-label="Тема обращения" maxLength={160} required value={subject} disabled={pending} onChange={event => setSubject(event.target.value)} placeholder="Коротко о вашем вопросе" /></label>
               <label>Сообщение<textarea aria-label="Сообщение" maxLength={8000} required rows={4} value={message} disabled={pending} onChange={event => setMessage(event.target.value)} placeholder="Что вы делали и какая помощь нужна?" /></label>
-              {!context.user_id && <><label>Email для ответа<input aria-label="Ваш email" type="email" autoComplete="email" maxLength={254} required value={email} disabled={pending} onChange={event => setEmail(event.target.value)} placeholder="you@example.com" /></label><label className="support-consent"><input type="checkbox" required checked={consent} disabled={pending} onChange={event => setConsent(event.target.checked)} /><span>Согласен на обработку данных обращения для ответа службы поддержки. <a href="/legal/privacy" target="_blank" rel="noreferrer">Политика конфиденциальности</a></span></label><p className="support-meta">История доступна в этом браузере и по личной ссылке из письма с подтверждением. Сохраните письмо и не передавайте ссылку другим людям.</p></>}
+              {!context.user_id && <><label>Email для ответа<input aria-label="Ваш email" type="email" autoComplete="email" maxLength={254} required value={email} disabled={pending} onChange={event => setEmail(event.target.value)} placeholder="you@example.com" /></label><label className="support-consent"><input type="checkbox" required checked={consent} disabled={pending} {...validation.propsFor("privacy_accepted", event => setConsent(event.target.checked))} /><span>Согласен на обработку данных обращения для ответа службы поддержки. <a href="/legal/privacy" target="_blank" rel="noreferrer">Политика конфиденциальности</a></span></label><RequiredCheckboxMessage error={validation.errorFor("privacy_accepted")} /><p className="support-meta">История доступна в этом браузере и по личной ссылке из письма с подтверждением. Сохраните письмо и не передавайте ссылку другим людям.</p></>}
               <label className="support-trap" aria-hidden="true">Сайт<input name="website" tabIndex={-1} autoComplete="off" value={website} onChange={event => setWebsite(event.target.value)} /></label>
               {error && <p role="alert" className="support-error">{error}</p>}
               <button className="support-primary" type="submit" disabled={pending}>{pending ? "Отправляем…" : "Отправить обращение"}</button>

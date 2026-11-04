@@ -177,6 +177,22 @@ async function click(label: string) { if (label.startsWith(ticket.reference) && 
 async function fill(label: string, value: string) { await wait(() => expect(document.querySelector(`[aria-label="${label}"]`)).not.toBeNull()); const el = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[aria-label="${label}"]`)!; expect(el).toBeTruthy(); await act(async () => { Object.getOwnPropertyDescriptor(el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, "value")!.set!.call(el, value); el.dispatchEvent(new Event("input", { bubbles: true })); }); }
 async function open() { await mount(); await click("Открыть поддержку"); await click("Написать оператору"); await wait(() => expect(document.querySelector('[aria-label="Тема обращения"]')).not.toBeNull()); }
 async function submit() { await act(async () => document.querySelector<HTMLFormElement>(".support-form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))); }
+it("uses a localized native required consent error for guests and clears it before an unchanged support request", async () => {
+  await open(); await fill("Тема обращения", ticket.subject); await fill("Сообщение", "Помогите"); await fill("Ваш email", "guest@example.test");
+  const form = document.querySelector<HTMLFormElement>(".support-form")!;
+  const box = form.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  await act(async () => form.requestSubmit());
+  expect(posts).toHaveLength(0); expect(box.validationMessage).toContain("галочку");
+  expect(document.getElementById(box.getAttribute("aria-describedby")!)?.textContent).toContain("галочку");
+  await act(async () => box.click()); expect(box.validationMessage).toBe("");
+  await act(async () => box.click());
+  await act(async () => form.requestSubmit());
+  expect(posts).toHaveLength(0); expect(box.validationMessage).toContain("галочку");
+  await act(async () => box.click());
+  await act(async () => form.requestSubmit());
+  await wait(() => expect(posts).toHaveLength(1));
+  expect(posts[0]).toMatchObject({ subject: ticket.subject, message: "Помогите", email: "guest@example.test", privacy_accepted: true });
+});
 it("keeps a failed guest draft and retries the same capability/request without acknowledging early", async () => {
   await open(); await fill("Тема обращения", ticket.subject); await fill("Сообщение", "Помогите"); await fill("Ваш email", "guest@example.test");
   await act(async () => document.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
