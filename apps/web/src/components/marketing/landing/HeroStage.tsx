@@ -1,12 +1,14 @@
 "use client";
 
-import { ArrowUp, Check, ChevronLeft, Clock, Minus, MoreHorizontal, Plus, Search, Users } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { ArrowUp, Check, ChevronLeft, ChevronRight, Clock, Minus, MoreHorizontal, Plus, Search, Users } from "lucide-react";
+import { useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
 
 import { LANDING_PROMPT_MAX_LENGTH, startWithPrompt } from "@/lib/landing-prompt";
 
 import { Chips, PhoneFrame, Promo, Strip } from "./AppScreens";
 import { ProductArt, type ArtKind } from "./ProductArt";
+import { HeroStaffScreen } from "./HeroStaffScreen";
+import { CAFE_DEMO, ROLE_COPY, type DemoRole, type DemoScenario as Scenario } from "./demo-content";
 
 /**
  * Первый экран витрины: запрос владельца печатается сам, а рядом появляется
@@ -19,13 +21,11 @@ import { ProductArt, type ArtKind } from "./ProductArt";
  * в эффекте.
  */
 
-type Scenario = "cafe" | "salon" | "club" | "shop";
-
 /* `event` — историческая метка сценария в статистике переходов. Ключи сценариев
    поменялись, а метки оставлены прежними, иначе прошлые данные воронки перестанут
    сходиться с новыми. */
 const scenarios: Record<Scenario, { tab: string; event: string; prompt: string; brand: string; section: string }> = {
-  cafe: { tab: "Кофейня", event: "coffee", brand: "Смена", section: "Кофейня",
+  cafe: { tab: "Кофейня", event: "coffee", brand: CAFE_DEMO.name, section: "Меню и заказ",
     prompt: "Сделай приложение кофейни: меню, заказ к выдаче и бонусы для гостей." },
   salon: { tab: "Услуги", event: "services", brand: "Форма", section: "Студия красоты",
     prompt: "Хочу приложение студии: услуги, мастера и запись на свободное время." },
@@ -57,7 +57,7 @@ const slots = ["10:00", "12:30", "14:00", "16:30"];
    клиент открыл приложение именно сейчас», а он у кофейни и у магазина разный. */
 const catalogueTop: Record<"cafe" | "shop", { promo: [string, string, string]; chips: string[] }> = {
   cafe: {
-    promo: ["Заберите без очереди", "Будет готово к 8:40", "15 мин"],
+    promo: ["Заберите без очереди", `Будет готово к ${CAFE_DEMO.readyAt}`, CAFE_DEMO.wait],
     chips: ["Кофе", "Выпечка", "Десерты", "Чай"],
   },
   shop: {
@@ -84,14 +84,16 @@ function useReducedMotion() {
   return useSyncExternalStore(store.subscribe, store.get, () => false);
 }
 
-function ScenarioStage({ scenario, onTouch, tabs }: { scenario: Scenario; onTouch: () => void; tabs: React.ReactNode }) {
+function ScenarioStage({ scenario }: { scenario: Scenario }) {
   const current = scenarios[scenario];
+  const slideId = useId();
+  const [role, setRole] = useState<DemoRole>("client");
   const [cart, setCart] = useState<Record<string, number>>({});
   const [slot, setSlot] = useState("12:30");
   const [joined, setJoined] = useState(false);
+  const participants = 14 + Number(joined);
 
   const add = (id: string, delta: number) => {
-    onTouch();
     setCart(prev => {
       const count = Math.max(0, (prev[id] ?? 0) + delta);
       const next = { ...prev };
@@ -107,31 +109,33 @@ function ScenarioStage({ scenario, onTouch, tabs }: { scenario: Scenario; onTouc
     return sum + (item ? item.price * n : 0);
   }, 0);
   const items = Object.values(cart).reduce((a, b) => a + b, 0);
+  const orderLines = catalogue.filter(item => cart[item.id]).map(item => ({ title: item.title, price: item.price, quantity: cart[item.id] }));
+  const demoLines = [catalogue[0], catalogue[scenario === "cafe" ? 2 : 1]].map(item => ({ title: item.title, price: item.price, quantity: 1 }));
+  const copy = ROLE_COPY[scenario][role];
+  const toggleRole = () => setRole(prev => prev === "client" ? "staff" : "client");
 
   return (
-    <>
-      {tabs}
-
-      {/* Телефон показывает сторону КЛИЕНТА, а плашки рядом — сторону владельца:
-          заказ пришёл и оплачен, приложение опубликовано. Два взгляда на один
-          продукт сразу, без единого слова объяснений. */}
-      <div className="ys-owner-note ys-owner-note--order" aria-hidden="true">
-        <span className="ys-owner-dot" />
-        <div>
-          <strong>Новый заказ · 410 ₽</strong>
-          <small>Оплачен через ЮKassa</small>
-        </div>
+    <section className="ys-role-carousel" aria-label="Приложение глазами клиента и персонала" aria-roledescription="карусель">
+      <div className="ys-role-switch" role="group" aria-label="Кому показан экран">
+        <button type="button" aria-pressed={role === "client"} aria-controls={slideId} onClick={() => setRole("client")}>Клиент</button>
+        <button type="button" aria-pressed={role === "staff"} aria-controls={slideId} onClick={() => setRole("staff")}>Персонал</button>
       </div>
-      <div className="ys-owner-note ys-owner-note--live" aria-hidden="true">
-        <span className="ys-owner-dot ys-owner-dot--live" />
-        <div>
-          <strong>Приложение опубликовано</strong>
-          <small>В чат-боте вашей организации</small>
+      <div className="ys-role-layout">
+        <div className="ys-role-copy">
+          <div aria-live="polite" aria-atomic="true">
+            <span className="ys-role-kicker">{role === "client" ? "Клиент · в MAX" : "Персонал · своя панель"}</span>
+            <h3>{copy.title}</h3>
+            <p>{copy.text}</p>
+          </div>
+          <div className="ys-role-navigation">
+            <button type="button" aria-label="Предыдущий экран" aria-controls={slideId} onClick={toggleRole}><ChevronLeft size={18} /></button>
+            <span>{role === "client" ? "01" : "02"}<i aria-hidden="true"> / </i>02</span>
+            <button type="button" aria-label="Следующий экран" aria-controls={slideId} onClick={toggleRole}><ChevronRight size={18} /></button>
+          </div>
         </div>
-      </div>
-
-      <div className="ys-phone" aria-live="polite">
+      <div className="ys-phone" id={slideId} role="group" aria-roledescription="слайд" aria-label={role === "client" ? "1 из 2. Экран клиента" : "2 из 2. Экран персонала"}>
         <PhoneFrame>
+        {role === "staff" ? <HeroStaffScreen scenario={scenario} brand={current.brand} lines={orderLines.length ? orderLines : demoLines} slot={slot} joined={joined} participants={participants} /> : (
         <div className="ys-screen">
           <div className="ys-screen-top">
             <ChevronLeft size={15} />
@@ -202,7 +206,7 @@ function ScenarioStage({ scenario, onTouch, tabs }: { scenario: Scenario; onTouc
                       type="button"
                       className={slot === time ? "is-on" : undefined}
                       aria-pressed={slot === time}
-                      onClick={() => { onTouch(); setSlot(time); }}
+                      onClick={() => setSlot(time)}
                     >
                       {time}
                     </button>
@@ -231,7 +235,7 @@ function ScenarioStage({ scenario, onTouch, tabs }: { scenario: Scenario; onTouc
                   <span />
                   <span />
                   <span />
-                  <small>идут 14 человек</small>
+                  <small>идут {participants} человек</small>
                 </div>
                 <p className="ys-kicker">Что будет на встрече</p>
                 <ul className="ys-list">
@@ -263,16 +267,18 @@ function ScenarioStage({ scenario, onTouch, tabs }: { scenario: Scenario; onTouc
               <button
                 type="button"
                 className={`ys-bar-button${joined ? " is-done" : " is-on"}`}
-                onClick={() => { onTouch(); setJoined(v => !v); }}
+                onClick={() => setJoined(v => !v)}
               >
                 {joined ? "Вы записаны" : "Участвовать"}
               </button>
             )}
           </div>
         </div>
+        )}
         </PhoneFrame>
       </div>
-    </>
+      </div>
+    </section>
   );
 }
 
@@ -367,49 +373,30 @@ function PromptComposer({ demo }: { demo: string }) {
 
 export function HeroStage() {
   const [scenario, setScenario] = useState<Scenario>("cafe");
-  const reduced = useReducedMotion();
-  const touched = useRef(false);
-  const onTouch = useCallback(() => { touched.current = true; }, []);
-
-  // Автоперебор сценариев, пока посетитель ни на что не нажал.
-  useEffect(() => {
-    if (reduced) return;
-    const id = window.setInterval(() => {
-      if (touched.current || document.hidden) return;
-      setScenario(prev => order[(order.indexOf(prev) + 1) % order.length]);
-    }, 9000);
-    return () => window.clearInterval(id);
-  }, [reduced]);
 
   return (
     <div className="ys-stage" data-testid="landing-example">
       <PromptComposer demo={scenarios[scenario].prompt} />
-      <ScenarioStage
-        key={scenario}
-        scenario={scenario}
-        onTouch={onTouch}
-        tabs={
-          <div className="ys-tabs" role="group" aria-label="Пример приложения">
-            {order.map((key, i) => (
-              <div key={key}>
-                {i > 0 && <span className="ys-tabs-dot" aria-hidden="true" />}
-                <button
-                  type="button"
-                  aria-pressed={scenario === key}
-                  data-marketing="scenario_select"
-                  data-placement={scenarios[key].event}
-                  onClick={() => { onTouch(); setScenario(key); }}
-                >
-                  {scenarios[key].tab}
-                </button>
-              </div>
-            ))}
+      <div className="ys-tabs" role="group" aria-label="Пример приложения">
+        {order.map((key, i) => (
+          <div key={key}>
+            {i > 0 && <span className="ys-tabs-dot" aria-hidden="true" />}
+            <button
+              type="button"
+              aria-pressed={scenario === key}
+              data-marketing="scenario_select"
+              data-placement={scenarios[key].event}
+              onClick={() => setScenario(key)}
+            >
+              {scenarios[key].tab}
+            </button>
           </div>
-        }
-      />
+        ))}
+      </div>
+      <ScenarioStage key={scenario} scenario={scenario} />
 
       <p className="ys-stage-caption">
-        Пример интерфейса — работающий, его можно нажать. Содержание и функции вы задаёте для своего бизнеса.
+        Пример интерфейса с демонстрационными данными. Товары, запись и участие можно попробовать; реальные заказы и платежи не создаются.
       </p>
     </div>
   );

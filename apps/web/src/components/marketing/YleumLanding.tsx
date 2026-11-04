@@ -102,11 +102,11 @@ export function YleumLanding() {
       <section id="main-content" className="yl-hero" data-marketing-section="hero">
         <div className="yl-wrap yl-hero-copy">
           <h1>Опишите словами.<br /><em className="yl-grad-text">Получите приложение.</em></h1>
-          <p className="yl-lead">Внутри MAX, где ваши клиенты уже есть.</p>
+          <p className="yl-lead">Приложение для вашего бизнеса в MAX.<br />Клиенты открывают его в мессенджере — без отдельной установки.</p>
           {/* Ниши строкой: человек ищет не «платформу для бизнеса», а себя —
               кофейню, студию, магазин. Ссылки ведут к примерам экранов. */}
           <div className="yl-niches">
-            {["Кофейни", "Кафе и рестораны", "Салоны красоты", "Барбершопы", "Магазины", "Студии и школы", "Клубы"].map((niche) => (
+            {["Кофейня", "Кафе", "Ресторан", "Салон красоты", "Барбершоп", "Магазин", "Студия", "Школа", "Клуб"].map((niche) => (
               <a className="yl-niche" href="#examples" key={niche} data-marketing="niche_click" data-placement={niche}>
                 {niche}
               </a>
@@ -143,7 +143,7 @@ export function YleumLanding() {
       <section id="stack" className="yl-section yl-section--tint" data-marketing-section="stack">
         <div className="yl-wrap yl-head yl-head--center">
           <h2>Всё, чем бизнес зарабатывает,<br /><em className="yl-grad-text">— внутри MAX.</em></h2>
-          <p className="yl-lead">Не список возможностей, а куски настоящих экранов: так видно, что они существуют.</p>
+          <p className="yl-lead">Каталог, запись, оплата и бонусы — на примерах экранов приложения.</p>
         </div>
         <Capabilities />
         <div className="yl-wrap yl-head yl-head--center yl-head--sub">

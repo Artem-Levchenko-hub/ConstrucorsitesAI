@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 
 import { ProductArt, type ArtKind } from "./ProductArt";
+import { CAFE_DEMO } from "./demo-content";
 
 export type ScreenKind =
   | "cafe"
@@ -151,16 +152,16 @@ const CAFE_MENU = [
 export function CafeScreen() {
   return (
     <ScreenChrome
-      name="Смена"
+      name={CAFE_DEMO.name}
       section="Кофейня"
       bar={
         <>
           <span>Корзина · 2</span>
-          <b>Оплатить 410 ₽</b>
+          <b>Оплатить 430 ₽</b>
         </>
       }
     >
-      <Promo kicker="Заберите без очереди" title="Будет готово к 8:40" pill="15 мин" tone="cafe" />
+      <Promo kicker="Заберите без очереди" title={`Будет готово к ${CAFE_DEMO.readyAt}`} pill={CAFE_DEMO.wait} tone="cafe" />
       <Chips items={["Кофе", "Выпечка", "Десерты", "Чай"]} />
       <Tiles items={CAFE_MENU} />
       <p className="ys-kicker">Часто берут вместе</p>
@@ -175,16 +176,16 @@ export function CafeScreen() {
 export function CafeAfterScreen() {
   return (
     <ScreenChrome
-      name="Смена"
+      name={CAFE_DEMO.name}
       section="Кофейня"
       bar={
         <>
           <span>Корзина · 2</span>
-          <b className="is-on">Оплатить 410 ₽</b>
+          <b className="is-on">Оплатить 430 ₽</b>
         </>
       }
     >
-      <Promo kicker="Заберите без очереди" title="Будет готово к 8:40" pill="15 мин" tone="cafe" />
+      <Promo kicker="Заберите без очереди" title={`Будет готово к ${CAFE_DEMO.readyAt}`} pill={CAFE_DEMO.wait} tone="cafe" />
       <div className="ys-search">
         <Search size={12} />
         Поиск по меню
@@ -320,7 +321,7 @@ export function ShopScreen() {
 /** Статус заказа — то, ради чего клиент возвращается в приложение. */
 export function StatusScreen() {
   return (
-    <ScreenChrome name="Смена" section="Ваш заказ" bar={<b>Показать код · 1482</b>}>
+    <ScreenChrome name={CAFE_DEMO.name} section="Ваш заказ" bar={<b>Показать код · 1482</b>}>
       <Promo kicker="Заказ №1482" title="Можно забирать в 10:30" pill="2 мин" tone="status" />
       <div className="ys-steps">
         {[
@@ -361,7 +362,7 @@ export function StatusScreen() {
 /** Карта постоянного гостя. */
 export function LoyaltyScreen() {
   return (
-    <ScreenChrome name="Смена" section="Ваши бонусы" bar={<b>Потратить бонусы</b>}>
+    <ScreenChrome name={CAFE_DEMO.name} section="Ваши бонусы" bar={<b>Потратить бонусы</b>}>
       <div className="ys-hero-card ys-hero-card--loyalty">
         <span>Накоплено</span>
         <strong>640</strong>

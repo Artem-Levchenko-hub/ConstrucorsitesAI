@@ -36,6 +36,76 @@ describe("Yleum landing conversion", () => {
     expect(host.querySelector('[data-testid="landing-example"]')?.textContent).toContain("Записаться на");
     expect(events).toContainEqual({ event: "max_scenario_select", page: "landing", placement: "services" });
   });
+  it("shows the staff view of the same order and preserves the client cart", async () => {
+    const example = host.querySelector('[data-testid="landing-example"]')!;
+    const button = (name: string) => Array.from(example.querySelectorAll("button")).find(el => el.textContent === name || el.getAttribute("aria-label") === name);
+    await act(async () => button("Добавить Капучино")?.click());
+    await act(async () => button("Добавить Круассан")?.click());
+    const staff = button("Персонал");
+    expect(staff).toBeDefined();
+    await act(async () => staff?.click());
+    const slide = example.querySelector('[aria-roledescription="слайд"]');
+    expect(slide?.getAttribute("aria-label")).toContain("2 из 2");
+    expect(slide?.textContent).toContain("430");
+    expect(slide?.textContent).toContain("Капучино");
+    expect(slide?.textContent).toContain("Круассан");
+    expect(example.querySelector('[aria-label="Добавить Капучино"]')).toBeNull();
+    await act(async () => button("Следующий экран")?.click());
+    expect(button("Клиент")?.getAttribute("aria-pressed")).toBe("true");
+    expect(example.textContent).toContain("Корзина · 2");
+    expect(example.textContent).toContain("Оформить · 430");
+  });
+  it("uses the selected appointment time in the staff view", async () => {
+    const example = host.querySelector('[data-testid="landing-example"]')!;
+    const click = async (name: string) => {
+      const button = Array.from(example.querySelectorAll("button")).find(el => el.textContent === name);
+      expect(button).toBeDefined();
+      await act(async () => button?.click());
+    };
+    await click("Услуги");
+    await click("16:30");
+    await click("Персонал");
+    expect(example.querySelector('[aria-roledescription="слайд"]')?.textContent).toContain("16:30");
+    expect(example.textContent).not.toContain("Капучино");
+    await click("Клиент");
+    expect(example.textContent).toContain("Записаться на 16:30");
+  });
+  it("keeps the same participant count after joining and switching roles", async () => {
+    const example = host.querySelector('[data-testid="landing-example"]')!;
+    const click = async (name: string) => {
+      const button = Array.from(example.querySelectorAll("button")).find(el => el.textContent === name);
+      expect(button).toBeDefined();
+      await act(async () => button?.click());
+    };
+    await click("Клуб");
+    await click("Участвовать");
+    await click("Персонал");
+    expect(example.querySelector('[aria-roledescription="слайд"]')?.textContent).toContain("15 чел.");
+    await click("Клиент");
+    expect(example.textContent).toContain("идут 15 человек");
+    expect(example.textContent).toContain("Вы записаны");
+  });
+  it("shows plant orders in the shop staff view and preserves an authored prompt", async () => {
+    const example = host.querySelector('[data-testid="landing-example"]')!;
+    const input = example.querySelector<HTMLTextAreaElement>("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "Приложение моей пекарни");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const click = async (name: string) => {
+      const button = Array.from(example.querySelectorAll("button")).find(el => el.textContent === name || el.getAttribute("aria-label") === name);
+      expect(button).toBeDefined();
+      await act(async () => button?.click());
+    };
+    await click("Магазин");
+    await click("Добавить Фикус");
+    await click("Персонал");
+    const slide = example.querySelector('[aria-roledescription="слайд"]');
+    expect(slide?.textContent).toContain("Фикус");
+    expect(slide?.textContent).toContain("980");
+    expect(slide?.textContent).not.toContain("Капучино");
+    expect(example.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Приложение моей пекарни");
+  });
   it("describes generation and edits without promising customer version restoration", () => {
     expect(host.textContent).toContain("Правки словами");
     expect(host.textContent).not.toContain("Откат за секунды");

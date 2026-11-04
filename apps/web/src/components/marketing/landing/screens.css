@@ -394,10 +394,12 @@ button.ys-action { cursor: pointer; }
   color: #fff;
 }
 
-.ys-tabs { display: flex; align-items: center; gap: 12px; }
-.ys-tabs > div { display: flex; align-items: center; gap: 12px; }
+.ys-tabs { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; }
+.ys-tabs > div { display: flex; align-items: center; gap: 8px; }
 .ys-tabs-dot { width: 5px; height: 5px; border-radius: 50%; background: #c6c2bc; }
 .ys-tabs button {
+  min-height: 44px;
+  padding: 4px;
   font-family: var(--font-onest), var(--font-inter), sans-serif;
   font-size: clamp(15px, 1.5vw, 19px);
   font-weight: 600;
@@ -554,32 +556,42 @@ button.ys-action { cursor: pointer; }
   transform: translateX(-50%);
 }
 
-/* ── плашки владельца вокруг телефона ────────────────────────────────────────
-   Телефон показывает, что видит клиент. Эти две плашки показывают, что в это же
-   время видит владелец: заказ пришёл и оплачен, приложение опубликовано. Для
-   экранного диктора они скрыты — это иллюстрация, а не содержание страницы. */
-.ys-owner-note {
-  position: absolute;
-  z-index: 2;
-  display: none;
-  align-items: center;
-  gap: 9px;
-  padding: 9px 13px 9px 11px;
-  border-radius: 13px;
-  border: 1px solid #ebe8e3;
-  background: #fff;
-  box-shadow: 0 16px 36px rgb(20 20 26 / 0.10);
-  text-align: left;
-  white-space: nowrap;
+/* Два подписанных вида одного приложения. Переключение только ручное: человек
+   может спокойно сравнить экраны, не теряя корзину или выбранное время. */
+.ys-role-carousel { display: grid; justify-items: center; gap: 28px; width: 100%; }
+.ys-role-switch { display: flex; width: min(100%, 320px); padding: 4px; border: 1px solid #e6e2dd; border-radius: 999px; background: #efede9; }
+.ys-role-switch button { flex: 1; min-height: 44px; padding: 10px 20px; border: 0; border-radius: 999px; background: transparent; color: #62616a; font: inherit; font-size: 14px; cursor: pointer; transition: color 0.2s, background-color 0.2s, box-shadow 0.2s; }
+.ys-role-switch button[aria-pressed="true"] { background: #fff; color: #14141a; box-shadow: 0 2px 7px rgb(20 20 26 / 0.07); }
+.ys-role-layout { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 320px); align-items: center; justify-content: center; gap: 64px; width: 100%; }
+.ys-role-copy { text-align: left; }
+.ys-role-kicker { display: block; margin-bottom: 12px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #68656f; }
+.ys-role-copy h3 { margin: 0; font-size: clamp(23px, 2.2vw, 28px); line-height: 1.2; letter-spacing: -0.035em; text-wrap: balance; }
+.ys-role-copy p { margin: 16px 0 0; font-size: 15px; line-height: 1.65; color: #62616a; }
+.ys-role-navigation { display: flex; align-items: center; gap: 16px; margin-top: 28px; }
+.ys-role-navigation button { display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid #e0dcd6; border-radius: 50%; background: transparent; color: #14141a; cursor: pointer; transition: background-color 0.2s; }
+.ys-role-navigation button:hover { background: #efede9; }
+.ys-role-navigation span { min-width: 51px; font-size: 12px; font-variant-numeric: tabular-nums; color: #62616a; }
+.ys-role-navigation i { font-style: normal; color: #a5a29c; }
+.ys-role-switch button:focus-visible, .ys-role-navigation button:focus-visible, .ys-tabs button:focus-visible { outline: 2px solid var(--color-brand-blue, #0062ee); outline-offset: 4px; }
+.ys-role-carousel .ys-screen { animation: ys-role-enter 0.24s ease-out; }
+.ys-role-carousel .ys-screen-body { overflow-y: auto; scrollbar-width: thin; }
+.ys-role-carousel .ys-stepper { gap: 4px; }
+.ys-role-carousel .ys-stepper button { flex: none; width: 44px; height: 44px; }
+.ys-role-carousel .ys-slots button, .ys-role-carousel .ys-bar-button { min-height: 44px; }
+.ys-staff-card { padding: 12px; border: 1px solid #e9e5df; border-radius: 12px; background: #faf9f7; }
+.ys-staff-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; font-size: 12px; }
+.ys-staff-heading > span { padding: 4px 7px; border-radius: 6px; background: #e8f3eb; color: #21653c; font-size: 10px; }
+.ys-staff-total { border-top: 1px solid #e9e5df; margin-top: 6px; padding-top: 10px; }
+@keyframes ys-role-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 720px) {
+  .ys-role-carousel { gap: 24px; }
+  .ys-role-layout { grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 24px; }
+  .ys-role-copy { width: min(100%, 360px); text-align: center; }
+  .ys-role-copy p { margin-top: 10px; font-size: 14px; }
+  .ys-role-kicker { margin-bottom: 8px; }
+  .ys-role-navigation { justify-content: center; margin-top: 16px; }
 }
-.ys-owner-note strong { display: block; font-size: 12px; }
-.ys-owner-note small { display: block; margin-top: 1px; font-size: 10.5px; color: #8a8a93; }
-.ys-owner-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--color-brand-blue, #0062ee); }
-.ys-owner-dot--live { background: #1d7a45; }
-/* Показываем только там, где рядом с телефоном есть свободное поле: на узком
-   экране плашки накрыли бы сам телефон и мешали бы, а не помогали. */
-@media (min-width: 1060px) {
-  .ys-owner-note { display: flex; }
-  .ys-owner-note--order { left: max(0px, calc(50% - 430px)); top: 46%; }
-  .ys-owner-note--live { right: max(0px, calc(50% - 470px)); top: 30%; }
+@media (prefers-reduced-motion: reduce) {
+  .ys-role-carousel .ys-screen { animation: none; }
+  .ys-role-switch button, .ys-role-navigation button { transition: none; }
 }
