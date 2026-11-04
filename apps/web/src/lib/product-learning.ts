@@ -3,10 +3,10 @@ export type LearningDefinition = { id: string; title: string; steps: readonly Le
 type Rect = { left: number; top: number; width: number; height: number };
 
 const step = (id: string, title: string, body: string, selector = `[data-learning="${id}"]`): LearningStep => ({ id, selector, title, body });
-const cabinet: LearningDefinition = { id: "cabinet", title: "Ваша студия", steps: [
-  step("create-project", "Создайте первое приложение", "Начните с описания своей идеи. Создание откроется только после вашего нажатия: обучение ничего не отправляет."),
+const cabinet: LearningDefinition = { id: "cabinet", title: "Обучение", steps: [
+  step("create-project", "Создайте первое приложение", "Начните с описания своей идеи."),
   step("projects-search", "Найдите своё приложение", "Введите название в поиске, чтобы вернуться к нужному проекту."),
-  step("projects-help", "Помощь всегда рядом", "Здесь находятся быстрый старт и подробная инструкция по запуску."),
+  step("projects-help", "Помощь всегда рядом", "Здесь находятся быстрый старт по созданию приложения и подробная инструкция по его запуску в MAX."),
   step("account-menu", "Ваш аккаунт", "В меню аккаунта доступны профиль, безопасность, баланс, операции и тариф."),
 ] };
 const editor: LearningDefinition = { id: "editor", title: "Редактор приложения", steps: [
@@ -67,7 +67,7 @@ const guideChapters = [
   ["checklists", "Списки для запуска", "Используйте списки для самостоятельной проверки готовности."],
 ] as const;
 const guide: LearningDefinition = { id: "guide", title: "Руководство Yleum", steps: [
-  step("guide-journey", "Ваш путь к запуску", "Выберите раздел в списке ниже: обучение прокрутит руководство и выделит настоящий заголовок. Действия в приложении остаются за вами."),
+  step("guide-journey", "Ваш путь к запуску", "Переходите по шагам кнопками «Далее» и «Назад»: обучение прокрутит руководство и выделит настоящий заголовок. Действия в приложении остаются за вами."),
   ...guideChapters.map(([id, title, body]) => step(id, title, body, `#${id} h2`)),
 ] };
 

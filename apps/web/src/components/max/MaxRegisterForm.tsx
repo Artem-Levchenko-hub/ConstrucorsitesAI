@@ -5,7 +5,7 @@ import { Fragment, startTransition, useActionState, useEffect, useState, type In
 import { useRouter } from "next/navigation";
 import { recoverAuthAction } from "@/lib/auth-action-recovery";
 import { AuthPageRefresh } from "@/components/auth/AuthPageRefresh";
-import { ArrowRight, Building2, Check, Eye, EyeOff, ShieldCheck } from "lucide-react";
+import { ArrowRight, Eye, EyeOff } from "lucide-react";
 import { RequiredCheckboxMessage, useRequiredCheckboxValidation } from "@/components/forms/required-checkbox-validation";
 
 import { maxRegisterAction } from "@/app/(auth)/actions";
@@ -15,6 +15,10 @@ import { Label } from "@/components/ui/label";
 import { RegistrationPhoneConfirmation } from "./PhoneVerification";
 
 const recoverableAction = recoverAuthAction(maxRegisterAction);
+
+function RequiredMark() {
+  return <span aria-hidden="true">*</span>;
+}
 
 function PasswordField({ revealLabel, className, ...props }: Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & { revealLabel: string }) {
   const [visible, setVisible] = useState(false);
@@ -61,9 +65,10 @@ export function MaxRegisterForm({ next = "/max", children, existingSession = fal
       startTransition(() => action(data));
     }} className="space-y-5">
       <input type="hidden" name="next" value={next} />
+      <p className="text-xs text-fg-tertiary">* — обязательные поля</p>
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2 sm:col-span-2">
-          <Label htmlFor="max-email">Рабочий email</Label>
+          <Label htmlFor="max-email">Рабочий email <RequiredMark /></Label>
           <Input
             id="max-email"
             name="email"
@@ -76,13 +81,13 @@ export function MaxRegisterForm({ next = "/max", children, existingSession = fal
           />
         </div>
         <div className="space-y-2 sm:col-span-2">
-          <Label htmlFor="max-phone">Телефон с кодом страны</Label>
+          <Label htmlFor="max-phone">Телефон с кодом страны <RequiredMark /></Label>
           <Input id="max-phone" name="phone" type="tel" inputMode="tel" autoComplete="tel" required value={fields.phone}
             onChange={event => update("phone", event.target.value)} className="h-12 border-border-default bg-surface" />
           <p className="text-xs leading-5 text-fg-tertiary">Подтверждение по SMS нужно один раз. Затем — вход по email и паролю.</p>
         </div>
         <div className="space-y-2">
-          <Label htmlFor="max-password">Пароль</Label>
+          <Label htmlFor="max-password">Пароль <RequiredMark /></Label>
           <PasswordField
             id="max-password"
             name="password"
@@ -96,7 +101,7 @@ export function MaxRegisterForm({ next = "/max", children, existingSession = fal
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="max-confirm">Повторите пароль</Label>
+          <Label htmlFor="max-confirm">Повторите пароль <RequiredMark /></Label>
           <PasswordField
             id="max-confirm"
             name="confirm"
@@ -121,7 +126,7 @@ export function MaxRegisterForm({ next = "/max", children, existingSession = fal
             <input name={name} type="checkbox" required checked={Boolean(consents[name])}
               {...validation.propsFor(name, event => setConsents(previous => ({ ...previous, [name]: event.target.checked })))}
               className="mt-1 size-4 accent-[#0062ee]" />
-            <span className="text-fg-secondary">{prefix}{" "}<Link className="text-accent-secondary hover:underline" href={href}>{label}</Link></span>
+            <span className="text-fg-secondary">{prefix}{" "}<Link className="text-accent-secondary hover:underline" href={href}>{label}</Link>{" "}<RequiredMark /></span>
           </label><RequiredCheckboxMessage error={validation.errorFor(name)} /></Fragment>
         ))}
         <label className="flex cursor-pointer items-start gap-3">
@@ -154,21 +159,6 @@ export function MaxRegisterForm({ next = "/max", children, existingSession = fal
         {!pending && <ArrowRight className="ml-2 size-4" />}
       </Button>
 
-      <div className="grid gap-2 text-xs text-fg-tertiary sm:grid-cols-3">
-        {[
-          [Building2, "Email — для входа и восстановления"],
-          [ShieldCheck, "Секреты не передаются агенту"],
-          [Check, "MAX и платежи подключаются позже"],
-        ].map(([Icon, text]) => {
-          const ItemIcon = Icon as typeof Building2;
-          return (
-            <div key={String(text)} className="flex items-center gap-2">
-              <ItemIcon className="size-3.5 text-accent" />
-              {String(text)}
-            </div>
-          );
-        })}
-      </div>
     </form>
     {children}
   </>);

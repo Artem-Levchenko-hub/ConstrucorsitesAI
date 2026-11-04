@@ -14,7 +14,7 @@ import { describeApiError } from "@/lib/api/errors";
 import { saveLandingPrompt, takeLandingPrompt } from "@/lib/landing-prompt";
 import { createProject, listProjects } from "@/lib/api/projects";
 import type { ManagementModule, MaxContentItem } from "@/lib/api/types";
-import { buildMaxProjectPrompt, defaultManagementModules, newProjectManagementModules, type MaxAppTypeId, type MaxFeature, type MaxStyleId } from "@/lib/max-brief";
+import { buildMaxProjectPrompt, defaultManagementModules, newProjectManagementModules, selectedMaxAppTypes, serializeMaxProjectFeatures, type MaxAppTypeId, type MaxFeature, type MaxProjectBrief, type MaxStyleId } from "@/lib/max-brief";
 import { containsChatSecret, resolveChatCredential } from "@/lib/max-chat-credentials";
 import { extractInitialCatalog } from "@/lib/max-catalog-brief";
 import { newMaxContentItem } from "@/lib/max-catalog";
@@ -22,6 +22,7 @@ import { initialCatalogError, publicInitialCatalog, publicMaxBriefText } from "@
 import { useOwnerChatQuota } from "@/hooks/useOwnerChatQuota";
 import { FREE_CHAT_UPGRADE_MESSAGE } from "@/lib/owner-chat-quota";
 import { OwnerChatQuotaNotice } from "@/components/workspace/OwnerChatQuotaNotice";
+import { useLearningGate } from "@/components/learning/LearningProvider";
 import { MaxStudioProjectCard } from "./MaxStudioProjectCard";
 import { MaxStudioHeader } from "./MaxStudioHeader";
 import { MAX_STATUS_COPY } from "@/lib/max-status-copy";
@@ -36,42 +37,21 @@ export function MaxStudio({ email }: { email: string }) {
   const router = useRouter();
   const quota = useOwnerChatQuota();
   const qc = useQueryClient();
+  const learning = useLearningGate();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [name, setName] = useState("");
   const [idea, setIdea] = useState("");
 
-  // Задача, написанная на витрине до регистрации. Человек её уже сформулировал —
-  // заставлять его повторяться после подтверждения почты нельзя, он просто уйдёт.
-  // Забираем один раз: текст предназначен ровно для одного проекта.
-  useEffect(() => {
-    const pending = takeLandingPrompt();
-    if (!pending) return;
-    // Открываем мастер следующим кадром, а не синхронно внутри эффекта:
-    // синхронный вызов запускает каскад перерисовок ещё до первой отрисовки
-    // списка проектов. Для глаза разницы нет, окно появляется сразу.
-    let applied = false;
-    const frame = window.requestAnimationFrame(() => {
-      applied = true;
-      setIdea(pending);
-      setDialogOpen(true);
-    });
-    return () => {
-      window.cancelAnimationFrame(frame);
-      // Если открытие не успело случиться — возвращаем текст в хранилище.
-      // Иначе он исчезает навсегда: забрали, показать не успели, повторно взять
-      // неоткуда. Именно так и происходит при повторном монтировании, которым
-      // React в режиме разработки проверяет эффекты на устойчивость.
-      if (!applied) saveLandingPrompt(pending);
-    };
-  }, []);
-  const [appType, setAppType] = useState<MaxAppTypeId>("loyalty");
+  const [appTypes, setAppTypes] = useState<MaxAppTypeId[]>(["loyalty"]);
+  const appType = appTypes[0];
   const [audience, setAudience] = useState("");
   const [primaryAction, setPrimaryAction] = useState("");
   const [features, setFeatures] = useState<MaxFeature[]>(STARTER_FEATURES);
   const [style, setStyle] = useState<MaxStyleId>("brand");
   const [brandColors, setBrandColors] = useState("");
   const [managementModules, setManagementModules] = useState<ManagementModule[]>(() => defaultManagementModules("loyalty"));
+  const [managementModuleOptOuts, setManagementModuleOptOuts] = useState<ManagementModule[]>([]);
   const safeCatalogIdea = useMemo(() => publicMaxBriefText(idea), [idea]);
   const proposedCatalog = useMemo(() => {
     const result = extractInitialCatalog(safeCatalogIdea);
@@ -82,27 +62,50 @@ export function MaxStudio({ email }: { email: string }) {
   const tooManyItems = catalogDraft?.tooManyItems ?? proposedCatalog.tooManyItems;
   const catalogError = initialCatalogError(publicInitialCatalog(initialContent), tooManyItems);
 
-  const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
+  const projects = useQuery({ queryKey: learning ? ["projects", learning.userKey] : ["projects"], queryFn: listProjects });
+  const allMaxProjects = useMemo(() => (projects.data ?? []).filter(project => project.template === "max_miniapp"), [projects.data]);
+  const hasExistingProjects = projects.isSuccess && allMaxProjects.length > 0;
+  const canOpenWizard = !learning || ((learning.completed || learning.creationExempt || hasExistingProjects) && !learning.active);
+  const grandfatherCreation = learning?.grandfatherCreation;
+  useEffect(() => {
+    if (hasExistingProjects) grandfatherCreation?.();
+  }, [hasExistingProjects, grandfatherCreation]);
+
+  // До завершения обучения черновик остаётся в хранилище. Открытие мастера
+  // переносит его один раз и само по себе не создаёт проект.
+  useEffect(() => {
+    if (!canOpenWizard) return;
+    const pending = takeLandingPrompt();
+    if (!pending) return;
+    let applied = false;
+    const frame = window.requestAnimationFrame(() => {
+      applied = true;
+      setIdea(pending);
+      setDialogOpen(true);
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (!applied) saveLandingPrompt(pending);
+    };
+  }, [canOpenWizard]);
   const maxProjects = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ru-RU");
-    return (projects.data ?? []).filter(
-      (project) =>
-        project.template === "max_miniapp" &&
-        (!needle || project.name.toLocaleLowerCase("ru-RU").includes(needle)),
-    );
-  }, [projects.data, search]);
+    return allMaxProjects.filter(project => !needle || project.name.toLocaleLowerCase("ru-RU").includes(needle));
+  }, [allMaxProjects, search]);
 
   const create = useMutation({
     mutationFn: async () => {
+      if (!canOpenWizard) throw new Error("Сначала завершите обучение.");
       if (quota.initialExhausted) throw new Error(FREE_CHAT_UPGRADE_MESSAGE);
       const content = publicInitialCatalog(initialContent);
       const contentError = initialCatalogError(content, tooManyItems);
       if (contentError) throw new Error(contentError);
-      const modules = newProjectManagementModules(appType, managementModules);
+      const modules = newProjectManagementModules(appType, managementModules, appTypes);
       const rawPrompt = buildMaxProjectPrompt({
         name,
         idea,
         appType,
+        appTypes,
         audience,
         primaryAction,
         features,
@@ -121,6 +124,7 @@ export function MaxStudio({ email }: { email: string }) {
         name: safeName,
         idea: safeIdea,
         appType,
+        appTypes,
         audience: safeAudience,
         primaryAction: safePrimaryAction,
         features,
@@ -137,7 +141,7 @@ export function MaxStudio({ email }: { email: string }) {
           summary: safeIdea,
           audience: safeAudience,
           primary_action: safePrimaryAction,
-          features,
+          features: serializeMaxProjectFeatures({ appType, appTypes, features }),
           style,
           brand_colors: safeBrandColors,
           content,
@@ -145,7 +149,7 @@ export function MaxStudio({ email }: { email: string }) {
           support: { email: null, response_time: "Ответим в течение 2 рабочих дней" },
           legal: {
             age_rating: "0+",
-            has_sales: appType === "catalog",
+            has_sales: appTypes.includes("catalog"),
             has_user_content: false,
             marketing_notifications: features.includes("Уведомления бота"),
             personal_data_consent: true,
@@ -204,22 +208,58 @@ export function MaxStudio({ email }: { email: string }) {
     },
   });
 
-  const allMaxProjects = (projects.data ?? []).filter((project) => project.template === "max_miniapp");
+  function openWizard(trigger?: HTMLElement) {
+    if (!canOpenWizard) {
+      if (projects.isSuccess) learning?.request(trigger);
+      return;
+    }
+    setDialogOpen(true);
+  }
 
   /** Готовая идея заполняет мастер, а не создаёт проект молча. */
   function applyIdea(idea: MaxStudioIdea) {
+    if (!canOpenWizard) { openWizard(); return; }
     setName(idea.title);
     setIdea(idea.idea);
-    setAppType(idea.appType);
+    setAppTypes([idea.appType]);
     setManagementModules(defaultManagementModules(idea.appType));
+    setManagementModuleOptOuts([]);
     setCatalogDraft(null);
     setAudience(idea.audience);
     setPrimaryAction(idea.primaryAction);
     setDialogOpen(true);
   }
 
+  function updateBrief(patch: Partial<MaxProjectBrief>) {
+    if (patch.name !== undefined) setName(patch.name);
+    if (patch.idea !== undefined) setIdea(patch.idea);
+    const changingTypes = patch.appTypes !== undefined || patch.appType !== undefined;
+    const nextTypes = patch.appTypes !== undefined
+      ? selectedMaxAppTypes(appType, patch.appTypes)
+      : patch.appType !== undefined ? [patch.appType] : appTypes;
+    if (changingTypes) setAppTypes(nextTypes);
+    if (patch.audience !== undefined) setAudience(patch.audience);
+    if (patch.primaryAction !== undefined) setPrimaryAction(patch.primaryAction);
+    if (patch.features !== undefined) setFeatures(patch.features);
+    if (patch.style !== undefined) setStyle(patch.style);
+    if (patch.brandColors !== undefined) setBrandColors(patch.brandColors);
+    if (patch.managementModules !== undefined) {
+      const modules = newProjectManagementModules(nextTypes[0], patch.managementModules, nextTypes);
+      if (changingTypes) {
+        setManagementModules(modules.filter(module => !managementModuleOptOuts.includes(module)));
+      } else {
+        // Type defaults must not re-enable a module the owner explicitly disabled.
+        setManagementModuleOptOuts(previous => [...new Set([
+          ...previous.filter(module => !modules.includes(module)),
+          ...managementModules.filter(module => !modules.includes(module)),
+        ])]);
+        setManagementModules(modules);
+      }
+    }
+  }
+
   return (
-    <div data-max-studio data-learning-ready={!projects.isPending && !projects.isError ? "true" : "false"} className="max-studio-workspace">
+    <div data-max-studio data-learning-ready={!projects.isPending && !projects.isError ? "true" : "false"} data-learning-project-count={projects.isSuccess ? allMaxProjects.length : undefined} className="max-studio-workspace">
       <MaxStudioHeader email={email} />
       <main className="max-projects-main">
         <div className="max-projects-content">
@@ -229,7 +269,7 @@ export function MaxStudio({ email }: { email: string }) {
               <h1>Мои приложения</h1>
               <p>Продолжите работу или запустите новую идею в MAX.</p>
             </div>
-            <Button data-learning="create-project" size="lg" disabled={quota.initialExhausted} onClick={() => setDialogOpen(true)}>
+            <Button data-learning="create-project" size="lg" disabled={quota.initialExhausted} onClick={event => openWizard(event.currentTarget)}>
               <Plus className="size-4" /> Создать приложение
             </Button>
           </div>
@@ -268,7 +308,7 @@ export function MaxStudio({ email }: { email: string }) {
               <FolderKanban className="mx-auto size-7 text-accent" />
               <h2>Первого приложения ещё нет</h2>
               <p>Опишите задачу своими словами — ИИ соберёт рабочее приложение внутри MAX. Или возьмите готовую идею ниже.</p>
-              <Button disabled={quota.initialExhausted} onClick={() => setDialogOpen(true)}>Описать свою идею</Button>
+              <Button disabled={quota.initialExhausted} onClick={event => openWizard(event.currentTarget)}>Описать свою идею</Button>
             </section>
           ) : (
             <section className="max-projects-list" aria-label="Приложения">
@@ -287,8 +327,8 @@ export function MaxStudio({ email }: { email: string }) {
         </div>
       </main>
       <MaxProjectWizard
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
+        open={dialogOpen && canOpenWizard}
+        onOpenChange={open => { if (open) openWizard(); else setDialogOpen(false); }}
         pending={create.isPending}
         submitDisabled={quota.initialExhausted || Boolean(catalogError)}
         quotaNotice={<OwnerChatQuotaNotice {...quota} initialOnly />}
@@ -301,21 +341,8 @@ export function MaxStudio({ email }: { email: string }) {
           onChange={(items) => setCatalogDraft({ source: safeCatalogIdea, items, tooManyItems: tooManyItems && items.length > 0 })}
           onReset={() => setCatalogDraft(null)}
         />}
-        values={{ name, idea, appType, audience, primaryAction, features, style, brandColors, managementModules }}
-        onChange={(patch) => {
-          if (patch.name !== undefined) setName(patch.name);
-          if (patch.idea !== undefined) setIdea(patch.idea);
-          if (patch.appType !== undefined) {
-            setAppType(patch.appType);
-            setManagementModules(defaultManagementModules(patch.appType));
-          }
-          if (patch.audience !== undefined) setAudience(patch.audience);
-          if (patch.primaryAction !== undefined) setPrimaryAction(patch.primaryAction);
-          if (patch.features !== undefined) setFeatures(patch.features);
-          if (patch.style !== undefined) setStyle(patch.style);
-          if (patch.brandColors !== undefined) setBrandColors(patch.brandColors);
-          if (patch.managementModules !== undefined) setManagementModules(newProjectManagementModules(patch.appType ?? appType, patch.managementModules));
-        }}
+        values={{ name, idea, appType, appTypes, audience, primaryAction, features, style, brandColors, managementModules }}
+        onChange={updateBrief}
         onSubmit={() => create.mutateAsync()}
       />
     </div>

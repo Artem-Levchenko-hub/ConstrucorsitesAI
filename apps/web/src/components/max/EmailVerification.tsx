@@ -13,16 +13,16 @@ export function EmailVerification({ email, available, onVerified }: {
 }) {
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
-  const [sent, setSent] = useState(false);
+  const [resendAccepted, setResendAccepted] = useState(false);
   const [pending, setPending] = useState<"send" | "verify" | null>(null);
   const busy = useRef(false);
   async function send() {
     if (busy.current || !available) return;
-    busy.current = true; setPending("send"); setError("");
+    busy.current = true; setPending("send"); setError(""); setResendAccepted(false);
     try {
       const result = await resendVerification();
       if (!result.accepted) throw new Error("Не удалось отправить письмо");
-      setSent(true); setCode("");
+      setResendAccepted(true); setCode("");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Не удалось отправить письмо"); }
     finally { busy.current = false; setPending(null); }
   }
@@ -40,7 +40,8 @@ export function EmailVerification({ email, available, onVerified }: {
   return <section className="space-y-5" aria-labelledby="email-verification-title">
     <h2 id="email-verification-title" className="text-2xl font-semibold">Подтвердите email</h2>
     {available ? <>
-      <p className="text-sm leading-6 text-fg-secondary">{sent ? "Письмо отправлено на" : "Если письмо уже пришло на"} {email}, в нём есть код на 10 минут и ссылка на 24 часа.</p>
+      <p className="text-sm leading-6 text-fg-secondary">Подтвердите почту {email}. Пройдите по ссылке в письме в течение 24 часов или введите ниже код из письма в течение 10 минут, чтобы завершить подтверждение аккаунта.</p>
+      {resendAccepted && <p role="status" className="text-sm leading-6 text-fg-secondary">Запрос на отправку письма принят. Проверьте почту.</p>}
       <form data-email-verify className="space-y-3" onSubmit={event => { event.preventDefault(); void verify(); }}>
         <Label htmlFor="email-verification-code">Код из письма</Label>
         <Input id="email-verification-code" type="text" name="one-time-code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required

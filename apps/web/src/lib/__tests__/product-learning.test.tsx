@@ -17,6 +17,7 @@ let host: HTMLDivElement;
 let reduced = false;
 let targetRect = { left: 40, top: 90, width: 240, height: 48 };
 let cardHeight = 300;
+let cardWidth = 336;
 let resizeObservers: { targets: Set<Element>; callback: () => void }[] = [];
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -34,13 +35,14 @@ beforeEach(() => {
   reduced = false;
   targetRect = { left: 40, top: 90, width: 240, height: 48 };
   cardHeight = 300;
+  cardWidth = 336;
   resizeObservers = [];
   vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("reduced-motion") && reduced, addEventListener() {}, removeEventListener() {} }));
   route.path = "/max"; route.query = "";
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    if (this.hasAttribute("data-learning")) return { ...targetRect, x: targetRect.left, y: targetRect.top, bottom: targetRect.top + targetRect.height, right: targetRect.left + targetRect.width, toJSON() {} };
-    return { x: 0, y: 0, top: 0, left: 0, bottom: cardHeight, right: 336, width: 336, height: cardHeight, toJSON() {} };
+    if (this.hasAttribute("data-learning") || this.matches("section[id] h2")) return { ...targetRect, x: targetRect.left, y: targetRect.top, bottom: targetRect.top + targetRect.height, right: targetRect.left + targetRect.width, toJSON() {} };
+    return { x: 0, y: 0, top: 0, left: 0, bottom: cardHeight, right: cardWidth, width: cardWidth, height: cardHeight, toJSON() {} };
   });
   HTMLElement.prototype.scrollIntoView = vi.fn();
   vi.stubGlobal("ResizeObserver", class {
@@ -56,9 +58,10 @@ async function click(label: string) {
   const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(item => item.textContent?.trim() === label || item.getAttribute("aria-label") === label);
   expect(button, label).toBeDefined(); await act(async () => button!.click()); await settle();
 }
-async function mount(userKey = "test-account-a", { hiddenSearch = false, onCreate = () => {} } = {}) {
+async function mount(userKey = "test-account-a", { hiddenSearch = false, onCreate = () => {}, startWelcome = true } = {}) {
   await act(async () => root.render(<><button data-learning="create-project" onClick={onCreate}>Создать приложение</button><div data-learning="projects-search" hidden={hiddenSearch}>Поиск</div><div data-learning="projects-help">Помощь</div><LearningButton /><ProductLearning userKey={userKey} /></>));
   await settle();
+  if (startWelcome && document.querySelector('[data-learning-welcome]')) await click("Начать обучение");
 }
 
 describe("product learning", () => {
@@ -73,15 +76,16 @@ describe("product learning", () => {
     expect(document.querySelector('[role="dialog"]')).not.toBeNull();
   });
 
-  it("can replay, choose chapters, skip absent targets, and return focus without performing app actions", async () => {
+  it("can replay linear steps, skip absent targets, and return focus without performing app actions", async () => {
     await mount(); await click("Закрыть обучение");
     const launch = [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.trim() === "Обучение")!;
     launch.focus(); await click("Обучение");
     await click("Далее");
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Найдите своё приложение");
-    const select = document.querySelector<HTMLSelectElement>('select[aria-label="Раздел обучения"]')!;
-    expect(select.options.length).toBe(3);
-    expect([...select.options].some(option => option.textContent?.includes("Аккаунт"))).toBe(false);
+    expect(document.querySelector(".learning-card select")).toBeNull();
+    expect(document.querySelector(".learning-counter")?.textContent).toBe("Шаг 2 из 3");
+    await click("Назад");
+    expect(document.querySelector(".learning-title")?.textContent).toBe("Создайте первое приложение");
     await click("Закрыть обучение");
     expect(document.activeElement).toBe(launch);
     expect(document.querySelector(".learning-spotlight")).toBeNull();
@@ -140,8 +144,8 @@ describe("product learning", () => {
   it("skips initially hidden controls and records completion without invoking app actions", async () => {
     const create = vi.fn();
     await mount("completion-account", { hiddenSearch: true, onCreate: create });
-    const select = document.querySelector<HTMLSelectElement>('select[aria-label="Раздел обучения"]')!;
-    expect(select.options.length).toBe(2);
+    expect(document.querySelector(".learning-counter")?.textContent).toBe("Шаг 1 из 2");
+    expect(document.querySelector(".learning-card select")).toBeNull();
     await click("Далее");
     await click("Завершить");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
@@ -209,13 +213,96 @@ describe("product learning", () => {
 
   it("scrolls to the selected real guide heading and respects reduced motion", async () => {
     reduced = true;
-    await act(async () => root.render(<><div data-learning="guide-journey">Путь</div><section id="builder"><h2>Редактор</h2></section><GuideLearning /></>));
+    await act(async () => root.render(<><div data-learning="guide-journey">Путь</div><section id="builder" className="guide-chapter"><h2>Редактор</h2></section><GuideLearning /></>));
     await settle(); await click("Перейти в режим обучения");
-    const select = document.querySelector<HTMLSelectElement>('select[aria-label="Раздел обучения"]')!;
-    await act(async () => { select.value = "1"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    await click("Далее");
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Редактор и проверка");
-    expect(vi.mocked(HTMLElement.prototype.scrollIntoView).mock.contexts.at(-1)).toBe(document.querySelector("#builder h2"));
-    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenLastCalledWith({ behavior: "auto", block: "center", inline: "nearest" });
+    expect(vi.mocked(HTMLElement.prototype.scrollIntoView).mock.contexts.at(-1)).toBe(document.querySelector("#builder"));
+    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenLastCalledWith({ behavior: "auto", block: "start", inline: "nearest" });
+  });
+
+  it("shows a centered welcome before the first cabinet step and blocks background actions", async () => {
+    const create = vi.fn();
+    await mount("welcome-owner", { onCreate: create, startWelcome: false });
+    expect(document.querySelector(".learning-card")?.textContent).toContain("Для начала пройдём короткое обучение");
+    expect(document.querySelector(".learning-card")?.textContent).toContain("Создание проекта начнётся только после прохождения обучения. Во время обучения кнопки приложения неактивны");
+    expect(document.querySelector(".learning-spotlight")).toBeNull();
+    const createButton = host.querySelector<HTMLButtonElement>('[data-learning="create-project"]')!;
+    expect(createButton.closest("[inert]")).not.toBeNull();
+    await act(async () => createButton.click());
+    expect(create).not.toHaveBeenCalled();
+    await click("Начать обучение");
+    expect(document.querySelector(".learning-title")?.textContent).toBe("Создайте первое приложение");
+    expect(document.querySelector(".learning-card-top")?.textContent).toContain("Обучение");
+    expect(document.querySelector(".learning-description")?.textContent).toBe("Начните с описания своей идеи.");
+    expect(document.querySelector(".learning-spotlight")).not.toBeNull();
+    await act(async () => createButton.click());
+    expect(create).not.toHaveBeenCalled();
+    await click("Закрыть обучение");
+    expect(createButton.closest("[inert]")).toBeNull();
+  });
+
+  it("resumes an incomplete step instead of restarting and keeps completed v1 records through a dismissed replay", async () => {
+    await mount("resume-owner"); await click("Далее"); await click("Закрыть обучение");
+    await act(async () => root.unmount()); root = createRoot(host);
+    await mount("resume-owner");
+    expect(document.querySelector(".learning-card")).toBeNull();
+    await click("Обучение");
+    expect(document.querySelector(".learning-title")?.textContent).toBe("Найдите своё приложение");
+    await click("Закрыть обучение");
+    localStorage.setItem("yleum:learning:v1:legacy-owner", JSON.stringify({ version: 1, tours: { cabinet: "completed" } }));
+    await mount("legacy-owner");
+    expect(document.querySelector(".learning-card")).toBeNull();
+    await click("Обучение"); await click("Закрыть обучение");
+    expect(JSON.parse(localStorage.getItem("yleum:learning:v1:legacy-owner")!).tours.cabinet).toBe("completed");
+  });
+
+  it("ignores a stale open request belonging to another account", async () => {
+    await mount("previous-owner"); await click("Закрыть обучение");
+    await mount("current-owner"); await click("Закрыть обучение");
+    await act(async () => window.dispatchEvent(new CustomEvent("yleum:learning:open", { detail: { scope: "product", userKey: "previous-owner", trigger: host.querySelector("button") } })));
+    await settle();
+    expect(document.querySelector(".learning-card")).toBeNull();
+  });
+
+  it("ignores an old detached launch element after the same account's page has changed", async () => {
+    await mount("detached-owner"); await click("Закрыть обучение");
+    const trigger = document.createElement("button");
+    await act(async () => window.dispatchEvent(new CustomEvent("yleum:learning:open", { detail: { scope: "product", userKey: "detached-owner", trigger } })));
+    await settle();
+    expect(document.querySelector(".learning-card")).toBeNull();
+  });
+
+  it("does not run a stale automatic welcome timer after completion in another tab", async () => {
+    await act(async () => root.render(<><button data-learning="create-project">Создать</button><ProductLearning userKey="external-completion-owner" /></>));
+    localStorage.setItem("yleum:learning:v1:external-completion-owner", JSON.stringify({ version: 1, tours: { cabinet: "completed" } }));
+    await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: "yleum:learning:v1:external-completion-owner" })));
+    await settle();
+    expect(document.querySelector(".learning-card")).toBeNull();
+  });
+
+  it("leaves the measured guide heading unobscured at 1280x720 after linear navigation and height growth", async () => {
+    vi.stubGlobal("innerWidth", 1280); vi.stubGlobal("innerHeight", 720);
+    cardWidth = 358; cardHeight = 359;
+    targetRect = { left: 293, top: 336.73, width: 850, height: 46.03 };
+    vi.mocked(HTMLElement.prototype.scrollIntoView).mockImplementation(function (this: HTMLElement, options) {
+      targetRect = { ...targetRect, top: this.matches(".guide-chapter") && typeof options === "object" && options.block === "start" ? 201.5 : 336.73 };
+    });
+    await act(async () => root.render(<><div data-learning="guide-journey">Путь</div>{["start", "account", "project", "builder", "settings"].map(id => <section key={id} id={id} className="guide-chapter"><h2 id={`${id}-title`}>{id}</h2></section>)}<GuideLearning /></>));
+    await click("Перейти в режим обучения");
+    for (let index = 0; index < 5; index++) await click("Далее");
+    const assertGeometry = () => {
+      const card = document.querySelector<HTMLElement>(".learning-card")!;
+      const spotlight = document.querySelector<HTMLElement>(".learning-spotlight")!;
+      const top = Number.parseFloat(card.style.top), targetTop = Number.parseFloat(spotlight.style.top), targetBottom = targetTop + Number.parseFloat(spotlight.style.height);
+      expect(top + cardHeight <= targetTop - 16 || top >= targetBottom + 16).toBe(true);
+      expect(top + cardHeight).toBeLessThanOrEqual(704);
+    };
+    expect(document.querySelector(".learning-title")?.textContent).toBe("Документы и каталог");
+    assertGeometry();
+    cardHeight = 400;
+    await act(async () => { for (const observer of resizeObservers) if (observer.targets.has(document.querySelector(".learning-card")!)) observer.callback(); });
+    assertGeometry();
   });
 
   it("offers contextual account and project tours but excludes guest and administrative pages", () => {

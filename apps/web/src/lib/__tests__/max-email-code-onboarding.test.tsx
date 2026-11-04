@@ -12,6 +12,64 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ replace }) }));
 vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
+it("explains the real link and code deadlines for the supplied email without asserting initial delivery", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const fetcher = vi.fn(); vi.stubGlobal("fetch", fetcher);
+  const container = document.createElement("div"); const root = createRoot(container);
+  try {
+    for (const email of ["registration@example.test", "updated@example.test"]) {
+      await act(async () => root.render(<EmailVerification email={email} available onVerified={() => {}} />));
+      expect(container.textContent).toContain(`Подтвердите почту ${email}. Пройдите по ссылке в письме в течение 24 часов или введите ниже код из письма в течение 10 минут, чтобы завершить подтверждение аккаунта.`);
+      expect(container.textContent).not.toMatch(/Мы отправили|Письмо отправлено|Если письмо уже пришло/);
+    }
+    expect(fetcher).not.toHaveBeenCalled();
+  } finally { await act(async () => root.unmount()); }
+});
+
+it("distinguishes an accepted resend request from confirmed delivery", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  let finish!: (response: Response) => void;
+  const fetcher = vi.fn(() => new Promise<Response>(resolve => { finish = resolve; }));
+  vi.stubGlobal("fetch", fetcher);
+  const container = document.createElement("div"); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<EmailVerification email="registration@example.test" available onVerified={() => {}} />));
+    const resend = container.querySelector<HTMLButtonElement>('button[type="button"]')!;
+    await act(async () => resend.click());
+    expect(resend.disabled).toBe(true);
+    expect(container.querySelector('[role="status"]')).toBeNull();
+    await act(async () => finish(Response.json({ accepted: true })));
+    expect(container.querySelector('[role="status"]')?.textContent ?? "").toContain("Запрос на отправку письма принят");
+    expect(container.textContent).not.toMatch(/Мы отправили|Письмо отправлено/);
+    expect(resend.disabled).toBe(false);
+    expect(fetcher).toHaveBeenCalledWith("/api/auth/email/verify/request", expect.objectContaining({ method: "POST" }));
+  } finally { await act(async () => root.unmount()); }
+});
+
+it("clears the previous resend acknowledgement when a later request fails and retains the entered code", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.stubGlobal("fetch", vi.fn()
+    .mockResolvedValueOnce(Response.json({ accepted: true }))
+    .mockResolvedValueOnce(Response.json({ error: { code: "email_delivery_unavailable", message: "Почта временно недоступна" } }, { status: 503 })));
+  const container = document.createElement("div"); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<EmailVerification email="registration@example.test" available onVerified={() => {}} />));
+    const resend = container.querySelector<HTMLButtonElement>('button[type="button"]')!;
+    await act(async () => resend.click());
+    expect(container.querySelector('[role="status"]')?.textContent ?? "").toContain("Запрос на отправку письма принят");
+    const code = container.querySelector<HTMLInputElement>("#email-verification-code")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(code, "123456");
+      code.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => resend.click());
+    expect(container.querySelector('[role="status"]')).toBeNull();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Почта временно недоступна");
+    expect(code.value).toBe("123456");
+    expect(container.textContent).not.toMatch(/Мы отправили|Письмо отправлено/);
+  } finally { await act(async () => root.unmount()); }
+});
+
 it("retains the email fallback code after rejection and sends only six digits to the existing endpoint", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const fetcher = vi.fn(async (_path: string, _init?: RequestInit) => Response.json({ error: { code: "code_invalid", message: "Неверный код" } }, { status: 400 }));

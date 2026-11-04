@@ -3,22 +3,12 @@ import {
   MAX_APP_TYPES,
   MAX_FEATURE_INFO,
   MAX_STYLES,
-  type MaxAppTypeId,
-  type MaxFeature,
-  type MaxStyleId,
+  selectedMaxAppTypes,
+  type MaxProjectBrief,
 } from "@/lib/max-brief";
 import "./max-project-review.css";
 
-type MaxProjectReviewProps = {
-  name: string;
-  idea: string;
-  appType: MaxAppTypeId;
-  audience: string;
-  primaryAction: string;
-  features: MaxFeature[];
-  style: MaxStyleId;
-  brandColors: string;
-};
+type MaxProjectReviewProps = Omit<MaxProjectBrief, "managementModules" | "catalogItemCount">;
 
 const later = "Уточним позже";
 
@@ -34,13 +24,15 @@ export function MaxProjectReview({
   name,
   idea,
   appType,
+  appTypes,
   audience,
   primaryAction,
   features,
   style,
   brandColors,
 }: MaxProjectReviewProps) {
-  const appTypeOption = MAX_APP_TYPES.find(item => item.id === appType);
+  const appTypeOptions = selectedMaxAppTypes(appType, appTypes)
+    .map(type => MAX_APP_TYPES.find(item => item.id === type));
   const styleOption = MAX_STYLES.find(item => item.id === style);
 
   return (
@@ -94,9 +86,9 @@ export function MaxProjectReview({
       <div className="max-project-review__facts">
         <section>
           <span className="max-project-review__fact-icon" aria-hidden="true"><LayoutGrid /></span>
-          <h4>Тип приложения</h4>
-          <p>{appTypeOption?.label}</p>
-          <small>{appTypeOption?.description}</small>
+          <h4>{appTypeOptions.length === 1 ? "Тип приложения" : "Типы приложения"}</h4>
+          <p>{appTypeOptions.map(option => option?.label).join(", ")}</p>
+          <small>{appTypeOptions.map(option => option?.description).join(" · ")}</small>
         </section>
         <section>
           <span className="max-project-review__fact-icon" aria-hidden="true"><Users /></span>

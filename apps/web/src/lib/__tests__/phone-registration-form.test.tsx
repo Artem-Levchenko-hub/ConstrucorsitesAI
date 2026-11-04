@@ -64,6 +64,32 @@ async function registration(run: (container: HTMLDivElement) => Promise<void>) {
   } finally { await act(async () => root.unmount()); container.remove(); }
 }
 
+it("marks every mandatory signup label while keeping marketing optional and unmarked", async () => {
+  await registration(async container => {
+    expect(container.textContent).toContain("* — обязательные поля");
+    const required = Array.from(container.querySelectorAll<HTMLInputElement>("input[required]"));
+    expect(required).toHaveLength(7);
+    for (const input of required) {
+      expect(input.labels?.[0]?.textContent, input.name).toContain("*");
+      expect(input.labels?.[0]?.querySelector('[aria-hidden="true"]')?.textContent, input.name).toBe("*");
+    }
+    const marketing = container.querySelector<HTMLInputElement>('input[name="marketing_accepted"]')!;
+    expect(marketing.required).toBe(false);
+    expect(marketing.labels?.[0]?.textContent).not.toContain("*");
+    expect(mocks.action).not.toHaveBeenCalled();
+  });
+});
+
+it("keeps the continue action without the three informational tiles below it", async () => {
+  await registration(async container => {
+    expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent?.includes("Продолжить"))).toBe(true);
+    for (const copy of ["Email — для входа и восстановления", "Секреты не передаются агенту", "MAX и платежи подключаются позже"]) {
+      expect(container.textContent).not.toContain(copy);
+    }
+    expect(mocks.action).not.toHaveBeenCalled();
+  });
+});
+
 it("toggles each password independently without submitting, replacing inputs or changing their form values", async () => {
   await registration(async container => {
     const password = container.querySelector<HTMLInputElement>('input[name="password"]')!;

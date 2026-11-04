@@ -130,13 +130,18 @@ function matchesWord(word: string, term: string): boolean {
 }
 
 function matchesPhrase(words: readonly string[], terms: readonly string[], fuzzy: boolean): boolean {
+  // A full app-creation intent may contain one edit in each word. Other
+  // phrases retain one typo in total; fuzzy results are suggestions only.
+  const typoLimit = terms.length === 2 && terms[0] === "создать" && terms[1] === "приложение" ? 2 : 1;
   return words.some((_, start) => {
     let typos = 0;
     return terms.every((term, offset) => {
       const word = words[start + offset];
       if (!word) return false;
       if (matchesWord(word, term)) return true;
-      return fuzzy && word.length >= 5 && term.length >= 5 && ++typos <= 1 && oneEdit(word, term);
+      if (!fuzzy || word.length < 5 || term.length < 5 || typos >= typoLimit || !oneEdit(word, term)) return false;
+      typos++;
+      return true;
     });
   });
 }

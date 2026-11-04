@@ -69,6 +69,15 @@ export type MaxAppTypeId = (typeof MAX_APP_TYPES)[number]["id"];
 export type MaxStyleId = (typeof MAX_STYLES)[number]["id"];
 export type MaxFeature = (typeof MAX_FEATURES)[number];
 
+/** Keep the selection order: the first scenario is the compatible primary. */
+export function selectedMaxAppTypes(appType: MaxAppTypeId, appTypes?: readonly MaxAppTypeId[]): MaxAppTypeId[] {
+  const selected = appTypes === undefined ? [appType] : Array.from(appTypes);
+  if (selected.length === 0 || selected.some(id => !MAX_APP_TYPES.some(option => option.id === id))) {
+    throw new Error("Выберите хотя бы один известный тип приложения.");
+  }
+  return [...new Set(selected)];
+}
+
 export const MAX_MANAGEMENT_MODULES: { id: ManagementModule; label: string; description: string }[] = [
   { id: "catalog", label: "Каталог", description: "До 100 товаров или услуг: цены, фото, разделы и наличие." },
   { id: "orders", label: "Заказы", description: "Состав, сумма и статус каждого заказа." },
@@ -82,21 +91,25 @@ function withRequiredManagementModules(selected: readonly ManagementModule[]): M
   return MAX_MANAGEMENT_MODULES.filter(module => modules.has(module.id)).map(module => module.id);
 }
 
-export function defaultManagementModules(appType: MaxAppTypeId): ManagementModule[] {
-  if (appType === "catalog" || appType === "loyalty") return withRequiredManagementModules(["orders"]);
-  if (appType === "booking") return withRequiredManagementModules(["bookings"]);
-  return withRequiredManagementModules([]);
+export function defaultManagementModules(appType: MaxAppTypeId, appTypes?: readonly MaxAppTypeId[]): ManagementModule[] {
+  const defaults = selectedMaxAppTypes(appType, appTypes).flatMap<ManagementModule>(type => {
+    if (type === "catalog" || type === "loyalty") return ["orders"];
+    return type === "booking" ? ["bookings"] : [];
+  });
+  return withRequiredManagementModules(defaults);
 }
 
 /** New-project defaults only; saved legacy configurations keep their own contract. */
-export function newProjectManagementModules(appType: MaxAppTypeId, selected?: readonly ManagementModule[]): ManagementModule[] {
-  return selected?.length ? withRequiredManagementModules(selected) : defaultManagementModules(appType);
+export function newProjectManagementModules(appType: MaxAppTypeId, selected?: readonly ManagementModule[], appTypes?: readonly MaxAppTypeId[]): ManagementModule[] {
+  return selected?.length ? withRequiredManagementModules(selected) : defaultManagementModules(appType, appTypes);
 }
 
 export type MaxProjectBrief = {
   name: string;
   idea: string;
   appType: MaxAppTypeId;
+  /** Optional for older single-scenario parents; first selected type stays primary. */
+  appTypes?: MaxAppTypeId[];
   audience: string;
   primaryAction: string;
   features: MaxFeature[];
@@ -113,7 +126,18 @@ function optionLabel<T extends { id: string; label: string }>(
 ): string {
   return options.find((option) => option.id === id)?.label ?? id;
 }
+
+/** Persist every scenario in the existing API string list, never in UI MaxFeature[]. */
+export function serializeMaxProjectFeatures(brief: Pick<MaxProjectBrief, "appType" | "appTypes" | "features">): string[] {
+  const appTypes = selectedMaxAppTypes(brief.appType, brief.appTypes);
+  if (appTypes.length === 1) return [...brief.features];
+  const scenarios = appTypes
+    .map(type => `Сценарий: ${optionLabel(MAX_APP_TYPES, type)}`);
+  return [...new Set([...brief.features, ...scenarios])];
+}
+
 export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
+  const appTypes = selectedMaxAppTypes(brief.appType, brief.appTypes);
   if (brief.catalogItemCount !== undefined && (!Number.isInteger(brief.catalogItemCount) || brief.catalogItemCount < 0 || brief.catalogItemCount > 100)) {
     throw new Error("В начальном каталоге может быть от 0 до 100 позиций.");
   }
@@ -129,14 +153,14 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
     brief.primaryAction.trim() || "определи главное действие пользователя";
   const colors =
     brief.brandColors.trim() || "подбери уместную палитру под продукт";
-  const managementModules = newProjectManagementModules(brief.appType, brief.managementModules);
+  const managementModules = newProjectManagementModules(brief.appType, brief.managementModules, brief.appTypes);
 
   const prompt = [
     "Создай готовое мини-приложение именно для мессенджера MAX.",
     "Не превращай его в обычный сайт, Telegram Mini App, VK Mini App или отдельное веб-приложение.",
     "",
     `Название продукта: ${brief.name.trim()}.`,
-    `Сценарий: ${optionLabel(MAX_APP_TYPES, brief.appType)}.`,
+    `${appTypes.length === 1 ? "Сценарий" : "Сценарии"}: ${appTypes.map(type => optionLabel(MAX_APP_TYPES, type)).join(", ")}.`,
     `Что должно делать приложение: ${brief.idea.trim()}.`,
     `Целевая аудитория: ${audience}.`,
     `Главное действие пользователя: ${primaryAction}.`,

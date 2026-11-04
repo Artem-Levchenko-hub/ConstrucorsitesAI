@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { MAX_APP_TYPES, MAX_BRIEF_LENGTH, MAX_FEATURES, MAX_FEATURE_INFO, MAX_MANAGEMENT_MODULES, MAX_STYLES, REQUIRED_MANAGEMENT_MODULES, newProjectManagementModules, type MaxFeature, type MaxProjectBrief } from "@/lib/max-brief";
+import { MAX_APP_TYPES, MAX_BRIEF_LENGTH, MAX_FEATURES, MAX_FEATURE_INFO, MAX_MANAGEMENT_MODULES, MAX_STYLES, REQUIRED_MANAGEMENT_MODULES, defaultManagementModules, newProjectManagementModules, selectedMaxAppTypes, type MaxAppTypeId, type MaxFeature, type MaxProjectBrief } from "@/lib/max-brief";
 import { MaxFeaturePreview } from "./MaxFeaturePreview";
 import { MaxProjectReview } from "./MaxProjectReview";
 import "./max-studio.css";
@@ -36,11 +36,29 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
   const submitLock = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
   const busy = pending || submitting;
-  const managementModules = newProjectManagementModules(values.appType, values.managementModules);
+  const appTypes = selectedMaxAppTypes(values.appType, values.appTypes);
+  const multipleTypes = values.appTypes !== undefined;
+  const managementModules = newProjectManagementModules(values.appType, values.managementModules, values.appTypes);
   const length = Array.from(values.idea.trim()).length;
   const ready = values.name.trim().length > 1 && values.idea.trim().length > 9 && length <= MAX_BRIEF_LENGTH;
 
   useEffect(() => { if (open) heading.current?.focus(); }, [step, open]);
+
+  function selectAppType(type: MaxAppTypeId) {
+    if (!multipleTypes) {
+      onChange({ appType: type });
+      return;
+    }
+    const removing = appTypes.includes(type);
+    if (removing && appTypes.length === 1) return;
+    const next = removing ? appTypes.filter(selected => selected !== type) : [...appTypes, type];
+    const defaults = removing ? [] : defaultManagementModules(type);
+    onChange({
+      appType: next[0],
+      appTypes: next,
+      managementModules: newProjectManagementModules(next[0], [...managementModules, ...defaults], next),
+    });
+  }
 
   async function submit() {
     if (submitLock.current || busy || submitDisabled || !ready) return;
@@ -86,9 +104,10 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
               </div>
               <fieldset>
                 <legend className="text-sm font-medium">Тип приложения</legend>
+                {multipleTypes && <p className="max-wizard-note">Можно выбрать несколько типов. Оставьте хотя бы один.</p>}
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                  {MAX_APP_TYPES.map(item => <button key={item.id} type="button" aria-pressed={values.appType === item.id} onClick={() => onChange({ appType: item.id })} className="max-wizard-option">
-                    <span className="flex items-center justify-between gap-2 text-sm font-medium">{item.label}{values.appType === item.id && <Check className="size-4 text-accent" />}</span>
+                  {MAX_APP_TYPES.map(item => <button key={item.id} type="button" aria-pressed={appTypes.includes(item.id)} onClick={() => selectAppType(item.id)} className="max-wizard-option">
+                    <span className="flex items-center justify-between gap-2 text-sm font-medium">{item.label}{appTypes.includes(item.id) && <Check className="size-4 text-accent" />}</span>
                     <span className="mt-1 block text-xs leading-5 text-fg-secondary">{item.description}</span>
                   </button>)}
                 </div>
@@ -108,7 +127,7 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
                       onChange={event => {
                         const selected = new Set(managementModules);
                         if (event.target.checked) selected.add(module.id); else selected.delete(module.id);
-                        onChange({ managementModules: newProjectManagementModules(values.appType, [...selected]) });
+                        onChange({ managementModules: newProjectManagementModules(values.appType, [...selected], values.appTypes) });
                       }} />
                     <span><span className="block text-sm font-medium">{module.label}</span><span className="mt-1 block text-xs leading-5 text-fg-secondary">{module.description}</span></span>
                   </label>)}

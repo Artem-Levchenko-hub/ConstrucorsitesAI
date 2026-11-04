@@ -70,6 +70,9 @@ it.each([
   "Создать прилржение",
   "Как создтаь приложение?",
   "Хочу сделать прилжение",
+  "Как созддать прилжение?",
+  "Как создатъ прилржение?",
+  "Как создтаь прилоежние?",
 ])("suggests application creation for %s without silently confirming a typo", question => {
   expect(searchSupportAnswers(question).map(answer => answer.id)).toEqual(["create"]);
   expect(findSupportAnswers(question)).toEqual([]);
@@ -92,6 +95,7 @@ it.each([
   "Как поменять шины у самолёта?",
   "Как изменить маршрут автобуса?",
   "Как редактировать фотографии со спутника?",
+  "Как созддать прилрржение?",
 ])("does not turn an unrelated word or incomplete intent into advice: %s", question => {
   expect(findSupportAnswers(question)).toEqual([]);
   expect(searchSupportAnswers(question)).toEqual([]);
@@ -118,6 +122,19 @@ it.each([false, true])("keeps an unrelated edit question unknown after creation=
 });
 it("keeps account creation distinct from application creation", () => {
   expect(findSupportAnswers("Хочу создать аккаунт").map(answer => answer.id)).toEqual(["register"]);
+});
+it("offers two one-word typos as a choice and leaves the next unrelated question unknown", async () => {
+  await mount(); await ask("Как созддать прилжение?");
+  const choice = host.querySelector('[role="log"] > li:last-child')!;
+  expect(choice.textContent).toContain("Выберите");
+  expect(choice.textContent).toContain("Как создать приложение и внести правку?");
+  expect(choice.textContent).not.toContain("В разделе «Мои приложения» создайте приложение");
+  await ask("Сколько спутников у Марса?");
+  const unknown = host.querySelector('[role="log"] > li:last-child')!;
+  expect(unknown.textContent).toContain("пока нет точного совпадения");
+  expect(unknown.textContent).not.toContain("Как создать приложение и внести правку?");
+  expect(fetch).not.toHaveBeenCalled();
+  expect(contact).not.toHaveBeenCalled();
 });
 it("resolves the reported typo through a choice and retains the user's original question for handoff", async () => {
   await mount(); await ask("Создать прилржение");

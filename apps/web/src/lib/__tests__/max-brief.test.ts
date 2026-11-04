@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { buildMaxProjectPrompt, defaultManagementModules, newProjectManagementModules } from "@/lib/max-brief";
+import * as maxBrief from "@/lib/max-brief";
+import { type MaxAppTypeId } from "@/lib/max-brief";
+
+const { buildMaxProjectPrompt, defaultManagementModules, newProjectManagementModules } = maxBrief;
 
 describe("buildMaxProjectPrompt", () => {
   it("locks a guided project to the MAX mini-app platform", () => {
@@ -89,4 +92,42 @@ it("preserves an explicit seed-data request instead of banning initial data", ()
 
   expect(prompt).toContain(idea);
   expect(prompt).toContain("Начальные данные добавляй только по явному запросу пользователя");
+});
+
+it("carries every chosen scenario with a loyalty primary and the reviewed catalog contract", () => {
+  const appTypes: MaxAppTypeId[] = ["loyalty", "catalog", "booking"];
+  const brief = { ...longBrief, appType: "loyalty" as const, appTypes, catalogItemCount: 2 };
+  const prompt = buildMaxProjectPrompt(brief);
+  expect(prompt).toContain("Сценарии: Лояльность, Каталог, Запись.");
+  expect(prompt).toContain("Управление в Yleum: Каталог, Заказы, Заявки, Запросы на запись");
+  expect(prompt).toContain("2 позиций уже сохранены в Yleum");
+  expect(prompt).toContain("не вшивай позиции в код");
+  expect(appTypes).toEqual(["loyalty", "catalog", "booking"]);
+});
+
+it("unions defaults for all selected types without replacing explicit module choices", () => {
+  const appTypes: MaxAppTypeId[] = ["education", "catalog", "booking"];
+  expect(defaultManagementModules("education", appTypes)).toEqual(["catalog", "orders", "leads", "bookings"]);
+  expect(newProjectManagementModules("education", undefined, appTypes)).toEqual(["catalog", "orders", "leads", "bookings"]);
+  expect(newProjectManagementModules("education", ["catalog", "leads", "bookings"], appTypes)).toEqual(["catalog", "leads", "bookings"]);
+});
+
+it("serializes scenario features separately from UI features and preserves legacy payloads", () => {
+  expect(maxBrief.serializeMaxProjectFeatures).toBeTypeOf("function");
+  const features = ["Профиль пользователя" as const];
+  const brief = { ...longBrief, appType: "loyalty" as const, appTypes: ["loyalty", "catalog", "booking"] as MaxAppTypeId[], features };
+  expect(maxBrief.serializeMaxProjectFeatures(brief)).toEqual([
+    "Профиль пользователя", "Сценарий: Лояльность", "Сценарий: Каталог", "Сценарий: Запись",
+  ]);
+  expect(features).toEqual(["Профиль пользователя"]);
+  expect(maxBrief.serializeMaxProjectFeatures({ ...longBrief, features })).toEqual(features);
+  expect(maxBrief.serializeMaxProjectFeatures({ ...longBrief, appTypes: ["custom"], features })).toEqual(features);
+});
+
+it("rejects an empty or unknown multi-selection instead of silently falling back to the primary", () => {
+  expect(() => buildMaxProjectPrompt({ ...longBrief, appTypes: [] })).toThrow();
+  expect(() => buildMaxProjectPrompt({ ...longBrief, appTypes: ["unknown"] as unknown as MaxAppTypeId[] })).toThrow();
+  const sparse: MaxAppTypeId[] = ["loyalty"];
+  sparse.length = 2;
+  expect(() => buildMaxProjectPrompt({ ...longBrief, appTypes: sparse })).toThrow();
 });
