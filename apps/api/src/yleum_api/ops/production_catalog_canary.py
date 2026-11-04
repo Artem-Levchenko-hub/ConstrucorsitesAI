@@ -36,6 +36,7 @@ from playwright.sync_api import (
 from yleum_api.ops.production_canary import (
     COMPONENTS,
     CanaryConfig,
+    CanaryFailure,
     ProductionCanary,
     validate_preview_url,
 )
@@ -1004,22 +1005,7 @@ class _CatalogScenario:
             self._healthy_browser()
             # A second context obtains a NEW server session through normal
             # login. No cookies/storageState are copied or written to disk.
-            old_client = self.api._client
-            self.context = self._new_context()
-            self.contexts.append(self.context)
-            self.api._client = httpx.Client(
-                base_url=self.config.base_url,
-                transport=_BrowserTransport(self.context.request, self.scope),
-                follow_redirects=False,
-            )
-            try:
-                self._login()
-            except BaseException:
-                if self.api._client not in self.authenticated_clients:
-                    self.api._client.close()
-                self.api._client = old_client
-                raise
-            page = self.context.new_page()
+            page = self._reconnect()
             self._preview(page, expected, screenshots=False)
             self.evidence.checks.append("reconnect")
             self.phase = "invariant_changed"
@@ -1033,7 +1019,9 @@ class _CatalogScenario:
             self.phase = "release_failed"
             self.api._assert_release_health(baseline=self.evidence.releases)
             self._healthy_browser()
-        except BaseException:
+        except BaseException as exc:
+            if isinstance(exc, CanaryFailure):
+                self.evidence.http_status = exc.http_status
             self.evidence.fail(self.phase)
         finally:
             # Recover only an ID proved by this invocation's successful create
@@ -1064,6 +1052,22 @@ class _CatalogScenario:
                     self.evidence.fail("cleanup_failed")
             self.evidence.elapsed_seconds = time.monotonic() - self.api._started_at
         return self.evidence
+
+    def _reconnect(self) -> Page:
+        old_client = self.api._client
+        self.context = self._new_context()
+        self.contexts.append(self.context)
+        self.api._client = self.api.new_client(
+            transport=_BrowserTransport(self.context.request, self.scope),
+        )
+        try:
+            self._login()
+        except BaseException:
+            if self.api._client not in self.authenticated_clients:
+                self.api._client.close()
+            self.api._client = old_client
+            raise
+        return self.context.new_page()
 
     def _logout_other_sessions(self) -> None:
         for client in getattr(self, "authenticated_clients", []):

@@ -296,6 +296,36 @@ def test_real_login_401_has_login_code_and_never_creates_a_project():
         assert source.cleanup_catalog(scenario.api, None, logged_in=False) == "ok"
 
 
+@pytest.mark.parametrize("status", [401, 403, 422, 429, 503])
+def test_login_failure_report_retains_only_the_safe_http_status(status, capsys):
+    source = module()
+    calls = []
+
+    def provider(request):
+        calls.append(request.url.path)
+        return httpx.Response(status if request.url.path.endswith("login") else 204,
+                              json={"error": "synthetic-private-password token=hidden"})
+
+    scenario = object.__new__(source._CatalogScenario)
+    scenario.config, scenario.evidence = config(), source.CatalogEvidence()
+    scenario.scope = scope()
+    scenario.logged_in, scenario.authenticated_clients = False, []
+    scenario.context = SimpleNamespace(new_page=lambda: None, close=lambda: None)
+    scenario.contexts = [scenario.context]
+    scenario.api = ProductionCanary(config(), transport=httpx.MockTransport(provider))
+    scenario.api._deadline = time.monotonic() + 10
+    scenario.api._assert_release_health = lambda: config().expected_releases
+    result = scenario.run()
+    report = result.report()
+    assert report["code"] == "login_failed"
+    assert report["http_status"] == status
+    assert report["cleanup"] == "ok"
+    assert calls == ["/api/auth/login", "/api/auth/logout"]
+    output = capsys.readouterr()
+    published = json.dumps(report) + output.out + output.err
+    assert "synthetic-private" not in published and "token=" not in published
+
+
 def test_session_issued_before_browser_failure_is_still_logged_out():
     source = module()
     requests = []
@@ -366,6 +396,7 @@ def test_malformed_initial_login_with_issued_cookie_still_owns_logout(logout_fai
     assert calls == ["/api/auth/login", "/api/auth/logout"]
     assert not scenario.logged_in  # Cleanup responsibility is not authentication authority.
     assert result.code == "login_failed"
+    assert result.report()["http_status"] == 200
     assert result.cleanup == ("failed" if logout_fails else "ok")
     output = capsys.readouterr()
     published = json.dumps(result.report()) + output.out + output.err
@@ -400,12 +431,17 @@ def test_malformed_reconnect_login_cookie_is_logged_out_after_old_client_restore
     scenario.api._deadline = time.monotonic() + 10
     issued = scenario.api._client
     old = httpx.Client(base_url="https://yleum.ru", transport=httpx.MockTransport(provider))
+    scenario.api._client = old
+    scenario.api.new_client = lambda **_kwargs: issued
+    scenario.contexts = []
+    scenario._new_context = lambda: SimpleNamespace(request=None)
+    scenario.scope = scope()
     scenario.authenticated_clients = [old]
     scenario.logged_in = True
     try:
         with pytest.raises(Exception):
-            scenario._login()
-        scenario.api._client = old  # Same restoration as the production reconnect exception branch.
+            scenario._reconnect()
+        assert scenario.api._client is old
         scenario._logout_other_sessions()
         assert calls == ["/api/auth/login", "/api/auth/logout"]
         assert issued.is_closed

@@ -487,13 +487,7 @@ class ProductionCanary:
         self._clock = clock
         self._sleep = sleep
         self._emit = emit or (lambda _event: None)
-        self._client = httpx.Client(
-            base_url=config.base_url,
-            timeout=30,
-            follow_redirects=False,
-            transport=transport,
-            headers={"User-Agent": "omnia-production-canary/1"},
-        )
+        self._client = self.new_client(transport=transport)
         self._started_at = 0.0
         self._deadline = 0.0
         self._stage = "unknown"
@@ -501,6 +495,29 @@ class ProductionCanary:
         self._run_id: str | None = None
         self._last_request_info: dict[str, object] = {}
         self._last_response_status: int | None = None
+
+    def new_client(self, *, transport: httpx.BaseTransport | None = None) -> httpx.Client:
+        """Start an independent cookie jar with Origin only on platform API writes."""
+        api_origin = httpx.URL(self.config.base_url)
+
+        def add_api_origin(request: httpx.Request) -> None:
+            if (
+                request.method not in {"GET", "HEAD", "OPTIONS"}
+                and request.url.path.startswith("/api/")
+                and (request.url.scheme, request.url.host, request.url.port)
+                == (api_origin.scheme, api_origin.host, api_origin.port)
+            ):
+                # Preserve explicit foreign values so the real server guard still rejects them.
+                request.headers.setdefault("Origin", str(api_origin).rstrip("/"))
+
+        return httpx.Client(
+            base_url=self.config.base_url,
+            timeout=30,
+            follow_redirects=False,
+            transport=transport,
+            headers={"User-Agent": "omnia-production-canary/1"},
+            event_hooks={"request": [add_api_origin]},
+        )
 
     def run(self) -> CanaryResult:
         self._started_at = self._clock()
