@@ -40,7 +40,6 @@
 .max-chat-advice-skeleton span:nth-child(2) { width: 86%; }
 .max-chat-advice-skeleton span:nth-child(3) { width: 65%; }
 [data-max-editor] .max-studio-chat.max-editor-chat { background: var(--color-surface-raised); }
-[data-max-editor] .max-studio-prompt.max-chat-composer { background: var(--color-surface-raised); padding-top: 16px; border-top: 1px solid var(--color-border-subtle); }
 [data-max-editor] .max-studio-prompt.max-chat-composer > .rounded-lg { background: var(--color-surface-base); border-color: var(--color-border-default); box-shadow: none; }
 [data-max-editor] .max-studio-prompt.max-chat-composer > .rounded-lg:focus-within { background: var(--color-surface-raised); }
 [data-max-editor] .max-studio-prompt textarea { min-height: 74px; line-height: 1.6; }

@@ -20,6 +20,7 @@ from yleum_api.services.integration_oauth import OAuthResult
 from yleum_api.services.integration_providers import IntegrationProviderError
 
 callback_boundary = callback_boundary_fixture
+_HTTP_CLIENT = httpx.AsyncClient
 
 
 def _merchant(boundary, *, shop="123", existing=True):
@@ -208,6 +209,149 @@ async def test_direct_credentials_rotate_only_the_current_shop(
         assert caught.value.status_code == 409
         assert vars(boundary.connection) == previous
         boundary.bind.assert_not_awaited()
+
+
+@pytest.fixture
+def merchant_verification(callback_boundary, monkeypatch):
+    boundary = callback_boundary
+    _merchant(boundary)
+    now = datetime.now(UTC)
+    connection = boundary.connection
+    connection.auth_mode = "oauth"
+    connection.status = "active"
+    connection.last_error = None
+    connection.created_at = connection.updated_at = now
+    connection.verified_at = connection.last_checked_at = now
+    connection.public_config = {"shop_id": "123", "shop_mode": "test", "other": "preserved"}
+    binding = SimpleNamespace(
+        integration_id=connection.id, enabled=True, status="ready", config={}, last_error=None,
+    )
+    monkeypatch.setattr(app_integrations, "_binding", AsyncMock(return_value=binding))
+    monkeypatch.setattr(app_integrations, "require_existing_max_account_access", lambda _: None)
+    monkeypatch.setattr(app_integrations, "load_credentials", AsyncMock(
+        return_value={"access_token": "synthetic-access"},
+    ))
+
+    async def verify():
+        return await app_integrations.verify_integration(
+            boundary.record.project_id, "yookassa", boundary.session, boundary.owner,
+        )
+
+    def install(handler):
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _HTTP_CLIENT(
+            transport=httpx.MockTransport(handler), **kwargs,
+        ))
+
+    return SimpleNamespace(
+        boundary=boundary, connection=connection, binding=binding, verify=verify, install=install,
+    )
+
+
+@pytest.mark.parametrize(("fields", "mode"), [
+    ({"test": True}, "test"),
+    ({"test": False}, "live"),
+    ({}, None),
+    ({"test": "false", "shop_mode": "live"}, None),
+])
+async def test_yookassa_verify_updates_or_clears_saved_shop_mode(
+    merchant_verification, fields, mode,
+):
+    case = merchant_verification
+    case.connection.public_config["shop_mode"] = "live" if mode == "test" else "test"
+    calls = []
+
+    def provider(request):
+        calls.append((request.method, request.url.path))
+        assert request.headers["authorization"] == "Bearer synthetic-access"
+        return httpx.Response(200, json={"account_id": "123", **fields})
+
+    case.install(provider)
+    result = await case.verify()
+    expected = {"shop_id": "123", "other": "preserved"}
+    if mode is not None:
+        expected["shop_mode"] = mode
+    assert result.public_config == case.connection.public_config == expected
+    assert result.bound_to_project and result.binding_status == "ready"
+    assert result.status == "active"
+    assert case.connection.grant_revision == 4
+    assert calls == [("GET", "/v3/me")]
+
+
+async def test_yookassa_basic_verify_keeps_legacy_request_without_claiming_mode(
+    merchant_verification, monkeypatch,
+):
+    case = merchant_verification
+    case.connection.auth_mode = "credentials"
+    monkeypatch.setattr(app_integrations, "load_credentials", AsyncMock(
+        return_value={"secret_key": "synthetic-key"},
+    ))
+    calls = []
+
+    def provider(request):
+        calls.append((request.method, request.url.path, request.url.params.get("limit")))
+        assert request.headers["authorization"].startswith("Basic ")
+        return httpx.Response(200, json={"items": [], "test": False})
+
+    case.install(provider)
+    result = await case.verify()
+    assert result.public_config == {"shop_id": "123", "other": "preserved"}
+    assert result.auth_mode == "credentials"
+    assert calls == [("GET", "/v3/payments", "1")]
+
+
+async def test_yookassa_verify_rejects_a_different_shop_without_replacing_metadata(
+    merchant_verification,
+):
+    case = merchant_verification
+    previous = case.connection.public_config.copy()
+    case.install(lambda request: httpx.Response(200, json={"account_id": "456", "test": False}))
+    with pytest.raises(ApiError) as caught:
+        await case.verify()
+    assert caught.value.status_code == 422
+    assert case.connection.public_config == previous
+    assert case.connection.status == case.binding.status == "error"
+
+
+@pytest.mark.parametrize("provider_status", [200, 401])
+async def test_stale_yookassa_verify_cannot_update_reconnected_grant(
+    merchant_verification, provider_status,
+):
+    case = merchant_verification
+    replacement = {"shop_id": "123", "shop_mode": "live"}
+
+    def provider(request):
+        case.connection.grant_revision += 1
+        case.connection.public_config = replacement.copy()
+        return httpx.Response(provider_status, json={"account_id": "123", "test": True})
+
+    case.install(provider)
+    with pytest.raises(ApiError) as caught:
+        await case.verify()
+    assert caught.value.status_code == 409
+    assert case.connection.public_config == replacement
+    assert case.connection.status == "active" and case.binding.status == "ready"
+    assert case.boundary.session.commits == 0
+
+
+async def test_yookassa_manual_connect_rejects_client_shop_mode(callback_boundary, monkeypatch):
+    boundary = callback_boundary
+    _merchant(boundary)
+    previous = vars(boundary.connection).copy()
+    monkeypatch.setattr(app_integrations, "require_existing_max_account_access", lambda _: None)
+    monkeypatch.setattr(app_integrations, "assert_integrations_allowed", AsyncMock())
+    verifier = AsyncMock()
+    monkeypatch.setattr(app_integrations.integration_providers, "verify_provider", verifier)
+    with pytest.raises(ApiError) as caught:
+        await app_integrations.connect_integration(
+            boundary.record.project_id, "yookassa",
+            IntegrationConnectRequest(values={
+                "shop_id": "123", "secret_key": "synthetic-key", "shop_mode": "live",
+            }),
+            boundary.session, boundary.owner,
+        )
+    assert caught.value.status_code == 400
+    verifier.assert_not_awaited()
+    assert vars(boundary.connection) == previous
 
 
 async def test_yookassa_lock_serializes_account_grants_before_a_connection_exists():

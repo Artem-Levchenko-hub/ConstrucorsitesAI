@@ -233,6 +233,11 @@ def _connection_public(
         if connection.auth_mode == "oauth"
         else [field.key for field in provider.fields if field.secret]
     )
+    public_config = dict(connection.public_config or {})
+    if connection.provider == "yookassa" and (
+        connection.auth_mode != "oauth" or public_config.get("shop_mode") not in ("test", "live")
+    ):
+        public_config.pop("shop_mode", None)
     return AppIntegrationPublic(
         id=str(connection.id),
         provider=connection.provider,
@@ -242,7 +247,7 @@ def _connection_public(
         binding_status=binding.status if binding else None,
         binding_config=dict(binding.config or {}) if binding else {},
         account_label=connection.account_label,
-        public_config=dict(connection.public_config or {}),
+        public_config=public_config,
         capabilities=list(provider.capabilities),
         configured_fields=configured_fields,
         last_error=(
@@ -577,14 +582,27 @@ async def verify_integration(
             "Сначала подключите интеграцию",
             status.HTTP_404_NOT_FOUND,
         )
-    binding = await _binding(session, project_id, provider_key)
+    is_yookassa = provider_key == "yookassa"
+    binding = None if is_yookassa else await _binding(session, project_id, provider_key)
     secret_values = await load_credentials(session, connection)
+    # The credential loader refreshes the ORM row under its lock, then commits.
+    # Pin the grant actually used for the provider request before it can finish late.
+    grant_snapshot = _connection_snapshot(connection) if is_yookassa else None
+    public_config = dict(connection.public_config or {})
+    verification_error: integration_providers.IntegrationCredentialsInvalid | None = None
+    shop_mode: str | None = None
+    account_label = ""
     try:
-        account_label = await integration_providers.verify_provider(
-            provider_key,
-            dict(connection.public_config or {}),
-            secret_values,
-        )
+        if is_yookassa and connection.auth_mode == "oauth":
+            shop = await integration_providers.verify_yookassa_oauth_shop(
+                public_config.get("shop_id"), secret_values.get("access_token"),
+            )
+            account_label = f"Магазин {shop['shop_id']}"
+            shop_mode = shop.get("shop_mode")
+        else:
+            account_label = await integration_providers.verify_provider(
+                provider_key, public_config, secret_values,
+            )
     except integration_providers.IntegrationProviderUnavailable as exc:
         raise ApiError(
             "integration_provider_unavailable",
@@ -592,15 +610,39 @@ async def verify_integration(
             status.HTTP_503_SERVICE_UNAVAILABLE,
         ) from exc
     except integration_providers.IntegrationCredentialsInvalid as exc:
+        verification_error = exc
+    except integration_providers.IntegrationProviderError as exc:
+        raise _map_provider_error(exc) from exc
+
+    if is_yookassa:
+        await lock_account_provider(session, current_user.id, provider_key)
+        current = await _account_connection(session, current_user.id, provider_key, for_update=True)
+        if current is None or not _connection_snapshot_matches(grant_snapshot, current):
+            raise ApiError(
+                "integration_operation_conflict",
+                "Подключение ЮKassa изменилось. Повторите проверку.",
+                status.HTTP_409_CONFLICT,
+            )
+        connection = current
+        binding = await _binding(session, project_id, provider_key)
+        if binding is not None and binding.integration_id != connection.id:
+            raise ApiError(
+                "integration_operation_conflict",
+                "Привязка ЮKassa изменилась. Повторите проверку.",
+                status.HTTP_409_CONFLICT,
+            )
+
+    now = datetime.now(UTC)
+    if verification_error is not None:
         # Provider adapters use safe local messages; also remove exact credential
         # values before persisting or exposing any future adapter's error text.
-        message = str(exc)
+        message = str(verification_error)
         for value in secret_values.values():
             if value:
                 message = message.replace(value, "[REDACTED]")
         connection.status = "error"
         connection.last_error = message[:500]
-        connection.last_checked_at = datetime.now(UTC)
+        connection.last_checked_at = now
         if binding:
             binding.status = "error"
             binding.last_error = connection.last_error
@@ -608,11 +650,14 @@ async def verify_integration(
         raise ApiError(
             "integration_credentials_invalid", message,
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-        ) from exc
-    except integration_providers.IntegrationProviderError as exc:
-        raise _map_provider_error(exc) from exc
+        ) from verification_error
 
-    now = datetime.now(UTC)
+    if is_yookassa:
+        verified_config = dict(connection.public_config or {})
+        verified_config.pop("shop_mode", None)
+        if shop_mode is not None:
+            verified_config["shop_mode"] = shop_mode
+        connection.public_config = verified_config
     connection.status = "active"
     connection.account_label = account_label[:240]
     connection.last_error = None

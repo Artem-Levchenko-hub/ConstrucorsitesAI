@@ -144,7 +144,7 @@ describe("Integration Hub inside the editor modal", () => {
     expect(document.querySelector('[role="dialog"]')).toBe(dialog);
     expect(dialog.querySelector('#integration-secret_key')).toBeNull();
     expect(dialog.textContent).toContain("Подключено");
-    expect(button("Добавить в приложение")).toBeDefined();
+    expect(button("Сценарий оплаты")).toBeDefined();
     expect(window.sessionStorage.length).toBe(0);
     expect(boundary.push).not.toHaveBeenCalled();
   });
@@ -170,21 +170,21 @@ describe("Integration Hub inside the editor modal", () => {
   it("replaces the catalog with a cancellable implementation proposal and hands off only after confirmation", async () => {
     const onExit = vi.fn();
     const dialog = await render([connection], onExit);
-    await click("Добавить в приложение");
+    await click("Сценарий оплаты");
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
     expect(dialog.querySelector('input[aria-label="Найти сервис"]')).toBeNull();
     expect(dialog.querySelector<HTMLTextAreaElement>("textarea")?.value).toContain("ЮKassa");
     expect(dialog.querySelector<HTMLTextAreaElement>("textarea")?.value).not.toContain("must-not-leak");
-    expect(dialog.textContent).toContain("Оплата списывается после успешной сборки приложения.");
+    expect(dialog.textContent).toContain("Стоимость доработки списывается после успешной сборки приложения.");
     expect(boundary.send).not.toHaveBeenCalled();
     await act(async () => input(dialog.querySelector("textarea")!, "   "));
     expect(button("Запустить доработку")?.disabled).toBe(true);
     await click("Назад к сервисам");
     expect(dialog.querySelector("textarea")).toBeNull();
-    expect(button("Добавить в приложение")).toBeDefined();
+    expect(button("Сценарий оплаты")).toBeDefined();
     expect(window.sessionStorage.length).toBe(0);
     expect(onExit).not.toHaveBeenCalled();
-    await click("Добавить в приложение");
+    await click("Сценарий оплаты");
     await act(async () => input(dialog.querySelector("textarea")!, "Добавь оплату заказа через ЮKassa."));
     await click("Запустить доработку");
     await settleMutation();
@@ -197,7 +197,7 @@ describe("Integration Hub inside the editor modal", () => {
   it("preserves the implementation step if browser storage blocks its handoff", async () => {
     const onExit = vi.fn();
     const dialog = await render([connection], onExit);
-    await click("Добавить в приложение");
+    await click("Сценарий оплаты");
     const blockedStorage = vi.spyOn(Object.getPrototypeOf(window.sessionStorage), "setItem")
       .mockImplementation(() => { throw new Error("Storage blocked"); });
     await click("Запустить доработку");
@@ -216,7 +216,7 @@ describe("Integration Hub inside the editor modal", () => {
     const dialog = await render([connection], onExit, onBusyChange);
     let finish!: (value: { run_id: string; message_id: string; snapshot_id: null }) => void;
     boundary.send.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-    await click("Добавить в приложение");
+    await click("Сценарий оплаты");
     const submit = button("Запустить доработку")!;
     await act(async () => { submit.click(); submit.click(); });
     await settleMutation();
@@ -236,7 +236,7 @@ describe("Integration Hub inside the editor modal", () => {
 
   it("never dispatches an integration proposal containing an inserted secret", async () => {
     const dialog = await render([connection]);
-    await click("Добавить в приложение");
+    await click("Сценарий оплаты");
     await act(async () => input(dialog.querySelector("textarea")!, "Добавь оплату. API key: secret_value_1234567890"));
     await click("Запустить доработку");
     expect(dialog.querySelector('[role="alert"]')?.textContent).toContain("ключ");
@@ -249,7 +249,7 @@ describe("Integration Hub inside the editor modal", () => {
     const onExit = vi.fn();
     boundary.send.mockRejectedValueOnce(new Error("Ответ потерян"));
     const dialog = await render([connection], onExit);
-    await click("Добавить в приложение");
+    await click("Сценарий оплаты");
     await click("Запустить доработку");
     await settleMutation();
     expect(dialog.querySelector('[role="alert"]')?.textContent).toContain("Ответ потерян");
@@ -257,7 +257,7 @@ describe("Integration Hub inside the editor modal", () => {
     expect(boundary.send).toHaveBeenCalledOnce();
     const firstKey = boundary.send.mock.calls[0][4].idempotencyKey;
     await click("Назад к сервисам");
-    await click("Добавить в приложение");
+    await click("Сценарий оплаты");
     await click("Запустить доработку");
     await settleMutation();
     expect(boundary.send.mock.calls[1][4].idempotencyKey).toBe(firstKey);
@@ -272,7 +272,7 @@ describe("Integration Hub inside the editor modal", () => {
     boundary.send.mockResolvedValueOnce({ run_id: "terminal", message_id: "m", snapshot_id: null, run_status, replayed: true })
       .mockRejectedValueOnce(new Error("Ответ потерян"));
     const dialog = await render([connection], onExit);
-    await click("Добавить в приложение");
+    await click("Сценарий оплаты");
     await click("Запустить доработку");
     await settleMutation();
     expect(onExit).not.toHaveBeenCalled();
@@ -309,7 +309,7 @@ describe("Integration Hub inside the editor modal", () => {
     boundary.connect.mockResolvedValue(connection);boundary.catalog.mockResolvedValue(catalog([connection]));
     await click("Проверить и подключить");await settleMutation();
     expect(boundary.connect).toHaveBeenCalledOnce();
-    await click("Добавить в приложение");await settleMutation();
+    await click("Сценарий оплаты");await settleMutation();
     expect(dialog.textContent).toContain("Осталось сообщений: 0 из 1 на весь аккаунт");
     expect(button("Запустить доработку")?.disabled).toBe(true);expect(boundary.send).not.toHaveBeenCalled();
     await click("Назад к сервисам");expect(dialog.querySelector('input[aria-label="Найти сервис"]')).not.toBeNull();
@@ -317,7 +317,7 @@ describe("Integration Hub inside the editor modal", () => {
   it("Free0 preserves same-key unknown-response integration replay, while editing creates a blocked new message", async () => {
     boundary.profile.mockResolvedValue({ id: "owner", user_chat_messages_limit: 1, user_chat_messages_remaining: 0 });
     sessionStorage.setItem("omnia:max:integration-attempt:project-1:yookassa", JSON.stringify({provider:"yookassa",prompt:"Добавь сохранённую оплату",key:"existing-unknown-key",terminal:false}));
-    const dialog=await render([connection]);await click("Добавить в приложение");await settleMutation();
+    const dialog=await render([connection]);await click("Сценарий оплаты");await settleMutation();
     expect(button("Запустить доработку")?.disabled).toBe(false);
     await click("Запустить доработку");await settleMutation();
     expect(boundary.send.mock.calls[0][4].idempotencyKey).toBe("existing-unknown-key");
@@ -327,7 +327,7 @@ describe("Integration Hub inside the editor modal", () => {
   it("Free0 terminal result cannot allocate a new integration refinement attempt", async () => {
     boundary.profile.mockResolvedValue({ id: "owner", user_chat_messages_limit: 1, user_chat_messages_remaining: 0 });
     sessionStorage.setItem("omnia:max:integration-attempt:project-1:yookassa", JSON.stringify({provider:"yookassa",prompt:"Добавь сохранённую оплату",key:"terminal-key",terminal:true}));
-    await render([connection]);await click("Добавить в приложение");await settleMutation();
+    await render([connection]);await click("Сценарий оплаты");await settleMutation();
     expect(button("Повторить доработку")?.disabled).toBe(true);expect(boundary.send).not.toHaveBeenCalled();
   });
 
@@ -342,7 +342,7 @@ describe("Integration Hub inside the editor modal", () => {
     });
     await render([connection]);
     await act(async () => { await vi.waitFor(() => expect(client.getQueryState(["owner-profile"])?.status).toBe(profileState)); });
-    await click("Добавить в приложение");
+    await click("Сценарий оплаты");
     await click("Запустить доработку");
     await settleMutation();
     expect(document.querySelector('[role="alert"]')?.textContent).toContain("Ответ потерян после принятия");
@@ -353,7 +353,7 @@ describe("Integration Hub inside the editor modal", () => {
     client.removeQueries({ queryKey: ["owner-profile"] });
     boundary.profile.mockResolvedValue({ id: "owner", user_chat_messages_limit: 1, user_chat_messages_remaining: 0 });
     const dialog = await render([connection]);
-    await click("Добавить в приложение");
+    await click("Сценарий оплаты");
     await settleMutation();
     expect(dialog.textContent).toContain("Осталось сообщений: 0");
     expect(button("Запустить доработку")?.disabled).toBe(false);

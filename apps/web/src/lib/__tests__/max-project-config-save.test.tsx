@@ -1,4 +1,5 @@
 import { act } from "react";
+import Link from "next/link";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
@@ -31,6 +32,50 @@ const record: MaxProjectConfig = {
 };
 
 afterEach(() => { vi.resetAllMocks(); sessionStorage.clear(); });
+
+it("protects unsaved app data on workspace navigation and saves it in place without AI", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const saved = { ...record, config_version: 2, config: { ...record.config, app_name: "Новое название" } };
+  mocks.get.mockResolvedValue(record);
+  mocks.save.mockResolvedValue(saved);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  try {
+    await act(async () => root.render(<QueryClientProvider client={client}>
+      <div className="max-project-workspace">
+        <Link href="/max/qa">К чату</Link>
+        <MaxProjectSetupDialog projectId="qa" display="page" />
+      </div>
+    </QueryClientProvider>));
+    await act(async () => { await vi.waitFor(() => expect(container.querySelector("#max-config-name")).not.toBeNull()); });
+    const name = container.querySelector<HTMLInputElement>("#max-config-name")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "Новое название");
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const link = container.querySelector("a[href='/max/qa']")!;
+    const clickLink = () => {
+      let canceled = false;
+      link.addEventListener("click", (event) => { canceled = event.defaultPrevented; event.preventDefault(); }, { once: true });
+      link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      return canceled;
+    };
+    expect(clickLink()).toBe(true);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(name.value).toBe("Новое название");
+    const save = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Сохранить изменения")!;
+    await act(async () => save.click());
+    await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain("Все изменения сохранены")); });
+    expect(mocks.save).toHaveBeenCalledWith("qa", saved.config, 1);
+    expect(container.querySelector<HTMLInputElement>("#max-config-name")?.value).toBe("Новое название");
+    expect(clickLink()).toBe(false);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(mocks.send).not.toHaveBeenCalled();
+  } finally { confirm.mockRestore(); await act(async () => root.unmount()); client.clear(); container.remove(); }
+});
 
 it("captures the full-config baseline on first edit and keeps it after background refresh and conflict", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -328,7 +373,7 @@ it.each(["я".repeat(19_992) + "КОНЕЦ ТЗ", "я".repeat(20_001)])("keeps t
 });
 
 
-it("saves content before showing the separately named, version-bound AI screen action", async () => {
+it.each(["panel", "page"] as const)("saves content before offering the version-bound AI screen action in %s", async (display) => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   mocks.get.mockResolvedValue(record);
   let finishSave!: (value: MaxProjectConfig) => void;
@@ -340,8 +385,8 @@ it("saves content before showing the separately named, version-bound AI screen a
   const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.trim() === label);
   const click = async (label: string) => { expect(button(label)).toBeDefined(); await act(async () => button(label)!.click()); };
   try {
-    await act(async () => root.render(<QueryClientProvider client={client}><MaxProjectSetupDialog projectId="qa" /></QueryClientProvider>));
-    await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+    await act(async () => root.render(<QueryClientProvider client={client}><MaxProjectSetupDialog projectId="qa" display={display} /></QueryClientProvider>));
+    if (display === "panel") await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
     await act(async () => { await vi.waitFor(() => expect(document.querySelector("#max-config-name")).not.toBeNull()); });
     await click("Контент");
     await click("Добавить позицию");
@@ -351,11 +396,19 @@ it("saves content before showing the separately named, version-bound AI screen a
     expect(button("Запустить доработку")).toBeUndefined();
     const updated = { ...record, config_version: 2, config: mocks.save.mock.calls[0][1] };
     expect(updated.config.content).toHaveLength(1);
+    const policies = document.querySelector<HTMLButtonElement>('[role="tab"][id$="-policies"]');
+    if (display === "page") await act(async () => policies!.click());
     mocks.get.mockResolvedValue(updated);
     await act(async () => finishSave(updated));
     await act(async () => { await vi.waitFor(() => expect(button("Запустить доработку")).toBeDefined()); });
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("баланс");
     expect(mocks.send).not.toHaveBeenCalled();
+    if (display === "page") {
+      await click("Не запускать ИИ");
+      await act(async () => { await vi.waitFor(() => expect(document.activeElement).toBe(policies)); });
+      expect(mocks.send).not.toHaveBeenCalled();
+      return;
+    }
     await click("Запустить доработку");
     await act(async () => { await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(1)); });
     expect(mocks.send.mock.calls[0][0]).toBe("qa");

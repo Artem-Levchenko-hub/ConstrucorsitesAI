@@ -105,6 +105,9 @@ const readyForImplementation = (
   ? provider.available && provider.enabled === true
   : connection?.status === "active" && connection.bound_to_project && connection.binding_status === "ready"));
 
+const yookassaShopModeLabel = (mode: unknown) => mode === "live" ? "Рабочий магазин"
+  : mode === "test" ? "Тестовый магазин" : null;
+
 // Plan refusals (`entitlement_exceeded`, `subscription_entitlement_required`)
 // are spelled out from their details; other API answers pass through.
 const message = (error: unknown) => describeApiError(error, "Не удалось выполнить действие");
@@ -320,11 +323,12 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
   });
   const verify = useMutation({
     mutationFn: (provider: string) => verifyAppIntegration(projectId, provider),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey });
-      toast.success("Доступ к сервису подтверждён");
+    onSuccess: (connection) => {
+      const mode = connection.provider === "yookassa" ? yookassaShopModeLabel(connection.public_config.shop_mode) : null;
+      toast.success(mode ?? "Доступ к сервису подтверждён");
     },
-    onError: (error) => toast.error("Интеграция не отвечает", { description: message(error) }),
+    onError: (error, provider) => toast.error(provider === "yookassa" ? "Не удалось проверить магазин" : "Интеграция не отвечает", { description: message(error) }),
+    onSettled: () => qc.invalidateQueries({ queryKey }),
   });
   const disconnect = useMutation({
     mutationFn: (provider: string) => disconnectAppIntegration(projectId, provider),
@@ -489,9 +493,9 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
   const implementationContent = (
     <>
       {embedded && <Button variant="ghost" className="w-fit" disabled={implement.isPending} onClick={() => setImplementationProvider(null)}><ArrowLeft className="size-4" />Назад к сервисам</Button>}
-      <DetailTitle className="text-xl font-semibold">Добавить интеграцию в приложение</DetailTitle>
+      <DetailTitle className="text-xl font-semibold">{implementationProvider === "yookassa" ? "Сценарий оплаты" : "Добавить интеграцию в приложение"}</DetailTitle>
       <DetailDescription className="text-sm text-fg-secondary">Проверьте и при необходимости измените задание. ИИ начнёт доработку только после нажатия кнопки. Не вставляйте ключи и токены.</DetailDescription>
-      <p className="text-sm text-fg-secondary">Оплата списывается после успешной сборки приложения. Результат появится в редакторе; затем потребуется публикация.</p>
+      <p className="text-sm text-fg-secondary">Стоимость доработки списывается после успешной сборки приложения. Результат появится в редакторе, затем потребуется публикация.</p>
       <OwnerChatQuotaNotice {...quota} />
       {implementationSummary && <IntegrationRequestCard request={implementationSummary} text={implementationPrompt} expandable={false} />}
       <Label htmlFor="integration-implementation-prompt">Задание для ИИ</Label>
@@ -502,7 +506,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
       {implementationProvider && !canUseProvider(implementationProvider) && <p className="text-sm text-danger-fg">Подключение требует настройки. Проверьте доступ перед доработкой.</p>}
       {proposalHasSecret && <p role="alert" className="text-sm text-danger-fg">Удалите ключи и токены из задания. Используйте защищённую форму подключения.</p>}
       {embedded && implement.error && <p role="alert" className="text-sm text-danger-fg">{message(implement.error)}</p>}
-      {embedded && terminalFailure && <p role="alert" className="text-sm text-danger-fg">Предыдущая доработка завершилась без результата. Можно запустить новую попытку. Оплата — после успешной сборки.</p>}
+      {embedded && terminalFailure && <p role="alert" className="text-sm text-danger-fg">Предыдущая доработка завершилась без результата. Можно запустить новую попытку. Стоимость доработки списывается после успешной сборки.</p>}
       <Button disabled={!canImplement || implement.isPending} onClick={startImplementation} className="min-h-11">{implement.isPending && <Loader2 className="size-4 animate-spin" />}{embedded && terminalFailure ? "Повторить доработку" : "Запустить доработку"}</Button>
     </>
   );
@@ -720,6 +724,9 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
                 const connection = connections.get(provider.key);
                 const platform = provider.connection_mode === "platform";
                 const connected = readyForImplementation(provider, connection);
+                const yookassa = provider.key === "yookassa";
+                const shopMode = yookassaShopModeLabel(connection?.public_config.shop_mode);
+                const checking = verify.isPending && verify.variables === provider.key;
                 const needsSetup = connection?.bound_to_project && !connected;
                 const reusable = connection?.status === "active" && !connection.bound_to_project;
                 const Icon = providerIcons[provider.key] ?? CloudCog;
@@ -737,7 +744,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
                       <div className="max-integration-provider-copy">
                         <h3>
                           {provider.name}
-                          {connected ? <span className="max-integration-provider-state" data-state="connected"><Check className="size-3" aria-hidden="true" />{platform ? "Встроено" : "Подключено"}</span>
+                          {connected ? <span className="max-integration-provider-state" data-state="connected"><Check className="size-3" aria-hidden="true" />{platform ? "Встроено" : yookassa ? "Подключено к приложению" : "Подключено"}</span>
                             : needsSetup ? <span className="max-integration-provider-state" data-state="needs-setup">Требуется настройка</span>
                             : reusable ? <span className="max-integration-provider-state" data-state="reusable">Есть у бизнеса</span>
                             : !provider.available ? <span className="max-integration-provider-state">Готовим</span>
@@ -745,6 +752,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
                         </h3>
                         {description && <p>{description}</p>}
                         {extraCapabilities.length > 0 && <p className="max-integration-provider-capabilities">{extraCapabilities.join(" · ")}</p>}
+                        {yookassa && connected && <p data-testid="yookassa-shop-mode">{shopMode ?? "Режим магазина не определён"}</p>}
                       </div>
                     </div>
                     <div className="max-integration-provider-actions">
@@ -757,14 +765,19 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
                         ) : null
                       ) : connected ? (
                         <>
-                          {getBuiltinIntegrationRequest(provider.key) && <Button size="sm" variant="outline" className="max-integration-provider-action" onClick={() => openImplementation(provider.key)}>Добавить в приложение</Button>}
-                          <button onClick={() => verify.mutate(provider.key)} className="max-integration-provider-icon-action" aria-label={`Проверить ${provider.name}`}><RefreshCw className="size-3.5" /></button>
+                          {yookassa ? (
+                            <Button type="button" size="sm" variant="outline" className="max-integration-provider-action" disabled={verify.isPending} aria-busy={checking} onClick={() => verify.mutate(provider.key)}>
+                              {checking ? <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <RefreshCw className="size-3.5" aria-hidden="true" />}
+                              {checking ? "Проверяем…" : "Проверить магазин"}
+                            </Button>
+                          ) : <button type="button" disabled={verify.isPending} onClick={() => verify.mutate(provider.key)} className="max-integration-provider-icon-action" aria-label={`Проверить ${provider.name}`}><RefreshCw className="size-3.5" aria-hidden="true" /></button>}
+                          {getBuiltinIntegrationRequest(provider.key) && <Button size="sm" variant="outline" className="max-integration-provider-action" onClick={() => openImplementation(provider.key)}>{yookassa ? "Сценарий оплаты" : "Добавить в приложение"}</Button>}
                           <button onClick={() => disconnect.mutate(provider.key)} className="max-integration-provider-icon-action max-integration-provider-disconnect" aria-label={`Отключить ${provider.name}`}><Trash2 className="size-3.5" /></button>
                           <Button size="sm" variant="outline" className="max-integration-provider-action" onClick={() => openProvider(provider)}>Настроить</Button>
                         </>
                       ) : connection?.status === "error" ? (
                         <>
-                          <Button size="sm" variant="outline" className="max-integration-provider-action" disabled={verify.isPending} onClick={() => verify.mutate(provider.key)} aria-label={`Проверить ${provider.name}`}>Проверить снова</Button>
+                          <Button type="button" size="sm" variant="outline" className="max-integration-provider-action" disabled={verify.isPending} onClick={() => verify.mutate(provider.key)}>Проверить снова</Button>
                           <Button size="sm" variant="outline" className="max-integration-provider-action" onClick={() => openProvider(provider)}>Переподключить</Button>
                         </>
                       ) : reusable ? (

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import {
   Bot,
   User as UserIcon,
@@ -93,6 +94,7 @@ export function ChatMessage({
       )}
     >
       <div
+        aria-hidden="true"
         className={cn(
           "h-7 w-7 rounded-full flex items-center justify-center shrink-0",
           isUser
@@ -100,11 +102,13 @@ export function ChatMessage({
             : "bg-surface-overlay border border-border-default",
           studio && "h-8 w-8 border-0",
           studio && isUser && "bg-accent-subtle text-accent",
-          studio && !isUser && "bg-surface-overlay text-accent",
+          studio && !isUser && "bg-accent-subtle",
         )}
       >
         {isUser ? (
           <UserIcon className="h-3.5 w-3.5 text-accent" />
+        ) : studio ? (
+          <Image src="/brand/assistant-robot.svg" alt="" width={32} height={32} className="size-full" />
         ) : (
           <Bot className="h-3.5 w-3.5 text-fg-secondary" />
         )}

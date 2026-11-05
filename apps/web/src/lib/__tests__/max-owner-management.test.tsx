@@ -1,4 +1,5 @@
 import { act } from "react";
+import Link from "next/link";
 import { createRoot, type Root } from "react-dom/client";
 import { onlineManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -10,9 +11,10 @@ import { MaxProjectNav } from "@/components/max/MaxProjectNav";
 import type { ManagementOverview, OwnerRecord, ResourceDefinition } from "@/lib/api/max-management";
 import type { MaxProjectConfig } from "@/lib/api/types";
 
-vi.mock("@/components/max/MaxSectionShell", () => ({ MaxSectionShell: ({ children }: { children: React.ReactNode }) => <main>{children}</main> }));
+vi.mock("@/components/max/MaxSectionShell", () => ({ MaxSectionShell: ({ children }: { children: React.ReactNode }) => (
+  <div className="max-project-workspace"><Link href="/max/owned">К чату</Link><main>{children}</main></div>
+) }));
 vi.mock("@/components/max/MaxOwnerCatalog", () => ({ MaxOwnerCatalog: ({ embedded }: { embedded?: boolean }) => <div data-embedded={embedded}>Каталог до 100 позиций</div> }));
-vi.mock("@/components/max/MaxOwnerAnalytics", () => ({ MaxOwnerAnalytics: () => <div>Статистика приложения</div> }));
 const resources = contract.resources as ResourceDefinition[];
 const first: OwnerRecord = { id: "00000000-0000-4000-8000-000000000001", resource: "orders", created_at: "2026-10-29T09:00:00Z", revision: "a".repeat(64), status: "new", customer_name: "<img src=x onerror=alert(1)>", contact_phone: null, contact_email: "client@example.test", comment: "<script>private()</script>", requested_for: null, service_title: null, service_price_label: null, items: [{ catalog_id: "old-id", title: "Историческая услуга", quantity: 2, unit_price_kopecks: 12345, option: "30 минут" }], total_kopecks: 24690, currency: "RUB", note: "" };
 let overview: ManagementOverview;
@@ -95,7 +97,7 @@ it("shows only enabled relevant resources, embedded catalog and baseline section
   expect(button("Заказы")).toBeTruthy(); expect(button("Заявки")).toBeUndefined(); expect(button("Записи")).toBeUndefined();
   await click("Каталог"); expect(node.querySelector('[data-embedded="true"]')).not.toBeNull();
   await click("Настройки"); expect(node.textContent).toContain("Название приложения");
-  await click("Статистика"); expect(node.textContent).toContain("Статистика приложения");
+  expect(button("Статистика")).toBeUndefined();
 });
 it.each(["not_published", "unsupported", "unavailable"] as const)("explains %s without fetching a fake empty register", async state => {
   overview = { ...overview, state, active_modules: [], resources: [] };
@@ -121,7 +123,7 @@ it("prepares legacy management only on an explicit click using a fresh version a
   expect(node.textContent).toContain("Подготовлено к доработке");
   expect(button("Подключить управление")).toBeUndefined();
   expect(node.querySelector('[data-embedded="true"]')).toBe(catalog);
-  expect(node.querySelector('a[href="/max/owned"]')?.textContent).toContain("редактор");
+  expect(node.querySelector('main a[href="/max/owned"]')?.textContent).toContain("редактор");
   expect(requests.filter(request => request.init.method === "POST")).toEqual(enables());
   expect(records()).toHaveLength(0);
 });
@@ -324,13 +326,20 @@ it("keeps retries identical until a definite error is edited, then creates a fre
   writeMode = "ok"; await click("Сохранить обращение");
   expect(JSON.parse(patches()[2].init.body as string).operation_key).not.toBe(secondWrite.operation_key);
 });
-it("blocks a dirty settings section switch until the owner explicitly discards the draft", async () => {
+it("protects a dirty settings draft when opening the chat or switching sections", async () => {
   await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />); await click("Настройки");
   await change("Название приложения", "Не потерять");
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-  await click("Статистика"); expect(confirm).toHaveBeenCalled();
+  const chat = node.querySelector("a[href='/max/owned']")!;
+  let canceled = false;
+  chat.addEventListener("click", (event) => { canceled = event.defaultPrevented; event.preventDefault(); }, { once: true });
+  chat.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  expect(canceled).toBe(true);
+  await click("Заказы"); expect(confirm).toHaveBeenCalled();
   expect((node.querySelector('[aria-label="Название приложения"]') as HTMLInputElement).value).toBe("Не потерять");
-  confirm.mockReturnValue(true); await click("Статистика"); expect(node.textContent).toContain("Статистика приложения");
+  confirm.mockReturnValue(true); await click("Заказы");
+  expect(node.querySelector('section[aria-label="Заказы"]')).not.toBeNull();
+  expect(node.querySelector('[aria-label="Название приложения"]')).toBeNull();
 });
 it("preserves settings after version conflicts and explicitly rebases over all latest unrelated fields", async () => {
   const original = vi.mocked(fetch).getMockImplementation()!;

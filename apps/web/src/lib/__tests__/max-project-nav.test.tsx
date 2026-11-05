@@ -46,10 +46,10 @@ it("даёт статистике постоянное место рядом с 
   // понимал, где искать адрес приложения и куда вставлять токен бота.
   const links = await render("p2", "editor", ["build", "legal"]);
   expect(links.map(link => link.textContent?.trim())).toEqual([
-    "Управление", "Сборка", "Данные приложения", "Каталог", "Бот и подключения", "Запуск и адрес", "Статистика",
+    "Управление", "Данные приложения", "Каталог", "Бот и подключения", "Запуск и адрес", "Статистика",
   ]);
   expect(links.map(link => link.getAttribute("href"))).toEqual([
-    "/max/p2/manage", "/max/p2", "/max/p2?data=details", "/max/p2/catalog", "/max/p2?panel=max", "/max/p2?panel=publish", "/max/p2/dashboard",
+    "/max/p2/manage", "/max/p2/settings?tab=app", "/max/p2/catalog", "/max/p2?panel=max", "/max/p2?panel=publish", "/max/p2/dashboard",
   ]);
 });
 

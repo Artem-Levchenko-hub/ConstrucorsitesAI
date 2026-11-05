@@ -13,6 +13,7 @@ import { catalogDraft, newMaxContentItem, rebaseCatalogDraft, type MaxCatalogDra
 import { MaxContentItemFields } from "./MaxContentItemEditor";
 import { MaxProjectDataApplyDialog } from "./MaxProjectDataApplyDialog";
 import { MaxSectionShell } from "./MaxSectionShell";
+import { useMaxWorkspaceDraftGuard } from "./use-max-workspace-draft-guard";
 import "./max-project-setup.css";
 import "./max-owner-catalog.css";
 
@@ -43,7 +44,6 @@ export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDi
   const [connectError, setConnectError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [reviewed, setReviewed] = useState(false);
-  useEffect(() => { onDirtyChange?.(Boolean(draft) || Boolean(editor) || uploading); return () => onDirtyChange?.(false); }, [onDirtyChange, draft, editor, uploading]);
   const saving = useRef(false);
   const connectTrigger = useRef<HTMLButtonElement>(null);
   const editorDialog = useRef<HTMLDivElement>(null);
@@ -62,6 +62,10 @@ export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDi
       if (!value.reapply) { setDraft(null); setEditor(null); setReviewed(false); }
     },
   });
+  const dirty = Boolean(draft) || Boolean(editor);
+  const savingChanges = uploading || save.isPending || connecting;
+  useMaxWorkspaceDraftGuard(!embedded && dirty, !embedded && savingChanges);
+  useEffect(() => { onDirtyChange?.(dirty || savingChanges); return () => onDirtyChange?.(false); }, [onDirtyChange, dirty, savingChanges]);
   const content = useQuery({
     queryKey: ["max-content", projectId], queryFn: () => getMaxProjectContent(projectId), retry: false,
     enabled: !save.isPending,
@@ -142,7 +146,7 @@ export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDi
     finally { setConnecting(false); }
   }
 
-  return <CatalogShell embedded={embedded} projectId={projectId} projectName={projectName} active="catalog" className="max-catalog-workspace" eyebrow="Каталог" title="Товары и услуги" lead="Меняйте позиции, цены и наличие. Обычное сохранение не расходует баланс ИИ.">
+  return <CatalogShell embedded={embedded} projectId={projectId} projectName={projectName} active="catalog" eyebrow="Каталог" title="Товары и услуги" lead="Меняйте позиции, цены и наличие. Обычное сохранение не расходует баланс ИИ.">
     <section className="max-owner-catalog" aria-label="Каталог приложения">
       {content.data && <div className="max-catalog-status" role="status">
         <div className="max-catalog-delivery" data-state="saved"><span>Данные в Yleum</span><strong>{draft ? "Есть несохранённые правки" : "Сохранены"}</strong></div>

@@ -111,7 +111,7 @@ it("shows a compact proposal beside the editable full text and sends the unchang
   const textarea = await renderHub();
   expect(container.querySelector("h3")?.textContent).toBe("Добавить amoCRM");
   expect(textarea.value).toBe(originalAmoPrompt);
-  expect(container.textContent).toContain("Оплата списывается после успешной сборки приложения.");
+  expect(container.textContent).toContain("Стоимость доработки списывается после успешной сборки приложения.");
   expect(boundary.send).not.toHaveBeenCalled();
   await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Запустить доработку")!.click());
   expect(boundary.send).toHaveBeenCalledTimes(1);
@@ -124,7 +124,7 @@ it("describes a failed attempt without claiming a legacy refund or a new upfront
   boundary.send.mockResolvedValue({ run_id: "fixture-run", run_status: "failed" });
   await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Запустить доработку")!.click());
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
-  expect(container.textContent).toContain("Предыдущая доработка завершилась без результата. Можно запустить новую попытку. Оплата — после успешной сборки.");
+  expect(container.textContent).toContain("Предыдущая доработка завершилась без результата. Можно запустить новую попытку. Стоимость доработки списывается после успешной сборки.");
   expect(container.textContent).not.toContain("Новая попытка расходует баланс");
 });
 

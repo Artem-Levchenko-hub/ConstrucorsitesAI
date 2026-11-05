@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 import httpx
 
 MOYSKLAD_PREFLIGHT_TIMEOUT_SECONDS = 15.0
+_VERIFY_HEADERS = {"User-Agent": "Omnia-Integration-Hub/1.0", "Accept": "application/json"}
 
 
 class IntegrationProviderError(RuntimeError):
@@ -299,6 +300,52 @@ def _provider_http_error(provider_name: str, response: httpx.Response) -> None:
         )
 
 
+def parse_yookassa_shop(payload: object) -> dict[str, str]:
+    """Project only the verified identity and the optional strict Me.test flag."""
+    if not isinstance(payload, dict):
+        raise ValueError("invalid YooKassa profile response")
+    shop_id = payload.get("account_id")
+    if not isinstance(shop_id, str) or not shop_id.strip():
+        raise ValueError("invalid YooKassa account identity")
+    result = {"shop_id": shop_id.strip()}
+    test = payload.get("test")
+    if type(test) is bool:
+        result["shop_mode"] = "test" if test else "live"
+    return result
+
+
+def _verification_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(12.0), follow_redirects=False, headers=_VERIFY_HEADERS,
+    )
+
+
+async def verify_yookassa_oauth_shop(
+    expected_shop_id: object, access_token: str | None,
+) -> dict[str, str]:
+    if not isinstance(expected_shop_id, str) or not expected_shop_id.strip() or not access_token:
+        raise IntegrationCredentialsInvalid("Переподключите ЮKassa и выберите тот же магазин.")
+    try:
+        async with _verification_client() as client:
+            response = await client.get(
+                "https://api.yookassa.ru/v3/me",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            _provider_http_error("ЮKassa", response)
+            shop = parse_yookassa_shop(response.json())
+    except (TimeoutError, httpx.TimeoutException, httpx.NetworkError) as exc:
+        raise IntegrationProviderUnavailable(
+            "Не удалось связаться с ЮKassa. Повторите проверку позже."
+        ) from exc
+    except (ValueError, KeyError, TypeError) as exc:
+        raise IntegrationProviderError("ЮKassa вернула ответ в неизвестном формате.") from exc
+    if shop["shop_id"] != expected_shop_id.strip():
+        raise IntegrationCredentialsInvalid(
+            "ЮKassa вернула другой магазин. Переподключите исходный магазин."
+        )
+    return shop
+
+
 def _bitrix_profile_url(value: str) -> tuple[str, str]:
     parsed = urlparse(value.strip())
     host = (parsed.hostname or "").lower()
@@ -333,6 +380,12 @@ async def verify_provider(
     if not provider.available and not (provider.oauth_supported and is_oauth):
         raise IntegrationProviderError(provider.requirement or "Интеграция пока недоступна")
 
+    if provider_key == "yookassa" and is_oauth:
+        shop = await verify_yookassa_oauth_shop(
+            public_values.get("shop_id"), secret_values.get("access_token"),
+        )
+        return f"Магазин {shop['shop_id']}"
+
     if provider_key == "moysklad":
         token = secret_values.get("token")
         if not isinstance(token, str) or not token.strip():
@@ -341,28 +394,10 @@ async def verify_provider(
                 "Подключите МойСклад заново."
             )
 
-    headers = {"User-Agent": "Omnia-Integration-Hub/1.0", "Accept": "application/json"}
+    headers = _VERIFY_HEADERS
     try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(12.0),
-            follow_redirects=False,
-            headers=headers,
-        ) as client:
+        async with _verification_client() as client:
             if provider_key == "yookassa":
-                if is_oauth:
-                    response = await client.get(
-                        "https://api.yookassa.ru/v3/me",
-                        headers={
-                            **headers,
-                            "Authorization": f"Bearer {secret_values['access_token']}",
-                        },
-                    )
-                    _provider_http_error(provider.name, response)
-                    yookassa_payload = response.json()
-                    account_id = yookassa_payload.get(
-                        "account_id"
-                    ) or public_values.get("shop_id")
-                    return f"Магазин {account_id}" if account_id else "ЮKassa"
                 response = await client.get(
                     "https://api.yookassa.ru/v3/payments",
                     params={"limit": 1},
