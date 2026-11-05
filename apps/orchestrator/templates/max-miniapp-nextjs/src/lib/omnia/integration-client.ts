@@ -1,6 +1,8 @@
 "use client";
 
 import { getMaxWebApp } from "@/lib/max/bridge";
+import { assertIdentityScope, captureIdentityScope, reportIdentityInvalidation } from "@/lib/omnia/identity-scope";
+import type { IdentityScope } from "@/lib/omnia/identity-scope";
 import type { YleumMaxConfig } from "@/lib/omnia/max-config";
 
 /** Owner-maintained app data; independent of MAX login or connected providers. */
@@ -21,18 +23,26 @@ export class YleumIntegrationError extends Error {
 }
 
 async function invoke<T>(
-  path: "status" | "payments" | "payment-status" | "leads" | "lead-list" | "lead-status" | "lead-receipt" | "catalog" | "orders" | "order-list" | "order-status" | "order-details" | "ai",
+  path: "status" | "payments" | "payment-status" | "leads" | "lead-list" | "lead-status" | "lead-receipt" | "catalog" | "orders" | "order-list" | "order-status" | "order-details" | "order-checkout" | "order-checkout-status" | "ai",
   payload: Record<string, unknown> = {},
+  scope?: IdentityScope,
 ): Promise<T> {
-  const initData = getMaxWebApp()?.initData;
   const response = await fetch(`/api/omnia/integrations/${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ initData: initData || "", payload }),
+    body: JSON.stringify(scope
+      ? { expectedActor: scope.actor, payload }
+      : { initData: getMaxWebApp()?.initData || "", payload }),
     credentials: "same-origin",
+    ...(scope ? { cache: "no-store", redirect: "error" } : {}),
   });
+  if (scope) assertIdentityScope(scope);
   const body = await response.json().catch(() => ({}));
+  if (scope) assertIdentityScope(scope);
   if (!response.ok) {
+    if (scope && (response.status === 401 || body?.error?.code === "actor_changed")) {
+      reportIdentityInvalidation(scope);
+    }
     throw new YleumIntegrationError(
       typeof body?.error?.message === "string" ? body.error.message : "Интеграция временно недоступна",
       typeof body?.error?.code === "string" ? body.error.code : null,
@@ -113,6 +123,74 @@ export function getYleumPayment(paymentId: string): Promise<{
   confirmation_url: string | null;
 }> {
   return invoke("payment-status", { payment_id: paymentId });
+}
+
+const MANAGED_ORDER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export type YleumOrderCheckout = {
+  order_id: string;
+  status: "pending" | "succeeded" | "canceled" | "needs_review";
+  confirmation_url: string | null;
+  failure_reason: "receipt_required" | null;
+  test: boolean | null;
+  paid_at: string | null;
+};
+
+function validCheckoutUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password;
+  } catch { return false; }
+}
+
+async function orderCheckout(
+  operation: "order-checkout" | "order-checkout-status", orderId: string, returnUrl?: string,
+): Promise<YleumOrderCheckout> {
+  if (typeof orderId !== "string" || !MANAGED_ORDER_ID.test(orderId)) {
+    throw new YleumIntegrationError("Некорректный номер заказа", "invalid_request", 400);
+  }
+  const scope = captureIdentityScope();
+  if (scope.mode !== "max") {
+    throw new YleumIntegrationError("Откройте опубликованное приложение внутри MAX", "unauthorized", 401);
+  }
+  const order_id = orderId.toLowerCase();
+  const receipt = await invoke<Partial<YleumOrderCheckout> | null>(operation, {
+    order_id, ...(returnUrl === undefined ? {} : { return_url: returnUrl }),
+  }, scope);
+  const failure_reason = receipt?.failure_reason ?? null;
+  if (!receipt || receipt.order_id !== order_id ||
+      (receipt.status !== "pending" && receipt.status !== "succeeded" &&
+       receipt.status !== "canceled" && receipt.status !== "needs_review") ||
+      (receipt.confirmation_url !== null && (receipt.status !== "pending" ||
+       typeof receipt.confirmation_url !== "string" || !validCheckoutUrl(receipt.confirmation_url))) ||
+      (failure_reason !== null && (receipt.status !== "needs_review" || failure_reason !== "receipt_required")) ||
+      (receipt.test !== null && typeof receipt.test !== "boolean") ||
+      (receipt.status === "succeeded"
+        ? typeof receipt.test !== "boolean" || typeof receipt.paid_at !== "string" || !Number.isFinite(Date.parse(receipt.paid_at))
+        : receipt.paid_at !== null)) {
+    throw new YleumIntegrationError("Не удалось подтвердить состояние оплаты", "unavailable", 503);
+  }
+  return {
+    order_id, status: receipt.status, confirmation_url: receipt.confirmation_url,
+    failure_reason, test: receipt.test, paid_at: receipt.paid_at ?? null,
+  };
+}
+
+/** The platform uses the immutable amount saved by createManagedOrder. */
+export function createYleumOrderCheckout(orderId: string, returnUrl?: string): Promise<YleumOrderCheckout> {
+  return orderCheckout("order-checkout", orderId, returnUrl);
+}
+
+/** Read an existing attempt without creating a payment. */
+export function getYleumOrderCheckout(orderId: string): Promise<YleumOrderCheckout> {
+  return orderCheckout("order-checkout-status", orderId);
+}
+
+/** The URL is only a lookup key. Confirm status via getYleumOrderCheckout. */
+export function getReturnedYleumCheckoutOrderId(search?: string): string | null {
+  const values = new URLSearchParams(search ?? (typeof window === "undefined" ? "" : window.location.search))
+    .getAll("checkout_order_id");
+  return values.length === 1 && MANAGED_ORDER_ID.test(values[0]) ? values[0].toLowerCase() : null;
 }
 
 export function createYleumLead(input: {

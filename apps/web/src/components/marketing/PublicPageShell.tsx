@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { ArrowLeft, ArrowRight } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import Link from "next/link";
 
 import { BrandMark } from "./BrandMark";
@@ -23,7 +23,6 @@ export function PublicPageShell({
         <div className="max-public-header__inner">
           <div className="max-public-header__brand"><BrandMark /></div>
           <div className="max-public-header__actions">
-            <Link href="/" className="max-public-link hidden items-center gap-2 sm:inline-flex"><ArrowLeft className="size-4" />На главную</Link>
             <Link href="/max/register" className="max-public-button max-public-button--primary">Создать приложение</Link>
           </div>
         </div>

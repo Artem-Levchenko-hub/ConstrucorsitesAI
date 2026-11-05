@@ -2,16 +2,16 @@ import { act } from "react";
 import Link from "next/link";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MaxProjectSetupDialog } from "@/components/max/MaxProjectSetupDialog";
 import { MaxProjectDataApplyDialog } from "@/components/max/MaxProjectDataApplyDialog";
 import { ApiError } from "@/lib/api/client";
-import type { MaxProjectConfig } from "@/lib/api/types";
+import type { MaxProjectConfig, MaxProjectContent } from "@/lib/api/types";
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), save: vi.fn(), success: vi.fn(), error: vi.fn(), info: vi.fn(), send: vi.fn(), push: vi.fn(), profile: vi.fn() }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), content: vi.fn(), save: vi.fn(), success: vi.fn(), error: vi.fn(), info: vi.fn(), send: vi.fn(), push: vi.fn(), profile: vi.fn() }));
 vi.mock("@/lib/api/owner-profile", () => ({ getOwnerProfile: () => mocks.profile() ?? Promise.resolve({id:"owner",user_chat_messages_limit:null,user_chat_messages_remaining:null}) }));
 vi.mock("@/lib/api/max-studio", () => ({
-  getMaxProjectConfig: mocks.get, saveMaxProjectConfig: mocks.save,
+  getMaxProjectConfig: mocks.get, getMaxProjectContent: mocks.content, saveMaxProjectConfig: mocks.save,
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
 vi.mock("@/lib/api/messages", () => ({ sendPrompt: mocks.send }));
@@ -31,7 +31,140 @@ const record: MaxProjectConfig = {
   },
 };
 
+function deliveryFor(version: number, publicState: MaxProjectContent["public"]["state"] = "not_published", confirmed: number | null = null): MaxProjectContent {
+  const target = { desired_config_version: version, controller_config_version: null, confirmed_config_version: null, checked_at: null, reason: null };
+  return {
+    project_id: "qa", config_version: version, content: [], saved: { state: "saved", config_version: version },
+    public: { ...target, state: publicState, confirmed_config_version: confirmed },
+    preview: { ...target, state: "not_created" },
+  };
+}
+beforeEach(() => { mocks.content.mockResolvedValue(deliveryFor(1)); });
 afterEach(() => { vi.resetAllMocks(); sessionStorage.clear(); });
+
+async function mountCanonical() {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  const render = async () => {
+    await act(async () => root.render(<QueryClientProvider client={client}><MaxProjectSetupDialog projectId="qa" display="page" /></QueryClientProvider>));
+    await act(async () => { await vi.waitFor(() => expect(container.querySelector("#max-config-name")).not.toBeNull()); });
+  };
+  const button = (label: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].find(item => item.textContent?.trim() === label);
+  const click = async (label: string) => {
+    await act(async () => { await vi.waitFor(() => expect(button(label)?.disabled, label).toBe(false)); });
+    await act(async () => button(label)!.click());
+  };
+  const change = async (id: string, value: string) => {
+    const field = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(`#${id}`)!;
+    const proto = field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(field, value);
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+  const expectText = async (value: string) => {
+    await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain(value)); });
+  };
+  await render();
+  return { container, button, click, change, expectText,
+    reopen: async () => { await act(async () => root.render(null)); await render(); },
+    cleanup: async () => { await act(async () => root.unmount()); client.clear(); container.remove(); },
+  };
+}
+
+it("moves only the edited profile fields over a fresh version after an explicit conflict rebase", async () => {
+  mocks.get.mockResolvedValue(record);
+  mocks.save.mockRejectedValueOnce(new ApiError(409, { code: "conflict", message: "Старая версия", details: { reason: "config_version_conflict" } }));
+  const page = await mountCanonical();
+  try {
+    await page.change("max-config-name", "Моё название");
+    await page.click("Документы"); await page.change("max-support-email", "new@example.test");
+    await page.click("Сохранить изменения"); await page.expectText("Черновик остался в форме");
+    expect(mocks.save).toHaveBeenCalledWith("qa", {
+      ...record.config, app_name: "Моё название", support: { ...record.config.support, email: "new@example.test" },
+    }, 1);
+    expect(page.container.querySelector<HTMLInputElement>("#max-support-email")?.value).toBe("new@example.test");
+    const fresh = { ...record, config_version: 2, config: {
+      ...record.config, app_name: "Имя из другого окна", summary: "Другое описание", audience: "Новая аудитория",
+      support: { ...record.config.support, response_time: "Новый срок" },
+    } };
+    const merged = { ...fresh.config, app_name: "Моё название", support: { ...fresh.config.support, email: "new@example.test" } };
+    mocks.get.mockResolvedValue(fresh);
+    await page.click("Загрузить актуальные данные"); await page.expectText("Некоторые поля изменены");
+    await page.click("Перенести мои правки");
+    expect(mocks.save).toHaveBeenCalledTimes(1);
+    mocks.save.mockResolvedValue({ ...fresh, config_version: 3, config: merged });
+    await page.click("Сохранить изменения"); await page.expectText("Версия 3");
+    expect(mocks.save).toHaveBeenLastCalledWith("qa", merged, 2);
+    expect(mocks.send).not.toHaveBeenCalled();
+  } finally { await page.cleanup(); }
+});
+
+it("discards a canonical edit and clears a version conflict without sending another write", async () => {
+  mocks.get.mockResolvedValue(record);
+  mocks.save.mockRejectedValueOnce(new ApiError(409, { code: "conflict", message: "Старая версия", details: { reason: "config_version_conflict" } }));
+  const page = await mountCanonical();
+  try {
+    await page.change("max-config-name", "Первый черновик");
+    await page.click("Отменить правки");
+    expect(page.container.querySelector<HTMLInputElement>("#max-config-name")?.value).toBe(record.config.app_name);
+    expect(mocks.save).not.toHaveBeenCalled();
+    await page.change("max-config-name", "Второй черновик");
+    await page.click("Сохранить изменения"); await page.expectText("Черновик остался в форме");
+    const fresh = { ...record, config_version: 2, config: { ...record.config, app_name: "Другая версия" } };
+    mocks.get.mockResolvedValue(fresh);
+    await page.click("Загрузить актуальные данные"); await page.expectText("Некоторые поля изменены");
+    await page.click("Отменить правки");
+    expect(page.container.querySelector<HTMLInputElement>("#max-config-name")?.value).toBe("Другая версия");
+    expect(page.container.querySelector('[role="alert"]')).toBeNull();
+    expect(mocks.save).toHaveBeenCalledOnce();
+  } finally { await page.cleanup(); }
+});
+
+it("retries the saved canonical version and only trusts matching delivery confirmation", async () => {
+  const version = 8;
+  const saved = { ...record, config_version: version };
+  mocks.get.mockResolvedValue(saved);
+  mocks.content.mockResolvedValue(deliveryFor(version, "applied", version - 1));
+  mocks.save.mockRejectedValueOnce(new TypeError("Соединение прервано")).mockResolvedValue(saved);
+  const page = await mountCanonical();
+  try {
+    await page.expectText("Применение не подтверждено");
+    expect(page.container.textContent).not.toContain("Применение подтверждено");
+    expect(page.button("Сохранить изменения")).toBeUndefined();
+    await page.click("Повторить применение");
+    await page.expectText("Попробуйте ещё раз");
+    await page.expectText("Версия 8");
+    await page.reopen(); await page.expectText("Версия 8"); await page.expectText("Применение не подтверждено");
+    mocks.content.mockResolvedValue(deliveryFor(version, "applied", version));
+    await page.click("Повторить применение"); await page.expectText("Применение подтверждено");
+    expect(mocks.save.mock.calls).toEqual([["qa", saved.config, version], ["qa", saved.config, version]]);
+    expect(mocks.send).not.toHaveBeenCalled();
+  } finally { await page.cleanup(); }
+});
+
+it("reconciles a save that persisted before delivery failed and retries with the new version", async () => {
+  mocks.get.mockResolvedValue(record);
+  const saved = { ...record, config_version: 2, synced_snapshot_id: null, config: { ...record.config, app_name: "Изменённое имя" } };
+  mocks.save.mockImplementationOnce(async () => {
+    mocks.get.mockResolvedValue(saved);
+    mocks.content.mockResolvedValue(deliveryFor(2, "pending"));
+    throw new ApiError(503, { code: "orchestrator_unavailable", message: "Данные сохранены на сервере, но ещё не применены. Повторите сохранение — генерация не нужна." });
+  });
+  const page = await mountCanonical();
+  try {
+    await page.change("max-config-name", "  Изменённое имя  ");
+    await page.click("Сохранить изменения"); await page.expectText("Версия 2");
+    await page.expectText("Повторить применение");
+    expect(page.container.querySelector<HTMLInputElement>("#max-config-name")?.value).toBe("Изменённое имя");
+    mocks.save.mockResolvedValue(saved);
+    await page.click("Повторить применение");
+    expect(mocks.save.mock.calls).toEqual([["qa", saved.config, 1], ["qa", saved.config, 2]]);
+    expect(mocks.send).not.toHaveBeenCalled();
+  } finally { await page.cleanup(); }
+});
 
 it("protects unsaved app data on workspace navigation and saves it in place without AI", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });

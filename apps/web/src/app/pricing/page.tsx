@@ -31,13 +31,12 @@ export default async function PricingPage() {
             {typeof plan.entitlements.integrations === "boolean" && <div className="flex justify-between gap-4"><dt className="text-fg-secondary">Интеграции</dt><dd>{plan.entitlements.integrations ? "Да" : "Нет"}</dd></div>}
           </dl>
           <p className="mt-6 text-sm leading-6 text-fg-secondary">{planPeriodDescription(plan)}</p>
-          <Link href={pricingHref} className="max-public-button max-public-button--primary mt-6">{plan.code === "free" ? "Начать бесплатно" : `Выбрать ${plan.name}`} <ArrowRight className="size-4 shrink-0" /></Link>
         </article>)}
       </div> : <div role="status" className="rounded-[12px] border border-border-default bg-surface p-7">
         <h2 className="text-lg font-semibold">Не удалось загрузить тарифы</h2>
         <p className="mt-2 text-sm leading-6 text-fg-secondary">Актуальные цены временно недоступны. Обновите страницу или откройте раздел тарифов в аккаунте.</p>
-        <Link href={pricingHref} className="max-public-button max-public-button--primary mt-6">Открыть тарифы в аккаунте <ArrowRight className="size-4" /></Link>
       </div>}
+      <div className="mt-6"><Link href={pricingHref} className="max-public-button max-public-button--primary">Открыть тарифы в аккаунте <ArrowRight className="size-4 shrink-0" aria-hidden="true" /></Link></div>
       <div className="mt-8 border-t border-border-default pt-8 text-sm leading-6 text-fg-secondary">
         <p>Автопродление подключается только с отдельного согласия при оплате. Текущий тариф и условия действующей подписки можно проверить в аккаунте.</p>
         <p className="mt-2">Интеграция с amoCRM доступна без отдельной платы со стороны Yleum. Лицензия amoCRM оплачивается отдельно по тарифам amoCRM.</p>

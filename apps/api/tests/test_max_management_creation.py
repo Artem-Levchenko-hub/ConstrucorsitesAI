@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 
 from yleum_api.models.max_project_config import MaxProjectConfig
+from yleum_api.models.max_staff import MaxStaffSettings
 from yleum_api.models.project import Project
 from yleum_api.routers import projects
 from yleum_api.schemas.project import ProjectCreate
@@ -54,9 +55,13 @@ async def test_creation_saves_owner_modules_in_same_project_transaction(
                 "summary": "Заказ услуг",
                 "management_modules": ["catalog", "orders"],
             },
+            "staff_settings": {"leads_enabled": True, "orders_mode": "yookassa", "prep_minutes": 7},
         }
     )
     await projects.create_project(payload, session, owner)
+    staff = next(item for item in added if isinstance(item, MaxStaffSettings))
+    assert staff.leads_enabled_at is not None and staff.orders_enabled_at is not None
+    assert staff.orders_mode == "yookassa" and staff.prep_minutes == 7
 
 
 @pytest.mark.parametrize(

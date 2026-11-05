@@ -286,7 +286,6 @@ function PromptComposer({ demo }: { demo: string }) {
   // текущей: иначе на такте между сменой и первым тиком видна обрезка чужого текста.
   const hint = reduced ? demo : demo.slice(0, Math.min(shown, demo.length));
 
-  // Пустое поле — это не ошибка: человек просто хочет зарегистрироваться.
   // Переход обычный, а не через маршрутизатор: витрина и кабинет — разные части
   // приложения, а хук маршрутизатора требует смонтированного роутера и ломает
   // статический рендер витрины в тестах и в предпросмотре.
@@ -294,11 +293,12 @@ function PromptComposer({ demo }: { demo: string }) {
 
   const length = Array.from(value.trim()).length;
   const tooLong = length > LANDING_PROMPT_MAX_LENGTH;
+  const canSubmit = length > 0 && !tooLong;
 
   return (
     <form
       className="ys-stage-prompt"
-      onSubmit={(event) => { event.preventDefault(); if (!tooLong) submit(); }}
+      onSubmit={(event) => { event.preventDefault(); if (canSubmit) submit(); }}
     >
       <label className="ys-stage-label" htmlFor="yl-hero-prompt">Вы пишете</label>
       <textarea
@@ -310,7 +310,7 @@ function PromptComposer({ demo }: { demo: string }) {
           // Enter отправляет, Shift+Enter переносит строку — как в любом чате.
           if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
-            if (!tooLong) submit();
+            if (canSubmit) submit();
           }
         }}
         placeholder={hint}
@@ -325,7 +325,8 @@ function PromptComposer({ demo }: { demo: string }) {
         className="ys-stage-send"
         data-marketing="signup_click"
         data-placement="hero_prompt"
-        aria-label={value.trim() ? "Создать приложение по этому описанию" : "Начать бесплатно"}
+        aria-label="Создать приложение по этому описанию"
+        disabled={!canSubmit}
       >
         <ArrowUp size={16} />
       </button>

@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { isMaxOwnerPreviewPath } from "@/lib/max-owner-preview-path";
+import { MAX_STAFF_JOIN_PATH, maxStaffReturnPath } from "@/lib/max-staff-path";
 
 // Real api JWT cookie (api/auth sets this; middleware just checks presence —
 // the layout calls /api/auth/me to validate the token).
@@ -21,7 +22,8 @@ function canonicalAuthNavigation(req: NextRequest): NextResponse | null {
   // The edge preserves Host; redirect destinations still come only from config.
   const browserHost = (req.headers.get("host") || req.nextUrl.host).toLowerCase();
   if (canonical.host.toLowerCase() === browserHost) return null;
-  const destination = new URL(`${req.nextUrl.pathname}${req.nextUrl.search}`, canonical.origin);
+  const query = req.nextUrl.pathname === MAX_STAFF_JOIN_PATH ? "" : req.nextUrl.search;
+  const destination = new URL(`${req.nextUrl.pathname}${query}`, canonical.origin);
   const response = NextResponse.redirect(destination);
   response.headers.set("Cache-Control", "no-store");
   response.headers.set("Referrer-Policy", "no-referrer");
@@ -41,7 +43,7 @@ export function middleware(req: NextRequest) {
   const session = req.cookies.get(AUTH_COOKIE);
   const path = req.nextUrl.pathname;
   const isGeneralAuthRoute = path === "/login" || path === "/register";
-  if (isGeneralAuthRoute || path === "/max/register" || path === "/oauth/complete") {
+  if (isGeneralAuthRoute || path === "/max/register" || path === "/oauth/complete" || path === MAX_STAFF_JOIN_PATH) {
     const canonicalResponse = canonicalAuthNavigation(req);
     if (canonicalResponse) return canonicalResponse;
   }
@@ -60,6 +62,7 @@ export function middleware(req: NextRequest) {
     path === "/max/product" ||
     path === "/max/guide" ||
     path === "/max/start" ||
+    path === MAX_STAFF_JOIN_PATH ||
     path === "/max/register" ||
     path === "/max/verify-email";
 
@@ -79,10 +82,11 @@ export function middleware(req: NextRequest) {
 
   if (!session && !isGeneralAuthRoute && !isPublicMaxRoute && isProtectedRoute) {
     const url = req.nextUrl.clone();
-    url.pathname = path.startsWith("/max") && !isMaxOwnerPreviewPath(path) ? "/max/register" : "/login";
+    const staffReturn = maxStaffReturnPath(path);
+    url.pathname = path.startsWith("/max") && !isMaxOwnerPreviewPath(path) && !staffReturn ? "/max/register" : "/login";
     // Preserve where the user actually wanted to land — including any
     // query string, since /projects?filter=… should round-trip too.
-    const target = `${path}${req.nextUrl.search}`;
+    const target = staffReturn ?? `${path}${req.nextUrl.search}`;
     url.search = "";
     url.searchParams.set("next", target);
     return NextResponse.redirect(url);
@@ -93,6 +97,10 @@ export function middleware(req: NextRequest) {
   const headers = new Headers(req.headers);
   headers.set("x-omnia-return-to", `${path}${req.nextUrl.search}`);
   const response = NextResponse.next({ request: { headers } });
+  if (path === MAX_STAFF_JOIN_PATH) {
+    response.headers.set("Cache-Control", "no-store");
+    response.headers.set("Referrer-Policy", "no-referrer");
+  }
   if (path === "/login") {
     // Clear legacy private-image caches before changing principals. Include
     // login POSTs: App Router may reuse the page without another network GET.

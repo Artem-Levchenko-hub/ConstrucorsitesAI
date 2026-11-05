@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StrictBool
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -96,6 +96,7 @@ class _Describe(BaseModel):
     model_config = ConfigDict(extra="forbid")
     publication_id: UUID
     contract: dict[str, object]
+    staff_read: StrictBool = False
 
 
 async def _owned(session: AsyncSession, project_id: UUID, owner_id: UUID) -> Project:
@@ -136,7 +137,7 @@ def _destination(value: object, slug: str) -> str:
     return f"https://{expected}{OWNER_PATH}"
 
 
-async def _target(project: Project) -> _Target:
+async def _target(project: Project, *, require_idle: bool = False) -> _Target:
     try:
         async with asyncio.timeout(RPC_TIMEOUT_SECONDS):
             deployment = await orchestrator_client.get_deploy(project.id)
@@ -144,6 +145,12 @@ async def _target(project: Project) -> _Target:
         raise _error() from None
     if not isinstance(deployment, dict) or deployment.get("project_id") != str(project.id):
         raise _error()
+    if require_idle and deployment.get("phase") in {
+        "queued", "building", "pushing", "swapping", "cancelling",
+    }:
+        raise ApiError(
+            "conflict", "Дождитесь завершения публикации перед подключением очереди", 409,
+        )
     if "active_publication" not in deployment:
         # A legacy successful attempt does not supply a runtime assertion identity.
         if deployment.get("prod_url"):
@@ -167,8 +174,10 @@ async def _target(project: Project) -> _Target:
         raise _error() from None
 
 
-async def _prepare(session: AsyncSession, project: Project, owner_id: UUID) -> _Context:
-    target = await _target(project)
+async def _prepare(
+    session: AsyncSession, project: Project, owner_id: UUID, *, require_idle: bool = False,
+) -> _Context:
+    target = await _target(project, require_idle=True) if require_idle else await _target(project)
     snapshot = await session.get(Snapshot, target.snapshot_id)
     if (
         snapshot is None
@@ -286,11 +295,25 @@ async def _rpc(
     return parsed
 
 
-async def _describe(session: AsyncSession, ctx: _Context, owner_id: UUID) -> None:
-    value = _Describe.model_validate(await _rpc(session, ctx, owner_id, {"op": "describe"}))
+async def _describe(
+    session: AsyncSession, ctx: _Context, owner_id: UUID, *, require_staff_read: bool = False,
+) -> None:
+    payload: dict[str, object] = {"op": "describe"}
+    if require_staff_read:
+        payload["staff_read"] = True
+    try:
+        result = await _rpc(session, ctx, owner_id, payload)
+    except ApiError as exc:
+        # Old runtimes accept only the original describe body.
+        if require_staff_read and exc.code == "invalid_request":
+            raise _error("unsupported") from None
+        raise
+    value = _Describe.model_validate(result)
     contract = parse_management_contract(value.contract)
     if value.publication_id != ctx.target.publication_id or contract != ctx.contract:
         raise _error()
+    if require_staff_read and not value.staff_read:
+        raise _error("unsupported")
 
 
 async def _configured(session: AsyncSession, project: Project) -> list[ManagementModule]:
@@ -337,12 +360,13 @@ async def get_overview(
 
 
 async def _ready(
-    session: AsyncSession, project: Project, owner_id: UUID, resource: ResourceId
+    session: AsyncSession, project: Project, owner_id: UUID, resource: ResourceId,
+    *, require_staff_read: bool = False,
 ) -> _Context:
     ctx = await _prepare(session, project, owner_id)
     if resource not in {entry.id for entry in ctx.contract.resources}:
         raise _error("unsupported")
-    await _describe(session, ctx, owner_id)
+    await _describe(session, ctx, owner_id, require_staff_read=require_staff_read)
     return ctx
 
 
@@ -351,10 +375,14 @@ async def list_records(
     project_id: UUID,
     owner_id: UUID,
     query: OwnerRecordsQuery,
+    *,
+    require_staff_read: bool = False,
 ) -> OwnerRecordsPagePublic:
     project = await _owned(session, project_id, owner_id)
     try:
-        ctx = await _ready(session, project, owner_id, query.resource)
+        ctx = await _ready(
+            session, project, owner_id, query.resource, require_staff_read=require_staff_read,
+        )
         result = OwnerRecordsPagePublic.model_validate(
             await _rpc(
                 session,
@@ -368,7 +396,46 @@ async def list_records(
         )
         if any(record.resource != query.resource for record in result.records):
             raise _error()
+        if require_staff_read and (
+            len(result.records) > query.limit
+            or (result.next_cursor is not None and result.next_cursor == query.cursor)
+        ):
+            raise _error()
         return result
+    except _State as exc:
+        raise _error("unsupported" if exc.state == "unsupported" else "unavailable") from None
+    except ApiError:
+        raise
+    except Exception:
+        raise _error() from None
+
+
+def _exact_record(result: object, record_id: UUID, resource: ResourceId) -> OwnerRecordPublic:
+    record = OwnerRecordPublic.model_validate(result)
+    if record.id != record_id or record.resource != resource:
+        raise _error()
+    return record
+
+
+async def get_record(
+    session: AsyncSession,
+    project_id: UUID,
+    owner_id: UUID,
+    record_id: UUID,
+    resource: ResourceId,
+    *,
+    actor: str | None = None,
+) -> OwnerRecordPublic:
+    """Read exactly one record from a publication with the staff read capability."""
+    project = await _owned(session, project_id, owner_id)
+    try:
+        ctx = await _ready(session, project, owner_id, resource, require_staff_read=True)
+        payload: dict[str, object] = {
+            "op": "get", "record_id": str(record_id), "resource": resource,
+        }
+        if actor is not None:
+            payload["actor"] = actor
+        return _exact_record(await _rpc(session, ctx, owner_id, payload), record_id, resource)
     except _State as exc:
         raise _error("unsupported" if exc.state == "unsupported" else "unavailable") from None
     except ApiError:
@@ -388,7 +455,7 @@ async def update_record(
     project = await _owned(session, project_id, owner_id)
     try:
         ctx = await _ready(session, project, owner_id, resource)
-        result = OwnerRecordPublic.model_validate(
+        return _exact_record(
             await _rpc(
                 session,
                 ctx,
@@ -399,11 +466,10 @@ async def update_record(
                     "resource": resource,
                     "update": update.model_dump(mode="json", exclude_unset=True),
                 },
-            )
+            ),
+            record_id,
+            resource,
         )
-        if result.id != record_id or result.resource != resource:
-            raise _error()
-        return result
     except _State as exc:
         raise _error("unsupported" if exc.state == "unsupported" else "unavailable") from None
     except ApiError:

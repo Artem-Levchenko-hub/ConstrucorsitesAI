@@ -207,7 +207,8 @@ it("validates name and idea, retains answers through Back, and creates only afte
   await click("Создать проект");
   await settle(() => expect(mocks.push).toHaveBeenCalledWith("/max/coffee?starter=1"));
   expect(mocks.create).toHaveBeenCalledTimes(1);
-  expect(mocks.create).toHaveBeenCalledWith({name:"Кофе рядом",template:"max_miniapp",max_config:{
+  expect(mocks.create).toHaveBeenCalledWith({name:"Кофе рядом",template:"max_miniapp",
+    staff_settings:{leads_enabled:true,orders_mode:"pickup",prep_minutes:7},max_config:{
     app_name:"Кофе рядом",summary:"Получать баллы и выбирать награды",app_type:"loyalty",audience:"Гости кофейни",primary_action:"Выбрать награду",
     features:["Профиль пользователя","История действий"],style:"brand",brand_colors:"молочный",management_modules:["catalog","orders","leads"],content:[],
     operator:{legal_name:""},support:{email:null,response_time:"Ответим в течение 2 рабочих дней"},

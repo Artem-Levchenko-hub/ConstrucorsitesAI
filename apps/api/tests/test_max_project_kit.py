@@ -96,7 +96,7 @@ def test_catalog_item_refuses_a_photo_address_that_is_not_https() -> None:
 
 def test_kit_v24_retires_encrypted_crud_and_stores_only_the_max_user_id() -> None:
     project_id = uuid4()
-    assert MAX_MANAGED_KIT_VERSION == 34
+    assert MAX_MANAGED_KIT_VERSION >= 34
     managed = render_max_managed_files(_config(), project_id)
     starter = render_max_starter_files(_config(), project_id, portable=True)
     # v22: no managed server file reads or persists the MAX visitor profile.
@@ -419,7 +419,7 @@ def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
     for capability in ("catalog", "orders", "ai"):
         assert f'"{capability}"' in proxy
     assert '"orders"' in client
-    assert "/api/runtime/projects/${PROJECT_ID}/ai" in proxy
+    assert 'ai: ["ai", "POST"]' in proxy
     assert "api_key" not in client.lower()
     assert "MAX_ACTION_LIMIT = 1000" in actions_route
     assert "MAX_ACTION_PAYLOAD_BYTES = 262_144" in actions_route
@@ -964,8 +964,19 @@ def test_portable_starter_does_not_reintroduce_legacy_database_scripts():
 
 
 def test_managed_kit_refresh_exposes_authenticated_lead_receipt_read() -> None:
-    assert MAX_MANAGED_KIT_VERSION == 34
     managed = render_max_managed_files(_config(), uuid4())
     assert "getYleumLeadReceipt" in managed["src/lib/omnia/integration-client.ts"]
     route = managed["src/app/api/omnia/integrations/[...path]/route.ts"]
-    assert 'operation === "lead-receipt"' in route and "/leads/receipt`" in route
+    assert '"lead-receipt": ["leads/receipt", "POST"]' in route
+
+
+def test_managed_kit_refresh_includes_linked_checkout_and_exact_record_reads() -> None:
+    assert MAX_MANAGED_KIT_VERSION == 35
+    managed = render_max_managed_files(_config(), uuid4())
+    sdk = managed["src/lib/omnia/integration-client.ts"]
+    assert all(name in sdk for name in (
+        "createYleumOrderCheckout", "getYleumOrderCheckout", "getReturnedYleumCheckoutOrderId",
+    ))
+    integration_route = managed["src/app/api/omnia/integrations/[...path]/route.ts"]
+    assert '"orders/checkout/status"' in integration_route
+    assert "staff_read" in managed["src/app/api/omnia/owner/route.ts"]

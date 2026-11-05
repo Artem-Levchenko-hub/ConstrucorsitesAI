@@ -64,17 +64,15 @@ it("keeps changed prices and allowances associated with the plan that supplied t
   expect(text(cards[2])).toContain("6 990,00 ₽");
 });
 
-it("keeps free signup and its marketing placement while paid plans use account entry", () => {
+it("shows all plans with one clear route to choosing a tariff in the account", () => {
   const host = render(plans);
   expect(text(host)).toContain("Бесплатный");
   expect(text(host)).not.toMatch(/\bFree\b|без карты|когда пойдут клиенты/i);
   expect(host.querySelector('a[href="/pricing"]')).toBeNull();
-  const links = Array.from(host.querySelectorAll("article a"));
-  expect(links).toHaveLength(3);
-  expect(links.map(link => link.getAttribute("href"))).toEqual(["/max/register", "/login?next=/billing/plan", "/login?next=/billing/plan"]);
-  expect(links[0].textContent).toContain("Начать бесплатно");
-  expect(links[0].getAttribute("data-marketing")).toBe("signup_click");
-  expect(links[0].getAttribute("data-placement")).toBe("free");
+  const links = Array.from(host.querySelectorAll("a"));
+  expect(links).toHaveLength(1);
+  expect(links[0].getAttribute("href")).toBe("/login?next=/billing/plan");
+  expect(links[0].textContent).toContain("Открыть тарифы в аккаунте");
 });
 
 it("shows no invented prices when the complete unique catalog is unavailable", () => {

@@ -22,7 +22,7 @@
 .max-dashboard-inspect > summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -4px; border-radius: 12px; }
 .max-dashboard-inspect .max-dashboard-overview { padding: 0 24px 20px; gap: 32px; }
 .max-dashboard-inspect .max-dashboard-release { padding: 12px 0 0; }
-.max-dashboard-inspect h2 { font-size: 16px; font-weight: 550; }
+.max-dashboard-inspect h2 { font-size: var(--yleum-text-body); font-weight: 550; }
 .max-dashboard-inspect .max-dashboard-release dl { margin-top: 12px; }
 .max-dashboard-inspect .max-dashboard-release dl > div,
 .max-dashboard-inspect .max-dashboard-url,
@@ -35,7 +35,6 @@
 .max-dashboard-inspect .max-dashboard-system-row { padding: 16px 0; gap: 12px; flex-wrap: wrap; }
 .max-dashboard-inspect .max-dashboard-system-row > div:first-child { flex: 1 1 180px; }
 .max-dashboard-inspect .max-dashboard-runtime { min-width: 0; }
-.max-dashboard-inspect .max-dashboard-settings-link { margin: 0; padding: 16px 24px; font-size: 14px; min-height: 52px; }
 .max-dashboard-inspect .max-dashboard-empty { padding: 20px 0; text-align: left; }
 @media (max-width: 760px) {
   .max-dashboard-status-line { align-items: flex-start; flex-direction: column; }

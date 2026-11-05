@@ -39,24 +39,6 @@ const faqs = [
   ["transfer", "У меня уже есть сайт. Можно перенести его в MAX?", "Приложение внутри MAX — это не копия сайта: сценарии там короче, а вход уже выполнен. Разумнее перенести одно-два главных действия клиента, а не всю структуру сайта."],
 ] as const;
 
-function Signup({ placement, children = "Начать бесплатно", tone = "dark" }: {
-  placement: string;
-  children?: React.ReactNode;
-  tone?: "dark" | "light";
-}) {
-  return (
-    <Link
-      href="/max/register"
-      className={`yl-cta yl-cta--lg${tone === "light" ? " yl-cta--light" : ""}`}
-      data-marketing="signup_click"
-      data-placement={placement}
-    >
-      {children}
-      <ArrowRight size={18} />
-    </Link>
-  );
-}
-
 function Brand() {
   return (
     <Link href="/" className="yl-brand" aria-label="Yleum — главная">
@@ -83,7 +65,6 @@ export function YleumLanding({ plans = null }: { plans?: BillingPlan[] | null } 
           </nav>
           <div className="yl-header__actions">
             <Link className="yl-login" href="/login?next=/max" data-marketing="login_click" data-placement="header">Войти</Link>
-            <Link href="/max/register" className="yl-cta" data-marketing="signup_click" data-placement="header">Начать бесплатно</Link>
           </div>
         </div>
       </header>
@@ -93,17 +74,15 @@ export function YleumLanding({ plans = null }: { plans?: BillingPlan[] | null } 
         <div className="yl-wrap yl-hero-copy">
           <h1>Опишите словами.<br /><em className="yl-grad-text">Получите приложение.</em></h1>
           <p className="yl-lead">Приложение для вашего бизнеса в MAX.<br />Клиенты открывают его в мессенджере — без отдельной установки.</p>
-          {/* Ниши строкой: человек ищет не «платформу для бизнеса», а себя —
-              кофейню, студию, магазин. Ссылки ведут к примерам экранов. */}
-          <div className="yl-niches">
+          <ul className="yl-niches" aria-label="Для какого бизнеса">
             {["Кофейня", "Кафе", "Ресторан", "Салон красоты", "Барбершоп", "Магазин", "Студия", "Школа", "Клуб"].map((niche) => (
-              <a className="yl-niche" href="#examples" key={niche} data-marketing="niche_click" data-placement={niche}>
-                {niche}
-              </a>
+              <li className="yl-niche" key={niche}>{niche}</li>
             ))}
-          </div>
+          </ul>
           <div className="yl-actions">
-            <Signup placement="hero" />
+            <Link href="/max/register" className="yl-cta yl-cta--lg" data-marketing="signup_click" data-placement="hero">
+              Начать бесплатно <ArrowRight size={18} aria-hidden="true" />
+            </Link>
             <span className="yl-note">Бесплатный тариф</span>
           </div>
         </div>
@@ -236,8 +215,9 @@ export function YleumLanding({ plans = null }: { plans?: BillingPlan[] | null } 
       <section className="yl-sendoff" data-marketing-section="final">
         <div className="yl-wrap">
           <h2>Ваша идея —<br />следующая.</h2>
-          <Signup placement="final" tone="light">Создать приложение</Signup>
-          <small>Регистрация на бесплатном тарифе</small>
+          <a href="#yl-hero-prompt" className="yl-cta yl-cta--lg yl-cta--light">
+            Описать идею <ArrowRight size={18} aria-hidden="true" />
+          </a>
         </div>
       </section>
 

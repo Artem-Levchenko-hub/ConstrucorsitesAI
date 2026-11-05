@@ -15,7 +15,7 @@ from yleum_api.core.errors import ApiError
 from yleum_api.models.max_project_config import MaxProjectConfig
 from yleum_api.models.project import Project
 from yleum_api.models.snapshot import Snapshot
-from yleum_api.schemas.max_management import OwnerRecordsQuery, OwnerRecordUpdate
+from yleum_api.schemas.max_management import OwnerRecordsQuery, OwnerRecordUpdate, ResourceId
 from yleum_api.services.max_management_contract import build_management_contract
 
 
@@ -140,6 +140,138 @@ def record(**patch):
         "items": [],
         **patch,
     }
+
+
+def staff_describe(broker):
+    return httpx.Response(200, json={
+        **describe(broker).json(), "staff_read": True,
+    })
+
+
+@pytest.mark.asyncio
+async def test_staff_exact_lookup_is_release_pinned_and_uses_no_owner_list(broker):
+    from yleum_api.services import max_staff_source
+
+    snapshot = record()
+    broker.responses.extend([staff_describe(broker), httpx.Response(200, json=snapshot)])
+    result = await max_staff_source.get_staff_source_record(
+        broker.session, broker.session.project, ResourceId.orders, UUID(snapshot["id"]),
+    )
+    assert str(result.id) == snapshot["id"]
+    assert [json.loads(request.content) for request in broker.requests] == [
+        {"op": "describe", "staff_read": True},
+        {"op": "get", "record_id": snapshot["id"], "resource": "orders"},
+    ]
+    for request in broker.requests:
+        signed = request.headers["X-Yleum-Owner-Assertion"].split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(signed + "=" * (-len(signed) % 4)))
+        assert claims["publication_id"] == str(broker.publication)
+        assert claims["body_sha256"] == hashlib.sha256(request.content).hexdigest()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_reply", [200, 400])
+async def test_staff_list_requires_capability_while_existing_owner_list_still_works(
+    broker, legacy_reply,
+):
+    from yleum_api.services import max_staff_source
+
+    response = describe(broker) if legacy_reply == 200 else httpx.Response(400, json={
+        "error": {"code": "invalid_request", "message": "unexpected field"},
+    })
+    broker.responses.append(response)
+    with pytest.raises(ApiError) as error:
+        await max_staff_source.list_staff_source_records(
+            broker.session, broker.session.project, OwnerRecordsQuery(resource="orders", limit=1),
+        )
+    assert (error.value.code, error.value.status_code) == ("unsupported", 409)
+    assert len(broker.requests) == 1
+    broker.responses.extend([describe(broker), httpx.Response(200, json={"records": [record()]})])
+    assert len((await listing(broker)).records) == 1
+    assert json.loads(broker.requests[1].content) == {"op": "describe"}
+
+
+@pytest.mark.asyncio
+async def test_staff_list_keeps_limit_and_cursor_without_accepting_overfull_pages(broker):
+    from yleum_api.services import max_staff_source
+
+    query = OwnerRecordsQuery(resource="orders", limit=1, cursor="page-one")
+    broker.responses.extend([staff_describe(broker), httpx.Response(200, json={
+        "records": [record()], "next_cursor": "page-two",
+    })])
+    page = await max_staff_source.list_staff_source_records(
+        broker.session, broker.session.project, query,
+    )
+    assert len(page.records) == 1 and page.next_cursor == "page-two"
+    assert json.loads(broker.requests[1].content)["query"] == query.model_dump(mode="json")
+    broker.responses.extend([staff_describe(broker), httpx.Response(200, json={
+        "records": [record(), record()],
+    })])
+    with pytest.raises(ApiError) as error:
+        await max_staff_source.list_staff_source_records(
+            broker.session, broker.session.project, query,
+        )
+    assert error.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_staff_source_does_not_search_hidden_owner_contact_fields(broker):
+    from yleum_api.services import max_staff_source
+
+    with pytest.raises(ApiError) as error:
+        await max_staff_source.list_staff_source_records(
+            broker.session, broker.session.project,
+            OwnerRecordsQuery(resource="orders", query="hidden contact"),
+        )
+    assert (error.value.code, error.value.status_code) == ("invalid_request", 400)
+    assert not broker.requests
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["wrong_id", "wrong_actor", "free", "new_release"])
+async def test_staff_checkout_uses_only_a_confirmed_positive_owner_snapshot(broker, failure):
+    from yleum_api.services import max_staff_source
+
+    actor = 9_007_199_254_740_993
+    snapshot = record(total_kopecks=1234, currency="RUB")
+    order_id = UUID(snapshot["id"])
+    if failure == "wrong_id":
+        snapshot["id"] = str(uuid4())
+    if failure == "free":
+        snapshot["total_kopecks"] = 0
+    if failure == "new_release":
+        original = broker.deploy.return_value
+        broker.deploy.side_effect = [original] * 4 + [{
+            **original, "active_publication": {**broker.active, "release_id": str(uuid4())},
+        }]
+    exact = (
+        httpx.Response(404, json={"error": {"code": "not_found", "message": "hidden"}})
+        if failure == "wrong_actor"
+        else httpx.Response(200, json=snapshot)
+    )
+    broker.responses.extend([staff_describe(broker), exact])
+    with pytest.raises(ApiError) as error:
+        await max_staff_source.read_staff_checkout_order(
+            broker.session, broker.session.project.id, order_id, actor,
+        )
+    statuses = {"wrong_id": 503, "wrong_actor": 404, "free": 400, "new_release": 503}
+    assert error.value.status_code == statuses[failure]
+    assert json.loads(broker.requests[1].content)["actor"] == "9007199254740993"
+
+
+@pytest.mark.asyncio
+async def test_staff_checkout_returns_minimal_authoritative_snapshot(broker):
+    from yleum_api.services import max_staff_source
+
+    snapshot = record(total_kopecks=1234, currency="RUB", note="owner only")
+    broker.responses.extend([staff_describe(broker), httpx.Response(200, json=snapshot)])
+    order = await max_staff_source.read_staff_checkout_order(
+        broker.session, broker.session.project.id, UUID(snapshot["id"]), 42,
+    )
+    assert str(order.id) == snapshot["id"]
+    assert (order.total_kopecks, order.currency, order.actor_id) == (1234, "RUB", 42)
+    assert order.created_at.isoformat() == "2026-10-29T09:00:00+00:00"
+    assert not hasattr(order, "note") and not hasattr(order, "customer_name")
 
 
 def test_assertion_matches_independent_crypto_and_exact_body():

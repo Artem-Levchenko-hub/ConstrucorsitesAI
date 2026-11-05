@@ -228,8 +228,8 @@
 .yl-plan ul { display: grid; gap: 11px; margin-block: 28px; }
 .yl-plan li { display: flex; gap: 10px; font-size: 15px; line-height: 1.5; color: var(--yl-ink-2); }
 .yl-plan li svg { flex-shrink: 0; margin-top: 3px; width: 16px; color: #1d7a45; }
-.yl-plan .yl-cta { margin-top: auto; justify-content: center; }
-.yl-plan .yl-note { margin-top: 16px; }
+.yl-plan .yl-note { margin-top: auto; padding-top: 8px; }
+.yl-plan-actions { display: flex; justify-content: center; margin-top: 24px; }
 
 /* ── 8. вопросы ──────────────────────────────────────────────────────────── */
 .yl-faq-layout { display: grid; grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr); gap: clamp(32px, 4vw, 64px); align-items: start; }
@@ -262,7 +262,6 @@
 }
 .yl-sendoff h2 { font-size: clamp(40px, 6.8vw, 100px); line-height: 0.94; letter-spacing: -0.042em; }
 .yl-sendoff .yl-cta { margin-top: 40px; }
-.yl-sendoff small { display: block; margin-top: 18px; font-size: 13px; color: rgb(255 255 255 / 0.82); }
 
 /* ── подвал ──────────────────────────────────────────────────────────────── */
 .yl-footer { padding-block: 64px 40px; background: var(--yl-bg); border-top: 1px solid var(--yl-line); }

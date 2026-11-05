@@ -46,9 +46,11 @@ async def request_project_cell_deletion(
         raise ApiError("not_found", "project not found", 404)
     if current_project.owner_id != expected_owner:
         raise ApiError("forbidden", "not your project", 403)
+    from yleum_api.services.max_staff_checkout import assert_no_unsettled_staff_checkout
     from yleum_api.services.restorations import assert_no_active_restoration
 
     await session.execute(select(Project.id).where(Project.id == project.id).with_for_update())
+    await assert_no_unsettled_staff_checkout(session, project.id)
     await assert_no_active_restoration(session, project.id)
     active = await session.scalar(select(GenerationRun.id).where(
         GenerationRun.project_id == project.id,

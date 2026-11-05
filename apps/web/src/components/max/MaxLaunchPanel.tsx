@@ -121,7 +121,7 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
             {!standalone && published && <Button asChild variant="outline"><Link href={`/max/${project.id}/manage`}>Управление</Link></Button>}
             {!standalone && <Button asChild variant="outline"><Link href={`/max/${project.id}`} onClick={onClose}>{published ? "Подготовить обновление" : "В редактор"}</Link></Button>}
           </div>
-          {productionUrl && <div className="max-launch-address"><a data-testid="max-launch-app-url" href={productionUrl} target="_blank" rel="noreferrer">{productionUrl}</a><Button variant="ghost" size="icon" aria-label="Скопировать адрес приложения" onClick={() => void copyUrl()}><Copy className="size-4" /></Button></div>}
+          {productionUrl && <div className="max-launch-address"><span data-testid="max-launch-app-url" title={productionUrl}>{productionUrl}</span><Button variant="ghost" size="icon" aria-label="Скопировать адрес приложения" onClick={() => void copyUrl()}><Copy className="size-4" /></Button></div>}
           {published && !items.find(item => item.id === "max_url")?.done && <div className="max-launch-notice"><p>Добавьте адрес в кнопку приложения в кабинете MAX, затем подтвердите его в «Подключениях».</p><a href="https://business.max.ru/" target="_blank" rel="noreferrer" onClick={openMaxCabinet} data-testid="max-open-business-cabinet">Открыть кабинет MAX ↗</a><Link href={`/max/${project.id}/integrations`}>Подтвердить адрес</Link></div>}
         </section>
         <MaxPublicationRequirements projectId={project.id} items={items} status={readiness.isError ? "error" : available ? "ready" : "loading"} promotedId={published || busyDeploy ? null : currentStage?.id ?? null} />

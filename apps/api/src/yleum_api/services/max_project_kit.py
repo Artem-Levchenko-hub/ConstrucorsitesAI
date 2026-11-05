@@ -21,7 +21,8 @@ from yleum_api.services.max_management_contract import build_management_contract
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 34
+MAX_MANAGED_KIT_VERSION = 35
+# v35 adds exact staff reads and order-linked checkout to managed source.
 # v34 sanitizes catalog selection, adopts legacy orders and recovers pending intents.
 # v33 adds explicit owner management and typed business resources in product DB.
 # v32 adds the owner catalog's shared server/client configuration file contract.

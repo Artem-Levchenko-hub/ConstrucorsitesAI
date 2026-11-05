@@ -23,6 +23,7 @@ def app(monkeypatch):
     owner = NS(id=uuid4(), is_anon=False)
     app.dependency_overrides[get_current_user] = lambda: owner
     app.dependency_overrides[get_session] = lambda: NS()
+    monkeypatch.setattr(routes, "legacy_history_cutoff", AsyncMock(return_value=None))
     return app, routes, owner
 
 

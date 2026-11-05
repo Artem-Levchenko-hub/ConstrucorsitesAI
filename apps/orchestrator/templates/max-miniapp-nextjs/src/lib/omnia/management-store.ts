@@ -192,6 +192,26 @@ export async function createManagedRecord(
 }
 const selection =
   "SELECT a.id,a.created_at,a.payload,m.resource,m.status,m.note,m.revision FROM max_business_actions a JOIN max_owner_records m ON m.record_id=a.id";
+const exactRecordSelection =
+  `${selection} WHERE a.id=$1 AND m.project_id=$2 AND m.resource=$3 AND a.action_type=$4 AND a.payload->>'management_protocol'='1' AND a.payload->>'resource'=$3`;
+
+export async function getManagedRecord(
+  owner: OwnerIdentity,
+  id: string,
+  resource: ResourceId,
+  actor?: string,
+): Promise<ManagedRecord> {
+  return transaction({ owner }, async (client) => {
+    const result = await client.query(
+      `${exactRecordSelection} AND a.max_user_id=m.max_user_id AND ($5::text IS NULL OR a.max_user_id=$5)`,
+      [id, owner.project_id, resource, ACTION_TYPES[resource], actor ?? null],
+    );
+    const row = result.rows[0];
+    if (!row) throw new ManagementError("not_found", 404);
+    return projectManagedRecord(row, true);
+  });
+}
+
 function cursorPosition(
   query: RecordsQuery,
   scope: Scope,
@@ -279,7 +299,7 @@ export async function updateManagedRecord(
       return receipt.rows[0].response as ManagedRecord;
     }
     const result = await client.query(
-      `${selection} WHERE a.id=$1 AND m.project_id=$2 AND m.resource=$3 AND a.action_type=$4 AND a.payload->>'management_protocol'='1' AND a.payload->>'resource'=$3 FOR UPDATE OF m`,
+      `${exactRecordSelection} FOR UPDATE OF m`,
       [id, owner.project_id, resource, ACTION_TYPES[resource]],
     );
     const row = result.rows[0];

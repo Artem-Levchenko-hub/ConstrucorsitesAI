@@ -127,7 +127,8 @@ it("waits for deployment details before announcing the already-ready version as 
   expect(container.querySelector('[data-testid="max-launch-app-url"]')).toBeNull();
   await act(async () => resolve(release));
   await settle(() => expect(container.textContent).toContain("Приложение опубликовано"));
-  expect(container.querySelector('[data-testid="max-launch-app-url"]')?.getAttribute("href")).toBe("https://app.example.com");
+  expect(container.querySelector('[data-testid="max-launch-app-url"]')?.textContent).toBe("https://app.example.com");
+  expect(container.querySelectorAll('a[href="https://app.example.com"]')).toHaveLength(1);
 });
 it.each([true, false])("reports publication evidence without claiming continuous uptime (published=%s)", async published => {
   api.readiness.mockResolvedValue(readiness(published));
@@ -187,7 +188,8 @@ it.each(["failed", "queued", "config_only", "already_current"] as const)("summar
   await settle(() => expect(container.querySelector(".max-dashboard-release dl")).not.toBeNull());
   const fields = [...container.querySelectorAll(".max-dashboard-release dd")];
   expect(fields[0].textContent).toBe("Ваше приложение");
-  expect(fields[1].querySelector("a")?.getAttribute("href")).toBe(activePublication.prod_url);
+  expect(fields[1].textContent).toBe(activePublication.prod_url);
+  expect(container.querySelectorAll(`a[href="${activePublication.prod_url}"]`)).toHaveLength(1);
   expect(fields[2].textContent).toBe(relativeDateLabel(activePublication.finished_at));
   if (phase === "failed") expect(container.textContent).toContain("Последняя публикация не завершилась");
   if (phase === "queued") expect(container.textContent).toContain("В очереди — публикация выполняется на сервере");

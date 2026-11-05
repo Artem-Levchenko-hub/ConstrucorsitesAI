@@ -84,22 +84,16 @@ export function LandingPricing({ plans }: { plans: BillingPlan[] | null }) {
               <ul>
                 {rows.map(row => <li key={row.key}><Check aria-hidden="true" /><span>{row.label}: <strong>{row.value}</strong></span></li>)}
               </ul>
-              <Link
-                href={isFree ? "/max/register" : ACCOUNT_HREF}
-                className={`yl-cta yl-cta--lg${isFree ? "" : " yl-cta--outline"}`}
-                data-marketing={isFree ? "signup_click" : undefined}
-                data-placement={isFree ? "free" : undefined}
-              >
-                {isFree ? "Начать бесплатно" : `Выбрать ${name}`}<ArrowRight size={18} aria-hidden="true" />
-              </Link>
               <p className="yl-note">{planPeriodDescription(plan)}</p>
             </article>
           );
         }) : <div role="status" className="yl-plan" style={{ gridColumn: "1 / -1" }}>
           <h3>Не удалось загрузить тарифы</h3>
           <p>Актуальные цены временно недоступны. Обновите страницу или откройте раздел тарифов в аккаунте.</p>
-          <Link href={ACCOUNT_HREF} className="yl-cta yl-cta--lg yl-cta--outline">Открыть тарифы в аккаунте<ArrowRight size={18} aria-hidden="true" /></Link>
         </div>}
+      </div>
+      <div className="yl-wrap yl-plan-actions">
+        <Link href={ACCOUNT_HREF} className="yl-cta yl-cta--lg yl-cta--outline">Открыть тарифы в аккаунте<ArrowRight size={18} aria-hidden="true" /></Link>
       </div>
     </section>
   );

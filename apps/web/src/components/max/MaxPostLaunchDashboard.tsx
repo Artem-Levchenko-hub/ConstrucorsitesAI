@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ArrowUpRight, Check, ChevronDown, CircleAlert, ExternalLink, Loader2, RefreshCw } from "lucide-react";
+import { ArrowUpRight, Check, ChevronDown, CircleAlert, Loader2, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { MaxOwnerAnalytics } from "@/components/max/MaxOwnerAnalytics";
 import { MaxSectionShell } from "@/components/max/MaxSectionShell";
@@ -69,7 +69,6 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
           <div className="max-dashboard-actions">
             {url ? <Button asChild><a href={url} target="_blank" rel="noreferrer">Открыть приложение <ArrowUpRight className="size-4" /></a></Button>
               : <Button asChild><Link href={`/max/${projectId}/publish`}>{active ? "Ход публикации" : "Подготовить запуск"}</Link></Button>}
-            <Button asChild variant="outline"><Link href={`/max/${projectId}`}>Редактировать</Link></Button>
           </div>
           </div>
           {statusError && <p className="max-dashboard-status-hint">{MAX_STATUS_COPY.publication.hint}</p>}
@@ -97,7 +96,7 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
             <dl>
               <div><dt>Что опубликовано</dt><dd>{releaseName}</dd></div>
               <div><dt>Где открывается</dt><dd>{url
-                ? <a className="max-dashboard-url" href={url} target="_blank" rel="noreferrer">{url}<ExternalLink className="size-4 shrink-0" /></a>
+                ? <span className="max-dashboard-url">{url}</span>
                 : "Адрес появится после успешной публикации"}</dd></div>
               <div><dt>Когда</dt><dd>{releaseWhen}</dd></div>
             </dl>
@@ -109,11 +108,10 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
         <div className="max-dashboard-system-row"><div><h3>Рабочая среда редактора</h3><p>В ней открывается живое превью, пока вы правите приложение. На опубликованное приложение у пользователей она не влияет.</p></div>
           <div className="max-dashboard-runtime">{runtime.isError ? <p className="text-danger-fg">{MAX_UNKNOWN_LABEL}</p> : runtime.isPending ? <p>Проверяем…</p> : <p>{runtime.data ? runtimeLabels[runtime.data.state] : "Нет данных"}</p>}</div>
         </div>
-        <div className="max-dashboard-system-row"><div><h3>Безопасный вход MAX</h3><p>Подключение бота для входа пользователей</p></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integrationLabel}</span><Button asChild variant="outline" size="sm"><Link href={`/max/${projectId}/integrations`}>Настроить MAX</Link></Button></div>
+        <div className="max-dashboard-system-row"><div><h3>Вход через MAX</h3><p>Бот, через которого пользователи открывают приложение</p></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integrationLabel}</span></div>
         <div className="max-dashboard-system-row"><div><h3>Связь с MAX</h3></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integration.isError ? MAX_UNKNOWN_LABEL : integration.isPending ? "Проверяем…" : integration.data?.status === "active" ? "Подключена" : "Не активна"}</span></div>
       </section>
           </div>
-          <Link className="max-dashboard-settings-link" href={`/max/${projectId}?data=details`}>Данные и настройки<ArrowUpRight className="size-4" /></Link>
         </details>
       </section>
     </MaxSectionShell>

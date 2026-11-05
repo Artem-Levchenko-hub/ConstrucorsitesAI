@@ -13,6 +13,18 @@ import {
 } from "@/lib/omnia/management-resources";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+function exactActor(value: unknown): string | undefined {
+  if (value === undefined) return;
+  if (
+    typeof value !== "string" ||
+    !/^[1-9][0-9]{0,18}$/.test(value) ||
+    BigInt(value) > 9_223_372_036_854_775_807n
+  )
+    throw new ManagementError("invalid_request");
+  return value;
+}
+
 export async function POST(request: Request): Promise<Response> {
   try {
     // Reject unauthenticated requests before filesystem/schema/DB access.
@@ -27,14 +39,26 @@ export async function POST(request: Request): Promise<Response> {
       "record_id",
       "resource",
       "update",
+      "staff_read",
+      "actor",
     ]);
-    const { assertManagementSchema, listManagedRecords, updateManagedRecord } =
-      await import("@/lib/omnia/management-store");
+    const {
+      assertManagementSchema,
+      getManagedRecord,
+      listManagedRecords,
+      updateManagedRecord,
+    } = await import("@/lib/omnia/management-store");
     if (value.op === "describe") {
-      object(value, ["op"]);
+      object(value, ["op", "staff_read"]);
+      if (value.staff_read !== undefined && value.staff_read !== true)
+        throw new ManagementError("invalid_request");
       await assertManagementSchema();
       return Response.json(
-        { publication_id: identity.publication_id, contract },
+        {
+          publication_id: identity.publication_id,
+          contract,
+          ...(value.staff_read === true ? { staff_read: true } : {}),
+        },
         { headers: { "Cache-Control": "no-store" } },
       );
     }
@@ -44,6 +68,19 @@ export async function POST(request: Request): Promise<Response> {
       requireResource(contract, query.resource);
       return Response.json(
         await listManagedRecords({ owner: identity }, query),
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    }
+    if (value.op === "get") {
+      object(value, ["op", "record_id", "resource", "actor"]);
+      const resource = requireResource(contract, value.resource);
+      return Response.json(
+        await getManagedRecord(
+          identity,
+          uuid(value.record_id),
+          resource,
+          exactActor(value.actor),
+        ),
         { headers: { "Cache-Control": "no-store" } },
       );
     }

@@ -35,6 +35,10 @@ _SDK = {
     "@/lib/omnia/catalog-client": {"useYleumCatalog", "useYleumCatalogSelection"},
     "react": {"useState", "useEffect", "useCallback"},
 }
+_CHECKOUT_SOURCE = "src/lib/omnia/integration-client"
+_LEGACY_CHECKOUT = {"createYleumPayment", "createOmniaPayment"}
+_LINKED_CHECKOUT = {"createYleumOrderCheckout", "getYleumOrderCheckout"}
+_CHECKOUT_ORDER_ID = "checkout-order-id"
 # Only the explicitly supported React form/button events are connection evidence.
 _INTRINSIC_EVENTS = {"onClick", "onClickCapture", "onSubmit", "onSubmitCapture"}
 _VISIBLE_FIELDS = {
@@ -128,7 +132,7 @@ def management_probe_resources(files: Mapping[str, str]) -> tuple[str, ...]:
 
 
 class _Connections:
-    def __init__(self, files: Mapping[str, str]):
+    def __init__(self, files: Mapping[str, str], *, inspect_checkout: bool = False):
         self.programs = {
             path: Parser(_language()).parse(source.encode()).root_node
             for path, source in files.items()
@@ -140,6 +144,10 @@ class _Connections:
         self.modules: dict[str, dict[str, _Value]] = {}
         self.created: set[str] = set()
         self.rendered: set[str] = set()
+        self.inspect_checkout = inspect_checkout
+        self.checkout_entry = False
+        self.checkout_legacy_probe = False
+        self.checkout_calls: set[str] = set()
         self.catalog_selection = False
         self.unsupported_constant_control = False
         self.unsupported_effects = False
@@ -150,12 +158,16 @@ class _Connections:
         self.projection_depth = 0
         self.projections: dict[tuple[str, int], bool] = {}
 
-    def _resolve(self, path: str, source: str) -> str | None:
-        base = (
+    @staticmethod
+    def _source_base(path: str, source: str) -> str:
+        return (
             "src/" + source[2:]
             if source.startswith("@/")
             else posixpath.normpath(posixpath.join(posixpath.dirname(path), source))
         )
+
+    def _resolve(self, path: str, source: str) -> str | None:
+        base = self._source_base(path, source)
         return next(
             (
                 name
@@ -176,6 +188,14 @@ class _Connections:
         for statement in program.named_children:
             if statement.type == "import_statement":
                 source = _text(statement.child_by_field_name("source"))[1:-1]
+                checkout_import = (
+                    self.inspect_checkout and self._source_base(path, source) == _CHECKOUT_SOURCE
+                )
+                sdk = (
+                    _LINKED_CHECKOUT | _LEGACY_CHECKOUT
+                    if checkout_import
+                    else _SDK.get(source, ())
+                )
                 for clause in statement.named_children:
                     if clause.type != "import_clause":
                         continue
@@ -189,7 +209,7 @@ class _Connections:
                             for spec in child.named_children:
                                 name = _text(spec.child_by_field_name("name"))
                                 alias = _text(spec.child_by_field_name("alias")) or name
-                                if name in _SDK.get(source, ()):
+                                if name in sdk:
                                     env[alias] = _Value(sdk=name)
                                 else:
                                     target = self._resolve(path, source)
@@ -198,6 +218,10 @@ class _Connections:
                                         if target
                                         else _Value()
                                     )
+                        elif child.type == "namespace_import" and checkout_import:
+                            env[_text(child.named_children[0])] = _Value(
+                                props={name: _Value(sdk=name) for name in sdk}
+                            )
             else:
                 declaration = (
                     statement.child_by_field_name("declaration")
@@ -641,16 +665,33 @@ class _Connections:
                     self.unsupported_constant_control = True
                     return True, _Value()
                 truth = _literal_truth(condition.literal)
-                branch = child.child_by_field_name(
-                    "alternative" if truth is False else "consequence"
-                )
+                alternative = child.child_by_field_name("alternative")
+                if self.checkout_entry and alternative is not None and alternative.named_children:
+                    # An unknown condition can still run a legacy charge in
+                    # its else arm. That arm must not add linked-flow proof.
+                    alternative = alternative.named_children[-1]
+                    if truth is None:
+                        self.checkout_legacy_branch(alternative, dict(env), path, render)
+                branch = alternative if truth is False else child.child_by_field_name("consequence")
                 if branch is not None:
                     returned, value = self.statement(branch, env, path, render)
                     if returned and truth is not None:
                         return True, value
             else:
-                self.statement(child, env, path, render)
+                returned, value = self.statement(child, env, path, render)
+                if self.checkout_entry and returned:
+                    return True, value
         return False, _Value()
+
+    def checkout_legacy_branch(
+        self, node: Node, env: dict[str, _Value], path: str, render: bool,
+    ) -> tuple[bool, _Value]:
+        previous = self.checkout_legacy_probe
+        self.checkout_legacy_probe = True
+        try:
+            return self.statement(node, env, path, render)
+        finally:
+            self.checkout_legacy_probe = previous
 
     def statement(
         self, node: Node, env: dict[str, _Value], path: str, render: bool
@@ -669,7 +710,27 @@ class _Connections:
         elif node.type == "try_statement":
             body = node.child_by_field_name("body")
             if body is not None:
-                return self.block(body, env, path, render)
+                returned, value = self.block(body, env, path, render)
+                if self.checkout_entry:
+                    handler = node.child_by_field_name("handler")
+                    if handler is not None:
+                        handler_body = handler.child_by_field_name("body")
+                        if handler_body is not None:
+                            handler_env = dict(env)
+                            parameter = handler.child_by_field_name("parameter")
+                            self.bind(parameter, _Value(), handler_env)
+                            handled, _ = self.checkout_legacy_branch(
+                                handler_body, handler_env, path, render
+                            )
+                            returned = returned and handled
+                    finalizer = node.child_by_field_name("finalizer")
+                    if finalizer is not None:
+                        final_body = finalizer.child_by_field_name("body")
+                        if final_body is not None:
+                            finalized, final_value = self.block(final_body, env, path, render)
+                            if finalized:
+                                return True, final_value
+                return returned, value
         elif node.type not in _TYPE_ONLY_DECLARATIONS | {"comment", "empty_statement"}:
             self.unsupported_effects = True
         return False, _Value()
@@ -982,6 +1043,24 @@ class _Connections:
             self.created.add(
                 next(resource for resource, method in _CREATE.items() if method == fn.sdk)
             )
+            if (
+                self.checkout_entry
+                and not self.checkout_legacy_probe
+                and fn.sdk == "createManagedOrder"
+            ):
+                return _Value(pending=_Value(props={"id": _Value(tags={_CHECKOUT_ORDER_ID})}))
+        if self.inspect_checkout and fn.sdk in _LEGACY_CHECKOUT:
+            self.checkout_calls.add(fn.sdk)
+        elif self.checkout_entry and not self.checkout_legacy_probe:
+            if fn.sdk == "getYleumOrderCheckout" and args and args[0].literal is None:
+                self.checkout_calls.add(fn.sdk)
+            elif (
+                fn.sdk == "createYleumOrderCheckout"
+                and self.event_depth
+                and args
+                and _CHECKOUT_ORDER_ID in args[0].tags
+            ):
+                self.checkout_calls.add(fn.sdk)
         if fn.function is None and not fn.sdk and fn.setter is None:
             root = self.mutation_root(target, env)
             if root is not None:
@@ -1045,10 +1124,25 @@ class _Connections:
         if "src/app/page.tsx" in self.programs:
             # Entry props come from the framework, not source-defined getters
             # closing over the component's SDK collections.
-            self.invoke(
-                self.module("src/app/page.tsx").get("default", _Value()),
-                [_Value(passive=True)], True,
-            )
+            entry = self.module("src/app/page.tsx").get("default", _Value())
+            self.checkout_entry = self.inspect_checkout
+            self.invoke(entry, [_Value(passive=True)], True)
+
+
+def linked_checkout_connected(files: Mapping[str, str]) -> bool:
+    """Find a linked checkout on the app entry using a created order's SDK ID."""
+    connections = _Connections(files, inspect_checkout=True)
+    try:
+        connections.analyze()
+    except RecursionError:
+        return False
+    return (
+        connections.steps <= 4000
+        and not connections.unsupported_effects
+        and not connections.unsupported_constant_control
+        and _LINKED_CHECKOUT <= connections.checkout_calls
+        and not _LEGACY_CHECKOUT & connections.checkout_calls
+    )
 
 
 def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:

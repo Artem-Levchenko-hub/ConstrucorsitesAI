@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from yleum_api.core.config import get_settings
 from yleum_api.core.db import dispose_engine, get_engine
@@ -39,6 +40,8 @@ from yleum_api.routers import max_accounts as max_accounts_router
 from yleum_api.routers import max_analytics as max_analytics_router
 from yleum_api.routers import max_integrations as max_integrations_router
 from yleum_api.routers import max_management as max_management_router
+from yleum_api.routers import max_staff as max_staff_router
+from yleum_api.routers import max_staff_checkout as max_staff_checkout_router
 from yleum_api.routers import max_studio as max_studio_router
 from yleum_api.routers import messages as messages_router
 from yleum_api.routers import models_router
@@ -61,6 +64,7 @@ from yleum_api.routers import ws as ws_router
 from yleum_api.services import readiness
 from yleum_api.services.generation.supervisor import resume_capacity_queued_generations
 from yleum_api.services.generation_runs import recover_interrupted_generation_runs
+from yleum_api.services.max_staff_checkout import run_staff_checkout_reconciliation_loop
 from yleum_api.services.project_cell_capacity import advance_terminal_generation_cleanup
 from yleum_api.services.project_cell_runtime import advance_owner_wake_operations
 from yleum_api.services.project_cells import recover_interrupted_cell_operations
@@ -136,7 +140,7 @@ async def _background_services(
     try:
         await _reader_compatibility_gate()
         await asyncio.to_thread(reconcile_public_bucket_policies)
-        get_engine()
+        engine = get_engine()
         initialized = True
         await _reader_compatibility_gate()
         recovered = await recover_interrupted_generation_runs()
@@ -165,6 +169,9 @@ async def _background_services(
             asyncio.create_task(_monitor_capacity_queued_generations()),
             asyncio.create_task(_monitor_owner_wake_operations()),
             asyncio.create_task(_monitor_terminal_generation_cleanup()),
+            asyncio.create_task(run_staff_checkout_reconciliation_loop(
+                async_sessionmaker(engine, expire_on_commit=False),
+            )),
         ]
         yield
     except Exception:
@@ -278,6 +285,8 @@ def create_app() -> FastAPI:
     app.include_router(max_accounts_router.router)
     app.include_router(max_studio_router.router)
     app.include_router(max_management_router.router)
+    app.include_router(max_staff_router.router)
+    app.include_router(max_staff_checkout_router.router)
     app.include_router(publication_migrations_router.router)
     app.include_router(rollback_router.router)
     app.include_router(task_board_router.router)

@@ -60,6 +60,33 @@ it("retains registration admission for other MAX routes", () => {
   expect(location.searchParams.get("next")).toBe("/max/owner-project");
 });
 
+it("preserves a clean staff destination with a stale session cookie", async () => {
+  vi.stubEnv("NEXT_PUBLIC_USE_MOCKS", "false");
+  state.token = "stale";
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 401 })));
+  const path = "/max/staff/00000000-0000-4000-8000-000000000001";
+  const response = middleware(new NextRequest(`https://example.test${path}?token=discard`, {
+    headers: { cookie: "omnia_session=stale", "x-omnia-return-to": "//evil.test" },
+  }));
+  state.target = response.headers.get("x-middleware-request-x-omnia-return-to")!;
+  await expect(AppLayout({ children: null })).rejects.toMatchObject({
+    digest: expect.stringContaining(`;/login?next=${encodeURIComponent(path)};`),
+  });
+});
+
+it("keeps the staff join page through the real login form and registration link", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const path = "/max/staff/join";
+  const page = await LoginPage({ searchParams: Promise.resolve({ next: `${path}?token=discard#token=discard` }) });
+  const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(page));
+    expect(container.querySelector<HTMLInputElement>('input[name="next"]')?.value).toBe(path);
+    expect(container.querySelector('a[href^="/max/register"]')?.getAttribute("href")).toBe(`/max/register?next=${encodeURIComponent(path)}`);
+    expect(container.innerHTML).not.toContain("discard");
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
 it.each(["https://evil.test/max/p/preview", "//evil.test/max/p/preview", "/max/p/preview/extra",
   "/max/p/preview-evil", "/max/p/editor", "/max/p%2Fq/preview", "/max//preview"])("does not broaden login returns for %s", async target => {
   vi.stubEnv("NEXT_PUBLIC_USE_MOCKS", "false");

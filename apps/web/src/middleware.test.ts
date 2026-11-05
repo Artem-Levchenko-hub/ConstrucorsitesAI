@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 import { config, middleware } from "./middleware";
@@ -108,6 +108,31 @@ describe("auth middleware", () => {
     expect(response.headers.get("location")).toBeNull();
     expect(response.headers.get("x-middleware-next")).toBe("1");
   });
+
+  it("keeps the invitation landing public and private to the current navigation", () => {
+    const response = middleware(request("/max/staff/join"));
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("keeps invitation and auth on the same canonical origin", () => {
+    vi.stubEnv("PUBLIC_ORIGIN", "https://canonical.example.test");
+    try {
+      const response = middleware(request("/max/staff/join?token=discard"));
+      expect(response.headers.get("location")).toBe("https://canonical.example.test/max/staff/join");
+      expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it.each(["/max/staff", "/max/staff/00000000-0000-4000-8000-000000000001"])(
+    "preserves the staff destination when directing an existing employee to login (%s)", path => {
+      const response = middleware(request(`${path}?token=discard`));
+      const destination = new URL(response.headers.get("location")!);
+      expect(destination.pathname).toBe("/login");
+      expect(destination.searchParams.get("next")).toBe(path);
+    },
+  );
 
   it("still sends unauthenticated protected routes to login", () => {
     const response = middleware(request("/billing/transactions?filter=recent"));

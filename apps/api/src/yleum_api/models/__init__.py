@@ -54,6 +54,14 @@ from yleum_api.models.lead import Lead
 from yleum_api.models.max_analytics import MaxAnalyticsEvent
 from yleum_api.models.max_integration import MaxIntegration
 from yleum_api.models.max_project_config import MaxProjectConfig
+from yleum_api.models.max_staff import (
+    MaxStaffAudit,
+    MaxStaffInvitation,
+    MaxStaffMember,
+    MaxStaffSettings,
+    MaxStaffWork,
+)
+from yleum_api.models.max_staff_checkout import MaxStaffPaymentAttempt
 from yleum_api.models.message import Message
 from yleum_api.models.moysklad import MoyskladInstallation, MoyskladVendorReceipt
 from yleum_api.models.oauth_login import OAuthLoginState, UserIdentity
@@ -142,6 +150,12 @@ __all__ = [
     "MaxAnalyticsEvent",
     "MaxIntegration",
     "MaxProjectConfig",
+    "MaxStaffAudit",
+    "MaxStaffInvitation",
+    "MaxStaffMember",
+    "MaxStaffPaymentAttempt",
+    "MaxStaffSettings",
+    "MaxStaffWork",
     "Message",
     "MoyskladInstallation",
     "MoyskladVendorReceipt",

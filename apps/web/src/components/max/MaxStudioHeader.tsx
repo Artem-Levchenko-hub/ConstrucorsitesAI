@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronDown, CircleHelp, CreditCard, LogOut, Receipt, Shield, User, WalletCards } from "lucide-react";
+import { ChevronDown, CircleHelp, CreditCard, LogOut, Receipt, Shield, User, UsersRound, WalletCards } from "lucide-react";
 
 import { logoutAction } from "@/app/(auth)/actions";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import { LearningButton } from "@/components/learning/ProductLearning";
+import { MAX_STAFF_PATH } from "@/lib/max-staff-path";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,6 +21,7 @@ import "./max-account-dropdown.css";
 import "./max-studio.css";
 
 const accountLinks = [
+  [MAX_STAFF_PATH, UsersRound, "Кабинет сотрудника"],
   ["/account", User, "Профиль"],
   ["/account/security", Shield, "Безопасность"],
   ["/billing", WalletCards, "Баланс"],

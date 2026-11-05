@@ -29,11 +29,13 @@ function dayBound(value: string, end = false): string | undefined {
   return date.toISOString();
 }
 
-export function MaxOwnerRecords(props: { projectId: string; resource: ResourceDefinition; onDirtyChange?: (dirty: boolean) => void }) {
+type RecordsProps = { projectId: string; resource: ResourceDefinition; onDirtyChange?: (dirty: boolean) => void; readOnly?: boolean };
+
+export function MaxOwnerRecords(props: RecordsProps) {
   return <Records key={`${props.projectId}:${props.resource.id}`} {...props} />;
 }
 
-function Records({ projectId, resource, onDirtyChange }: { projectId: string; resource: ResourceDefinition; onDirtyChange?: (dirty: boolean) => void }) {
+function Records({ projectId, resource, onDirtyChange, readOnly = false }: RecordsProps) {
   const [filters, setFilters] = useState<Filters>(initialFilters);
   const [cursors, setCursors] = useState<Array<string | undefined>>([undefined]);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -78,7 +80,7 @@ function Records({ projectId, resource, onDirtyChange }: { projectId: string; re
     setDraft(previous => previous ? { ...previous, ...patch, operation: previous.error && !ambiguous(previous.error) ? undefined : previous.operation, error: undefined, latest: undefined, reloadMessage: undefined } : previous);
   }
   async function save() {
-    if (!draft || saving.current || !dirty(draft) || draft.note.length > 2000) return;
+    if (readOnly || !draft || saving.current || !dirty(draft) || draft.note.length > 2000) return;
     const operation: OwnerRecordUpdate = draft.operation ?? {
       expected_revision: draft.record.revision, operation_key: crypto.randomUUID(),
       ...(draft.status !== draft.record.status ? { status: draft.status } : {}),
@@ -108,7 +110,7 @@ function Records({ projectId, resource, onDirtyChange }: { projectId: string; re
   const filtered = Boolean(filters.query || filters.status || filters.from || filters.to);
   const rows = records.data?.records ?? [];
   return <section className="max-owner-records" aria-label={resource.label}>
-    <header className="max-owner-section-heading"><h2>{resource.label}</h2><p>Обращения клиентов из опубликованного приложения.</p></header>
+    <header className="max-owner-section-heading"><h2>{resource.label}</h2><p>{readOnly ? "Обращения, полученные до подключения команды." : "Обращения клиентов из опубликованного приложения."}</p></header>
     <fieldset className="max-owner-filters" aria-label="Фильтры обращений" disabled={pending}>
       <label>Поиск
         <span className="max-owner-search-field">
@@ -190,7 +192,8 @@ function Records({ projectId, resource, onDirtyChange }: { projectId: string; re
           </>}
         </p>}
         {draft.record.items.length > 0 && <div><h4>Состав заказа</h4><ul>{draft.record.items.map((item, index) => <li key={`${item.catalog_id}:${index}`}><strong>{item.title}</strong>{item.option && <span>{item.option}</span>}<span>{item.quantity.toLocaleString("ru-RU")} × {ownerMoney(item.unit_price_kopecks)}</span></li>)}</ul></div>}
-        <form onSubmit={event => { event.preventDefault(); void save(); }}>
+        {readOnly && draft.record.note && <p className="max-staff-comment"><strong>Заметка владельца</strong>{draft.record.note}</p>}
+        {!readOnly && <form onSubmit={event => { event.preventDefault(); void save(); }}>
           <h4>Работа с обращением</h4>
           <label>Статус<select aria-label="Статус обращения" disabled={locked} value={draft.status} onChange={event => edit({ status: event.target.value as OwnerStatus })}>{[draft.record.status, ...(resource.transitions[draft.record.status] ?? [])].map(status => <option key={status} value={status}>{resource.status_labels[status]}</option>)}</select></label>
           <label>Заметка владельца<textarea aria-label="Заметка владельца" maxLength={2000} rows={5} value={draft.note} disabled={locked} onChange={event => edit({ note: event.target.value })} /></label><p className="max-owner-hint">Видна только владельцу. До 2000 символов.</p>
@@ -200,7 +203,7 @@ function Records({ projectId, resource, onDirtyChange }: { projectId: string; re
           {saved && <p role="status">Изменения сохранены</p>}
           {pending && <p role="status">Сохраняем изменения…</p>}
           <div className="max-owner-actions max-owner-form-footer"><Button type="submit" aria-busy={pending} disabled={!unsaved || pending || draft.note.length > 2000}>Сохранить обращение</Button><Button type="button" variant="outline" disabled={pending || ambiguous(draft.error)} onClick={() => { setDraft({ record: draft.record, status: draft.record.status, note: draft.record.note ?? "" }); setSaved(false); }}>Отменить правки</Button></div>
-        </form>
+        </form>}
       </article>}
     </div>}
   </section>;

@@ -72,6 +72,15 @@ it("keeps the cookie-updated registration page available to its client action st
   expect(document.querySelector(".max-auth-card > p:not([role])")).toBeNull();
 });
 
+it("carries the staff join destination from registration back to login", async () => {
+  const next = "/max/staff/join";
+  const page = await MaxRegisterPage({ searchParams: Promise.resolve({ next: `${next}?token=discard` }) });
+  const html = renderToStaticMarkup(page);
+  const document = new DOMParser().parseFromString(html, "text/html");
+  expect(document.querySelector('a[href^="/login"]')?.getAttribute("href")).toBe(`/login?next=${encodeURIComponent(next)}`);
+  expect(html).not.toContain("discard");
+});
+
 async function registration(run: (container: HTMLDivElement) => Promise<void>) {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);

@@ -27,6 +27,20 @@ ErrorCode = Literal[
     "operation_conflict",
     "quote_changed",
     "invalid_request",
+    # Separate project team and work queues.
+    "staff_access_denied",
+    "staff_assignee_unavailable",
+    "staff_checkout_not_enabled",
+    "staff_invite_account_mismatch",
+    "staff_invite_invalid",
+    "staff_member_exists",
+    "staff_order_scheduled",
+    "staff_queue_active",
+    "staff_queue_already_enabled",
+    "staff_record_changed",
+    "staff_team_limit",
+    "staff_test_order",
+    "staff_verification_required",
     # Why a prompt (or another claim on the project) was refused with 409. The
     # client must not guess: only `generation_active` means "a build is running".
     "generation_active",

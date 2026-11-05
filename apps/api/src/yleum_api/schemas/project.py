@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
+from yleum_api.schemas.max_staff import StaffSettings
 from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.services.design_presets import PRESETS
 
@@ -111,6 +112,7 @@ class ProjectCreate(BaseModel):
     language: str | None = None
     # Wizard settings and module choices commit atomically with the project.
     max_config: MaxProjectConfigPayload | None = None
+    staff_settings: StaffSettings | None = None
 
     @field_validator("max_config")
     @classmethod

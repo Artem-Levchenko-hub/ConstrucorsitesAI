@@ -12,6 +12,7 @@ from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.services.max_content_delivery import public_business_config
 from yleum_api.services.max_management_contract import build_management_contract
 from yleum_api.services.max_management_generation import (
+    linked_checkout_connected,
     management_implemented_capabilities,
     management_source_gap,
 )
@@ -110,6 +111,122 @@ CREATE_METHOD = {
     "orders": "createManagedOrder", "leads": "createManagedLead",
     "bookings": "createManagedBooking",
 }
+
+
+CHECKOUT_PAGE = """
+import { useEffect } from 'react';
+import { createManagedOrder as saveOrder } from '@/lib/omnia/business-client';
+import {
+    createYleumOrderCheckout as startCheckout,
+    getYleumOrderCheckout as readCheckout,
+    getReturnedYleumCheckoutOrderId as returnedOrder,
+    createOmniaPayment as legacyPayment,
+} from '@/lib/omnia/integration-client';
+
+export default function Page() {
+    useEffect(() => {
+        const orderId = returnedOrder();
+        if (orderId) void readCheckout(orderId);
+    }, []);
+    async function placeOrder() {
+        const order = await saveOrder({ customer_name: 'Тест' });
+        await startCheckout(order.id);
+    }
+    return <button onClick={placeOrder}>Заказать</button>;
+}
+"""
+
+
+def test_linked_checkout_uses_canonical_order_from_live_submit_and_loads_status():
+    assert linked_checkout_connected({"src/app/page.tsx": CHECKOUT_PAGE})
+
+
+def test_linked_checkout_accepts_live_checkout_with_local_error_handling():
+    page = CHECKOUT_PAGE.replace(
+        "await startCheckout(order.id);",
+        "try { await startCheckout(order.id); } catch (error) { console.error(error); }",
+    )
+    assert linked_checkout_connected({"src/app/page.tsx": page})
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ("await startCheckout(order.id);", "// await startCheckout(order.id);"),
+        ("await startCheckout(order.id);", "'startCheckout(order.id)';"),
+        ("await startCheckout(order.id);", "if (false) await startCheckout(order.id);"),
+        (
+            "await startCheckout(order.id);",
+            "async function unused() { await startCheckout(order.id); }",
+        ),
+        ("await startCheckout(order.id);", "await startCheckout('fake-order-id');"),
+        ("await startCheckout(order.id);", "await startCheckout(order.reference);"),
+        ("if (orderId) void readCheckout(orderId);", "const unused = () => readCheckout(orderId);"),
+        ("if (orderId) void readCheckout(orderId);", "if (false) void readCheckout(orderId);"),
+        ("if (orderId) void readCheckout(orderId);", "void readCheckout('fake-order-id');"),
+        ("onClick={placeOrder}", "onClick={() => {}}"),
+        ("onClick={placeOrder}", "disabled onClick={placeOrder}"),
+        ("return <button", "return null; return <button"),
+        ("@/lib/omnia/integration-client", "@/lib/my-checkout"),
+        (
+            "await startCheckout(order.id);",
+            "await startCheckout(order.id); await legacyPayment({});",
+        ),
+        (
+            "await startCheckout(order.id);",
+            "try { await startCheckout(order.id); } catch (error) { await legacyPayment({}); }",
+        ),
+        (
+            "await startCheckout(order.id);",
+            "try { await startCheckout(order.id); } finally { await legacyPayment({}); }",
+        ),
+        (
+            "await startCheckout(order.id);",
+            "try { return; } finally {} await startCheckout(order.id);",
+        ),
+        (
+            "if (orderId) void readCheckout(orderId);",
+            "if (orderId) void readCheckout(orderId); else void legacyPayment({});",
+        ),
+        (
+            "export default function Page()",
+            "void legacyPayment({}); export default function Page()",
+        ),
+    ],
+)
+def test_linked_checkout_rejects_unreachable_wrong_or_legacy_calls(before, after):
+    assert not linked_checkout_connected({"src/app/page.tsx": CHECKOUT_PAGE.replace(before, after)})
+
+
+def test_linked_checkout_rejects_legacy_payment_from_relative_namespace_import():
+    page = CHECKOUT_PAGE.replace(
+        "export default function Page()",
+        "import * as sdk from '../lib/omnia/integration-client'; export default function Page()",
+    ).replace(
+        "await startCheckout(order.id);",
+        "await startCheckout(order.id); await sdk.createYleumPayment({});",
+    )
+    assert not linked_checkout_connected({"src/app/page.tsx": page})
+
+
+def test_linked_checkout_accepts_imported_event_helper_and_ignores_dead_legacy_code():
+    event = """
+import { createManagedOrder } from '@/lib/omnia/business-client';
+import { createYleumOrderCheckout, createYleumPayment } from '@/lib/omnia/integration-client';
+export async function placeOrder() {
+    const { id } = await createManagedOrder({ customer_name: 'Тест' });
+    return createYleumOrderCheckout(id);
+}
+function oldCheckout() { return createYleumPayment({}); }
+"""
+    start = CHECKOUT_PAGE.index("    async function placeOrder")
+    end = CHECKOUT_PAGE.index("    return <button", start)
+    page = (
+        "import { placeOrder } from '@/lib/checkout';\n"
+        + CHECKOUT_PAGE[:start]
+        + CHECKOUT_PAGE[end:]
+    )
+    assert linked_checkout_connected({"src/app/page.tsx": page, "src/lib/checkout.ts": event})
 
 
 def connection_example(modules):

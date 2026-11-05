@@ -779,6 +779,58 @@ async function managementDatabase() {
   };
   return { engine, pool };
 }
+
+async function portableManagementDatabase(t) {
+  const { engine, pool } = await managementDatabase();
+  t.after(() => engine.close());
+  await engine.exec(
+    "CREATE ROLE managed_runtime; CREATE SCHEMA managed_test; SET search_path TO managed_test,public;",
+  );
+  // Portable projects have no max_users table.
+  const migration = readFileSync(resolve(base, "drizzle/0003_owner_management.sql"), "utf8");
+  await engine.exec(migration.replaceAll("--> statement-breakpoint", ""));
+  await engine.exec(
+    "GRANT USAGE ON SCHEMA managed_test TO managed_runtime; GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA managed_test TO managed_runtime; SET ROLE managed_runtime",
+  );
+  return { engine, pool };
+}
+
+test("signed exact read isolates the record, project, resource and full MAX actor ID",
+  { skip: !pgliteModule && !nativePgUrl }, async t => {
+    const { pool } = await portableManagementDatabase(t);
+    const app = runtime();
+    app.dependencies.set("@/lib/db", { pool });
+    app.dependencies.set("@/lib/omnia/management-config", { getManagementContract: async () => fixture });
+    const store = app.load("lib/omnia/management-store.ts");
+    const route = app.load("app/api/omnia/owner/route.ts");
+    const actor = "9007199254740993";
+    const { record } = await store.createManagedRecord(actor, "orders", { operationKey: ids[2] }, () => ({
+      management_protocol: 1, resource: "orders", customer_name: "Анна", items: [],
+      total_kopecks: 4000, currency: "RUB",
+    }));
+    const call = (patch) => {
+      const raw = Buffer.from(JSON.stringify({ op: "get", record_id: record.id, resource: "orders", ...patch }));
+      return route.POST(new Request("https://app.test/api/omnia/owner", {
+        method: "POST", headers: { "X-Yleum-Owner-Assertion": sign(app, raw) }, body: raw,
+      }));
+    };
+    const matched = await call({ actor });
+    assert.equal(matched.status, 200);
+    const exact = await matched.json();
+    assert.equal(exact.id, record.id);
+    assert.equal(exact.total_kopecks, 4000);
+    assert.equal(Object.hasOwn(exact, "max_user_id"), false);
+    assert.equal(Object.hasOwn(exact, "actor"), false);
+    assert.equal((await call({})).status, 200);
+    for (const patch of [{ actor: "9007199254740992" }, { resource: "leads" }, { record_id: ids[1] }]) {
+      assert.equal((await call(patch)).status, 404);
+    }
+    await assert.rejects(
+      store.getManagedRecord({ project_id: ids[1], owner_id: ids[1], publication_id: ids[2] }, record.id, "orders", actor),
+      (error) => error.code === "not_found" && error.status === 404,
+    );
+  });
+
 test(
   "managed store: receipts, RLS, snapshots, private forgery, concurrency, owner revisions and stable pages",
   { skip: !pgliteModule && !nativePgUrl },
@@ -791,20 +843,7 @@ test(
       existsSync(resolve(base, "src/lib/omnia/management-store.ts")),
       "Managed store missing",
     );
-    const { engine, pool } = await managementDatabase();
-    t.after(() => engine.close());
-    await engine.exec(
-      `CREATE ROLE managed_runtime; CREATE SCHEMA managed_test; SET search_path TO managed_test,public;`,
-    );
-    // Store tests start from portable product schema: deliberately no max_users.
-    const migration = readFileSync(
-      resolve(base, "drizzle/0003_owner_management.sql"),
-      "utf8",
-    );
-    await engine.exec(migration.replaceAll("--> statement-breakpoint", ""));
-    await engine.exec(
-      "GRANT USAGE ON SCHEMA managed_test TO managed_runtime; GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA managed_test TO managed_runtime; SET ROLE managed_runtime",
-    );
+    const { engine, pool } = await portableManagementDatabase(t);
     const app = runtime();
     app.dependencies.set("@/lib/db", { pool });
     const store = app.load("lib/omnia/management-store.ts");
@@ -1205,6 +1244,45 @@ test("owner route accepts only signed strict RPC and body limits, never imports 
     }),
   );
   assert.equal(result.status, 400);
+});
+
+test("owner RPC negotiates staff support and rejects malformed exact actor predicates", async () => {
+  const app = runtime();
+  app.dependencies.set("@/lib/omnia/management-config", {
+    getManagementContract: async () => fixture,
+  });
+  const reads = [];
+  app.dependencies.set("@/lib/omnia/management-store", {
+    assertManagementSchema: async () => undefined,
+    getManagedRecord: async (identity, recordId, resource, actor) => {
+      reads.push({ identity, recordId, resource, actor });
+      return { id: recordId, resource };
+    },
+  });
+  const route = app.load("app/api/omnia/owner/route.ts");
+  const call = (body) => {
+    const raw = Buffer.from(JSON.stringify(body));
+    return route.POST(new Request("https://app.test/api/omnia/owner", {
+      method: "POST", headers: { "X-Yleum-Owner-Assertion": sign(app, raw) }, body: raw,
+    }));
+  };
+  const ordinary = await call({ op: "describe" });
+  assert.equal(ordinary.status, 200);
+  assert.deepEqual(Object.keys(await ordinary.json()).sort(), ["contract", "publication_id"]);
+  const capabilities = await call({ op: "describe", staff_read: true });
+  assert.equal(capabilities.status, 200);
+  assert.equal((await capabilities.json()).staff_read, true);
+  const request = { op: "get", record_id: ids[0], resource: "orders" };
+  for (const actor of [null, true, 42, "01", "-1", "0", "42\n", "9223372036854775808"]) {
+    assert.equal((await call({ ...request, actor })).status, 400);
+  }
+  assert.equal((await call({ ...request, private: true })).status, 400);
+  assert.equal(reads.length, 0);
+  const result = await call({ ...request, actor: "9007199254740993" });
+  assert.equal(result.status, 200);
+  assert.deepEqual(await result.json(), { id: ids[0], resource: "orders" });
+  assert.equal(reads[0].actor, "9007199254740993");
+  assert.equal(reads[0].identity.project_id, ids[0]);
 });
 test("customer business route rejects unverified MAX identity and unsupported resource before SQL", async () => {
   const app = runtime();

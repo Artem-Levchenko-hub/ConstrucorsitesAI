@@ -1,6 +1,7 @@
 """Authenticated owner browser API. Runtime credentials remain server-side."""
 
 import re
+from datetime import timedelta
 from typing import Annotated
 from uuid import UUID
 
@@ -19,9 +20,11 @@ from yleum_api.schemas.max_management import (
     OwnerRecordUpdate,
     ResourceId,
 )
+from yleum_api.schemas.max_staff import StaffResource
 from yleum_api.schemas.max_studio import MaxProjectConfigPublic
 from yleum_api.services import max_management as service
 from yleum_api.services.max_management_contract import new_project_management_modules
+from yleum_api.services.max_staff_team import legacy_history_cutoff
 
 router = APIRouter(prefix="/api/projects", tags=["max-management"])
 
@@ -130,6 +133,16 @@ async def get_records(
     query: Annotated[OwnerRecordsQuery, Depends(_records_query)],
 ) -> OwnerRecordsPagePublic:
     _account(current_user)
+    if query.resource != ResourceId.bookings:
+        cutoff = await legacy_history_cutoff(
+            session, project_id, current_user, StaffResource(query.resource)
+        )
+        if cutoff is not None:
+            history_end = cutoff - timedelta(microseconds=1)
+            if query.created_from is not None and query.created_from > history_end:
+                return OwnerRecordsPagePublic(records=[], next_cursor=None)
+            created_to = min(query.created_to, history_end) if query.created_to else history_end
+            query = query.model_copy(update={"created_to": created_to})
     return await service.list_records(session, project_id, current_user.id, query)
 
 
@@ -143,6 +156,12 @@ async def patch_record(
     resource: Annotated[ResourceId, Depends(_resource_query)],
 ) -> OwnerRecordPublic:
     _account(current_user)
+    if resource != ResourceId.bookings and await legacy_history_cutoff(
+        session, project_id, current_user, StaffResource(resource), write=True,
+    ) is not None:
+        raise ApiError(
+            "staff_queue_active", "Для обработки обращений откройте рабочую очередь", 409
+        )
     return await service.update_record(
         session, project_id, current_user.id, record_id, resource, payload
     )

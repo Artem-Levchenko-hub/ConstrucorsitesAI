@@ -3,33 +3,37 @@
 import { useCallback, useRef, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, CircleAlert, Inbox, Loader2, Settings2, ShoppingBag } from "lucide-react";
+import { CalendarDays, CircleAlert, History, Inbox, Loader2, ShoppingBag, UsersRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { enableMaxManagement, getMaxManagement, ownerRequestError, type ResourceId } from "@/lib/api/max-management";
+import { enableMaxManagement, getMaxManagement, ownerRequestError, type ResourceDefinition, type ResourceId } from "@/lib/api/max-management";
+import { getMaxTeam } from "@/lib/api/max-staff";
 import { getMaxProjectConfig } from "@/lib/api/max-studio";
 import { MaxSectionShell } from "./MaxSectionShell";
 import { MaxOwnerRecords } from "./MaxOwnerRecords";
-import { MaxOwnerSettings } from "./MaxOwnerSettings";
+import { MaxStaffQueue } from "./MaxStaffQueue";
+import { MaxStaffTeam } from "./MaxStaffTeam";
 import { useMaxWorkspaceDraftGuard } from "./use-max-workspace-draft-guard";
 import "./max-owner-console.css";
 
-type Section = ResourceId | "settings";
+type Section = ResourceId | "team";
 const sectionIcon = {
   orders: ShoppingBag,
   leads: Inbox,
   bookings: CalendarDays,
-  settings: Settings2,
+  team: UsersRound,
 };
 const stateCopy = {
   not_published: "Обращения клиентов появятся после публикации приложения. Пока можно подготовить каталог и настройки.",
   unsupported: "Опубликованное приложение пока не поддерживает управление обращениями. Для подключения нужна совместимая доработка и публикация; существующие данные сохранены.",
   unavailable: "Рабочее приложение сейчас недоступно. Обращения не удалось загрузить. Повторите попытку позже.",
 };
-export function MaxOwnerConsole(props: { projectId: string; projectName: string }) {
+type OwnerConsoleProps = { projectId: string; projectName: string; initialTeam?: boolean };
+
+export function MaxOwnerConsole(props: OwnerConsoleProps) {
   return <OwnerConsole key={props.projectId} {...props} />;
 }
-function OwnerConsole({ projectId, projectName }: { projectId: string; projectName: string }) {
-  const [selected, setSelected] = useState<Section | null>(null);
+function OwnerConsole({ projectId, projectName, initialTeam }: OwnerConsoleProps) {
+  const [selected, setSelected] = useState<Section | null>(initialTeam ? "team" : null);
   const [dirty, setDirty] = useState(false);
   const dirtyRef = useRef(false);
   useMaxWorkspaceDraftGuard(dirty);
@@ -53,15 +57,20 @@ function OwnerConsole({ projectId, projectName }: { projectId: string; projectNa
     },
   });
   const overview = useQuery({ queryKey: ["max-management", projectId], queryFn: ({ signal }) => getMaxManagement(projectId, signal), retry: false, refetchOnWindowFocus: false });
+  const team = useQuery({ queryKey: ["max-team", projectId], queryFn: ({ signal }) => getMaxTeam(projectId, signal), retry: false, staleTime: 0, gcTime: 0 });
   const data = overview.data;
   const managementPrepared = Boolean(data?.configured_modules.some(module => module !== "catalog")) || enable.isSuccess;
   const resources = data?.state === "active" ? data.resources.filter(resource => data.active_modules.includes(resource.id)) : [];
   const sections: { id: Section; label: string }[] = [
     ...resources.map(resource => ({ id: resource.id, label: resource.label })),
-    { id: "settings", label: "Настройки" },
+    { id: "team", label: "Команда" },
   ];
-  const active = sections.some(section => section.id === selected) ? selected : sections[0]?.id;
+  const active = sections.some(section => section.id === selected) ? selected : overview.isPending ? null : sections[0].id;
   const resource = resources.find(item => item.id === active);
+  const needsTeamSettings = resource?.id === "orders" || resource?.id === "leads";
+  const teamSettings = team.data?.settings;
+  const staffResource = resource?.id === "orders" && teamSettings?.orders_mode ? "orders"
+    : resource?.id === "leads" && teamSettings?.leads_enabled ? "leads" : null;
   function confirmDiscard() {
     return !dirtyRef.current || window.confirm("Есть несохранённые правки. Отменить их и открыть другой раздел?");
   }
@@ -72,15 +81,11 @@ function OwnerConsole({ projectId, projectName }: { projectId: string; projectNa
   function prepareManagement() {
     if (dirtyRef.current || enable.isPending) return;
     // Keep the current section when the available sections refresh after enabling.
-    setSelected(active ?? "settings");
+    setSelected(active ?? "team");
     enable.mutate();
   }
-  return <MaxSectionShell projectId={projectId} projectName={projectName} active="manage" eyebrow="Ежедневная работа" title="Управление" lead="Меняйте данные и работайте с обращениями прямо в Yleum.">
+  return <MaxSectionShell projectId={projectId} projectName={projectName} active="manage" eyebrow="Ежедневная работа" title="Управление" lead="Работайте с обращениями и управляйте доступом сотрудников.">
     <div className="max-owner-console">
-      {overview.isPending && <div role="status" className="max-owner-notice max-owner-loading">
-        <Loader2 aria-hidden="true" className="size-5 motion-safe:animate-spin" />
-        <p>{overview.fetchStatus === "paused" ? "Нет соединения. Подключитесь к интернету, чтобы открыть управление." : "Загружаем разделы управления…"}</p>
-      </div>}
       {overview.isError && <div role="alert" className="max-owner-notice" data-tone="error">
         <strong><CircleAlert aria-hidden="true" className="size-4" />Не удалось открыть управление</strong>
         <p>{ownerRequestError(overview.error)}</p>
@@ -102,7 +107,7 @@ function OwnerConsole({ projectId, projectName }: { projectId: string; projectNa
           </Button>
         </>)}
       </div>}
-      {!overview.isPending && <div className="max-owner-workbench">
+      <div className="max-owner-workbench">
         <aside className="max-owner-rail">
           <p className="max-owner-rail-label">Рабочие разделы</p>
           <nav className="max-owner-tabs" aria-label="Разделы управления">
@@ -116,10 +121,31 @@ function OwnerConsole({ projectId, projectName }: { projectId: string; projectNa
           </nav>
         </aside>
         <div className="max-owner-workbench-content">
-          {resource && <MaxOwnerRecords key={resource.id} projectId={projectId} resource={resource} onDirtyChange={onDirtyChange} />}
-          {active === "settings" && <MaxOwnerSettings projectId={projectId} onDirtyChange={onDirtyChange} />}
+          {overview.isPending && active !== "team" && <div role="status" className="max-owner-notice max-owner-loading">
+            <Loader2 aria-hidden="true" className="size-5 motion-safe:animate-spin" />
+            <p>{overview.fetchStatus === "paused" ? "Нет соединения. Подключитесь к интернету, чтобы открыть управление." : "Загружаем разделы управления…"}</p>
+          </div>}
+          {needsTeamSettings && team.isPending && <div role="status" className="max-owner-notice max-owner-loading">
+            <Loader2 aria-hidden="true" className="size-5 motion-safe:animate-spin" /><p>Проверяем настройки очереди…</p>
+          </div>}
+          {needsTeamSettings && team.isError && !teamSettings && <div role="alert" className="max-owner-notice" data-tone="error">
+            <p>Не удалось проверить настройки очереди.</p><Button variant="outline" onClick={() => void team.refetch()}>Повторить загрузку</Button>
+          </div>}
+          {resource && (!needsTeamSettings || team.isSuccess || teamSettings) && (staffResource ? <>
+            <MaxStaffQueue key={staffResource} projectId={projectId} resource={staffResource} members={team.data?.members} onDirtyChange={onDirtyChange} />
+            <LegacyRecords key={resource.id} projectId={projectId} resource={resource} />
+          </> : <MaxOwnerRecords key={resource.id} projectId={projectId} resource={resource} onDirtyChange={onDirtyChange} />)}
+          {active === "team" && <MaxStaffTeam projectId={projectId} team={team} onDirtyChange={onDirtyChange} />}
         </div>
-      </div>}
+      </div>
     </div>
   </MaxSectionShell>;
+}
+
+function LegacyRecords({ projectId, resource }: { projectId: string; resource: ResourceDefinition }) {
+  const [open, setOpen] = useState(false);
+  return <details className="max-staff-history max-staff-legacy" onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary><History aria-hidden="true" /> До подключения команды</summary>
+    {open && <MaxOwnerRecords projectId={projectId} resource={resource} readOnly />}
+  </details>;
 }

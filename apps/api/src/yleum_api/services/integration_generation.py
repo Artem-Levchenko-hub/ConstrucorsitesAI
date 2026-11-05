@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yleum_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
+from yleum_api.models.max_staff import MaxStaffSettings
 from yleum_api.models.project import Project
 
 MANAGED_PRODUCT_GUIDE = """MANAGED BUSINESS CONFIGURATION AND PRODUCT STATE
@@ -24,6 +25,39 @@ Keep MAX Bridge/session initialization and platform-owned /api/max/*, /api/omnia
 and managed config/clients intact. Use exact SDK exports; credentials belong in
 the Integration Hub, never in product code, chat instructions or .env files.
 Do not turn on unrequested features merely because a service is connected.
+""".strip()
+
+_STAFF_PICKUP_GUIDE = """STAFF PICKUP ORDERS
+The owner explicitly selected payment on pickup for orders sent to staff. Persist
+these orders with createManagedOrder and show the saved pickup details. Keep
+online payment and generic payment helpers out of the staff pickup flow.
+""".strip()
+
+_STAFF_CHECKOUT_GUIDE = """STAFF ORDERS WITH LINKED ONLINE PAYMENT
+After explicit order confirmation, save it with createManagedOrder from
+@/lib/omnia/business-client and retain the returned canonical ManagedRecord.id.
+On explicit payment action call createYleumOrderCheckout(order.id) from
+@/lib/omnia/integration-client. Disable repeated submit while the call is running.
+Keep the same order ID on network errors and explicit retries. The platform reads the
+saved price and tracks the attempt. Send no amount, client payment status,
+provider payment ID, credentials or idempotency key to linked checkout.
+On return, getReturnedYleumCheckoutOrderId() reads the validated URL lookup key.
+Call getYleumOrderCheckout(orderId) after verified MAX session on mount, refresh
+and visible return. If the return opens outside MAX, offer to reopen the mini app
+and check the same order from its history. The redirect is not proof of payment. Pending with a
+confirmation_url can continue via that URL. Pending without a URL means check
+the same order again. Only succeeded with test=false and paid_at confirms real
+payment. Clearly label a succeeded test payment. Canceled is terminal for this
+order: show canceled and let the customer deliberately start a new order if
+wanted. Never automatically place a second order. For needs_review or unknown
+outcome, keep the order ID, show the actual state and offer status refresh or
+support. Missing provider setup must show an actionable error and keep the order.
+For failure_reason=receipt_required show “Магазину нужно настроить чеки для
+онлайн-оплаты. Обратитесь в поддержку магазина.” Keep the saved order and offer
+support. Never retry the same payment, request receipt data or switch payment
+methods automatically in this state.
+On app updates preserve prior order and payment history. Staff checkout becomes
+available to buyers after the owner publishes the updated app.
 """.strip()
 
 _METHODS = {
@@ -113,6 +147,15 @@ async def generation_context(session: AsyncSession, project_id: UUID) -> str:
     ai_enabled = await session.scalar(
         select(Project.runtime_ai_enabled).where(Project.id == project_id)
     )
+    staff_order_mode = await session.scalar(
+        select(MaxStaffSettings.orders_mode)
+        .join(Project, Project.id == MaxStaffSettings.project_id)
+        .where(
+            Project.id == project_id,
+            Project.owner_id == MaxStaffSettings.owner_id,
+            MaxStaffSettings.orders_enabled_at.is_not(None),
+        )
+    )
     if ai_enabled:
         providers.append("llmgw")
     lines = [
@@ -122,7 +165,12 @@ async def generation_context(session: AsyncSession, project_id: UUID) -> str:
             " operation proof):"
         )
     ]
-    lines.extend(f"- {p}: {_METHODS[p]}" for p in providers if p in _METHODS)
+    lines.extend(
+        f"- {provider}: {_METHODS[provider]}"
+        for provider in providers
+        if provider in _METHODS
+        and not (provider == "yookassa" and staff_order_mode in {"pickup", "yookassa"})
+    )
     if not providers:
         lines.append(
 
@@ -137,8 +185,8 @@ async def generation_context(session: AsyncSession, project_id: UUID) -> str:
                 "not create provider routes or request keys in chat."
             ),
             (
-                "For payment/lead/order submission keep one idempotency_key per user intent "
-                "across retries; disable the submit button while pending. An unknown "
+                "For generic payment/lead/order submission keep one idempotency_key per user "
+                "intent across retries; disable the submit button while pending. An unknown "
                 "operation result requires reconciliation, not a new key."
             ),
             (
@@ -157,4 +205,16 @@ async def generation_context(session: AsyncSession, project_id: UUID) -> str:
             ),
         ]
     )
+    if staff_order_mode == "yookassa":
+        lines.append(_STAFF_CHECKOUT_GUIDE)
+    elif staff_order_mode == "pickup":
+        lines.append(_STAFF_PICKUP_GUIDE)
+    elif "yookassa" in providers:
+        lines.append(
+            "When the owner explicitly asks to prepare online orders for the staff queue, "
+            "read the linked checkout and status helpers in integration-client.ts and use the "
+            "canonical ID returned by createManagedOrder. Preserve that ID across redirect and "
+            "retry, confirm payment by server status, and keep generic payment creation out of "
+            "that order flow. The owner activates the queue after publishing the adapted app."
+        )
     return "\n".join(lines)

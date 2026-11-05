@@ -27,7 +27,7 @@ import { MaxStudioProjectCard } from "./MaxStudioProjectCard";
 import { MaxStudioHeader } from "./MaxStudioHeader";
 import { MAX_STATUS_COPY } from "@/lib/max-status-copy";
 import { MaxStudioIdeas, type MaxStudioIdea } from "./MaxStudioIdeas";
-import { MaxProjectWizard } from "./MaxProjectWizard";
+import { MaxProjectWizard, type WizardOrderSettings } from "./MaxProjectWizard";
 import { MaxInitialCatalog } from "./MaxInitialCatalog";
 import "./max-studio.css";
 
@@ -51,6 +51,7 @@ export function MaxStudio({ email }: { email: string }) {
   const [style, setStyle] = useState<MaxStyleId>("brand");
   const [brandColors, setBrandColors] = useState("");
   const [managementModules, setManagementModules] = useState<ManagementModule[]>(() => defaultManagementModules("loyalty"));
+  const [orderSettings, setOrderSettings] = useState<WizardOrderSettings>({ mode: "pickup", prepMinutes: "7" });
   const [managementModuleOptOuts, setManagementModuleOptOuts] = useState<ManagementModule[]>([]);
   const safeCatalogIdea = useMemo(() => publicMaxBriefText(idea), [idea]);
   const proposedCatalog = useMemo(() => {
@@ -101,6 +102,11 @@ export function MaxStudio({ email }: { email: string }) {
       const contentError = initialCatalogError(content, tooManyItems);
       if (contentError) throw new Error(contentError);
       const modules = newProjectManagementModules(appType, managementModules, appTypes);
+      const hasOrders = modules.includes("orders");
+      const prepMinutes = hasOrders ? Number(orderSettings.prepMinutes) : 7;
+      if (!Number.isInteger(prepMinutes) || prepMinutes < 1 || prepMinutes > 120) {
+        throw new Error("Укажите время приготовления от 1 до 120 минут.");
+      }
       const rawPrompt = buildMaxProjectPrompt({
         name,
         idea,
@@ -135,6 +141,7 @@ export function MaxStudio({ email }: { email: string }) {
       });
       const project = await createProject({
         name: safeName, template: "max_miniapp",
+        staff_settings: { leads_enabled: true, orders_mode: hasOrders ? orderSettings.mode : null, prep_minutes: prepMinutes },
         max_config: {
           app_name: safeName,
           app_type: appType,
@@ -342,6 +349,8 @@ export function MaxStudio({ email }: { email: string }) {
           onReset={() => setCatalogDraft(null)}
         />}
         values={{ name, idea, appType, appTypes, audience, primaryAction, features, style, brandColors, managementModules }}
+        orderSettings={orderSettings}
+        onOrderSettingsChange={setOrderSettings}
         onChange={updateBrief}
         onSubmit={() => create.mutateAsync()}
       />

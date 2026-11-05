@@ -11,6 +11,35 @@ const PLATFORM_API = (
 
 type Context = { params: Promise<{ path: string[] }> };
 
+const upstreamOperations = {
+  status: ["integrations", "GET"],
+  payments: ["payments", "POST"],
+  "payment-status": ["payments/status", "POST"],
+  leads: ["leads", "POST"],
+  "lead-list": ["leads", "GET"],
+  "lead-status": ["leads/status", "POST"],
+  "lead-receipt": ["leads/receipt", "POST"],
+  catalog: ["catalog", "GET"],
+  orders: ["orders", "POST"],
+  "order-list": ["orders", "GET"],
+  "order-status": ["orders/status", "POST"],
+  "order-details": ["orders/details", "POST"],
+  "order-checkout": ["orders/checkout", "POST"],
+  "order-checkout-status": ["orders/checkout/status", "POST"],
+  ai: ["ai", "POST"],
+} as const;
+const managedOrderId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function checkoutPayload(payload: unknown, create: boolean): Record<string, string> | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const fields = payload as Record<string, unknown>;
+  const { order_id, return_url } = fields;
+  if (Object.keys(fields).some(key => key !== "order_id" && !(create && key === "return_url")) ||
+      typeof order_id !== "string" || !managedOrderId.test(order_id) ||
+      (return_url !== undefined && (typeof return_url !== "string" || return_url.length > 512))) return null;
+  return return_url === undefined ? { order_id } : { order_id, return_url };
+}
+
 export async function POST(request: NextRequest, context: Context) {
   if (!PROJECT_ID) {
     return NextResponse.json(
@@ -20,11 +49,10 @@ export async function POST(request: NextRequest, context: Context) {
   }
   const { path } = await context.params;
   const operation = path.join("/");
-  if (
-    !["status", "payments", "payment-status", "leads", "lead-list", "lead-status", "lead-receipt", "catalog", "orders", "order-list", "order-status", "order-details", "ai", "consent-policy", "consent-state"].includes(
-      operation,
-    )
-  ) {
+  const target = Object.hasOwn(upstreamOperations, operation)
+    ? upstreamOperations[operation as keyof typeof upstreamOperations]
+    : null;
+  if (!target && operation !== "consent-policy" && operation !== "consent-state") {
     return NextResponse.json(
       { error: { message: "Unknown capability" } },
       { status: 404 },
@@ -40,11 +68,12 @@ export async function POST(request: NextRequest, context: Context) {
   const body = parsed as {
     initData?: unknown;
     payload?: unknown;
+    expectedActor?: unknown;
   };
   // Only the immutable core imports the signed-cookie session implementation.
   // The portable product session adapter must never mint these assertions.
   const user = await getMaxUser();
-  if (operation === "consent-policy" || operation === "consent-state") {
+  if (!target) {
     // Unlike legacy integration operations, consent never accepts raw initData
     // from product code and never converts a business request into a grant.
     if (!user) return NextResponse.json({ error: { message: "Откройте приложение внутри MAX" } }, { status: 401 });
@@ -56,6 +85,17 @@ export async function POST(request: NextRequest, context: Context) {
         { status: error instanceof ConsentBridgeError ? error.status : 503 });
     }
   }
+  const checkout = operation === "order-checkout" || operation === "order-checkout-status";
+  if (checkout && (!user || !/^[1-9][0-9]{0,19}$/.test(user.id))) {
+    return NextResponse.json({ error: { code: "unauthorized", message: "Откройте приложение внутри MAX" } }, { status: 401 });
+  }
+  if (checkout && body.expectedActor !== user?.id) {
+    return NextResponse.json({ error: { code: "actor_changed", message: "Учётная запись MAX изменилась" } }, { status: 409 });
+  }
+  const payload = checkout ? checkoutPayload(body.payload, operation === "order-checkout") : body.payload || {};
+  if (payload === null) {
+    return NextResponse.json({ error: { code: "invalid_request", message: "Некорректные данные заказа" } }, { status: 400 });
+  }
   const rawInitData = typeof body.initData === "string" ? body.initData : "";
   if ((user && !/^[1-9][0-9]{0,19}$/.test(user.id)) || (!user && !rawInitData)) {
     return NextResponse.json(
@@ -63,31 +103,10 @@ export async function POST(request: NextRequest, context: Context) {
       { status: 401 },
     );
   }
-  const readOnly = operation === "status" || operation === "catalog" || operation === "lead-list" || operation === "order-list";
-  const upstreamPath =
-    operation === "status"
-      ? `/api/runtime/projects/${PROJECT_ID}/integrations`
-      : operation === "catalog"
-        ? `/api/runtime/projects/${PROJECT_ID}/catalog`
-      : operation === "ai"
-        ? `/api/runtime/projects/${PROJECT_ID}/ai`
-      : operation === "payment-status"
-        ? `/api/runtime/projects/${PROJECT_ID}/payments/status`
-      : operation === "lead-list"
-        ? `/api/runtime/projects/${PROJECT_ID}/leads`
-      : operation === "lead-status"
-        ? `/api/runtime/projects/${PROJECT_ID}/leads/status`
-      : operation === "lead-receipt"
-        ? `/api/runtime/projects/${PROJECT_ID}/leads/receipt`
-      : operation === "order-list"
-        ? `/api/runtime/projects/${PROJECT_ID}/orders`
-      : operation === "order-status"
-        ? `/api/runtime/projects/${PROJECT_ID}/orders/status`
-      : operation === "order-details"
-        ? `/api/runtime/projects/${PROJECT_ID}/orders/details`
-      : `/api/runtime/projects/${PROJECT_ID}/${operation}`;
-  const method = readOnly ? "GET" : "POST";
-  const upstreamBody = readOnly ? "" : JSON.stringify(body.payload || {});
+  const [upstreamOperation, method] = target;
+  const upstreamPath = `/api/runtime/projects/${PROJECT_ID}/${upstreamOperation}`;
+  const readOnly = method === "GET";
+  const upstreamBody = readOnly ? "" : JSON.stringify(payload);
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (user) {
     const token = process.env.MAX_BOT_TOKEN;
@@ -122,12 +141,14 @@ export async function POST(request: NextRequest, context: Context) {
       headers,
       body: readOnly ? undefined : upstreamBody,
       cache: "no-store",
+      ...(checkout ? { redirect: "error" as const } : {}),
       signal: AbortSignal.timeout(60_000),
     });
     return new NextResponse(await upstream.text(), {
       status: upstream.status,
       headers: {
         "Content-Type": upstream.headers.get("content-type") || "application/json",
+        ...(checkout ? { "Cache-Control": "private, no-store" } : {}),
       },
     });
   } catch {

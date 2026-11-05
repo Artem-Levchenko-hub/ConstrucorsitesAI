@@ -7,11 +7,14 @@ import { MarketingEvents } from "@/components/marketing/MarketingEvents";
 import { getSession } from "@/lib/auth-mock";
 import { listOAuthProviders } from "@/lib/oauth-login-server";
 import { safeReturnPath } from "@/lib/auth-return";
+import { maxStaffReturnPath } from "@/lib/max-staff-path";
 import "@/components/max/max-studio.css";
 import "@/components/marketing/max-public.css";
 
 export default async function MaxRegisterPage({ searchParams }: { searchParams?: Promise<{ next?: string }> }) {
-  const next = safeReturnPath((await searchParams)?.next) ?? "/max";
+  const requestedNext = (await searchParams)?.next;
+  const staffReturn = maxStaffReturnPath(requestedNext);
+  const next = staffReturn ?? safeReturnPath(requestedNext) ?? "/max";
   const session = await getSession();
   const providers = await listOAuthProviders();
 
@@ -24,7 +27,7 @@ export default async function MaxRegisterPage({ searchParams }: { searchParams?:
           <span className="h-5 w-px bg-border-default" />
           <span className="text-sm text-fg-secondary">Yleum</span>
         </div>
-        <Link href="/login?next=/max" className="max-public-link">
+        <Link href={staffReturn ? `/login?next=${encodeURIComponent(staffReturn)}` : "/login?next=/max"} className="max-public-link">
           Уже есть аккаунт
         </Link>
       </header>

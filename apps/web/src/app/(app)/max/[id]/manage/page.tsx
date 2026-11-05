@@ -10,9 +10,11 @@ export default async function MaxManagePage({ params, searchParams }: {
   searchParams?: Promise<{ section?: string | string[] }>;
 }) {
   const { id } = await params;
-  const legacyCatalog = (await searchParams)?.section === "catalog";
-  const nextPath = `/max/${id}/manage${legacyCatalog ? "?section=catalog" : ""}`;
+  const section = (await searchParams)?.section;
+  const legacyCatalog = section === "catalog";
+  const initialTeam = section === "team";
+  const nextPath = `/max/${id}/manage${legacyCatalog ? "?section=catalog" : initialTeam ? "?section=team" : ""}`;
   const project = await loadMaxProject(id, nextPath);
   if (legacyCatalog) redirect(`/max/${encodeURIComponent(project.id)}/catalog`);
-  return <MaxOwnerConsole key={project.id} projectId={project.id} projectName={project.name} />;
+  return <MaxOwnerConsole key={project.id} projectId={project.id} projectName={project.name} initialTeam={initialTeam} />;
 }

@@ -417,6 +417,9 @@ async def submit_publication(
     )
     if not config.legal.terms_accepted:
         raise ApiError("conflict", "Подтвердите документы приложения перед публикацией", 409)
+    from yleum_api.services.max_staff_team import guard_staff_publication
+
+    await guard_staff_publication(session, project, evidence["commit_sha"])
     # Plan publish slots: checked after every evidence gate so an app that is
     # not ready never "spends" a refusal on the plan, and before the controller
     # is asked so nothing public changes when the plan is full.

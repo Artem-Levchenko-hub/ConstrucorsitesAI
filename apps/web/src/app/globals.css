@@ -91,6 +91,14 @@
 }
 
 :root {
+  --yleum-text-caption: .75rem;
+  --yleum-text-label: .875rem;
+  --yleum-text-body: 1rem;
+  --yleum-text-section: 1.25rem;
+  --yleum-text-title: clamp(1.625rem, 3vw, 2.125rem);
+  --yleum-motion-control: 140ms;
+  --yleum-motion-content: 180ms;
+  --yleum-motion-ease: cubic-bezier(.2, .7, .3, 1);
   /* Бренд Yleum — цвета сняты пипеткой с фирменного знака.
      brand-blue — основной цвет бренда для светлых поверхностей (белый текст на нём 5.27:1);
      --color-accent в @theme выше — тот же синий, осветлённый до мид-тона знака,
@@ -110,6 +118,43 @@
     #804ffa 84%,
     #c472fa 100%
   );
+}
+
+@keyframes yleum-content-in {
+  from { opacity: .88; }
+  to { opacity: 1; }
+}
+
+@keyframes yleum-dialog-in {
+  from { opacity: 0; scale: .99; }
+  to { opacity: 1; scale: 1; }
+}
+
+@keyframes yleum-fade-out {
+  to { opacity: 0; }
+}
+
+@keyframes yleum-fade-in {
+  from { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :where(
+    .yl, .max-docs, .max-auth-layout, .max-public-content, .max-project-content,
+    .max-editor-workspace, .max-projects-content, .max-staff-main, .max-staff-join-card,
+    .max-setup-section, .max-owner-workbench-content > section
+  ) {
+    animation: yleum-content-in var(--yleum-motion-content) var(--yleum-motion-ease);
+  }
+  .yleum-dialog-backdrop[data-state=open] {
+    animation: yleum-fade-in var(--yleum-motion-control) var(--yleum-motion-ease);
+  }
+  .yleum-dialog-panel[data-state=open] {
+    animation: yleum-dialog-in var(--yleum-motion-content) var(--yleum-motion-ease);
+  }
+  :is(.yleum-dialog-backdrop, .yleum-dialog-panel)[data-state=closed] {
+    animation: yleum-fade-out var(--yleum-motion-control) ease-out both;
+  }
 }
 
 @layer base {

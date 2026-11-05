@@ -1,6 +1,3 @@
-import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
-
 import { BrandMark } from "@/components/marketing/BrandMark";
 import "@/components/max/max-studio.css";
 import "@/components/marketing/max-public.css";
@@ -28,10 +25,6 @@ export function AuthCard({
     <main data-max-studio className="max-auth-shell">
       <header>
         <BrandMark />
-        <Link href="/" className="max-public-link inline-flex items-center gap-2">
-          <ArrowLeft className="size-3.5" />
-          На главную
-        </Link>
       </header>
       <section className="max-auth-layout">
         <div className="max-auth-card">

@@ -60,8 +60,8 @@ describe("Yleum account dropdown", () => {
   it("uses one direct interactive menu-item surface for links and logout", () => {
     const items = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
 
-    // Профиль, Безопасность, Баланс, Операции, Тариф, Справка + Выйти: организации больше нет.
-    expect(items).toHaveLength(7);
+    expect(items).toHaveLength(8);
+    expect(items.filter(item => item.getAttribute("href") === "/max/staff")).toHaveLength(1);
     expect(items.slice(0, -1).every((item) => item.tagName === "A")).toBe(true);
     expect(items.at(-1)?.tagName).toBe("BUTTON");
     expect(items.every((item) => item.querySelector("button, a") === null)).toBe(true);

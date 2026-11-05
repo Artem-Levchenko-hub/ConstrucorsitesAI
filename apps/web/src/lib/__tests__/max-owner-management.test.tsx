@@ -6,10 +6,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import contract from "../../../../api/tests/fixtures/max_management_contract_v1.json";
 import { MaxOwnerConsole } from "@/components/max/MaxOwnerConsole";
 import { MaxOwnerRecords } from "@/components/max/MaxOwnerRecords";
-import { MaxOwnerSettings } from "@/components/max/MaxOwnerSettings";
 import { MaxProjectNav } from "@/components/max/MaxProjectNav";
 import type { ManagementOverview, OwnerRecord, ResourceDefinition } from "@/lib/api/max-management";
 import type { MaxProjectConfig } from "@/lib/api/types";
+import type { TeamView } from "@/lib/api/max-staff";
 
 vi.mock("@/components/max/MaxSectionShell", () => ({ MaxSectionShell: ({ children, projectId }: { children: React.ReactNode; projectId: string }) => (
   <div className="max-project-workspace">
@@ -23,6 +23,7 @@ const resources = contract.resources as ResourceDefinition[];
 const first: OwnerRecord = { id: "00000000-0000-4000-8000-000000000001", resource: "orders", created_at: "2026-10-29T09:00:00Z", revision: "a".repeat(64), status: "new", customer_name: "<img src=x onerror=alert(1)>", contact_phone: null, contact_email: "client@example.test", comment: "<script>private()</script>", requested_for: null, service_title: null, service_price_label: null, items: [{ catalog_id: "old-id", title: "Историческая услуга", quantity: 2, unit_price_kopecks: 12345, option: "30 минут" }], total_kopecks: 24690, currency: "RUB", note: "" };
 let overview: ManagementOverview;
 let config: MaxProjectConfig;
+let team: TeamView;
 let requests: Array<{ url: string; init: RequestInit }>;
 let writeMode: "ok" | "network" | "conflict" | "pending";
 let enableMode: "ok" | "network" | "conflict";
@@ -31,12 +32,26 @@ let root: Root; let node: HTMLDivElement; let client: QueryClient;
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   overview = { state: "active", configured_modules: ["catalog", "orders"], active_modules: ["catalog", "orders"], resources: [resources[0]], publication_id: "published", contract_hash: contract.contract_hash, catalog_limit: 100 };
+  team = { settings: { leads_enabled: false, orders_mode: null, prep_minutes: 7 }, members: [], invitations: [] };
   config = { project_id: "owned", config_version: 7, config: { app_name: "Приложение", summary: "Описание", app_type: "custom", audience: "Клиенты", primary_action: "Написать", features: ["Другое"], style: "clean", brand_colors: "blue", content: [], management_modules: ["catalog", "orders"], operator: { legal_name: "ИП" }, support: { email: "old@example.test", response_time: "24 часа" }, legal: { age_rating: "0+", has_sales: false, has_user_content: false, marketing_notifications: false, personal_data_consent: false, policy_url: "", terms_accepted: true }, max_url_attached: false }, synced_snapshot_id: null, updated_at: null };
   requests = []; writeMode = "ok"; enableMode = "ok"; resolveWrite = undefined;
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   node = document.createElement("div"); document.body.append(node); root = createRoot(node);
   vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit = {}) => {
     requests.push({ url, init });
+    if (url.endsWith("/max/team")) return Response.json(team);
+    if (url.endsWith("/team/settings") && init.method === "PUT") {
+      team = { ...team, settings: JSON.parse(String(init.body)) };
+      return Response.json(team);
+    }
+    if (url.endsWith("/team/invitations") && init.method === "POST") {
+      const input = JSON.parse(String(init.body));
+      const expires_at = "2026-11-08T09:00:00Z";
+      team = { ...team, invitations: [{ ...input, id: "invitation", expires_at }] };
+      return Response.json({ token: "fixture-".padEnd(43, "a"), expires_at }, { status: 201 });
+    }
+    if (url.endsWith("/max/staff")) return Response.json({ project_id: "owned", project_name: "Проект", actor_id: "owner", is_owner: true, permissions: ["orders"] });
+    if (url.includes("/staff/records?")) return Response.json({ records: [], next_cursor: null, server_time: "2026-11-05T09:00:00Z" });
     if (url.endsWith("/management/enable") && init.method === "POST") {
       if (enableMode === "network") throw new TypeError("offline");
       if (enableMode === "conflict") return Response.json({ error: { code: "conflict", message: "private diagnostic" } }, { status: 409 });
@@ -51,11 +66,7 @@ beforeEach(() => {
       if (writeMode === "pending") return new Promise<Response>(resolve => { resolveWrite = resolve; });
       return Response.json({ ...first, ...JSON.parse(init.body as string), revision: "b".repeat(64) });
     }
-    if (url.endsWith("/content")) return Response.json({config_version:config.config_version,public:{state:"pending",desired_config_version:config.config_version},preview:{state:"not_created",desired_config_version:config.config_version}});
-    if (url.endsWith("/config")) {
-      if (init.method === "PUT") return Response.json({ ...config, config_version: 8, config: JSON.parse(init.body as string) });
-      return Response.json(config);
-    }
+    if (url.endsWith("/config")) return Response.json(config);
     if (url.includes("/records?")) {
       const query = new URL(url, "https://yleum.test").searchParams;
       return Response.json({ records: query.has("cursor") ? [{ ...first, id: "second", customer_name: "Вторая страница" }] : [first, { ...first, id: "another", customer_name: "Другой клиент" }], next_cursor: query.has("cursor") ? null : "cursor+safe/=" });
@@ -70,14 +81,18 @@ async function render(element: React.ReactNode) { await act(async () => root.ren
 function button(label: string) { return [...node.querySelectorAll<HTMLButtonElement>("button")].find(element => element.textContent?.trim() === label)!; }
 async function click(label: string) { expect(button(label), label).toBeTruthy(); await act(async () => button(label).click()); await settle(); }
 async function change(label: string, value: string) {
+  const field = node.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(`[aria-label="${label}"]`)!;
+  expect(field, label).toBeTruthy();
+  await changeField(field, value);
+}
+async function changeField(field: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement, value: string) {
   await act(async () => {
-    const field = node.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(`[aria-label="${label}"]`)!;
-    expect(field, label).toBeTruthy();
     const proto = field.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : field.tagName === "SELECT" ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
     Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(field, value);
     field.dispatchEvent(new Event(field.tagName === "SELECT" ? "change" : "input", { bubbles: true }));
   }); await settle();
 }
+const teamName = () => node.querySelector<HTMLInputElement>('[aria-label="Команда"] input[type="text"]')!;
 function patches() { return requests.filter(item => item.init.method === "PATCH"); }
 function records() { return requests.filter(item => item.url.includes("/records?")); }
 async function mountRecords(resource = resources[0]) { await render(<MaxOwnerRecords projectId="owned" resource={resource} />); }
@@ -86,24 +101,89 @@ it("links to management from project navigation", async () => {
   await render(<MaxProjectNav projectId="owned" active="manage" showProgress={false} />);
   expect(node.querySelector('a[href="/max/owned/manage"]')?.textContent).toContain("Управление");
 });
-it("waits for the section overview before mounting an editable default section", async () => {
+it("keeps Team reachable while waiting for the queue overview", async () => {
   const original = vi.mocked(fetch).getMockImplementation()!;
   let resolveOverview: ((response: Response) => void) | undefined;
   vi.mocked(fetch).mockImplementation((url, init) => String(url).endsWith("/management") ? new Promise<Response>(resolve => { resolveOverview = resolve; }) : original(url, init));
   await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />);
   expect(node.textContent).toContain("Загружаем разделы");
-  expect(node.querySelector('[aria-label="Название приложения"]')).toBeNull();
+  expect(button("Заказы")).toBeUndefined();
+  await click("Команда");
+  expect(node.textContent).toContain("Настройки очередей");
   await act(async () => resolveOverview!(Response.json(overview))); await settle();
   expect(button("Заказы")).toBeTruthy();
+  expect(button("Команда").getAttribute("aria-current")).toBe("page");
 });
-it("keeps the catalog in project navigation and shows only enabled resources and settings in management", async () => {
+it("keeps the catalog in project navigation and shows only enabled resources and Team in management", async () => {
   await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />);
   expect(button("Заказы")).toBeTruthy(); expect(button("Заявки")).toBeUndefined(); expect(button("Записи")).toBeUndefined();
   expect(node.querySelector('a[href="/max/owned/catalog"]')?.textContent).toContain("Каталог");
   expect(button("Каталог")).toBeUndefined();
   expect(node.querySelector('[data-embedded="true"]')).toBeNull();
-  await click("Настройки"); expect(node.textContent).toContain("Название приложения");
+  expect(button("Настройки")).toBeUndefined();
+  await click("Команда"); expect(node.textContent).toContain("Настройки очередей");
   expect(button("Статистика")).toBeUndefined();
+});
+
+it("invites a staff member before publication with a private, single-use fragment link", async () => {
+  overview = { ...overview, state: "not_published", active_modules: [], resources: [] };
+  await render(<MaxOwnerConsole projectId="owned" projectName="Проект" initialTeam />);
+  const form = [...node.querySelectorAll("form")].find(item => item.querySelector("h3")?.textContent === "Пригласить сотрудника")!;
+  for (const [selector, value] of [["input[type=text]", "Бариста"], ["input[type=email]", "staff@example.test"]]) {
+    await act(async () => {
+      const field = form.querySelector<HTMLInputElement>(selector)!;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, value);
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+  expect(button("Создать приглашение")?.disabled).toBe(true);
+  await act(async () => form.querySelector<HTMLInputElement>("input[type=checkbox]")!.click());
+  await click("Создать приглашение");
+  const post = requests.find(request => request.url.endsWith("/team/invitations") && request.init.method === "POST");
+  expect(JSON.parse(String(post?.init.body))).toEqual({ name: "Бариста", email: "staff@example.test", permissions: ["orders"] });
+  const field = node.querySelector<HTMLInputElement>("#max-staff-invite-link")!;
+  const invite = new URL(field.value);
+  expect(invite.pathname).toBe("/max/staff/join");
+  expect(invite.search).toBe("");
+  expect(invite.hash).toBe(`#token=${"fixture-".padEnd(43, "a")}`);
+});
+
+it("switches an enabled resource to the live staff queue and leaves prior records read-only", async () => {
+  await render(<MaxOwnerConsole projectId="owned" projectName="Проект" initialTeam />);
+  const mode = node.querySelector<HTMLSelectElement>(".max-staff-settings-fields select")!;
+  await act(async () => { mode.value = "pickup"; mode.dispatchEvent(new Event("change", { bubbles: true })); });
+  await click("Сохранить настройки");
+  const save = requests.find(request => request.url.endsWith("/team/settings") && request.init.method === "PUT");
+  expect(JSON.parse(String(save?.init.body))).toEqual({ leads_enabled: false, orders_mode: "pickup", prep_minutes: 7 });
+  expect(mode.disabled).toBe(true);
+  await click("Заказы");
+  expect(node.querySelector('[aria-label="Рабочая очередь"]')?.textContent).toContain("Готовить сейчас");
+  expect(requests.some(request => request.url.includes("/management/records"))).toBe(false);
+  const details = node.querySelector<HTMLDetailsElement>("details.max-staff-legacy")!;
+  await act(async () => details.querySelector("summary")!.click()); await settle();
+  await click("Другой клиент");
+  expect(node.textContent).toContain("Обращения, полученные до подключения команды");
+  expect(node.querySelector('[aria-label="Статус обращения"]')).toBeNull();
+  expect(button("Сохранить обращение")).toBeUndefined();
+});
+
+it("keeps the online queue draft and guides the owner to publish if the current version is incompatible", async () => {
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  const message = "Добавьте в приложение оплату по сохранённому заказу через ЮKassa и опубликуйте обновление.";
+  vi.mocked(fetch).mockImplementation((url, init) => String(url).endsWith("/team/settings")
+    ? Promise.resolve(Response.json({ error: { code: "unsupported", message } }, { status: 409 }))
+    : original(url, init));
+  await render(<MaxOwnerConsole projectId="owned" projectName="Проект" initialTeam />);
+  const mode = node.querySelector<HTMLSelectElement>(".max-staff-settings-fields select")!;
+  await changeField(mode, "yookassa");
+  await click("Сохранить настройки");
+  const alert = node.querySelector('[role="alert"]')!;
+  expect(alert.textContent).toContain(message);
+  expect(alert.querySelector('a[href="/max/owned"]')?.textContent).toBe("К чату");
+  expect(alert.querySelector('a[href="/max/owned/publish"]')?.textContent).toBe("К публикации");
+  expect(mode.value).toBe("yookassa");
+  expect(mode.disabled).toBe(false);
+  expect(requests.some(request => request.init.method === "POST")).toBe(false);
 });
 it.each(["not_published", "unsupported", "unavailable"] as const)("explains %s without fetching a fake empty register", async state => {
   overview = { ...overview, state, active_modules: [], resources: [] };
@@ -111,17 +191,18 @@ it.each(["not_published", "unsupported", "unavailable"] as const)("explains %s w
   expect(records()).toHaveLength(0);
   expect(node.textContent).not.toContain("Обращений пока нет");
   expect(node.textContent).toMatch(state === "not_published" ? /после публикации/i : state === "unsupported" ? /не поддерживает/i : /недоступн/i);
-  expect(button("Настройки")).toBeTruthy(); expect(button("Каталог")).toBeUndefined();
+  expect(button("Команда")?.getAttribute("aria-current")).toBe("page");
+  expect(button("Настройки")).toBeUndefined(); expect(button("Каталог")).toBeUndefined();
 });
 function legacyUnsupported() {
   overview = { ...overview, state: "unsupported", configured_modules: [], active_modules: [], resources: [] };
   config = { ...config, config: { ...config.config, app_type: "catalog", management_modules: null } };
 }
 function enables() { return requests.filter(request => request.url.endsWith("/management/enable")); }
-it("prepares legacy management only on an explicit click using a fresh version and preserves settings", async () => {
+it("prepares legacy management only on an explicit click using a fresh version and retains Team", async () => {
   legacyUnsupported(); await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />);
-  const settings = node.querySelector('[aria-label="Название приложения"]');
-  expect(settings).not.toBeNull();
+  const memberName = teamName();
+  expect(memberName).not.toBeNull();
   expect(enables()).toHaveLength(0);
   config = { ...config, config_version: 9 };
   await click("Подключить управление");
@@ -129,7 +210,7 @@ it("prepares legacy management only on an explicit click using a fresh version a
   expect(JSON.parse(enables()[0].init.body as string)).toEqual({ expected_config_version: 9 });
   expect(node.textContent).toContain("Подготовлено к доработке");
   expect(button("Подключить управление")).toBeUndefined();
-  expect(node.querySelector('[aria-label="Название приложения"]')).toBe(settings);
+  expect(teamName()).toBe(memberName);
   expect(node.querySelector('main a[href="/max/owned"]')?.textContent).toContain("редактор");
   expect(requests.filter(request => request.init.method === "POST")).toEqual(enables());
   expect(records()).toHaveLength(0);
@@ -144,39 +225,39 @@ it("does not repeat preparation when an unsupported app already has configured b
 it("retains the section and retries a preparation conflict only with another click and fresh version", async () => {
   legacyUnsupported(); enableMode = "conflict";
   await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />);
-  const settings = node.querySelector('[aria-label="Название приложения"]');
-  expect(settings).not.toBeNull();
+  const memberName = teamName();
+  expect(memberName).not.toBeNull();
   await click("Подключить управление");
   expect(enables()).toHaveLength(1);
   expect(node.textContent).not.toContain("private diagnostic");
   expect(node.textContent).toContain("Повторите попытку");
-  expect(node.querySelector('[aria-label="Название приложения"]')).toBe(settings);
+  expect(teamName()).toBe(memberName);
   config = { ...config, config_version: 8 }; enableMode = "ok";
   await click("Подключить управление");
   expect(enables()).toHaveLength(2);
   expect(JSON.parse(enables()[1].init.body as string)).toEqual({ expected_config_version: 8 });
 });
-it("blocks preparation while settings contain an unsaved draft", async () => {
+it("blocks preparation while Team contains an unsaved invitation draft", async () => {
   legacyUnsupported(); await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />);
-  await click("Настройки"); await change("Название приложения", "Не потерять");
+  await changeField(teamName(), "Не потерять");
   expect(button("Подключить управление").disabled).toBe(true);
   await click("Подключить управление");
   expect(enables()).toHaveLength(0);
-  expect((node.querySelector('[aria-label="Название приложения"]') as HTMLInputElement).value).toBe("Не потерять");
+  expect(teamName().value).toBe("Не потерять");
 });
 it("rechecks dirty state after the fresh read before sending the enable POST", async () => {
-  legacyUnsupported(); await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />); await click("Настройки");
+  legacyUnsupported(); await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />);
   const original = vi.mocked(fetch).getMockImplementation()!;
   let release: ((response: Response) => void) | undefined;
   vi.mocked(fetch).mockImplementation((url, init) => String(url).endsWith("/config")
     ? new Promise<Response>(resolve => { release = resolve; }) : original(url, init));
   await click("Подключить управление");
-  await change("Название приложения", "Черновик во время чтения");
+  await changeField(teamName(), "Черновик во время чтения");
   await act(async () => release!(Response.json(config))); await settle();
   expect(enables()).toHaveLength(0);
-  expect((node.querySelector('[aria-label="Название приложения"]') as HTMLInputElement).value).toBe("Черновик во время чтения");
+  expect(teamName().value).toBe("Черновик во время чтения");
 });
-it("keeps the current settings section and a draft created while enable POST is in flight", async () => {
+it("keeps the current Team section and an invitation draft created while enable POST is in flight", async () => {
   legacyUnsupported(); config = { ...config, config: { ...config.config, app_type: "custom" } };
   await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />);
   const original = vi.mocked(fetch).getMockImplementation()!;
@@ -184,12 +265,11 @@ it("keeps the current settings section and a draft created while enable POST is 
   vi.mocked(fetch).mockImplementation((url, init) => String(url).endsWith("/management/enable")
     ? new Promise<Response>(resolve => { requests.push({ url: String(url), init: init ?? {} }); release = resolve; }) : original(url, init));
   await click("Подключить управление");
-  await change("Название приложения", "Черновик во время подключения");
+  await changeField(teamName(), "Черновик во время подключения");
   config = { ...config, config_version: 8, config: { ...config.config, management_modules: ["catalog", "leads"] } };
   overview = { ...overview, configured_modules: ["catalog", "leads"] };
   await act(async () => release!(Response.json(config))); await settle();
-  expect(node.querySelector('[aria-label="Название приложения"]')).not.toBeNull();
-  expect((node.querySelector('[aria-label="Название приложения"]') as HTMLInputElement).value).toBe("Черновик во время подключения");
+  expect(teamName().value).toBe("Черновик во время подключения");
   expect(enables()).toHaveLength(1);
 });
 it("does not grant configured draft resources active access or show diary business modules", async () => {
@@ -334,9 +414,9 @@ it("keeps retries identical until a definite error is edited, then creates a fre
   writeMode = "ok"; await click("Сохранить обращение");
   expect(JSON.parse(patches()[2].init.body as string).operation_key).not.toBe(secondWrite.operation_key);
 });
-it("protects a dirty settings draft when opening the chat or switching sections", async () => {
-  await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />); await click("Настройки");
-  await change("Название приложения", "Не потерять");
+it("protects a dirty invitation when opening the chat or switching sections", async () => {
+  await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />); await click("Команда");
+  await changeField(teamName(), "Не потерять");
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
   const chat = node.querySelector("a[href='/max/owned']")!;
   let canceled = false;
@@ -344,39 +424,11 @@ it("protects a dirty settings draft when opening the chat or switching sections"
   chat.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
   expect(canceled).toBe(true);
   await click("Заказы"); expect(confirm).toHaveBeenCalled();
-  expect((node.querySelector('[aria-label="Название приложения"]') as HTMLInputElement).value).toBe("Не потерять");
+  expect(teamName().value).toBe("Не потерять");
   confirm.mockReturnValue(true); await click("Заказы");
   expect(node.querySelector('section[aria-label="Заказы"]')).not.toBeNull();
-  expect(node.querySelector('[aria-label="Название приложения"]')).toBeNull();
+  expect(teamName()).toBeNull();
 });
-it("preserves settings after version conflicts and explicitly rebases over all latest unrelated fields", async () => {
-  const original = vi.mocked(fetch).getMockImplementation()!;
-  let conflict = true;
-  vi.mocked(fetch).mockImplementation(async (url, init) => {
-    if (init?.method === "PUT" && conflict) { requests.push({ url: String(url), init }); return Response.json({ error: { code: "conflict", message: "stale" } }, { status: 409 }); }
-    return original(url, init);
-  });
-  await render(<MaxOwnerSettings projectId="owned" />); await change("Email поддержки", "new@example.test"); await click("Сохранить настройки");
-  expect((node.querySelector('[aria-label="Email поддержки"]') as HTMLInputElement).value).toBe("new@example.test");
-  config = { ...config, config_version: 8, config: { ...config.config, audience: "Новая аудитория", support: { ...config.config.support, response_time: "Новый срок" } } };
-  await click("Загрузить актуальные настройки"); await click("Перенести мои настройки"); conflict = false; await click("Сохранить настройки");
-  const write = requests.filter(item => item.init.method === "PUT").at(-1)!;
-  expect(write.init.headers).toMatchObject({ "X-Max-Config-Version": "8" });
-  expect(JSON.parse(write.init.body as string)).toMatchObject({ audience: "Новая аудитория", support: { email: "new@example.test", response_time: "Новый срок" } });
-});
-it("saves only supported settings over the captured full-config baseline and version", async () => {
-  await render(<MaxOwnerSettings projectId="owned" />);
-  const original = structuredClone(config.config);
-  await change("Название приложения", "Новое название"); await change("Описание приложения", "Новое описание"); await change("Email поддержки", "support@example.test");
-  client.setQueryData(["max-config", "owned"], { ...config, config_version: 99, config: { ...config.config, audience: "Другие" } });
-  await click("Сохранить настройки");
-  const write = requests.find(item => item.init.method === "PUT")!;
-  expect(write.init.headers).toMatchObject({ "X-Max-Config-Version": "7" });
-  expect(JSON.parse(write.init.body as string)).toEqual({ ...original, app_name: "Новое название", summary: "Новое описание", support: { ...original.support, email: "support@example.test" } });
-  expect(node.textContent).toContain("Настройки сохранены в Yleum");
-  expect(node.textContent).not.toContain("Приложение обновлено");
-});
-
 it("booking dates target appointments and display service and requested time", async () => {
   const booking = {...first, resource:"bookings",requested_for:"2030-06-10T08:00:00Z",service_title:"Маникюр"};
   const original=vi.mocked(fetch).getMockImplementation()!;
@@ -388,37 +440,4 @@ it("booking dates target appointments and display service and requested time", a
   expect(query.has("created_from")).toBe(false);
   expect(node.textContent).toContain("Маникюр");
   expect(node.querySelector('time')?.dateTime).toBe(booking.requested_for);
-});
-
-it("settings observe whole-config confirmation and reapply the same saved version", async () => {
-  let applied=false;
-  const original=vi.mocked(fetch).getMockImplementation()!;
-  vi.mocked(fetch).mockImplementation((url,init)=>String(url).endsWith("/content") ? Promise.resolve(Response.json({config_version:8,public:{state:applied?"applied":"unknown",desired_config_version:8,confirmed_config_version:applied?8:null},preview:{state:"not_created",desired_config_version:8}})) : original(url,init));
-  await render(<MaxOwnerSettings projectId="owned" />);
-  await change("Название приложения","Новое имя"); await click("Сохранить настройки");
-  expect(node.textContent).toContain("Применение не подтверждено");
-  const firstSave=requests.find(r=>r.init.method==="PUT")!;
-  applied=true;
-  await click("Повторить применение");
-  const saves=requests.filter(r=>r.init.method==="PUT");
-  expect(saves).toHaveLength(2); expect(saves[1].init.body).toBe(firstSave.init.body);
-  expect(new Headers(saves[1].init.headers).get("X-Max-Config-Version")).toBe("8");
-  expect(node.textContent).toContain("Применение подтверждено");
-  expect(requests.some(r=>/generate|snapshot|publish$/.test(r.url))).toBe(false);
-});
-
-it("settings keep saved version visible when application retry fails and after reopening", async () => {
-  config = {...config,config_version:8};
-  const original=vi.mocked(fetch).getMockImplementation()!;
-  vi.mocked(fetch).mockImplementation((url,init)=>init?.method==="PUT" ? Promise.reject(new TypeError("offline")) : original(url,init));
-  await render(<MaxOwnerSettings projectId="owned" />);
-  await click("Повторить применение");
-  expect(node.textContent).toContain("Версия 8");
-  expect(node.querySelector('[role="alert"]')).not.toBeNull();
-  expect(node.textContent).not.toContain("Применение подтверждено");
-  expect(button("Повторить применение").disabled).toBe(false);
-  await act(async()=>root.render(<QueryClientProvider client={client}><div /></QueryClientProvider>));
-  await render(<MaxOwnerSettings projectId="owned" />);
-  expect(node.textContent).toContain("Версия 8");
-  expect(node.textContent).toContain("Применяются");
 });
