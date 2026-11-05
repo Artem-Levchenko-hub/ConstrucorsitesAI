@@ -18,7 +18,7 @@ function form(fields: Record<string, string>): FormData {
   return data;
 }
 
-const credentials = { email: "owner@example.com", password: "secret123", confirm: "secret123" };
+const credentials = { email: "owner@example.com", password: "moss river blue", confirm: "moss river blue" };
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -56,4 +56,18 @@ describe.each(["loginAction", "registerAction"] as const)("%s landing", (name) =
       actions[name]({ error: null }, form({ ...credentials, next: "//evil.example/x" })),
     ).rejects.toThrow("redirect:/max");
   });
+});
+
+it.each(["x", "secret123", "alllettersnodigit", "🔐".repeat(128)])("keeps existing login passwords compatible (%#)", async password => {
+  const { loginAction } = await import("@/app/(auth)/actions");
+  await expect(loginAction({ error: null }, form({ ...credentials, password }))).rejects.toThrow("redirect:/max");
+  expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body)).password).toBe(password);
+});
+
+it.each(["registerAction", "maxRegisterAction"] as const)("%s rejects common passwords before transmitting them", async name => {
+  const actions = await import("@/app/(auth)/actions");
+  const result = await actions[name]({ error: null }, form({ ...credentials, password: "passwordpassword", confirm: "passwordpassword" }));
+  expect(result.error).toContain("менее распространённый");
+  expect(result.error).not.toContain("passwordpassword");
+  expect(fetch).not.toHaveBeenCalled();
 });

@@ -39,7 +39,7 @@ CONSENT = {
 }
 MAX_REGISTRATION = {
     "email": "owner@example.com",
-    "password": "secret123",
+    "password": "Fixture garden lantern 2026",
     "product": "max",
     "phone": "+79991234567",
     **CONSENT,
@@ -790,7 +790,9 @@ async def test_inactive_account_cannot_sign_in_through_a_provider(
     provider: Provider,
 ) -> None:
     registered = await client.post(
-        "/api/auth/register", json={"email": "owner@example.com", "password": "secret123"}
+        "/api/auth/register", json={
+            "email": "owner@example.com", "password": "Fixture garden lantern 2026",
+        }
     )
     assert registered.status_code == 201
     client.cookies.clear()

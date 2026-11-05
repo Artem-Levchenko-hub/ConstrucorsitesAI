@@ -1531,24 +1531,27 @@ class DockerRestorationAdaptationHealthProber:
         witness: ActivationBusinessWitness,
         item_id: str,
     ) -> Mapping[str, object] | None:
+        from yleum_orchestrator.services.restoration_row_conversion import row_conversion_preamble
+
         parameters = json.dumps({"id": item_id}, separators=(",", ":")).encode().hex()
         table = quote_ident(witness.entity)
         id_column = quote_ident(witness.id_column)
         owner_column = quote_ident(witness.owner_column)
         value_column = quote_ident(witness.value_column)
-        statement = f"""
-SET statement_timeout = '5s';
-SET default_transaction_read_only = on;
-SELECT coalesce(json_agg(json_build_object(
+        statement = row_conversion_preamble(
+            [("public", witness.entity)], timeout_seconds=5
+        ) + f"""
+SELECT coalesce(pg_catalog.json_agg(pg_catalog.json_build_object(
   'id', target.{id_column}::text,
   'ownerId', target.{owner_column}::text,
   'value', target.{value_column}::text
 )), '[]'::json)
 FROM public.{table} AS target
-CROSS JOIN json_to_record(
-  convert_from(decode('{parameters}', 'hex'), 'UTF8')::json
+CROSS JOIN pg_catalog.json_to_record(
+  pg_catalog.convert_from(pg_catalog.decode('{parameters}', 'hex'), 'UTF8')::json
 ) AS bound(id text)
 WHERE target.{id_column}::text = bound.id;
+COMMIT;
 """
         raw = await asyncio.to_thread(admin_sql, backend, statement, max_bytes=8192)
         try:

@@ -1,18 +1,13 @@
 from typing import Literal
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field
 
-from yleum_api.schemas.user import PasswordResetConsume
+from yleum_api.core.password_policy import NewPassword
 
 
 class PasswordChange(BaseModel):
     current_password: str = Field(min_length=1, max_length=128)
-    new_password: str = Field(min_length=8, max_length=128)
-
-    @field_validator("new_password")
-    @classmethod
-    def password_policy(cls, value: str) -> str:
-        return PasswordResetConsume.must_contain_digit(value)
+    new_password: NewPassword
 
 
 class EmailChange(BaseModel):

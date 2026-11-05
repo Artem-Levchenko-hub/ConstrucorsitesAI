@@ -22,6 +22,7 @@ from yleum_api.services import account_security_email as delivery
 from yleum_api.services.transactional_email import EmailDeliveryFailed, EmailDeliveryNotConfigured
 
 PASSWORD = "current-password123"
+LONG_UNICODE_PREFIX = "".join(chr(0x1F400 + index) for index in range(127))
 
 
 @pytest.fixture
@@ -66,8 +67,10 @@ def cap(letter):
 @pytest.mark.parametrize(
     ("new_password", "wrong_password"),
     [
-        pytest.param("replacement456", "replacement457", id="short"),
-        pytest.param("🔐" * 127 + "1", "🔐" * 127 + "2", id="maximum-unicode-length"),
+        pytest.param("replacement-cedar-456", "replacement-cedar-457", id="phrase"),
+        pytest.param(
+            LONG_UNICODE_PREFIX + "1", LONG_UNICODE_PREFIX + "2", id="maximum-unicode-length",
+        ),
     ],
 )
 async def test_signed_in_password_change_revokes_sessions_and_queues_one_notice(
@@ -99,7 +102,7 @@ async def test_signed_in_password_change_revokes_sessions_and_queues_one_notice(
 
 async def test_current_password_origin_and_oauth_only_are_not_bypassed(client, db_session, mail):
     user, headers = await owner(db_session)
-    data = {"current_password": "incorrect", "new_password": "replacement456"}
+    data = {"current_password": "incorrect", "new_password": "replacement-cedar-456"}
     assert (
         await client.post("/api/account/credentials/password", headers=headers, json=data)
     ).status_code == 400
@@ -220,7 +223,7 @@ async def test_password_mutation_and_notice_rollback_together(db_session, monkey
 
     monkeypatch.setattr(credentials, "enqueue_notice", fail)
     with pytest.raises(RuntimeError):
-        await credentials.change_password(db_session, user_id, PASSWORD, "replacement456")
+        await credentials.change_password(db_session, user_id, PASSWORD, "replacement-cedar-456")
     await db_session.rollback()
     user = await db_session.get(User, user_id)
     assert await verify_password(PASSWORD, user.password_hash)
@@ -276,7 +279,7 @@ async def test_outbox_retry_safety_claims_and_frozen_recipient(
     test_engine, db_session, monkeypatch, safe, expected
 ):
     user, _ = await owner(db_session)
-    await credentials.change_password(db_session, user.id, PASSWORD, "replacement456")
+    await credentials.change_password(db_session, user.id, PASSWORD, "replacement-cedar-456")
     user.email = "later@example.com"
     await db_session.commit()
     calls = []
@@ -297,7 +300,7 @@ async def test_outbox_retry_safety_claims_and_frozen_recipient(
 
 async def test_stale_sending_is_never_replayed(test_engine, db_session, mail):
     user, _ = await owner(db_session)
-    await credentials.change_password(db_session, user.id, PASSWORD, "replacement456")
+    await credentials.change_password(db_session, user.id, PASSWORD, "replacement-cedar-456")
     row = (await db_session.scalars(select(AccountSecurityEmail))).one()
     row.status, row.claimed_at = "sending", datetime.now(UTC) - timedelta(minutes=11)
     await db_session.commit()
@@ -310,8 +313,10 @@ async def test_stale_sending_is_never_replayed(test_engine, db_session, mail):
 @pytest.mark.parametrize(
     ("new_password", "wrong_password"),
     [
-        pytest.param("replacement456", "replacement457", id="short"),
-        pytest.param("я" * 127 + "1", "я" * 127 + "2", id="maximum-unicode-length"),
+        pytest.param("replacement-cedar-456", "replacement-cedar-457", id="phrase"),
+        pytest.param(
+            LONG_UNICODE_PREFIX + "1", LONG_UNICODE_PREFIX + "2", id="maximum-unicode-length",
+        ),
     ],
 )
 async def test_reset_sends_branded_link_and_commits_success_notice_once(
@@ -334,7 +339,7 @@ async def test_reset_sends_branded_link_and_commits_success_notice_once(
     assert notice.kind == "password_reset" and notice.recipient_email == "owner@example.com"
     assert (
         await client.post(
-            "/api/auth/password/reset", json={"token": token, "password": "replacement789"}
+            "/api/auth/password/reset", json={"token": token, "password": "replacement-cedar-789"}
         )
     ).status_code == 400
     assert await db_session.scalar(select(func.count()).select_from(AccountSecurityEmail)) == 1
@@ -466,7 +471,8 @@ async def test_target_capability_preserves_unrelated_browser_cookie(client, db_s
         token = await auth._issue_email_token(
             db_session, target, "reset_password", ttl=timedelta(minutes=30)
         )
-        path, body = "/api/auth/password/reset", {"token": token, "password": "replacement456"}
+        path = "/api/auth/password/reset"
+        body = {"token": token, "password": "replacement-cedar-456"}
     client.cookies.set(get_settings().jwt_cookie_name, other_headers["authorization"][7:])
     response = await client.post(
         path, json=body, headers={"origin": get_settings().web_base_url.rstrip("/")}
@@ -498,7 +504,7 @@ async def test_reset_consumption_refreshes_preloaded_principal_version(test_engi
         db_session, token, "reset_password", datetime.now(UTC)
     )
     await credentials.apply_password_change(
-        db_session, consumed, await hash_password("replacement456"), kind="password_reset"
+        db_session, consumed, await hash_password("replacement-cedar-456"), kind="password_reset"
     )
     await db_session.commit()
     await db_session.refresh(user)

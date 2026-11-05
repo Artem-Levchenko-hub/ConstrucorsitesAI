@@ -533,7 +533,7 @@ async def test_revocation_supervises_stalled_setup_and_replay_without_releasing_
         ("register", {"email": "qa@example.com", "password": "QA1"}, "QA1"),
         (
             "register",
-            {"email": "qa@example.com", "password": "QA_PRIVATE_NO_DIGIT"},
+            {"email": "invalid-address", "password": "QA_PRIVATE_NO_DIGIT"},
             "QA_PRIVATE_NO_DIGIT",
         ),
         ("login", {"email": "qa@example.com", "password": "QA_PRIVATE_1" * 20}, "QA_PRIVATE_1"),

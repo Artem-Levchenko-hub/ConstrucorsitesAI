@@ -13,17 +13,23 @@ from yleum_orchestrator.services.restoration_database import admin_sql
 
 # Observe the isolated imported database, never an application-name prefix.
 DATABASE_INVENTORY_SQL = """
-SELECT json_build_object(
- 'unsupported', EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-   WHERE n.nspname NOT IN ('pg_catalog','information_schema')
-    AND n.nspname !~ '^pg_(toast|temp)_?'
-    AND (c.relkind IN ('v','m','p','f') OR
-      (c.relkind='r' AND (n.nspname<>'public' OR
-       EXISTS(SELECT FROM pg_inherits i WHERE i.inhrelid=c.oid OR i.inhparent=c.oid)))))
-   OR EXISTS(SELECT FROM pg_largeobject_metadata),
- 'tables', coalesce((SELECT json_agg(c.relname ORDER BY c.relname)
-   FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-   WHERE n.nspname='public' AND c.relkind='r'), '[]'));
+SELECT pg_catalog.json_build_object(
+ 'unsupported', EXISTS(SELECT FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n
+   ON n.oid OPERATOR(pg_catalog.=) c.relnamespace
+   WHERE n.nspname OPERATOR(pg_catalog.<>) 'pg_catalog'
+    AND n.nspname OPERATOR(pg_catalog.<>) 'information_schema'
+    AND n.nspname OPERATOR(pg_catalog.!~) '^pg_(toast|temp)_?'
+    AND (c.relkind OPERATOR(pg_catalog.=) 'v' OR c.relkind OPERATOR(pg_catalog.=) 'm'
+      OR c.relkind OPERATOR(pg_catalog.=) 'p' OR c.relkind OPERATOR(pg_catalog.=) 'f'
+      OR (c.relkind OPERATOR(pg_catalog.=) 'r' AND (n.nspname OPERATOR(pg_catalog.<>) 'public' OR
+       EXISTS(SELECT FROM pg_catalog.pg_inherits i WHERE i.inhrelid OPERATOR(pg_catalog.=) c.oid
+         OR i.inhparent OPERATOR(pg_catalog.=) c.oid)))))
+   OR EXISTS(SELECT FROM pg_catalog.pg_largeobject_metadata),
+ 'tables', coalesce((SELECT pg_catalog.json_agg(c.relname ORDER BY c.relname)
+   FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n
+   ON n.oid OPERATOR(pg_catalog.=) c.relnamespace
+   WHERE n.nspname OPERATOR(pg_catalog.=) 'public'
+     AND c.relkind OPERATOR(pg_catalog.=) 'r'), '[]'));
 """
 
 
@@ -59,74 +65,112 @@ def database_state(backend: Any) -> RestorationDatabaseState:
 
 
 CATALOG_SQL = """
-SELECT json_build_object('event_triggers', EXISTS(
- SELECT FROM pg_event_trigger WHERE evtenabled <> 'D'),
- 'unsupported_relations', EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-   WHERE n.nspname='public' AND (c.relkind IN ('v','m','p','f')
-     OR EXISTS(SELECT FROM pg_inherits i WHERE i.inhrelid=c.oid OR i.inhparent=c.oid))),
- 'tables', coalesce(json_agg(t), '[]')) FROM (
+SELECT pg_catalog.json_build_object('event_triggers', EXISTS(
+ SELECT FROM pg_catalog.pg_event_trigger WHERE evtenabled OPERATOR(pg_catalog.<>) 'D'),
+ 'unsupported_relations', EXISTS(SELECT FROM pg_catalog.pg_class c
+   JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.relnamespace
+   WHERE n.nspname OPERATOR(pg_catalog.=) 'public' AND (
+     c.relkind OPERATOR(pg_catalog.=) 'v' OR c.relkind OPERATOR(pg_catalog.=) 'm'
+     OR c.relkind OPERATOR(pg_catalog.=) 'p' OR c.relkind OPERATOR(pg_catalog.=) 'f'
+     OR EXISTS(SELECT FROM pg_catalog.pg_inherits i
+       WHERE i.inhrelid OPERATOR(pg_catalog.=) c.oid
+         OR i.inhparent OPERATOR(pg_catalog.=) c.oid))),
+ 'tables', coalesce(pg_catalog.json_agg(t), '[]')) FROM (
  SELECT c.relname AS name,
- (SELECT json_agg(json_build_object('name',a.attname,'type',format_type(a.atttypid,a.atttypmod),
-    'nullable',NOT a.attnotnull, 'values', (SELECT json_agg(e.enumlabel ORDER BY e.enumsortorder)
-      FROM pg_enum e WHERE e.enumtypid=a.atttypid),
-    'default', (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d
-      WHERE d.adrelid=c.oid AND d.adnum=a.attnum AND a.attgenerated=''),
-    'identity', CASE a.attidentity WHEN 'a' THEN 'always' WHEN 'd' THEN 'by_default' END)
+ (SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
+    'name',a.attname,'type',pg_catalog.format_type(a.atttypid,a.atttypmod),
+    'nullable',NOT a.attnotnull, 'values', (SELECT pg_catalog.json_agg(
+      e.enumlabel ORDER BY e.enumsortorder)
+      FROM pg_catalog.pg_enum e WHERE e.enumtypid OPERATOR(pg_catalog.=) a.atttypid),
+    'default', (SELECT pg_catalog.pg_get_expr(d.adbin,d.adrelid) FROM pg_catalog.pg_attrdef d
+      WHERE d.adrelid OPERATOR(pg_catalog.=) c.oid AND d.adnum OPERATOR(pg_catalog.=) a.attnum
+        AND a.attgenerated OPERATOR(pg_catalog.=) ''),
+    'identity', CASE WHEN a.attidentity OPERATOR(pg_catalog.=) 'a' THEN 'always'
+      WHEN a.attidentity OPERATOR(pg_catalog.=) 'd' THEN 'by_default' END)
     ORDER BY a.attnum)
-  FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped) AS columns,
- (SELECT coalesce(json_agg(json_build_object('name',k.conname,
-    'definition',pg_get_constraintdef(k.oid)) ORDER BY k.conname),'[]')
-  FROM pg_constraint k WHERE k.conrelid=c.oid AND k.contype='c'
+  FROM pg_catalog.pg_attribute a WHERE a.attrelid OPERATOR(pg_catalog.=) c.oid
+    AND a.attnum OPERATOR(pg_catalog.>) 0 AND NOT a.attisdropped) AS columns,
+ (SELECT coalesce(pg_catalog.json_agg(pg_catalog.json_build_object('name',k.conname,
+    'definition',pg_catalog.pg_get_constraintdef(k.oid)) ORDER BY k.conname),'[]')
+  FROM pg_catalog.pg_constraint k WHERE k.conrelid OPERATOR(pg_catalog.=) c.oid
+   AND k.contype OPERATOR(pg_catalog.=) 'c'
    AND NOT k.condeferrable AND k.convalidated) AS check_constraints,
- (SELECT coalesce(json_agg(json_build_object(
+ (SELECT coalesce(pg_catalog.json_agg(pg_catalog.json_build_object(
    'column',a.attname,'table',p.relname,'target',b.attname,'on_delete',
-   CASE k.confdeltype WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL'
-    WHEN 'd' THEN 'SET DEFAULT' WHEN 'r' THEN 'RESTRICT' ELSE 'NO ACTION' END, 'on_update',
-   CASE k.confupdtype WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL'
-    WHEN 'd' THEN 'SET DEFAULT' WHEN 'r' THEN 'RESTRICT' ELSE 'NO ACTION' END)
+   CASE WHEN k.confdeltype OPERATOR(pg_catalog.=) 'c' THEN 'CASCADE'
+    WHEN k.confdeltype OPERATOR(pg_catalog.=) 'n' THEN 'SET NULL'
+    WHEN k.confdeltype OPERATOR(pg_catalog.=) 'd' THEN 'SET DEFAULT'
+    WHEN k.confdeltype OPERATOR(pg_catalog.=) 'r' THEN 'RESTRICT' ELSE 'NO ACTION' END, 'on_update',
+   CASE WHEN k.confupdtype OPERATOR(pg_catalog.=) 'c' THEN 'CASCADE'
+    WHEN k.confupdtype OPERATOR(pg_catalog.=) 'n' THEN 'SET NULL'
+    WHEN k.confupdtype OPERATOR(pg_catalog.=) 'd' THEN 'SET DEFAULT'
+    WHEN k.confupdtype OPERATOR(pg_catalog.=) 'r' THEN 'RESTRICT' ELSE 'NO ACTION' END)
    ORDER BY k.conname),'[]')
-  FROM pg_constraint k JOIN pg_class p ON p.oid=k.confrelid
-   JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum=k.conkey[1]
-   JOIN pg_attribute b ON b.attrelid=p.oid AND b.attnum=k.confkey[1]
-  WHERE k.conrelid=c.oid AND k.contype='f') AS foreign_keys,
- (SELECT coalesce(json_agg(json_build_object('name',tr.tgname,'function',p.proname,
-   'schema',n.nspname,'owner',p.proowner::regrole::text,'source',p.prosrc,
+  FROM pg_catalog.pg_constraint k JOIN pg_catalog.pg_class p
+   ON p.oid OPERATOR(pg_catalog.=) k.confrelid
+   JOIN pg_catalog.pg_attribute a ON a.attrelid OPERATOR(pg_catalog.=) c.oid
+     AND a.attnum OPERATOR(pg_catalog.=) k.conkey[1]
+   JOIN pg_catalog.pg_attribute b ON b.attrelid OPERATOR(pg_catalog.=) p.oid
+     AND b.attnum OPERATOR(pg_catalog.=) k.confkey[1]
+  WHERE k.conrelid OPERATOR(pg_catalog.=) c.oid
+    AND k.contype OPERATOR(pg_catalog.=) 'f') AS foreign_keys,
+ (SELECT coalesce(pg_catalog.json_agg(pg_catalog.json_build_object(
+   'name',tr.tgname,'function',p.proname,
+   'schema',n.nspname,'owner',p.proowner::pg_catalog.regrole::pg_catalog.text,'source',p.prosrc,
    'security_definer',p.prosecdef,'language',l.lanname,'config',p.proconfig,
-   'return_type',p.prorettype::regtype::text,'enabled',tr.tgenabled,'type',tr.tgtype,
-   'arguments',tr.tgnargs,'predicate',tr.tgqual IS NOT NULL,'columns',tr.tgattr::text)), '[]')
- FROM pg_trigger tr JOIN pg_proc p ON p.oid=tr.tgfoid
- JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_language l ON l.oid=p.prolang
- WHERE tr.tgrelid=c.oid AND NOT tr.tgisinternal) AS triggers,
- (SELECT coalesce(json_agg(a.attname ORDER BY u.ord),'[]') FROM pg_constraint k
- CROSS JOIN LATERAL unnest(k.conkey) WITH ORDINALITY u(attnum,ord)
- JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum=u.attnum
- WHERE k.conrelid=c.oid AND k.contype='p') AS primary_key,
- (SELECT coalesce(json_agg(keys.names ORDER BY keys.names::text),'[]') FROM (
-  SELECT json_agg(a.attname ORDER BY u.ord) AS names FROM pg_index i
-  CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY u(attnum,ord)
-  JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum=u.attnum
-  WHERE i.indrelid=c.oid AND i.indisunique AND NOT i.indisprimary
-   AND i.indexprs IS NULL AND i.indpred IS NULL AND u.ord<=i.indnkeyatts
+   'return_type',p.prorettype::pg_catalog.regtype::pg_catalog.text,
+   'enabled',tr.tgenabled,'type',tr.tgtype,
+   'arguments',tr.tgnargs,'predicate',tr.tgqual IS NOT NULL,
+   'columns',tr.tgattr::pg_catalog.text)), '[]')
+ FROM pg_catalog.pg_trigger tr JOIN pg_catalog.pg_proc p ON p.oid OPERATOR(pg_catalog.=) tr.tgfoid
+ JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) p.pronamespace
+ JOIN pg_catalog.pg_language l ON l.oid OPERATOR(pg_catalog.=) p.prolang
+ WHERE tr.tgrelid OPERATOR(pg_catalog.=) c.oid AND NOT tr.tgisinternal) AS triggers,
+ (SELECT coalesce(pg_catalog.json_agg(a.attname ORDER BY u.ord),'[]')
+ FROM pg_catalog.pg_constraint k
+ CROSS JOIN LATERAL pg_catalog.unnest(k.conkey) WITH ORDINALITY u(attnum,ord)
+ JOIN pg_catalog.pg_attribute a ON a.attrelid OPERATOR(pg_catalog.=) c.oid
+   AND a.attnum OPERATOR(pg_catalog.=) u.attnum
+ WHERE k.conrelid OPERATOR(pg_catalog.=) c.oid
+   AND k.contype OPERATOR(pg_catalog.=) 'p') AS primary_key,
+ (SELECT coalesce(pg_catalog.json_agg(keys.names ORDER BY keys.names::pg_catalog.text),'[]') FROM (
+  SELECT pg_catalog.json_agg(a.attname ORDER BY u.ord) AS names FROM pg_catalog.pg_index i
+  CROSS JOIN LATERAL pg_catalog.unnest(i.indkey) WITH ORDINALITY u(attnum,ord)
+  JOIN pg_catalog.pg_attribute a ON a.attrelid OPERATOR(pg_catalog.=) c.oid
+    AND a.attnum OPERATOR(pg_catalog.=) u.attnum
+  WHERE i.indrelid OPERATOR(pg_catalog.=) c.oid AND i.indisunique AND NOT i.indisprimary
+   AND i.indexprs IS NULL AND i.indpred IS NULL AND u.ord OPERATOR(pg_catalog.<=) i.indnkeyatts
   GROUP BY i.indexrelid) keys) AS unique_keys,
- (SELECT coalesce(json_agg(ci.relname ORDER BY ci.relname),'[]') FROM pg_index i
-   JOIN pg_class ci ON ci.oid=i.indexrelid WHERE i.indrelid=c.oid AND
+ (SELECT coalesce(pg_catalog.json_agg(ci.relname ORDER BY ci.relname),'[]')
+   FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class ci
+   ON ci.oid OPERATOR(pg_catalog.=) i.indexrelid WHERE i.indrelid OPERATOR(pg_catalog.=) c.oid AND
    (i.indexprs IS NOT NULL OR i.indpred IS NOT NULL OR NOT i.indisvalid
     OR i.indnullsnotdistinct)) AS custom_indexes,
- (SELECT coalesce(json_agg(k.conname ORDER BY k.conname),'[]') FROM pg_constraint k
-   WHERE k.conrelid=c.oid AND
-   (k.contype NOT IN ('p','u','f','c') OR k.condeferrable OR NOT k.convalidated))
+ (SELECT coalesce(pg_catalog.json_agg(k.conname ORDER BY k.conname),'[]')
+   FROM pg_catalog.pg_constraint k WHERE k.conrelid OPERATOR(pg_catalog.=) c.oid AND
+   ((k.contype OPERATOR(pg_catalog.<>) 'p' AND k.contype OPERATOR(pg_catalog.<>) 'u'
+    AND k.contype OPERATOR(pg_catalog.<>) 'f' AND k.contype OPERATOR(pg_catalog.<>) 'c')
+    OR k.condeferrable OR NOT k.convalidated))
  AS custom_constraints,
- (SELECT coalesce(json_agg(x.name ORDER BY x.name),'[]') FROM (
-  SELECT a.attname AS name FROM pg_attribute a JOIN pg_type ty ON ty.oid=a.atttypid
-   WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
-    AND (a.attgenerated<>'' OR ty.typtype IN ('d','c','r','m')
-      OR (ty.typtype='b' AND ty.typnamespace<>'pg_catalog'::regnamespace))
-  UNION SELECT '(rule:'||r.rulename||')' FROM pg_rewrite r WHERE r.ev_class=c.oid) x)
+ (SELECT coalesce(pg_catalog.json_agg(x.name ORDER BY x.name),'[]') FROM (
+  SELECT a.attname AS name FROM pg_catalog.pg_attribute a
+   JOIN pg_catalog.pg_type ty ON ty.oid OPERATOR(pg_catalog.=) a.atttypid
+   WHERE a.attrelid OPERATOR(pg_catalog.=) c.oid AND a.attnum OPERATOR(pg_catalog.>) 0
+    AND NOT a.attisdropped AND (a.attgenerated OPERATOR(pg_catalog.<>) ''
+      OR ty.typtype OPERATOR(pg_catalog.=) 'd' OR ty.typtype OPERATOR(pg_catalog.=) 'c'
+      OR ty.typtype OPERATOR(pg_catalog.=) 'r' OR ty.typtype OPERATOR(pg_catalog.=) 'm'
+      OR (ty.typtype OPERATOR(pg_catalog.=) 'b'
+        AND ty.typnamespace OPERATOR(pg_catalog.<>) 'pg_catalog'::pg_catalog.regnamespace))
+  UNION SELECT '(rule:' OPERATOR(pg_catalog.||) r.rulename OPERATOR(pg_catalog.||) ')'
+   FROM pg_catalog.pg_rewrite r WHERE r.ev_class OPERATOR(pg_catalog.=) c.oid) x)
  AS custom_column_behavior,
- EXISTS(SELECT 1 FROM pg_constraint k WHERE k.conrelid=c.oid
-   AND k.contype='f' AND array_length(k.conkey,1) <> 1) AS composite_foreign_keys
- FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
- WHERE n.nspname='public' AND c.relkind='r' AND c.relname NOT LIKE 'omnia_%'
+ EXISTS(SELECT 1 FROM pg_catalog.pg_constraint k WHERE k.conrelid OPERATOR(pg_catalog.=) c.oid
+   AND k.contype OPERATOR(pg_catalog.=) 'f'
+   AND pg_catalog.array_length(k.conkey,1) OPERATOR(pg_catalog.<>) 1) AS composite_foreign_keys
+ FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n
+   ON n.oid OPERATOR(pg_catalog.=) c.relnamespace
+ WHERE n.nspname OPERATOR(pg_catalog.=) 'public' AND c.relkind OPERATOR(pg_catalog.=) 'r'
+   AND c.relname OPERATOR(pg_catalog.!~~) 'omnia_%'
  ORDER BY c.relname
 ) t;
 """
@@ -161,9 +205,14 @@ def infer_ownership(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return tables
 
 
-# pg_catalog first: an unqualified now()/nextval() in the rendered catalog is then
-# always the built-in, never a same-named function a role's search_path puts first.
-CATALOG_SCRIPT = "SET search_path = pg_catalog, public;\n" + CATALOG_SQL
+# Public visibility preserves PostgreSQL's historical enum/default rendering.
+# Every resolved function, operator, type and relation in CATALOG_SQL is explicitly
+# pg_catalog-qualified; public is visible only to the native SQL deparsers. Merely
+# putting pg_catalog first would not exclude different-signature public overloads.
+CATALOG_SCRIPT = (
+    "SET default_transaction_read_only = on;\nSET search_path = pg_catalog, public;\n"
+    + CATALOG_SQL
+)
 
 
 def catalog_contract(backend: Any) -> tuple[DataContract, list[str]]:

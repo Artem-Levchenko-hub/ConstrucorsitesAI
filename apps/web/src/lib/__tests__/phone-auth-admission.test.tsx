@@ -12,7 +12,7 @@ vi.mock("@/components/max/MaxStudio", () => ({ MaxStudio: () => null }));
 
 function registration(phone = "+79991234567", next = "/max") {
   const data = new FormData();
-  for (const [key, value] of Object.entries({ email: "owner@example.com", phone, password: "secret123", confirm: "secret123", terms_accepted: "on", privacy_accepted: "on", personal_data_accepted: "on", next })) data.set(key, value);
+  for (const [key, value] of Object.entries({ email: "owner@example.com", phone, password: "moss river blue", confirm: "moss river blue", terms_accepted: "on", privacy_accepted: "on", personal_data_accepted: "on", next })) data.set(key, value);
   return data;
 }
 beforeEach(() => {
@@ -60,5 +60,5 @@ it("keeps routine login on email and password only", async () => {
   await expect(loginAction({ error: null }, data)).rejects.toThrow("redirect:/max");
   expect(fetch).toHaveBeenCalledTimes(1);
   expect(String(vi.mocked(fetch).mock.calls[0]?.[0])).toContain("/api/auth/login");
-  expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body))).toEqual({ email: "owner@example.com", password: "secret123" });
+  expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body))).toEqual({ email: "owner@example.com", password: "moss river blue" });
 });

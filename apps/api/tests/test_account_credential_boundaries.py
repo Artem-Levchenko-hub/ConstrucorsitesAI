@@ -82,7 +82,7 @@ async def test_public_capability_only_clears_target_principal_cookie(monkeypatch
     )
     body = {"token": "x" * 64}
     if kind == "password":
-        body["password"] = "replacement456"
+        body["password"] = "Boundary recovery phrase 2026"
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://testserver"
     ) as client:

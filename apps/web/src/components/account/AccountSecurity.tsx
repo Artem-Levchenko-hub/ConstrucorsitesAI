@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { listSessions, revokeSession, type AuthSession } from "@/lib/api/account";
 import { changeAccountPassword, getAccountCredentials } from "@/lib/api/account-credentials";
+import { existingPasswordError, newPasswordError, PASSWORD_HELP, PASSWORD_MIN_LENGTH } from "@/lib/password-policy";
 import { date, QueryError } from "./account-presentation";
 
 function device(value: string | null) {
@@ -26,6 +27,7 @@ function PasswordChangeForm({ email }: { email: string }) {
   const submitting = useRef(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const [passwordInvalid, setPasswordInvalid] = useState(false);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -33,16 +35,21 @@ function PasswordChangeForm({ email }: { email: string }) {
     const form = event.currentTarget;
     if (submitting.current || !form.reportValidity()) return;
     const values = new FormData(form);
+    const currentPassword = String(values.get("current_password") ?? "");
+    const currentError = existingPasswordError(currentPassword);
+    if (currentError) { setError(new Error(currentError)); return; }
     const password = String(values.get("new_password") ?? "");
+    const policyError = newPasswordError(password);
+    setPasswordInvalid(Boolean(policyError));
+    if (policyError) {
+      setError(new Error(policyError)); return;
+    }
     if (password !== values.get("confirm_password")) {
       setError(new Error("Пароли не совпадают")); return;
     }
-    if (!/\p{Decimal_Number}/u.test(password)) {
-      setError(new Error("Пароль должен содержать хотя бы одну цифру")); return;
-    }
     submitting.current = true; setPending(true); setError(null);
     try {
-      await changeAccountPassword(String(values.get("current_password") ?? ""), password);
+      await changeAccountPassword(currentPassword, password);
       if (!active.current) return;
       form.reset();
       // The server has already revoked sessions and cleared this session's cookies.
@@ -63,12 +70,13 @@ function PasswordChangeForm({ email }: { email: string }) {
     {credentials.data?.has_password && <form onSubmit={submit} className="space-y-4">
       <p className="account-hint">После смены пароля все сессии завершатся. Войдите снова с новым паролем.</p>
       <div className="space-y-2"><label htmlFor="account-current-password">Текущий пароль</label>
-        <Input id="account-current-password" name="current_password" type="password" autoComplete="current-password" required maxLength={128} disabled={pending} /></div>
+        <Input id="account-current-password" name="current_password" type="password" autoComplete="current-password" required disabled={pending} /></div>
       <div className="space-y-2"><label htmlFor="account-new-password">Новый пароль</label>
-        <Input id="account-new-password" name="new_password" type="password" autoComplete="new-password" required minLength={8} maxLength={128} disabled={pending} />
-        <p className="account-hint">От 8 до 128 символов, хотя бы одна цифра.</p></div>
+        <Input id="account-new-password" name="new_password" type="password" autoComplete="new-password" required minLength={PASSWORD_MIN_LENGTH}
+          aria-describedby="account-password-help" aria-invalid={passwordInvalid} onChange={() => setPasswordInvalid(false)} disabled={pending} />
+        <p id="account-password-help" className="account-hint">{PASSWORD_HELP}</p></div>
       <div className="space-y-2"><label htmlFor="account-confirm-password">Повторите новый пароль</label>
-        <Input id="account-confirm-password" name="confirm_password" type="password" autoComplete="new-password" required minLength={8} maxLength={128} disabled={pending} /></div>
+        <Input id="account-confirm-password" name="confirm_password" type="password" autoComplete="new-password" required minLength={PASSWORD_MIN_LENGTH} disabled={pending} /></div>
       <QueryError error={error} />
       <Button type="submit" disabled={pending}>{pending ? "Сохраняем…" : "Изменить пароль"}</Button>
     </form>}

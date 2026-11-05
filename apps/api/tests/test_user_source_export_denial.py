@@ -7,6 +7,7 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy import event, select
 
+from tests.session_authority import authenticated_session_token
 from yleum_api.core.config import get_settings
 from yleum_api.core.security import create_access_token
 from yleum_api.models.billing import BillingAccount, BillingPlan, Subscription
@@ -60,7 +61,7 @@ async def test_personal_export_does_not_grant_source_or_disaster_archive_access(
     project.current_snapshot_id = snapshot.id
     await db_session.commit()
     assert (await load_plan_context(db_session, owner.id)).plan.code == plan_code
-    token = create_access_token(owner.id, session_version=owner.session_version)
+    token = await authenticated_session_token(db_session, owner)
     client.cookies.set(get_settings().jwt_cookie_name, token)
     backup_settings = get_settings().model_copy(
         update={"offhost_backup_read_token": SecretStr("synthetic-machine-only-token")}

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from yleum_api.core.security import create_access_token
+from tests.session_authority import authenticated_session_token
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.project import Project
 from yleum_api.models.project_cell import ProjectCellWorkspace
@@ -129,7 +129,9 @@ def _stub_orchestrator(monkeypatch, *, files, revision="1" * 64):
 async def test_save_records_the_draft_as_the_new_head_version(client, db_session, monkeypatch):
     owner, project, head, workspace = await _fixture(db_session)
     calls = _stub_orchestrator(monkeypatch, files=EDITED)
-    client.headers["Authorization"] = f"Bearer {create_access_token(owner.id)}"
+    client.headers["Authorization"] = (
+        f"Bearer {await authenticated_session_token(db_session, owner)}"
+    )
 
     response = await client.post(f"/api/projects/{project.id}/draft/save-version")
 
@@ -159,7 +161,9 @@ async def test_save_records_the_draft_as_the_new_head_version(client, db_session
 async def test_save_refuses_a_draft_that_equals_the_version(client, db_session, monkeypatch):
     owner, project, _head, _workspace = await _fixture(db_session)
     calls = _stub_orchestrator(monkeypatch, files=SAVED)
-    client.headers["Authorization"] = f"Bearer {create_access_token(owner.id)}"
+    client.headers["Authorization"] = (
+        f"Bearer {await authenticated_session_token(db_session, owner)}"
+    )
 
     response = await client.post(f"/api/projects/{project.id}/draft/save-version")
 
@@ -173,7 +177,9 @@ async def test_discard_sends_exactly_the_patch_under_the_current_revision(
 ):
     owner, project, head, workspace = await _fixture(db_session)
     calls = _stub_orchestrator(monkeypatch, files=EDITED, revision="7" * 64)
-    client.headers["Authorization"] = f"Bearer {create_access_token(owner.id)}"
+    client.headers["Authorization"] = (
+        f"Bearer {await authenticated_session_token(db_session, owner)}"
+    )
 
     response = await client.post(f"/api/projects/{project.id}/draft/discard")
 
@@ -208,7 +214,9 @@ async def test_actions_refuse_while_the_workspace_belongs_to_a_generation(
     workspace.generation_run_id = run.id
     await db_session.commit()
     calls = _stub_orchestrator(monkeypatch, files=EDITED)
-    client.headers["Authorization"] = f"Bearer {create_access_token(owner.id)}"
+    client.headers["Authorization"] = (
+        f"Bearer {await authenticated_session_token(db_session, owner)}"
+    )
 
     save = await client.post(f"/api/projects/{project.id}/draft/save-version")
     discard = await client.post(f"/api/projects/{project.id}/draft/discard")
@@ -226,7 +234,9 @@ async def test_actions_need_the_owner(client, db_session, monkeypatch):
     await db_session.commit()
 
     anonymous = await client.post(f"/api/projects/{project.id}/draft/save-version")
-    client.headers["Authorization"] = f"Bearer {create_access_token(stranger.id)}"
+    client.headers["Authorization"] = (
+        f"Bearer {await authenticated_session_token(db_session, stranger)}"
+    )
     foreign = await client.post(f"/api/projects/{project.id}/draft/discard")
 
     assert anonymous.status_code == 401

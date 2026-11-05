@@ -22,7 +22,7 @@ pytestmark = pytest.mark.asyncio
 
 MAX_REGISTRATION = {
     "email": "owner@example.com",
-    "password": "secret123",
+    "password": "Fixture garden lantern 2026",
     "product": "max",
     "phone": "+79991234567",
     "terms_accepted": True,
@@ -48,7 +48,7 @@ async def test_max_registration_requires_separate_legal_acceptances(
         "/api/auth/register",
         json={
             "email": "owner@example.com",
-            "password": "secret123",
+            "password": "Fixture garden lantern 2026",
             "product": "max",
             "document_version": get_settings().legal_document_version,
         },
@@ -126,7 +126,7 @@ async def test_account_never_accepts_owner_requisites(
 ) -> None:
     registered = await client.post(
         "/api/auth/register",
-        json={"email": "no-requisites@example.com", "password": "secret123"},
+        json={"email": "no-requisites@example.com", "password": "Fixture garden lantern 2026"},
     )
     assert registered.status_code == 201
 
@@ -166,7 +166,7 @@ async def test_general_registration_cannot_bypass_max_consents(
     _stub_project_creation(monkeypatch)
     registered = await client.post(
         "/api/auth/register",
-        json={"email": "general@example.com", "password": "secret123"}
+        json={"email": "general@example.com", "password": "Fixture garden lantern 2026"}
         | ({"product": product} if product else {}),
     )
     assert registered.status_code == 201
@@ -185,7 +185,9 @@ async def test_general_owner_can_explicitly_complete_max_onboarding(
     _stub_project_creation(monkeypatch)
     registered = await client.post(
         "/api/auth/register", json={
-            "email": "general@example.com", "password": "secret123", "role": "admin",
+            "email": "general@example.com",
+            "password": "Fixture garden lantern 2026",
+            "role": "admin",
         },
     )
     assert registered.status_code == 201
@@ -321,7 +323,7 @@ async def test_admin_access_flag_requires_the_admin_role(
     )
     registered = await client.post(
         "/api/auth/register",
-        json={"email": "admin@example.com", "password": "secret123"},
+        json={"email": "admin@example.com", "password": "Fixture garden lantern 2026"},
     )
     assert registered.status_code == 201
 

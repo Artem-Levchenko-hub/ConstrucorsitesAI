@@ -7,9 +7,9 @@ import pytest
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from tests.session_authority import authenticated_session_token
 from tests.test_restorations import FakeRuntime, restoration_fixture
 from yleum_api.core.errors import ApiError
-from yleum_api.core.security import create_access_token
 from yleum_api.models.restoration import Restoration
 from yleum_api.schemas.restoration import RestoreApplyRequest
 from yleum_api.services import repo
@@ -112,7 +112,7 @@ async def test_public_detail_get_is_a_pure_projection_across_one_hundred_reads(
     monkeypatch.setattr(routes, "HttpRestorationRuntime", forbidden_runtime)
     monkeypatch.setattr(repo, "prepare_restore_commit", forbidden_git)
     monkeypatch.setattr(repo, "activate_restore_commit", forbidden_git)
-    headers = {"Authorization": f"Bearer {create_access_token(owner.id)}"}
+    headers = {"Authorization": f"Bearer {await authenticated_session_token(db_session, owner)}"}
     path = f"/api/projects/{project.id}/restorations/{operation.id}"
 
     for _ in range(100):
@@ -157,7 +157,7 @@ async def test_public_detail_get_never_observes_or_redispatches_runtime_404(
     row.phase = "cancel"
     await db_session.commit()
     monkeypatch.setattr(routes, "HttpRestorationRuntime", lambda: runtime)
-    headers = {"Authorization": f"Bearer {create_access_token(owner.id)}"}
+    headers = {"Authorization": f"Bearer {await authenticated_session_token(db_session, owner)}"}
 
     response = await client.get(
         f"/api/projects/{project.id}/restorations/{operation.id}", headers=headers

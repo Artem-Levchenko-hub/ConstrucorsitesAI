@@ -126,30 +126,34 @@ def content_inventory_partition_digests(
     )
     if any(item.kind not in {"table", "partitioned_table"} for item in measured):
         raise CellIdentityConflict("restoration inventory cannot be content-hashed")
+    from yleum_orchestrator.services.restoration_row_conversion import row_conversion_preamble
+
     expressions: list[str] = []
+    relations: list[tuple[str, str]] = []
     for ordinal, item in enumerate(measured):
         if "." not in item.object:
             raise CellIdentityConflict("restoration inventory identity is invalid")
         schema, name = item.object.split(".", 1)
+        relations.append((schema, name))
         relation = f"{quote_ident(schema)}.{quote_ident(name)}"
         expressions.append(
-            f"SELECT {ordinal} AS ordinal, (SELECT json_build_object("
-            "'rows', count(*),"
-            "'sha256', encode(sha256(convert_to(coalesce("
-            "string_agg(row_sha256, '' ORDER BY row_sha256), ''), 'UTF8')), 'hex')) "
-            "FROM (SELECT encode(sha256(convert_to(to_jsonb(t)::text, 'UTF8')), 'hex') "
+            f"SELECT {ordinal} AS ordinal, (SELECT pg_catalog.json_build_object("
+            "'rows', pg_catalog.count(*),"
+            "'sha256', pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(coalesce("
+            "pg_catalog.string_agg(row_sha256, '' ORDER BY row_sha256), ''), 'UTF8')), 'hex')) "
+            "FROM (SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
+            "pg_catalog.to_jsonb(t)::text, 'UTF8')), 'hex') "
             f"AS row_sha256 FROM {relation} AS t) AS content) AS evidence"
         )
     evidence_query = (
-        "SELECT coalesce(json_agg(evidence ORDER BY ordinal), '[]'::json) FROM ("
+        "SELECT coalesce(pg_catalog.json_agg(evidence ORDER BY ordinal), '[]'::json) FROM ("
         + " UNION ALL ".join(expressions)
         + ") AS measured"
         if expressions
         else "SELECT '[]'::json"
     )
     sql = (
-        "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;\n"
-        "SET LOCAL statement_timeout = '60s';\n" + evidence_query + ";\nCOMMIT;"
+        row_conversion_preamble(relations) + evidence_query + ";\nCOMMIT;"
     )
     try:
         evidence = json.loads(admin_sql(backend, sql, max_bytes=256 * 1024))

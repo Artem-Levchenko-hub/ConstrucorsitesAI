@@ -25,20 +25,24 @@ RunSql = Callable[[str], bytes]
 EXACT_COUNT_LIMIT = 100_000
 # Per-relation fallback is bounded: it runs under the workspace lock.
 FALLBACK_LIMIT = 40
-# Session guard for every counting script: read-only and time-bounded.
-_GUARD = "SET statement_timeout = '5s';\nSET default_transaction_read_only = on;\n"
+# Keep project routines/operators out of administrator name resolution. Explicit
+# relation identities below remain schema-qualified, including non-public tables.
+_GUARD = (
+    "SET search_path = pg_catalog;\n"
+    "SET statement_timeout = '5s';\nSET default_transaction_read_only = on;\n"
+)
 
 LIST_RELATIONS_SQL = _GUARD + """
-SELECT json_build_object(
- 'relations', coalesce((SELECT json_agg(json_build_object(
+SELECT pg_catalog.json_build_object(
+ 'relations', coalesce((SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
     'schema', n.nspname, 'name', c.relname, 'kind', c.relkind,
     'partition', c.relispartition, 'estimate', greatest(c.reltuples, 0)::bigint)
     ORDER BY n.nspname, c.relname)
-  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
   WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
    AND n.nspname !~ '^pg_(toast|temp)'
    AND c.relkind IN ('r', 'p', 'v', 'm', 'f')), '[]'),
- 'large_objects', EXISTS(SELECT FROM pg_largeobject_metadata));
+ 'large_objects', EXISTS(SELECT FROM pg_catalog.pg_largeobject_metadata));
 """
 
 _KINDS = {
@@ -62,7 +66,8 @@ def quote_ident(value: str) -> str:
 
 def _count_expression(schema: str, name: str) -> str:
     return (
-        f"(SELECT count(*) FROM (SELECT 1 FROM {quote_ident(schema)}.{quote_ident(name)} "
+        "(SELECT pg_catalog.count(*) FROM (SELECT 1 FROM "
+        f"{quote_ident(schema)}.{quote_ident(name)} "
         f"LIMIT {EXACT_COUNT_LIMIT + 1}) bounded)"
     )
 
@@ -111,7 +116,7 @@ def _counts(
         return []
     expressions = ", ".join(_count_expression(r["schema"], r["name"]) for r in relations)
     try:
-        values = json.loads(run_sql(_GUARD + f"SELECT json_build_array({expressions});"))
+        values = json.loads(run_sql(_GUARD + f"SELECT pg_catalog.json_build_array({expressions});"))
         if isinstance(values, list) and len(values) == len(relations):
             return [(int(value), None) for value in values]
     except Exception:

@@ -123,9 +123,13 @@ def _try_download(project_id: UUID, dest: Path) -> bool:
         if e.code in {"NoSuchKey", "NoSuchBucket"}:
             return False
         raise
-    with tarfile.open(tar_path, "r:gz") as tar:
-        tar.extractall(dest)
-    tar_path.unlink(missing_ok=True)
+    try:
+        with tarfile.open(tar_path, "r:gz") as tar:
+            tar.extractall(dest, filter="data")
+    finally:
+        # The original object remains untouched; rejected downloads leave no
+        # retained archive beside the temporary checkout.
+        tar_path.unlink(missing_ok=True)
     return True
 
 

@@ -87,7 +87,9 @@ def test_empty_witness_is_one_repeatable_read_exact_snapshot(monkeypatch):
     assert witness.classification_policy == "business_data_empty_v1"
     assert len(witness.digest()) == 64
     assert len(seen) == 2
-    assert "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY" in seen[0]
+    assert "BEGIN ISOLATION LEVEL REPEATABLE READ READ WRITE" in seen[0]
+    assert seen[0].index("LOCK TABLE ") < seen[0].index("SET TRANSACTION READ ONLY;")
+    assert seen[0].index("SET TRANSACTION READ ONLY;") < seen[0].index("DO $row_conversion_guard$")
     assert "SET LOCAL row_security = off" in seen[0]
     assert "query_to_xml" in seen[0]
     assert "pg_prepared_xacts" in seen[0]

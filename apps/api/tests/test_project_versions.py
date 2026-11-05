@@ -1,6 +1,6 @@
 from sqlalchemy import select
 
-from yleum_api.core.security import create_access_token
+from tests.session_authority import authenticated_session_token
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.project import Project
@@ -54,7 +54,9 @@ async def test_versions_are_durable_idempotent_failed_and_paginated(client, db_s
     second = await ensure_generation_version(db_session, run2, project)
     await db_session.commit()
     assert (first.number, second.number) == (1, 2)
-    client.headers["Authorization"] = f"Bearer {create_access_token(owner.id)}"
+    client.headers["Authorization"] = (
+        f"Bearer {await authenticated_session_token(db_session, owner)}"
+    )
     result = await client.get(f"/api/projects/{project.id}/versions?limit=1")
     assert result.status_code == 200, result.text
     assert result.json()["versions"][0]["status"] == "failed"
@@ -96,7 +98,9 @@ async def test_owner_scope_and_final_snapshot_provenance(client, db_session):
     assistant.snapshot_id = final.id
     project.current_snapshot_id = final.id
     await db_session.commit()
-    client.headers["Authorization"] = f"Bearer {create_access_token(owner.id)}"
+    client.headers["Authorization"] = (
+        f"Bearer {await authenticated_session_token(db_session, owner)}"
+    )
     row = (await client.get(f"/api/projects/{project.id}/versions")).json()["versions"][0]
     assert row["status"] == "ready" and row["is_current"]
     assert row["can_restore"] is False
@@ -121,7 +125,9 @@ async def test_owner_scope_and_final_snapshot_provenance(client, db_session):
     stranger = User(email="stranger@example.test")
     db_session.add(stranger)
     await db_session.commit()
-    client.headers["Authorization"] = f"Bearer {create_access_token(stranger.id)}"
+    client.headers["Authorization"] = (
+        f"Bearer {await authenticated_session_token(db_session, stranger)}"
+    )
     assert (await client.get(f"/api/projects/{project.id}/versions")).status_code == 404
 
 
@@ -184,7 +190,9 @@ async def test_unchanged_run_keeps_base_image_when_technical_snapshot_reuses_com
     assistant.snapshot_id = technical.id
     project.current_snapshot_id = technical.id
     await db_session.commit()
-    client.headers["Authorization"] = f"Bearer {create_access_token(owner.id)}"
+    client.headers["Authorization"] = (
+        f"Bearer {await authenticated_session_token(db_session, owner)}"
+    )
     row = (await client.get(f"/api/projects/{project.id}/versions")).json()["versions"][0]
     assert row["status"] == "unchanged" and row["is_current"]
     assert row["snapshot_id"] == str(base.id)
@@ -200,7 +208,9 @@ async def test_current_version_survives_managed_technical_child_commit(client, d
     await db_session.flush()
     project.current_snapshot_id = technical.id
     await db_session.commit()
-    client.headers["Authorization"] = f"Bearer {create_access_token(owner.id)}"
+    client.headers["Authorization"] = (
+        f"Bearer {await authenticated_session_token(db_session, owner)}"
+    )
     row = (await client.get(f"/api/projects/{project.id}/versions")).json()["versions"][0]
     assert row["id"] == str(version.id) and row["is_current"]
     assert row["snapshot_id"] == str(base.id)
@@ -282,7 +292,9 @@ async def test_failed_version_api_hides_verified_base_preview(client, db_session
     run, _ = await accepted(db_session, project, 1, "failed")
     await ensure_generation_version(db_session, run, project)
     await db_session.commit()
-    client.headers["Authorization"] = f"Bearer {create_access_token(owner.id)}"
+    client.headers["Authorization"] = (
+        f"Bearer {await authenticated_session_token(db_session, owner)}"
+    )
     row = (await client.get(f"/api/projects/{project.id}/versions")).json()["versions"][0]
     assert row["status"] == "failed"
     assert row["preview_status"] == "missing" and row["previews"] == []

@@ -17,7 +17,7 @@ async def _register(
 ) -> dict[str, object]:
     response = await client.post(
         "/api/auth/register",
-        json={"email": email, "password": "secret123"},
+        json={"email": email, "password": "Cobalt meadow archive 72"},
     )
     assert response.status_code == 201
     return response.json()
@@ -32,6 +32,21 @@ async def test_regular_user_cannot_open_admin_api(
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "forbidden"
+
+
+async def test_registration_cannot_claim_allowlisted_admin_email(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from yleum_api.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "admin_emails", "bootstrap@example.com")
+    registered = await _register(client, "bootstrap@example.com")
+    assert registered["role"] == "user" and registered["email_verified_at"] is None
+    for path in ("/api/admin/access", "/api/admin/users", "/api/admin/audit"):
+        assert (await client.get(path)).status_code == 403
+    assert (await client.patch(
+        f"/api/admin/users/{registered['id']}", json={"role": "admin"},
+    )).status_code == 403
 
 
 async def test_admin_can_manage_account_with_audit(

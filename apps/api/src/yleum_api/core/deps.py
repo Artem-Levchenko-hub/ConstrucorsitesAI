@@ -26,9 +26,7 @@ def _extract_token(cookie: str | None, authorization: str | None) -> str | None:
 def set_session_cookie(response: Response, token: str) -> None:
     """Single source of truth for the auth session cookie (R-04).
 
-    Used by the auth router (register/login) and the anon-project seam
-    (create_project hands the ephemeral principal a session so their project
-    stays editable pre-auth).
+    Used by registration/login and authenticated session renewal.
     """
     settings = get_settings()
     response.set_cookie(
@@ -46,6 +44,7 @@ def set_session_cookie(response: Response, token: str) -> None:
 async def resolve_session_user(
     session: AsyncSession, cookie: str | None, authorization: str | None
 ) -> User | None:
+    """Require a current account version and a live session for every transport."""
     token = _extract_token(cookie, authorization)
     if token is None:
         return None
@@ -55,18 +54,16 @@ async def resolve_session_user(
     user = await session.get(User, claims.user_id)
     if user is None or user.status != "active":
         return None
-    if claims.session_version is not None and claims.session_version != user.session_version:
+    if claims.session_version != user.session_version:
         return None
-    if claims.session_id is not None:
-        auth_session = await session.get(AuthSession, claims.session_id)
-        now = datetime.now(UTC)
-        if (
-            auth_session is None
-            or auth_session.user_id != user.id
-            or auth_session.revoked_at is not None
-            or auth_session.expires_at <= now
-        ):
-            return None
+    auth_session = await session.get(AuthSession, claims.session_id)
+    if (
+        auth_session is None
+        or auth_session.user_id != user.id
+        or auth_session.revoked_at is not None
+        or auth_session.expires_at <= datetime.now(UTC)
+    ):
+        return None
     return user
 
 
@@ -93,9 +90,8 @@ async def get_optional_user(
 ) -> User | None:
     """Resolve the caller if a valid session is present, else None.
 
-    Unlike ``get_current_user`` this never raises — a missing, malformed, or
-    stale cookie simply yields an anonymous caller. The anon-project seam
-    (V4.1a) uses this so unauthenticated visitors can create a project.
+    A missing, malformed, or stale credential yields an anonymous caller.
+    Present credentials use the same durable-session checks as protected routes.
     """
     return await resolve_session_user(session, omnia_session, authorization)
 

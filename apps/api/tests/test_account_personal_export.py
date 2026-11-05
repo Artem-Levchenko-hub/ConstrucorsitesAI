@@ -52,7 +52,14 @@ async def test_export_uses_current_owner_and_never_serializes_auth_secrets(clien
                          balance_after_rub=Decimal(10 + i), description=f"private-reason-{i}"),
         ])
     await db_session.commit()
-    client.cookies.set(get_settings().jwt_cookie_name, create_access_token(owners[0].id))
+    login = await db_session.scalar(select(AuthSession).where(AuthSession.user_id == owners[0].id))
+    assert login is not None
+    client.cookies.set(
+        get_settings().jwt_cookie_name,
+        create_access_token(
+            owners[0].id, session_id=login.id, session_version=owners[0].session_version,
+        ),
+    )
     response = await client.get(f"/api/account/export?user_id={owners[1].id}&include_files=true")
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"

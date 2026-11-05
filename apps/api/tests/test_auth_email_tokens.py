@@ -31,7 +31,7 @@ from yleum_api.services.transactional_email import (
 pytestmark = pytest.mark.asyncio
 
 EMAIL = "owner@example.com"
-PASSWORD = "secret123"
+PASSWORD = "moss river blue"
 REGISTRATION = {
     "email": EMAIL,
     "password": PASSWORD,
@@ -250,8 +250,11 @@ async def test_preexisting_link_without_code_remains_usable(client, outbox, db_s
 @pytest.mark.parametrize(
     ("new_password", "wrong_password"),
     [
-        pytest.param("brand-new-456", "brand-new-457", id="short"),
-        pytest.param("a" * 127 + "1", "a" * 127 + "2", id="maximum-ascii-length"),
+        pytest.param("violet-lantern-456", "violet-lantern-457", id="phrase"),
+        pytest.param(
+            ("cedar river lantern moss " * 6)[:127] + "1",
+            ("cedar river lantern moss " * 6)[:127] + "2", id="maximum-ascii-length",
+        ),
     ],
 )
 async def test_reset_letter_changes_the_password_once_and_signs_everyone_out(
@@ -287,7 +290,7 @@ async def test_reset_letter_changes_the_password_once_and_signs_everyone_out(
     assert new.status_code == 200
 
     replay = await client.post(
-        "/api/auth/password/reset", json={"token": outbox.token(), "password": "third-pass-789"}
+        "/api/auth/password/reset", json={"token": outbox.token(), "password": "third-lantern-789"}
     )
     assert (replay.status_code, _error(replay)) == (400, INVALID)
 
@@ -297,7 +300,7 @@ async def test_reset_rejects_unknown_expired_and_foreign_purpose_tokens(
 ):
     await _register(client)
     verify_token = outbox.token()
-    body = {"password": "brand-new-456"}
+    body = {"password": "violet-lantern-456"}
 
     unknown = await client.post("/api/auth/password/reset", json={"token": "x" * 64, **body})
     assert (unknown.status_code, _error(unknown)) == (400, INVALID)
@@ -361,11 +364,12 @@ async def test_green_phone_proof_survives_email_login_and_password_recovery_with
     forgot = await client.post("/api/auth/password/forgot", json={"email": EMAIL})
     assert forgot.status_code == 202
     reset = await client.post(
-        "/api/auth/password/reset", json={"token": outbox.token(), "password": "new-green-456"},
+        "/api/auth/password/reset",
+        json={"token": outbox.token(), "password": "new-green-lantern-456"},
     )
     assert reset.status_code == 200
     logged_in = await client.post(
-        "/api/auth/login", json={"email": EMAIL, "password": "new-green-456"},
+        "/api/auth/login", json={"email": EMAIL, "password": "new-green-lantern-456"},
     )
     assert logged_in.status_code == 200
     assert logged_in.json()["phone_e164"] == "+79991234567"
@@ -424,8 +428,12 @@ async def test_one_reset_link_submitted_twice_at_once_works_once(site, outbox):
     token = await _reset_link(http, outbox)
 
     first, second = await asyncio.gather(
-        http.post("/api/auth/password/reset", json={"token": token, "password": "first-pass-111"}),
-        http.post("/api/auth/password/reset", json={"token": token, "password": "other-pass-222"}),
+        http.post(
+            "/api/auth/password/reset", json={"token": token, "password": "first-lantern-111"},
+        ),
+        http.post(
+            "/api/auth/password/reset", json={"token": token, "password": "other-lantern-222"},
+        ),
     )
 
     assert sorted([first.status_code, second.status_code]) == [200, 400]
@@ -529,7 +537,7 @@ async def test_consumed_links_are_committed_not_just_flushed(site, outbox):
     token = await _reset_link(http, outbox)
     verified = await http.post("/api/auth/email/verify", json={"token": outbox.token(0)})
     reset = await http.post(
-        "/api/auth/password/reset", json={"token": token, "password": "brand-new-456"}
+        "/api/auth/password/reset", json={"token": token, "password": "violet-lantern-456"}
     )
     assert (verified.status_code, reset.status_code) == (200, 200)
 
@@ -550,7 +558,7 @@ async def test_a_reset_that_fails_midway_leaves_the_link_usable(site, outbox, mo
 
     monkeypatch.setattr(auth_router, "hash_password", broken)
     failed = await http.post(
-        "/api/auth/password/reset", json={"token": token, "password": "brand-new-456"}
+        "/api/auth/password/reset", json={"token": token, "password": "violet-lantern-456"}
     )
     assert failed.status_code == 500
     async with factory() as fresh:
@@ -562,6 +570,6 @@ async def test_a_reset_that_fails_midway_leaves_the_link_usable(site, outbox, mo
 
     monkeypatch.setattr(auth_router, "hash_password", hash_password)
     retry = await http.post(
-        "/api/auth/password/reset", json={"token": token, "password": "brand-new-456"}
+        "/api/auth/password/reset", json={"token": token, "password": "violet-lantern-456"}
     )
     assert retry.status_code == 200

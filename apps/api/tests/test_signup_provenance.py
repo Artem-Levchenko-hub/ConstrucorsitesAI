@@ -36,7 +36,7 @@ async def test_share_link_signup_persists_source_and_referrer(
         "/api/auth/register",
         json={
             "email": "stranger@example.com",
-            "password": "secret123",
+            "password": "Fixture garden lantern 2026",
             "source": "share_link",
             "referrer_project_id": str(ref),
         },
@@ -55,7 +55,7 @@ async def test_organic_signup_leaves_provenance_blank(
     # stamped a default source, this assert would catch it.
     r = await client.post(
         "/api/auth/register",
-        json={"email": "organic@example.com", "password": "secret123"},
+        json={"email": "organic@example.com", "password": "Fixture garden lantern 2026"},
     )
     assert r.status_code == 201, r.text
     src, referrer = await _source(db_session, "organic@example.com")
@@ -72,7 +72,7 @@ async def test_source_only_records_source_referrer_null(
         "/api/auth/register",
         json={
             "email": "direct@example.com",
-            "password": "secret123",
+            "password": "Fixture garden lantern 2026",
             "source": "direct",
         },
     )
@@ -88,7 +88,7 @@ async def test_out_of_enum_source_rejected(client: httpx.AsyncClient) -> None:
         "/api/auth/register",
         json={
             "email": "spoof@example.com",
-            "password": "secret123",
+            "password": "Fixture garden lantern 2026",
             "source": "evil_value",
         },
     )
@@ -101,7 +101,7 @@ async def test_non_uuid_referrer_rejected(client: httpx.AsyncClient) -> None:
         "/api/auth/register",
         json={
             "email": "spoof2@example.com",
-            "password": "secret123",
+            "password": "Fixture garden lantern 2026",
             "source": "share_link",
             "referrer_project_id": "not-a-uuid",
         },

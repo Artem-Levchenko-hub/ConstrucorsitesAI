@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from yleum_orchestrator.services.restoration_binding import canonical_digest
 from yleum_orchestrator.services.restoration_database import admin_sql
+from yleum_orchestrator.services.restoration_row_conversion import row_conversion_preamble
 
 ObservationKind = Literal["source", "candidate_copy", "quiesced_source"]
 _LEDGER_IDENTITY = ("public", "__omnia_migrations")
@@ -62,10 +63,12 @@ class EmptyDatabaseWitness(BaseModel):
 
 # query_to_xml supplies safe dynamic relation reads inside this one server-side
 # snapshot. Identifiers come from pg_catalog and are quoted by format(%I).
-EMPTY_WITNESS_SQL = r"""
-BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
-SET LOCAL statement_timeout = '60s';
-SET LOCAL lock_timeout = '5s';
+EMPTY_WITNESS_SQL = row_conversion_preamble(
+    [("public", name) for name in (
+        "__omnia_migrations", "__omnia_project_migrations", "max_users",
+    )],
+    allow_missing=True,
+) + r"""
 SET LOCAL row_security = off;
 WITH user_relations AS (
  SELECT n.nspname AS schema_name, c.relname, c.relkind, c.relispartition,
@@ -189,6 +192,7 @@ COMMIT;
 TEMPLATE1_WITNESS_SQL = r"""
 \connect template1
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET LOCAL search_path = pg_catalog;
 SET LOCAL statement_timeout = '60s';
 SET LOCAL lock_timeout = '5s';
 SET LOCAL row_security = off;

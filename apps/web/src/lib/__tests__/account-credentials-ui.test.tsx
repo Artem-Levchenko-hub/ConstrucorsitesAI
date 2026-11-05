@@ -43,12 +43,22 @@ it("rejects mismatched new passwords without submitting credentials", async () =
   await render("security"); fill("account-current-password", "test-current-secret"); fill("account-new-password", "test-new-secret1"); fill("account-confirm-password", "test-other-secret2");
   await submit(); expect(container.querySelector('[role="alert"]')?.textContent).toContain("не совпадают"); expect(requests.length).toBe(0);
 });
-it("rejects a new password without a digit before making a request", async () => {
-  await render("security"); fill("account-current-password", "test-current-secret"); fill("account-new-password", "test-no-digit-secret"); fill("account-confirm-password", "test-no-digit-secret");
+it("rejects a common long password without sending or echoing it", async () => {
+  await render("security"); fill("account-current-password", "test-current-secret"); fill("account-new-password", "passwordpassword"); fill("account-confirm-password", "passwordpassword");
   await submit();
   expect(requests.length).toBe(0);
-  expect(container.querySelector('[role="alert"]')?.textContent).toContain("хотя бы одну цифру");
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("менее распространённый");
+  expect(container.querySelector('[role="alert"]')?.textContent).not.toContain("passwordpassword");
+  expect(container.querySelector('#account-new-password')?.getAttribute("aria-invalid")).toBe("true");
   expect(navigation.replace).not.toHaveBeenCalled();
+});
+it("accepts a digitless phrase while retaining a legacy current password", async () => {
+  const currentPassword = "🔐".repeat(128);
+  await render("security"); fill("account-current-password", currentPassword); fill("account-new-password", "moss river blue"); fill("account-confirm-password", "moss river blue");
+  expect(container.querySelector("#account-current-password")?.hasAttribute("maxlength")).toBe(false);
+  expect(container.textContent).toContain("цифры и спецсимволы необязательны");
+  await submit();
+  expect(requests[0].body).toEqual({ current_password: currentPassword, new_password: "moss river blue" });
 });
 it("reports a wrong current password and permits correction", async () => {
   post = async () => Response.json({ error: { code: "bad_request", message: "Неверный текущий пароль" } }, { status: 400 });

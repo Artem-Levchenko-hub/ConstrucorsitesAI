@@ -45,8 +45,8 @@ async def consume_dummy_verify() -> None:
 @dataclass(frozen=True)
 class AccessClaims:
     user_id: UUID
-    session_id: UUID | None
-    session_version: int | None
+    session_id: UUID
+    session_version: int
 
 
 def create_access_token(
@@ -84,21 +84,19 @@ def decode_access_claims(token: str) -> AccessClaims | None:
     except InvalidTokenError:
         return None
     sub = payload.get("sub")
-    if not isinstance(sub, str):
+    sid = payload.get("sid")
+    version = payload.get("ver")
+    if (
+        not isinstance(sub, str)
+        or not isinstance(sid, str)
+        or type(version) is not int
+        or version < 0
+    ):
         return None
     try:
         user_id = UUID(sub)
+        session_id = UUID(sid)
     except ValueError:
-        return None
-    session_id: UUID | None = None
-    sid = payload.get("sid")
-    if isinstance(sid, str):
-        try:
-            session_id = UUID(sid)
-        except ValueError:
-            return None
-    version = payload.get("ver")
-    if version is not None and not isinstance(version, int):
         return None
     return AccessClaims(
         user_id=user_id,

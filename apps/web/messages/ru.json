@@ -42,7 +42,7 @@
       "emailLabel": "Email",
       "emailPlaceholder": "вы@почта.ru",
       "passwordLabel": "Пароль",
-      "passwordPlaceholder": "не короче 8 символов, с цифрой",
+      "passwordPlaceholder": "от 15 до 128 символов",
       "confirmLabel": "Подтверждение",
       "confirmPlaceholder": "повторите пароль",
       "loginButton": "Войти",

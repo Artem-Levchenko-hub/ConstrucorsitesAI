@@ -14,7 +14,7 @@ async def register_verified_account(
     email: str,
     *,
     product: Literal["general", "max"] = "general",
-    password: str = "secret123",
+    password: str = "Fixture garden lantern 2026",
 ) -> httpx.Response:
     tokens: list[str] = []
 

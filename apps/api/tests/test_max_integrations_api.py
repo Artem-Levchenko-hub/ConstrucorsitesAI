@@ -178,7 +178,7 @@ async def test_max_preview_session_rejects_foreign_project(
     assert logged_out.status_code == 204
     registered = await client.post(
         "/api/auth/register",
-        json={"email": "preview-foreign@example.com", "password": "secret123"},
+        json={"email": "preview-foreign@example.com", "password": "Fixture garden lantern 2026"},
     )
     assert registered.status_code == 201
 

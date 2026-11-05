@@ -54,7 +54,7 @@ async def test_registration_creates_one_free_subscription(
 ) -> None:
     registered = await client.post(
         "/api/auth/register",
-        json={"email": "subscriber@example.com", "password": "secret123"},
+        json={"email": "subscriber@example.com", "password": "Fixture garden lantern 2026"},
     )
     assert registered.status_code == 201
 
@@ -73,7 +73,7 @@ async def test_database_allows_only_one_live_subscription_per_account(
 ) -> None:
     await client.post(
         "/api/auth/register",
-        json={"email": "one-plan@example.com", "password": "secret123"},
+        json={"email": "one-plan@example.com", "password": "Fixture garden lantern 2026"},
     )
     user_id = (
         await db_session.execute(select(User.id).where(User.email == "one-plan@example.com"))

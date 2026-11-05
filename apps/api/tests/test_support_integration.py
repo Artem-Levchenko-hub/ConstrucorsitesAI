@@ -5,11 +5,11 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import func, inspect, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from tests.session_authority import authenticated_session_token
 from yleum_api.core.config import get_settings
-from yleum_api.core.security import create_access_token
 from yleum_api.models.support import (
     SupportEmailOutbox,
     SupportMessage,
@@ -35,7 +35,7 @@ def isolate_support_transport(monkeypatch):
 def headers(user=None, token=None):
     values = {"origin": get_settings().web_base_url.rstrip("/")}
     if user is not None:
-        values["authorization"] = f"Bearer {create_access_token(inspect(user).identity[0])}"
+        values["authorization"] = f"Bearer {user._test_access_token}"
     if token:
         values["X-Support-Token"] = token
     return values
@@ -44,7 +44,8 @@ def headers(user=None, token=None):
 async def account(session, email, role="user", status="active"):
     user = User(email=email, role=role, status=status, is_anon=False)
     session.add(user)
-    await session.commit()
+    # Each account fixture has a real revocable session; headers only replay it.
+    user._test_access_token = await authenticated_session_token(session, user)
     return user
 
 
@@ -369,7 +370,7 @@ async def test_socket_identity_revocation_and_guest_scope(test_engine, db_sessio
     from yleum_api.routers.support import _socket_identity
 
     admin = await account(db_session, "staff@example.com", "admin")
-    token = create_access_token(admin.id, session_version=0)
+    token = await authenticated_session_token(db_session, admin)
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     assert (await _socket_identity(factory, token, None, None, None))[0] == "admins"
     admin.role = "user"

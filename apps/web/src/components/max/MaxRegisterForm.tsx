@@ -12,6 +12,7 @@ import { maxRegisterAction } from "@/app/(auth)/actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { newPasswordError, PASSWORD_HELP, PASSWORD_MIN_LENGTH } from "@/lib/password-policy";
 import { RegistrationPhoneConfirmation } from "./PhoneVerification";
 
 const recoverableAction = recoverAuthAction(maxRegisterAction);
@@ -38,6 +39,7 @@ export function MaxRegisterForm({ next = "/max", children, existingSession = fal
   const router = useRouter();
   const [fields, setFields] = useState({ email: "", phone: "", password: "", confirm: "" });
   const [consents, setConsents] = useState<Record<string, boolean>>({});
+  const [passwordError, setPasswordError] = useState<string | null>(null);
   const validation = useRequiredCheckboxValidation();
   const update = (name: keyof typeof fields, value: string) => setFields(previous => ({ ...previous, [name]: value }));
   const [state, action, pending] = useActionState(recoverableAction, {
@@ -59,6 +61,12 @@ export function MaxRegisterForm({ next = "/max", children, existingSession = fal
     <form onSubmit={event => {
       event.preventDefault();
       if (pending) return;
+      const error = newPasswordError(fields.password);
+      setPasswordError(error);
+      if (error) {
+        event.currentTarget.querySelector<HTMLInputElement>("#max-password")?.focus();
+        return;
+      }
       const data = new FormData(event.currentTarget);
       // Dispatch explicitly: React's form action resets native inputs even
       // when the server returns a validation error. Preserve the user's work.
@@ -94,11 +102,14 @@ export function MaxRegisterForm({ next = "/max", children, existingSession = fal
             revealLabel="пароль"
             autoComplete="new-password"
             required
-            minLength={8}
+            minLength={PASSWORD_MIN_LENGTH}
+            aria-describedby="max-password-help max-password-error"
+            aria-invalid={Boolean(passwordError)}
             value={fields.password}
-            onChange={event => update("password", event.target.value)}
+            onChange={event => { update("password", event.target.value); setPasswordError(null); }}
             className="h-12 border-border-default bg-surface"
           />
+          <p id="max-password-help" className="text-xs leading-5 text-fg-tertiary">{PASSWORD_HELP}</p>
         </div>
         <div className="space-y-2">
           <Label htmlFor="max-confirm">Повторите пароль <RequiredMark /></Label>
@@ -108,7 +119,7 @@ export function MaxRegisterForm({ next = "/max", children, existingSession = fal
             revealLabel="повтор пароля"
             autoComplete="new-password"
             required
-            minLength={8}
+            minLength={PASSWORD_MIN_LENGTH}
             value={fields.confirm}
             onChange={event => update("confirm", event.target.value)}
             className="h-12 border-border-default bg-surface"
@@ -143,9 +154,9 @@ export function MaxRegisterForm({ next = "/max", children, existingSession = fal
         </label>
       </div>
 
-      {state.error && (
-        <p role="alert" className="rounded-[8px] bg-danger/10 px-4 py-3 text-sm text-danger-fg">
-          {state.error}
+      {(passwordError || state.error) && (
+        <p id="max-password-error" role="alert" className="rounded-[8px] bg-danger/10 px-4 py-3 text-sm text-danger-fg">
+          {passwordError || state.error}
         </p>
       )}
 

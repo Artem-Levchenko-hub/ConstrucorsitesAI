@@ -16,7 +16,13 @@ from sqlalchemy.exc import IntegrityError
 from yleum_api.core.config import get_settings
 from yleum_api.core.deps import CurrentUserDep, OptionalUserDep, SessionDep, extract_access_claims
 from yleum_api.core.errors import ApiError
-from yleum_api.core.ratelimit import _client_ip, rate_limit_auth, rate_limit_email
+from yleum_api.core.ratelimit import (
+    _client_ip,
+    clear_login_account_limit,
+    rate_limit_auth,
+    rate_limit_email,
+    rate_limit_login_account,
+)
 from yleum_api.core.security import consume_dummy_verify, hash_password, verify_password
 from yleum_api.models.account import AuthSession, AuthToken
 from yleum_api.models.user import User
@@ -310,6 +316,7 @@ async def login(
     response: Response,
     session: SessionDep,
 ) -> UserPublic:
+    await rate_limit_login_account(str(payload.email))
     result = await session.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
     if user is None or user.password_hash is None:
@@ -324,6 +331,7 @@ async def login(
     await session.commit()
     await session.refresh(user)
     attach_session_cookie(response, user, auth_session)
+    clear_login_account_limit(user.email)
     return await _public_user(session, user)
 
 
@@ -503,6 +511,7 @@ async def reset_password(
         session, user, await hash_password(payload.password), kind="password_reset",
     )
     await session.commit()
+    clear_login_account_limit(user.email)
     if incoming_user_id == user.id:
         settings = get_settings()
         response.delete_cookie(

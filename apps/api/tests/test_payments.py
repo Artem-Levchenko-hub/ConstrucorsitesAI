@@ -75,7 +75,7 @@ async def test_payment_endpoint_is_closed_without_provider_configuration(
 ) -> None:
     await client.post(
         "/api/auth/register",
-        json={"email": "closed@example.com", "password": "secret123"},
+        json={"email": "closed@example.com", "password": "Fixture garden lantern 2026"},
     )
     response = await client.post(
         "/api/payments",

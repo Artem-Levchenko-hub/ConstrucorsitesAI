@@ -17,12 +17,15 @@ The api runs a single uvicorn process, so in-memory storage is exact; promote to
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+
 from fastapi import Request, status
-from limits import parse
+from limits import RateLimitItem, parse
 from limits.storage import MemoryStorage
 from limits.strategies import MovingWindowRateLimiter
 
-from yleum_api.core.config import get_settings
+from yleum_api.core.config import Settings, get_settings
 from yleum_api.core.deps import _extract_token
 from yleum_api.core.errors import ApiError
 from yleum_api.core.security import decode_access_token
@@ -93,6 +96,42 @@ async def rate_limit_prompt(request: Request) -> None:
         )
 
 
+def _auth_rate_error() -> ApiError:
+    return ApiError(
+        "rate_limited",
+        "Слишком много попыток. Подождите и попробуйте снова",
+        status.HTTP_429_TOO_MANY_REQUESTS,
+    )
+
+
+def _login_account_bucket(settings: Settings, email: str) -> tuple[RateLimitItem, str]:
+    # The login schema validates the address first. A case-insensitive account
+    # keeps one bucket across source IPs; no plaintext address is stored as a key.
+    digest = hmac.new(
+        settings.jwt_secret.get_secret_value().encode(),
+        email.strip().casefold().encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    return parse(settings.auth_account_rate_limit), f"auth-login-account:{digest}"
+
+
+async def rate_limit_login_account(email: str) -> None:
+    """Bound attempts before user lookup or password verification on every IP."""
+    settings = get_settings()
+    if settings.rate_limit_enabled:
+        item, key = _login_account_bucket(settings, email)
+        if not _limiter.hit(item, key):
+            raise _auth_rate_error()
+
+
+def clear_login_account_limit(email: str | None) -> None:
+    """Only a successful login or proven credential recovery may clear this key."""
+    settings = get_settings()
+    if email and settings.rate_limit_enabled:
+        item, key = _login_account_bucket(settings, email)
+        _limiter.clear(item, key)
+
+
 async def rate_limit_auth(request: Request) -> None:
     """Protect password hashing and login from brute force and CPU exhaustion."""
     settings = get_settings()
@@ -100,17 +139,9 @@ async def rate_limit_auth(request: Request) -> None:
         return
     client_ip = _client_ip(request)
     if not _limiter.hit(parse(settings.auth_ip_rate_limit), f"auth-ip:{client_ip}"):
-        raise ApiError(
-            "rate_limited",
-            "Слишком много попыток. Подождите и попробуйте снова",
-            status.HTTP_429_TOO_MANY_REQUESTS,
-        )
+        raise _auth_rate_error()
     if not _limiter.hit(parse(settings.auth_rate_limit), f"auth-actor:{_rate_key(request)}"):
-        raise ApiError(
-            "rate_limited",
-            "Слишком много попыток. Подождите и попробуйте снова",
-            status.HTTP_429_TOO_MANY_REQUESTS,
-        )
+        raise _auth_rate_error()
 
 
 async def rate_limit_email(request: Request) -> None:
@@ -156,8 +187,10 @@ async def rate_limit_max_content_image(request: Request) -> None:
 
 
 __all__ = [
+    "clear_login_account_limit",
     "rate_limit_auth",
     "rate_limit_email",
+    "rate_limit_login_account",
     "rate_limit_max_content_image",
     "rate_limit_prompt",
     "rate_limit_task_board",

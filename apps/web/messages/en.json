@@ -42,7 +42,7 @@
       "emailLabel": "Email",
       "emailPlaceholder": "you@example.com",
       "passwordLabel": "Password",
-      "passwordPlaceholder": "at least 8 characters with a number",
+      "passwordPlaceholder": "15 to 128 characters",
       "confirmLabel": "Confirm password",
       "confirmPlaceholder": "repeat password",
       "loginButton": "Sign in",

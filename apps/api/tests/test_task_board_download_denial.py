@@ -7,8 +7,8 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import event, select
 
+from tests.session_authority import authenticated_session_token
 from yleum_api.core.config import get_settings
-from yleum_api.core.security import create_access_token
 from yleum_api.models.billing import BillingAccount, BillingPlan, Subscription
 from yleum_api.models.task_board import TaskBoardAttachment, TaskBoardTask
 from yleum_api.models.user import User
@@ -48,7 +48,7 @@ async def test_tier_and_admin_attachment_downloads_deny_before_storage(
     db_session.add(attachment)
     await db_session.commit()
     assert (await load_plan_context(db_session, owner.id)).plan.code == plan_code
-    token = create_access_token(owner.id, session_version=owner.session_version)
+    token = await authenticated_session_token(db_session, owner)
     client.cookies.set(get_settings().jwt_cookie_name, token)
     assert (await client.get("/api/auth/me")).status_code == 200
     storage = Mock(return_value=BytesIO(b"synthetic-private-attachment"))

@@ -1,9 +1,10 @@
-import re
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
+
+from yleum_api.core.password_policy import NewPassword
 
 # Bounded set of viral-funnel signup sources (V4.2b). A closed enum is the
 # teeth: an attacker (or a buggy client) cannot stuff arbitrary strings into the
@@ -26,7 +27,7 @@ class LegalAcceptanceRequest(BaseModel):
 class UserCreate(LegalAcceptanceRequest):
     email: EmailStr
     phone: str | None = Field(default=None, min_length=7, max_length=40)
-    password: str = Field(min_length=8, max_length=128)
+    password: NewPassword
     # Viral-funnel provenance (V4.2b return-edge), both optional → organic signup
     # leaves them NULL. Validated: `source` against the closed SignupSource enum
     # and `referrer_project_id` as a real UUID, so junk provenance is rejected
@@ -34,14 +35,6 @@ class UserCreate(LegalAcceptanceRequest):
     source: SignupSource | None = None
     referrer_project_id: UUID | None = None
     product: RegistrationProduct = "general"
-
-    @field_validator("password")
-    @classmethod
-    def must_contain_digit(cls, v: str) -> str:
-        if not re.search(r"\d", v):
-            raise ValueError("password must contain at least one digit")
-        return v
-
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -111,14 +104,7 @@ class EmailCodeConsume(BaseModel):
 
 class PasswordResetConsume(BaseModel):
     token: str = Field(min_length=32, max_length=512)
-    password: str = Field(min_length=8, max_length=128)
-
-    @field_validator("password")
-    @classmethod
-    def must_contain_digit(cls, v: str) -> str:
-        if not re.search(r"\d", v):
-            raise ValueError("password must contain at least one digit")
-        return v
+    password: NewPassword
 
 
 class SessionPublic(BaseModel):

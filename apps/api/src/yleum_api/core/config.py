@@ -324,6 +324,9 @@ class Settings(BaseSettings):
     prompt_ip_rate_limit: str = Field(default="60/hour")
     auth_rate_limit: str = Field(default="30/minute")
     auth_ip_rate_limit: str = Field(default="120/hour")
+    # Independent from source IP and existing sessions; genuine login/recovery
+    # clears it. Prevents distributed guesses against one known account.
+    auth_account_rate_limit: str = Field(default="10/15minutes")
     email_rate_limit: str = Field(default="10/hour")
 
     # Phase B — multipass design generation for budget models.

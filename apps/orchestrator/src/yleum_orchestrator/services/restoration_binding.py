@@ -51,10 +51,13 @@ def exact_inventory_partition_digests(backend: Any, inventory: InventoryReport) 
         if "." not in item.object:
             raise CellIdentityConflict("restoration inventory identity is invalid")
         schema, name = item.object.split(".", 1)
-        expressions.append(f"(SELECT count(*) FROM {quote_ident(schema)}.{quote_ident(name)})")
+        expressions.append(
+            f"(SELECT pg_catalog.count(*) FROM {quote_ident(schema)}.{quote_ident(name)})"
+        )
     sql = (
+        "SET search_path = pg_catalog;\n"
         "SET statement_timeout = '60s';\nSET default_transaction_read_only = on;\n"
-        + "SELECT json_build_array("
+        + "SELECT pg_catalog.json_build_array("
         + ",".join(expressions)
         + ");"
     )
@@ -146,7 +149,9 @@ def _database_observation(backend: Any) -> dict[str, Any]:
     if not isinstance(role, str) or not re.fullmatch(r"[a-zA-Z0-9_]+", role):
         raise CellIdentityConflict("restoration database role is invalid")
     sql = f"""
-SELECT json_build_object(
+SET search_path = pg_catalog;
+SET default_transaction_read_only = on;
+SELECT pg_catalog.json_build_object(
   'database_name', d.datname,
   'database_oid', d.oid::bigint,
   'role_name', r.rolname,
@@ -155,10 +160,10 @@ SELECT json_build_object(
   'role_create_db', r.rolcreatedb,
   'role_create_role', r.rolcreaterole,
   'database_acl', COALESCE(d.datacl::text, ''),
-  'system_identifier', (SELECT system_identifier::text FROM pg_control_system())
+  'system_identifier', (SELECT system_identifier::text FROM pg_catalog.pg_control_system())
 )::text
-FROM pg_database d
-JOIN pg_roles r ON r.rolname = '{role}'
+FROM pg_catalog.pg_database d
+JOIN pg_catalog.pg_roles r ON r.rolname = '{role}'
 WHERE d.datname = '{database}';
 """
     try:

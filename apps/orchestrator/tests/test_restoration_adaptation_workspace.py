@@ -886,7 +886,8 @@ def test_content_digest_detects_same_count_update_without_returning_rows(
     index = 0 if changed_partition == "business" else 1
     assert before[index] != after[index]
     assert all("to_jsonb(t)" in sql and "sha256" in sql for sql in calls)
-    assert all("REPEATABLE READ READ ONLY" in sql for sql in calls)
+    assert all("REPEATABLE READ READ WRITE" in sql for sql in calls)
+    assert all("SET TRANSACTION READ ONLY;" in sql for sql in calls)
     assert all("secret" not in sql for sql in calls)
 
 

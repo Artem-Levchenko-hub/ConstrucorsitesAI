@@ -20,7 +20,7 @@ it("preserves credentials, phone and chosen legal consents when signup is reject
   const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
   try {
     await act(async () => root.render(<MaxRegisterForm />));
-    const values = { email: "owner@example.com", phone: "+79991234567", password: "secret123", confirm: "secret123" };
+    const values = { email: "owner@example.com", phone: "+79991234567", password: "moss river blue", confirm: "moss river blue" };
     for (const [name, value] of Object.entries(values)) await act(async () => {
       const input = container.querySelector<HTMLInputElement>(`input[name=${name}]`)!;
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
@@ -41,6 +41,28 @@ it("preserves credentials, phone and chosen legal consents when signup is reject
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
 
+it("rejects a common long password locally and connects accessible help to the field", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(<MaxRegisterForm />));
+    for (const [name, value] of Object.entries({ email: "owner@example.com", phone: "+79991234567", password: "passwordpassword", confirm: "passwordpassword" })) await act(async () => {
+      const input = container.querySelector<HTMLInputElement>(`input[name=${name}]`)!;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    for (const box of container.querySelectorAll<HTMLInputElement>("input[type=checkbox][required]")) await act(async () => box.click());
+    await act(async () => { container.querySelector("form")!.requestSubmit(); });
+    const field = container.querySelector<HTMLInputElement>("#max-password")!;
+    expect(field.minLength).toBe(15); expect(field.getAttribute("aria-invalid")).toBe("true");
+    expect(field.getAttribute("aria-describedby")).toContain("max-password-help");
+    expect(container.querySelector("#max-password-help")?.textContent).toContain("цифры и спецсимволы необязательны");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("менее распространённый");
+    expect(container.querySelector('[role="alert"]')?.textContent).not.toContain("passwordpassword");
+    expect(document.activeElement).toBe(field); expect(mocks.action).not.toHaveBeenCalled();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
 it("keeps the cookie-updated registration page available to its client action state", async () => {
   const page = await MaxRegisterPage({});
   const html = renderToStaticMarkup(page);
@@ -55,7 +77,7 @@ async function registration(run: (container: HTMLDivElement) => Promise<void>) {
   const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
   try {
     await act(async () => root.render(<MaxRegisterForm />));
-    for (const [name, value] of Object.entries({ email: "example@example.test", phone: "+79990000000", password: "fixture123", confirm: "fixture123" })) await act(async () => {
+    for (const [name, value] of Object.entries({ email: "example@example.test", phone: "+79990000000", password: "moss river blue", confirm: "moss river blue" })) await act(async () => {
       const input = container.querySelector<HTMLInputElement>(`input[name=${name}]`)!;
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
       input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -116,10 +138,13 @@ it("toggles each password independently without submitting, replacing inputs or 
     expect(container.querySelector('input[name="password"]')).toBe(password);
     expect(container.querySelector('input[name="confirm"]')).toBe(confirm);
     for (const input of [password, confirm]) {
-      expect(input.required).toBe(true); expect(input.minLength).toBe(8); expect(input.autocomplete).toBe("new-password");
+      expect(input.required).toBe(true); expect(input.minLength).toBe(15); expect(input.autocomplete).toBe("new-password");
+      // Native maxLength counts UTF-16 units and would truncate a valid
+      // 128-code-point Unicode password. The shared policy bounds it instead.
+      expect(input.hasAttribute("maxlength")).toBe(false);
     }
     const data = new FormData(container.querySelector("form")!);
-    expect(data.get("password")).toBe("fixture123"); expect(data.get("confirm")).toBe("fixture123");
+    expect(data.get("password")).toBe("moss river blue"); expect(data.get("confirm")).toBe("moss river blue");
     expect(mocks.action).not.toHaveBeenCalled();
   });
 });
@@ -171,7 +196,7 @@ it("retains the newly registered phone when cookie mutation re-renders server pr
   const render = (existingSession: boolean) => <QueryClientProvider client={client}><MaxRegisterForm existingSession={existingSession}><span>Другой способ входа</span></MaxRegisterForm></QueryClientProvider>;
   try {
     await act(async () => root.render(render(false)));
-    for (const [name, value] of Object.entries({ email: "owner@example.com", phone: "+79991234567", password: "secret123", confirm: "secret123" })) await act(async () => {
+    for (const [name, value] of Object.entries({ email: "owner@example.com", phone: "+79991234567", password: "moss river blue", confirm: "moss river blue" })) await act(async () => {
       const input = container.querySelector<HTMLInputElement>(`input[name=${name}]`)!;
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
       input.dispatchEvent(new Event("input", { bubbles: true }));

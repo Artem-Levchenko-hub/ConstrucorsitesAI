@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { apiFetch } from "@/lib/api/client";
+import { newPasswordError, PASSWORD_HELP, PASSWORD_MIN_LENGTH } from "@/lib/password-policy";
 
 export function PasswordResetForm({ token }: { token: string }) {
   const [password, setPassword] = useState("");
@@ -18,6 +19,12 @@ export function PasswordResetForm({ token }: { token: string }) {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (pending) return;
+    const policyError = newPasswordError(password);
+    if (policyError) {
+      setError(policyError);
+      return;
+    }
     if (password !== confirm) {
       setError("Пароли не совпадают");
       return;
@@ -76,11 +83,14 @@ export function PasswordResetForm({ token }: { token: string }) {
           id="reset-password"
           type="password"
           value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          minLength={8}
+          onChange={(event) => { setPassword(event.target.value); setError(null); }}
+          minLength={PASSWORD_MIN_LENGTH}
+          aria-describedby="reset-password-help reset-password-error"
+          aria-invalid={Boolean(error && error === newPasswordError(password))}
           required
           autoComplete="new-password"
         />
+        <p id="reset-password-help" className="text-xs leading-5 text-fg-tertiary">{PASSWORD_HELP}</p>
       </div>
       <div className="space-y-2">
         <Label htmlFor="reset-confirm">Повторите пароль</Label>
@@ -89,12 +99,12 @@ export function PasswordResetForm({ token }: { token: string }) {
           type="password"
           value={confirm}
           onChange={(event) => setConfirm(event.target.value)}
-          minLength={8}
+          minLength={PASSWORD_MIN_LENGTH}
           required
           autoComplete="new-password"
         />
       </div>
-      {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+      {error && <p id="reset-password-error" role="alert" className="text-sm text-danger">{error}</p>}
       <Button className="w-full" disabled={pending}>
         {pending && <Loader2 className="mr-2 size-4 animate-spin" />}
         Сохранить пароль

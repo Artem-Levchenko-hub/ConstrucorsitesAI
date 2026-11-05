@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from yleum_api.core.config import get_settings
 from yleum_api.core.deps import CurrentUserDep, OptionalUserDep, SessionDep
 from yleum_api.core.errors import ApiError
-from yleum_api.core.ratelimit import rate_limit_auth, rate_limit_email
+from yleum_api.core.ratelimit import clear_login_account_limit, rate_limit_auth, rate_limit_email
 from yleum_api.core.request_origin import require_origin
 from yleum_api.schemas.account_credentials import (
     ConfirmationSent,
@@ -49,6 +49,7 @@ async def password_change(
 ) -> PasswordChanged:
     require_origin(request)
     await credentials.change_password(session, user.id, data.current_password, data.new_password)
+    clear_login_account_limit(user.email)
     clear_session(response)
     return PasswordChanged()
 

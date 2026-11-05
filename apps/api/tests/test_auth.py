@@ -15,7 +15,7 @@ from yleum_api.services.readiness import ReadinessReport
 async def test_register_creates_user_and_sets_session_cookie(client: httpx.AsyncClient) -> None:
     r = await client.post(
         "/api/auth/register",
-        json={"email": "alice@example.com", "password": "secret123"},
+        json={"email": "alice@example.com", "password": "moss river blue"},
     )
     assert r.status_code == 201
     body = r.json()
@@ -33,24 +33,24 @@ async def test_register_rejects_short_password(client: httpx.AsyncClient) -> Non
     assert r.json()["error"]["code"] == "validation_failed"
 
 
-async def test_register_rejects_password_without_digit(client: httpx.AsyncClient) -> None:
+async def test_register_accepts_long_password_without_digit(client: httpx.AsyncClient) -> None:
     r = await client.post(
         "/api/auth/register",
         json={"email": "a@b.com", "password": "alllettersnodigit"},
     )
-    assert r.status_code == 422
+    assert r.status_code == 201
 
 
 async def test_register_rejects_invalid_email(client: httpx.AsyncClient) -> None:
     r = await client.post(
         "/api/auth/register",
-        json={"email": "not-an-email", "password": "secret123"},
+        json={"email": "not-an-email", "password": "moss river blue"},
     )
     assert r.status_code == 422
 
 
 async def test_register_rejects_duplicate_email(client: httpx.AsyncClient) -> None:
-    payload = {"email": "dup@example.com", "password": "secret123"}
+    payload = {"email": "dup@example.com", "password": "moss river blue"}
     first = await client.post("/api/auth/register", json=payload)
     assert first.status_code == 201
     second = await client.post("/api/auth/register", json=payload)
@@ -61,12 +61,12 @@ async def test_register_rejects_duplicate_email(client: httpx.AsyncClient) -> No
 async def test_login_with_correct_credentials_sets_cookie(client: httpx.AsyncClient) -> None:
     await client.post(
         "/api/auth/register",
-        json={"email": "bob@example.com", "password": "secret123"},
+        json={"email": "bob@example.com", "password": "moss river blue"},
     )
     client.cookies.clear()
     r = await client.post(
         "/api/auth/login",
-        json={"email": "bob@example.com", "password": "secret123"},
+        json={"email": "bob@example.com", "password": "moss river blue"},
     )
     assert r.status_code == 200
     assert "omnia_session" in r.cookies
@@ -128,7 +128,8 @@ async def test_legacy_bcrypt_login_preserves_hash_and_existing_session(
 async def test_registration_and_login_preserve_a_long_password_suffix(
     client: httpx.AsyncClient,
 ) -> None:
-    password = "🔐" * 127 + "1"
+    prefix = "".join(chr(0x1F400 + index) for index in range(127))
+    password = prefix + "1"
     registered = await client.post(
         "/api/auth/register", json={"email": "long@example.com", "password": password},
     )
@@ -137,7 +138,7 @@ async def test_registration_and_login_preserve_a_long_password_suffix(
 
     altered = await client.post(
         "/api/auth/login",
-        json={"email": "long@example.com", "password": "🔐" * 127 + "2"},
+        json={"email": "long@example.com", "password": prefix + "2"},
     )
     assert altered.status_code == 401
     correct = await client.post(
@@ -149,7 +150,7 @@ async def test_registration_and_login_preserve_a_long_password_suffix(
 async def test_login_wrong_password_returns_401(client: httpx.AsyncClient) -> None:
     await client.post(
         "/api/auth/register",
-        json={"email": "carol@example.com", "password": "secret123"},
+        json={"email": "carol@example.com", "password": "moss river blue"},
     )
     r = await client.post(
         "/api/auth/login",
@@ -162,7 +163,7 @@ async def test_login_wrong_password_returns_401(client: httpx.AsyncClient) -> No
 async def test_login_unknown_email_returns_401(client: httpx.AsyncClient) -> None:
     r = await client.post(
         "/api/auth/login",
-        json={"email": "ghost@example.com", "password": "secret123"},
+        json={"email": "ghost@example.com", "password": "moss river blue"},
     )
     assert r.status_code == 401
 
@@ -170,7 +171,7 @@ async def test_login_unknown_email_returns_401(client: httpx.AsyncClient) -> Non
 async def test_me_returns_current_user(client: httpx.AsyncClient) -> None:
     await client.post(
         "/api/auth/register",
-        json={"email": "dave@example.com", "password": "secret123"},
+        json={"email": "dave@example.com", "password": "moss river blue"},
     )
     r = await client.get("/api/auth/me")
     assert r.status_code == 200
@@ -193,7 +194,7 @@ async def test_logout_clears_cookie_and_subsequent_me_returns_401(
 ) -> None:
     await client.post(
         "/api/auth/register",
-        json={"email": "eve@example.com", "password": "secret123"},
+        json={"email": "eve@example.com", "password": "moss river blue"},
     )
     logout = await client.post("/api/auth/logout")
     assert logout.status_code == 204

@@ -6,6 +6,7 @@ import { safeReturnPath } from "@/lib/auth-return";
 import type { AuthFormState } from "@/lib/auth-action-recovery";
 import { oauthTicketBinding } from "@/lib/oauth-browser-binding-server";
 import { publicOrigin } from "@/lib/public-origin";
+import { existingPasswordError, newPasswordError } from "@/lib/password-policy";
 
 import {
   sanitizeReferrerProjectId,
@@ -20,11 +21,12 @@ const COOKIE_NAME = "omnia_session";
  * which itself routes an unverified account to onboarding. */
 const DEFAULT_LANDING = "/max";
 
-function validateCredentials(email: string, password: string): string | null {
+function validateCredentials(email: string, password: string, purpose: "login" | "new"): string | null {
   if (!email || !EMAIL_RE.test(email)) return "Введите корректный email";
-  if (!password || password.length < 8) return "Пароль должен быть не короче 8 символов";
-  if (!/\d/.test(password)) return "Пароль должен содержать хотя бы одну цифру";
-  return null;
+  if (purpose === "new") return newPasswordError(password);
+  // Existing credentials retain their original length/composition. New-password
+  // rules must never lock someone out of an account they already own.
+  return existingPasswordError(password);
 }
 
 /**
@@ -176,7 +178,7 @@ export async function loginAction(
 ): Promise<FormState> {
   const email = String(formData.get("email") ?? "").trim();
   const password = String(formData.get("password") ?? "");
-  const validationError = validateCredentials(email, password);
+  const validationError = validateCredentials(email, password, "login");
   if (validationError) return { error: validationError };
 
   const error = await callAuth("login", { email, password });
@@ -192,7 +194,7 @@ export async function registerAction(
   const password = String(formData.get("password") ?? "");
   const confirm = String(formData.get("confirm") ?? "");
 
-  const validationError = validateCredentials(email, password);
+  const validationError = validateCredentials(email, password, "new");
   if (validationError) return { error: validationError };
   if (password !== confirm) return { error: "Пароли не совпадают" };
 
@@ -221,7 +223,7 @@ export async function maxRegisterAction(
   const phone = String(formData.get("phone") ?? "").trim();
   const password = String(formData.get("password") ?? "");
   const confirm = String(formData.get("confirm") ?? "");
-  const validationError = validateCredentials(email, password);
+  const validationError = validateCredentials(email, password, "new");
   if (validationError) return { error: validationError };
   if (!phone) return { error: "Введите телефон с кодом страны" };
   if (password !== confirm) return { error: "Пароли не совпадают" };

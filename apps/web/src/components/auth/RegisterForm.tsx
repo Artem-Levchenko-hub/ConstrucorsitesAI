@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { recoverAuthAction } from "@/lib/auth-action-recovery";
 import { AuthPageRefresh } from "@/components/auth/AuthPageRefresh";
 import { useTranslations } from "next-intl";
@@ -10,6 +10,7 @@ import { registerAction } from "@/app/(auth)/actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { newPasswordError, PASSWORD_HELP, PASSWORD_MIN_LENGTH } from "@/lib/password-policy";
 
 const recoverableAction = recoverAuthAction(registerAction);
 
@@ -26,9 +27,17 @@ export function RegisterForm({
     error: null,
   });
   const t = useTranslations("auth.form");
+  const [passwordError, setPasswordError] = useState<string | null>(null);
 
   return (
-    <form action={formAction} className="space-y-4">
+    <form action={formAction} onSubmit={event => {
+      const error = newPasswordError(String(new FormData(event.currentTarget).get("password") ?? ""));
+      setPasswordError(error);
+      if (error) {
+        event.preventDefault();
+        event.currentTarget.querySelector<HTMLInputElement>("#password")?.focus();
+      }
+    }} className="space-y-4">
       {next && <input type="hidden" name="next" value={next} />}
       {/* V4.2b return-edge: carry viral-funnel provenance from the URL into the
           register action. The server action re-validates/sanitizes these. */}
@@ -56,8 +65,12 @@ export function RegisterForm({
           type="password"
           autoComplete="new-password"
           required
-          placeholder={t("passwordPlaceholder")}
+          minLength={PASSWORD_MIN_LENGTH}
+          aria-describedby="password-help password-error"
+          aria-invalid={Boolean(passwordError)}
+          onChange={() => setPasswordError(null)}
         />
+        <p id="password-help" className="text-xs leading-5 text-fg-tertiary">{PASSWORD_HELP}</p>
       </div>
 
       <div className="space-y-2">
@@ -68,11 +81,12 @@ export function RegisterForm({
           type="password"
           autoComplete="new-password"
           required
+          minLength={PASSWORD_MIN_LENGTH}
           placeholder={t("confirmPlaceholder")}
         />
       </div>
 
-      {state.error && <p role="alert" className="text-xs text-danger">{state.error}</p>}
+      {(passwordError || state.error) && <p id="password-error" role="alert" className="text-xs text-danger">{passwordError || state.error}</p>}
 
       {state.refreshRequired && <AuthPageRefresh />}
 

@@ -996,12 +996,12 @@ async def test_db_admission_blocks_active_restore_and_rebound_key(db_session):
 
 
 async def test_db_disabled_routes_owner_scope_and_no_dispatch(client, db_session, monkeypatch):
-    from yleum_api.core.security import create_access_token
+    from tests.session_authority import authenticated_session_token
     from yleum_api.routers import restorations as routes
 
     owner, project, _, _, _, _, request = await restoration_fixture(db_session)
     monkeypatch.setattr(routes.get_settings(), "max_code_restoration_enabled", False)
-    token = create_access_token(owner.id)
+    token = await authenticated_session_token(db_session, owner)
     headers = {"Authorization": f"Bearer {token}"}
     path = f"/api/projects/{project.id}/restorations"
     response = await client.get(path, headers=headers)
@@ -1480,14 +1480,14 @@ async def test_db_capacity_skips_restoration_until_cancelled(db_session):
 
 
 async def test_db_router_completed_returns_actual_snapshot(client, db_session, monkeypatch):
-    from yleum_api.core.security import create_access_token
+    from tests.session_authority import authenticated_session_token
     from yleum_api.routers import restorations as routes
 
     owner, project, old, current, _, _, request = await restoration_fixture(db_session)
     monkeypatch.setattr(routes.get_settings(), "max_code_restoration_enabled", True)
     runtime = FakeRuntime()
     monkeypatch.setattr(routes, "HttpRestorationRuntime", lambda: runtime)
-    headers = {"Authorization": f"Bearer {create_access_token(owner.id)}"}
+    headers = {"Authorization": f"Bearer {await authenticated_session_token(db_session, owner)}"}
     path = f"/api/projects/{project.id}/restorations"
     prepared = await client.post(path, json=request.model_dump(mode="json"), headers=headers)
     assert prepared.status_code == 200

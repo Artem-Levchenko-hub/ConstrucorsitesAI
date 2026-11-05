@@ -14,6 +14,7 @@ from yleum_api.core.db import get_session
 from yleum_api.core.deps import set_session_cookie
 from yleum_api.core.errors import ApiError, api_error_handler
 from yleum_api.core.security import create_access_token
+from yleum_api.models.account import AuthSession
 from yleum_api.models.user import User
 from yleum_api.routers import app_integrations
 from yleum_api.services.integration_oauth import OAuthResult
@@ -22,8 +23,12 @@ from yleum_api.services.integration_providers import IntegrationProviderUnavaila
 
 @pytest.fixture
 def callback_boundary(monkeypatch):
-    owner = SimpleNamespace(id=uuid4(), status="active")
-    stranger = SimpleNamespace(id=uuid4(), status="active")
+    owner = SimpleNamespace(id=uuid4(), status="active", session_version=0)
+    stranger = SimpleNamespace(id=uuid4(), status="active", session_version=0)
+    logins = {user.id: AuthSession(
+        id=uuid4(), user_id=user.id, revoked_at=None,
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    ) for user in (owner, stranger)}
     raw_state = "synthetic-unpredictable-state-for-owner"
     record = SimpleNamespace(
         user_id=owner.id,
@@ -47,8 +52,10 @@ def callback_boundary(monkeypatch):
             return SimpleNamespace(scalar_one_or_none=lambda: found)
 
         async def get(self, model, identifier):
-            assert model is User
-            return next((user for user in (owner, stranger) if user.id == identifier), None)
+            if model is User:
+                return next((user for user in (owner, stranger) if user.id == identifier), None)
+            assert model is AuthSession
+            return next((row for row in logins.values() if row.id == identifier), None)
 
         async def commit(self):
             self.commits += 1
@@ -93,7 +100,7 @@ def callback_boundary(monkeypatch):
     return SimpleNamespace(
         app=app, owner=owner, stranger=stranger, record=record, session=session,
         raw_state=raw_state, exchange=exchange, bind=bind, find_connection=find_connection,
-        connection=connection,
+        connection=connection, logins=logins,
     )
 
 
@@ -102,7 +109,10 @@ async def callback(boundary, *, user=None, provider="amocrm", **params):
         transport=httpx.ASGITransport(app=boundary.app), base_url="https://yleum.example.test",
     ) as client:
         if user is not None:
-            client.cookies.set("omnia_session", create_access_token(user.id))
+            client.cookies.set("omnia_session", create_access_token(
+                user.id, session_id=boundary.logins[user.id].id,
+                session_version=user.session_version,
+            ))
         return await client.get(
             f"/api/integrations/oauth/{provider}/callback",
             params={"state": boundary.raw_state, "code": "synthetic-code", **params},

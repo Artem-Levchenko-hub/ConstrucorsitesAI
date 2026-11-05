@@ -9,8 +9,8 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.session_authority import authenticated_session_token
 from yleum_api.core.config import get_settings
-from yleum_api.core.security import create_access_token
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.max_project_config import MaxProjectConfig
 from yleum_api.models.project import Project
@@ -46,11 +46,11 @@ async def _user(db_session: AsyncSession, email: str) -> User:
     return user
 
 
-def _login(client: httpx.AsyncClient, user: User) -> None:
+async def _login(client: httpx.AsyncClient, user: User, db_session: AsyncSession) -> None:
     client.cookies.clear()
     client.cookies.set(
         get_settings().jwt_cookie_name,
-        create_access_token(user.id),
+        await authenticated_session_token(db_session, user),
     )
 
 
@@ -134,9 +134,9 @@ async def test_product_advice_hides_other_users_and_non_max_projects(
         template="fullstack",
     )
 
-    _login(client, other)
+    await _login(client, other, db_session)
     hidden = await client.post(f"/api/projects/{max_project.id}/product-advice")
-    _login(client, owner)
+    await _login(client, owner, db_session)
     non_max = await client.post(f"/api/projects/{site_project.id}/product-advice")
 
     assert hidden.status_code == 404
@@ -151,7 +151,7 @@ async def test_advice_analyzes_and_caches_current_snapshot(
 ) -> None:
     owner = await _user(db_session, "owner-cache@example.com")
     project, _, cosmetic = await _project_with_snapshots(db_session, owner)
-    _login(client, owner)
+    await _login(client, owner, db_session)
     redis = FakeRedis()
     model_calls = 0
     read_commits: list[str] = []
@@ -215,7 +215,7 @@ async def test_long_cosmetic_history_still_analyzes_current_state(
         parent = snapshot
     project.current_snapshot_id = parent.id
     await db_session.commit()
-    _login(client, owner)
+    await _login(client, owner, db_session)
     redis = FakeRedis()
     read_commits: list[str] = []
 
@@ -257,7 +257,7 @@ async def test_rollback_snapshot_is_used_as_current_product_state(
     await db_session.flush()
     project.current_snapshot_id = rollback.id
     await db_session.commit()
-    _login(client, owner)
+    await _login(client, owner, db_session)
     redis = FakeRedis()
     read_commits: list[str] = []
 
@@ -288,7 +288,7 @@ async def test_redis_failure_does_not_block_model_advice(
 ) -> None:
     owner = await _user(db_session, "owner-fallback@example.com")
     project, material, _ = await _project_with_snapshots(db_session, owner)
-    _login(client, owner)
+    await _login(client, owner, db_session)
     redis = FakeRedis(fail_get=True, fail_set=True)
 
     async def generate(*_args, **_kwargs) -> ProductAdviceResult:
@@ -324,7 +324,7 @@ async def test_cached_payload_is_validated_before_return(
 ) -> None:
     owner = await _user(db_session, "owner-invalid-cache@example.com")
     project, _, _ = await _project_with_snapshots(db_session, owner)
-    _login(client, owner)
+    await _login(client, owner, db_session)
     redis = FakeRedis()
 
     monkeypatch.setattr(advice_router, "get_redis", lambda: redis)
@@ -364,7 +364,7 @@ async def test_abandoned_future_branch_is_excluded_from_advice_context(
         )
     )
     await db_session.commit()
-    _login(client, owner)
+    await _login(client, owner, db_session)
     contexts = []
 
     async def generate(context):
@@ -402,7 +402,7 @@ async def test_configuration_change_invalidates_advice_without_snapshot_change(
     )
     db_session.add(config)
     await db_session.commit()
-    _login(client, owner)
+    await _login(client, owner, db_session)
     redis = FakeRedis()
     contexts = []
 
@@ -438,7 +438,7 @@ async def test_model_outage_returns_retryable_error_and_does_not_cache(
 
     owner = await _user(db_session, "owner-unavailable@example.com")
     project, _, _ = await _project_with_snapshots(db_session, owner)
-    _login(client, owner)
+    await _login(client, owner, db_session)
     redis = FakeRedis()
     attempts = 0
 
@@ -467,7 +467,7 @@ async def test_model_outage_returns_retryable_error_and_does_not_cache(
 async def test_simultaneous_requests_share_one_analysis(client, db_session, monkeypatch) -> None:
     owner = await _user(db_session, "owner-concurrent@example.com")
     project, _, _ = await _project_with_snapshots(db_session, owner)
-    _login(client, owner)
+    await _login(client, owner, db_session)
     redis = FakeRedis()
     started = asyncio.Event()
     release = asyncio.Event()
@@ -500,7 +500,7 @@ async def test_simultaneous_requests_share_one_analysis(client, db_session, monk
 async def test_discovery_brief_change_invalidates_cached_advice(client, db_session, monkeypatch):
     owner = await _user(db_session, "owner-brief@example.com")
     project, _, _ = await _project_with_snapshots(db_session, owner)
-    _login(client, owner)
+    await _login(client, owner, db_session)
     redis = FakeRedis()
     contexts = []
 
@@ -543,7 +543,7 @@ async def test_active_generation_blocks_analysis_until_terminal(
     )
     db_session.add(run)
     await db_session.commit()
-    _login(client, owner)
+    await _login(client, owner, db_session)
     redis = FakeRedis()
     calls = 0
 
@@ -575,7 +575,7 @@ async def test_new_snapshot_with_same_commit_does_not_join_previous_analysis(
 ):
     owner = await _user(db_session, "owner-same-commit@example.com")
     project, _, current = await _project_with_snapshots(db_session, owner)
-    _login(client, owner)
+    await _login(client, owner, db_session)
     redis = FakeRedis()
     started = asyncio.Event()
     release = asyncio.Event()
