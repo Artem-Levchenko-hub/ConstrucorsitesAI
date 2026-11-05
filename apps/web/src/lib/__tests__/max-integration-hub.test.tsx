@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FigmaIntegrationHub } from "@/components/max/FigmaIntegrationHub";
+import { ApiError } from "@/lib/api/client";
 import type { AppIntegration, IntegrationCatalog, IntegrationProvider } from "@/lib/api/types";
 
 const boundary = vi.hoisted(() => ({ push: vi.fn(), connect: vi.fn(), verify: vi.fn(), catalog: vi.fn(), pack: vi.fn(), platformAi: vi.fn(), amocrmOptions: vi.fn(), saveAmocrm: vi.fn(), success: vi.fn() }));
@@ -101,7 +102,7 @@ describe("Integration Hub implementation handoff", () => {
   });
   it("requires confirmation and transfers the edited proposal without account data", async () => {
     await render([connection]);
-    await click("Добавить в приложение");
+    await click("Сценарий оплаты");
     const dialog = document.querySelector('[role="dialog"]');
     expect(dialog).not.toBeNull();
     const textarea = dialog!.querySelector("textarea")!;
@@ -127,7 +128,7 @@ describe("Integration Hub implementation handoff", () => {
   });
   it("does not dispatch a blank proposal or a cancelled dialog", async () => {
     await render([connection]);
-    await click("Добавить в приложение");
+    await click("Сценарий оплаты");
     await act(async () => input(document.querySelector("textarea")!, "   "));
     expect(button("Запустить доработку")?.disabled).toBe(true);
     await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
@@ -137,7 +138,7 @@ describe("Integration Hub implementation handoff", () => {
   });
   it("keeps the proposal available if browser storage prevents handoff", async () => {
     await render([connection]);
-    await click("Добавить в приложение");
+    await click("Сценарий оплаты");
     const proposal = document.querySelector("textarea")!.value;
     vi.spyOn(Object.getPrototypeOf(window.sessionStorage), "setItem").mockImplementation(() => { throw new Error("Storage blocked"); });
     await click("Запустить доработку");
@@ -161,7 +162,7 @@ describe("Integration Hub implementation handoff", () => {
   });
   it.each(["error", "needs_setup", null] as const)("does not offer generation or mark connected for binding status %s", async (binding_status) => {
     await render([{ ...connection, binding_status }]);
-    expect(button("Добавить в приложение")).toBeUndefined();
+    expect(button("Сценарий оплаты")).toBeUndefined();
     expect(container.textContent).not.toContain("Подключено");
     expect(container.textContent).toContain("Требуется настройка");
   });
@@ -176,7 +177,7 @@ describe("Integration Hub implementation handoff", () => {
     ];
     const saved = [{ ...connection, provider: "bitrix24" }, connection];
     await render(saved, providers);
-    expect([...container.querySelectorAll("h3")].map(el => el.textContent)).toEqual(["ЮKassaПодключено", "МойСклад", "amoCRM", "Яндекс Метрика"]);
+    expect([...container.querySelectorAll("h3")].map(el => el.textContent)).toEqual(["ЮKassaПодключено к приложению", "МойСклад", "amoCRM", "Яндекс Метрика"]);
     expect(button("ИИ")).toBeUndefined();
     expect(button("Запись")).toBeUndefined();
     expect(container.querySelector(".max-integration-summary")?.textContent).toContain("1 / 4");
@@ -207,19 +208,57 @@ describe("Integration Hub implementation handoff", () => {
     await click("Подключить рекомендуемые");
     expect(boundary.pack).toHaveBeenCalledWith("project-1");
   });
-  it("reports verification as access confirmation", async () => {
+  it.each([
+    ["live", "Рабочий магазин"],
+    ["test", "Тестовый магазин"],
+    [undefined, "Режим магазина не определён"],
+  ] as const)("shows the verified shop mode %s independently of AI implementation", async (mode, label) => {
     await render([connection]);
-    boundary.verify.mockResolvedValue(connection);
-    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Проверить ЮKassa"]')!.click());
-    expect(boundary.success).toHaveBeenCalledWith("Доступ к сервису подтверждён");
+    expect(container.textContent).toContain("Подключено к приложению");
+    expect(container.textContent).toContain("Режим магазина не определён");
+    expect(button("Добавить в приложение")).toBeUndefined();
+    expect(button("Сценарий оплаты")).toBeDefined();
+    const checked: AppIntegration = {
+      ...connection,
+      auth_mode: "oauth",
+      public_config: mode ? { ...connection.public_config, shop_mode: mode } : connection.public_config,
+    };
+    boundary.verify.mockResolvedValue(checked);
+    boundary.catalog.mockResolvedValue(catalog([checked]));
+    await click("Проверить магазин");
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(client.getQueryData<IntegrationCatalog>(["app-integrations", "project-1"])?.connections[0]).toEqual(checked);
+      });
+    });
+    expect(container.querySelector('[data-testid="yookassa-shop-mode"]')?.textContent).toBe(label);
+    expect(boundary.success).toHaveBeenCalledWith(mode ? label : "Доступ к сервису подтверждён");
+    expect(boundary.verify).toHaveBeenCalledWith("project-1", "yookassa");
+    expect(boundary.push).not.toHaveBeenCalled();
+    expect(window.sessionStorage.length).toBe(0);
+  });
+  it("refreshes the connection when a store check rejects a stale shop", async () => {
+    const live: AppIntegration = { ...connection, public_config: { shop_mode: "live" } };
+    await render([live]);
+    expect(container.textContent).toContain("Рабочий магазин");
+    const failed: AppIntegration = { ...live, status: "error", binding_status: "error" };
+    boundary.verify.mockRejectedValue(new ApiError(422, { code: "integration_credentials_invalid", message: "Магазин изменился" }));
+    boundary.catalog.mockResolvedValue(catalog([failed]));
+    await click("Проверить магазин");
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(client.getQueryData<IntegrationCatalog>(["app-integrations", "project-1"])?.connections[0]).toEqual(failed);
+      });
+    });
+    expect(container.textContent).toContain("Требуется настройка");
+    expect(container.textContent).not.toContain("Рабочий магазин");
+    expect(button("Сценарий оплаты")).toBeUndefined();
   });
   it("lets a previously failed connection retry verification without replacing credentials", async () => {
     await render([{ ...connection, status: "error", binding_status: "error" }]);
     expect(button("Подключить")).toBeUndefined();
-    const retry = document.querySelector<HTMLButtonElement>('[aria-label="Проверить ЮKassa"]');
-    expect(retry).not.toBeNull();
     boundary.verify.mockResolvedValue(connection);
-    await act(async () => retry!.click());
+    await click("Проверить снова");
     expect(boundary.verify).toHaveBeenCalledWith("project-1", "yookassa");
   });
   it("offers current stock and order capabilities in the MoySklad implementation brief", async () => {

@@ -19,13 +19,6 @@ vi.mock("@/components/marketing/BrandMark", () => ({ BrandMark: () => null }));
 const project = { id: "data-test", name: "Калькулятор", template: "max_miniapp" } as Project;
 afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); mocks.params = new URLSearchParams(); });
 
-it("redirects the old data page to the editor dialog, after checking project access", async () => {
-  mocks.load.mockResolvedValue(project);
-  await expect(MaxSettingsPage({ params: Promise.resolve({ id: project.id }), searchParams: Promise.resolve({ tab: "app" }) }))
-    .rejects.toMatchObject({ digest: expect.stringContaining(`/max/${project.id}?data=details`) });
-  expect(mocks.load).toHaveBeenCalledWith(project.id, `/max/${project.id}/settings?tab=app`);
-});
-
 it("does not redirect through a failed ownership check", async () => {
   const denied = new Error("Not your project"); mocks.load.mockRejectedValue(denied);
   await expect(MaxSettingsPage({ params: Promise.resolve({ id: project.id }), searchParams: Promise.resolve({ tab: "app" }) })).rejects.toBe(denied);

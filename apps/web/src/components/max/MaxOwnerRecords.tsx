@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { ArrowLeft, ArrowRight, Inbox, Loader2, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ApiError } from "@/lib/api/client";
@@ -40,15 +41,12 @@ function Records({ projectId, resource, onDirtyChange }: { projectId: string; re
   const [saved, setSaved] = useState(false);
   const saving = useRef(false);
   const mounted = useRef(true);
+  const detailsHeading = useRef<HTMLHeadingElement>(null);
+  const selectedId = draft?.record.id;
   const unsaved = dirty(draft);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => { if (selectedId) detailsHeading.current?.focus(); }, [selectedId]);
   useEffect(() => { onDirtyChange?.(unsaved || pending); return () => onDirtyChange?.(false); }, [onDirtyChange, unsaved, pending]);
-  useEffect(() => {
-    if (!unsaved) return;
-    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [unsaved]);
   let createdFrom: string | undefined; let createdTo: string | undefined; let dateError = "";
   try {
     createdFrom = dayBound(filters.from); createdTo = dayBound(filters.to, true);
@@ -106,30 +104,81 @@ function Records({ projectId, resource, onDirtyChange }: { projectId: string; re
     });
   }
   const locked = pending || ambiguous(draft?.error);
+  const booking = resource.id === "bookings";
+  const filtered = Boolean(filters.query || filters.status || filters.from || filters.to);
+  const rows = records.data?.records ?? [];
   return <section className="max-owner-records" aria-label={resource.label}>
-    <div className="max-owner-section-heading"><h2>{resource.label}</h2><p>Рабочие обращения опубликованного приложения. Данные предпросмотра сюда не входят.</p></div>
-    <div className="max-owner-filters">
-      <label>Поиск<Input aria-label="Поиск обращений" maxLength={120} value={filters.query} disabled={pending} placeholder="Имя или контакт клиента" onChange={event => changeFilter({ query: event.target.value })} /></label>
-      <label>Статус<select aria-label="Фильтр статуса" value={filters.status} disabled={pending} onChange={event => changeFilter({ status: event.target.value })}><option value="">Все статусы</option>{Object.entries(resource.status_labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-      <label>{resource.id === "bookings" ? "Дата записи с" : "Дата создания с"}<Input aria-label={resource.id === "bookings" ? "Дата записи с" : "С даты"} type="date" value={filters.from} disabled={pending} onChange={event => changeFilter({ from: event.target.value })} /></label>
-      <label>{resource.id === "bookings" ? "Дата записи по" : "Дата создания по"}<Input aria-label={resource.id === "bookings" ? "Дата записи по" : "По дату"} type="date" value={filters.to} disabled={pending} onChange={event => changeFilter({ to: event.target.value })} /></label>
-    </div>
+    <header className="max-owner-section-heading"><h2>{resource.label}</h2><p>Обращения клиентов из опубликованного приложения.</p></header>
+    <fieldset className="max-owner-filters" aria-label="Фильтры обращений" disabled={pending}>
+      <label>Поиск
+        <span className="max-owner-search-field">
+          <Search aria-hidden="true" className="size-4" />
+          <Input aria-label="Поиск обращений" maxLength={120} value={filters.query} placeholder="Имя или контакт клиента" onChange={event => changeFilter({ query: event.target.value })} />
+        </span>
+      </label>
+      <label>Статус
+        <select aria-label="Фильтр статуса" value={filters.status} onChange={event => changeFilter({ status: event.target.value })}>
+          <option value="">Все статусы</option>
+          {Object.entries(resource.status_labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+      </label>
+      <label>{booking ? "Дата записи с" : "Дата создания с"}
+        <Input aria-label={booking ? "Дата записи с" : "С даты"} type="date" value={filters.from} onChange={event => changeFilter({ from: event.target.value })} />
+      </label>
+      <label>{booking ? "Дата записи по" : "Дата создания по"}
+        <Input aria-label={booking ? "Дата записи по" : "По дату"} type="date" value={filters.to} onChange={event => changeFilter({ to: event.target.value })} />
+      </label>
+    </fieldset>
     {dateError && <p role="alert" className="max-owner-error">{dateError}</p>}
-    {!dateError && <div className="max-owner-record-layout">
-      <div>
-        {records.isPending && <p role="status">{records.fetchStatus === "paused" ? "Нет соединения. Подключитесь к интернету, чтобы загрузить обращения." : "Загружаем обращения…"}</p>}
-        {records.isError && <div role="alert" className="max-owner-notice"><p>{ownerRequestError(records.error)}</p><Button variant="outline" onClick={() => void records.refetch()}>Повторить загрузку</Button></div>}
-        {records.isSuccess && !records.data.records.length && <p className="max-owner-notice">{filters.query || filters.status || filters.from || filters.to ? "По этим условиям ничего не найдено. Измените фильтры." : "Обращений пока нет. Здесь появятся обращения клиентов после отправки через опубликованное приложение."}</p>}
-        <div className="max-owner-record-list">{records.data?.records.map(record => <article key={record.id} className="max-owner-record-row" data-selected={draft?.record.id === record.id}>
-          <Button variant="ghost" disabled={pending} onClick={() => select(record)}>{record.customer_name}</Button>
-          <span>{resource.status_labels[record.status]}</span><time dateTime={resource.id === "bookings" ? record.requested_for ?? record.created_at : record.created_at}>{dateLabel(resource.id === "bookings" ? record.requested_for ?? record.created_at : record.created_at)}</time>
-          {resource.id === "bookings" && <span>{record.service_title}</span>}
-          {record.total_kopecks != null && <strong>{ownerMoney(record.total_kopecks)}</strong>}
-        </article>)}</div>
-        <div className="max-owner-actions"><Button variant="outline" disabled={cursors.length === 1 || pending || records.isFetching} onClick={() => page(false)}>Предыдущая страница</Button><span>Страница {cursors.length}</span><Button variant="outline" disabled={!records.data?.next_cursor || pending || records.isFetching} onClick={() => page(true)}>Следующая страница</Button></div>
+    {!dateError && <div className="max-owner-record-layout" data-has-records={Boolean(rows.length || draft)}>
+      <div className="max-owner-record-index">
+        {records.isPending && <div role="status" className="max-owner-notice max-owner-loading">
+          <Loader2 aria-hidden="true" className="size-5 motion-safe:animate-spin" />
+          <p>{records.fetchStatus === "paused" ? "Нет соединения. Подключитесь к интернету, чтобы загрузить обращения." : "Загружаем обращения…"}</p>
+        </div>}
+        {records.isError && <div role="alert" className="max-owner-notice" data-tone="error">
+          <p>{ownerRequestError(records.error)}</p>
+          <Button variant="outline" onClick={() => void records.refetch()}>Повторить загрузку</Button>
+        </div>}
+        {records.isSuccess && !rows.length && <div className="max-owner-empty">
+          <Inbox aria-hidden="true" className="size-6" />
+          <h3>{filtered ? "По этим условиям ничего не найдено" : "Обращений пока нет"}</h3>
+          <p>{filtered ? "Уточните поиск или очистите фильтры." : "Здесь появятся обращения клиентов из опубликованного приложения."}</p>
+          {filtered && <Button variant="outline" onClick={() => changeFilter(initialFilters)}>Сбросить фильтры</Button>}
+        </div>}
+        {rows.length > 0 && <ul className="max-owner-record-list">
+          {rows.map(record => {
+            const when = booking ? record.requested_for ?? record.created_at : record.created_at;
+            const selected = selectedId === record.id;
+            return <li key={record.id} className="max-owner-record-row" data-selected={selected}>
+              <Button variant="ghost" disabled={pending} aria-pressed={selected} onClick={() => select(record)}>{record.customer_name}</Button>
+              <div className="max-owner-record-meta">
+                <span className="max-owner-record-status" data-status={record.status}>{resource.status_labels[record.status]}</span>
+                <time dateTime={when}>{dateLabel(when)}</time>
+              </div>
+              {(booking || record.total_kopecks != null) && <div className="max-owner-record-meta">
+                {booking && <span>{record.service_title}</span>}
+                {record.total_kopecks != null && <strong>{ownerMoney(record.total_kopecks)}</strong>}
+              </div>}
+            </li>;
+          })}
+        </ul>}
+        {(rows.length > 0 || cursors.length > 1) && <div className="max-owner-pagination">
+          <Button variant="outline" disabled={cursors.length === 1 || pending || records.isFetching} onClick={() => page(false)}><ArrowLeft aria-hidden="true" className="size-4" />Предыдущая страница</Button>
+          <span>Страница {cursors.length}</span>
+          <Button variant="outline" disabled={!records.data?.next_cursor || pending || records.isFetching} onClick={() => page(true)}>Следующая страница<ArrowRight aria-hidden="true" className="size-4" /></Button>
+        </div>}
       </div>
+      {!draft && rows.length > 0 && <div className="max-owner-empty max-owner-record-placeholder">
+        <Inbox aria-hidden="true" className="size-6" /><h3>Выберите обращение</h3>
+        <p>Здесь откроются детали, статус и заметка владельца.</p>
+      </div>}
       {draft && <article className="max-owner-record-card" aria-label={`${resource.singular_label}: ${draft.record.customer_name}`}>
-        <h3>{resource.singular_label}</h3><p className="max-owner-hint">Сведения клиента и состав сохранены на момент обращения.</p>
+        <header className="max-owner-record-card-header">
+          <h3 ref={detailsHeading} tabIndex={-1}>{resource.singular_label}</h3>
+          <span className="max-owner-record-status" data-status={draft.record.status}>{resource.status_labels[draft.record.status]}</span>
+          <p className="max-owner-hint">Сведения клиента и состав сохранены на момент обращения.</p>
+        </header>
         <dl>{resource.fields.filter(field => field.readonly && field.key !== "items").map(field => {
           const value = draft.record[field.key];
           if (value == null || value === "") return null;
@@ -142,6 +191,7 @@ function Records({ projectId, resource, onDirtyChange }: { projectId: string; re
         </p>}
         {draft.record.items.length > 0 && <div><h4>Состав заказа</h4><ul>{draft.record.items.map((item, index) => <li key={`${item.catalog_id}:${index}`}><strong>{item.title}</strong>{item.option && <span>{item.option}</span>}<span>{item.quantity.toLocaleString("ru-RU")} × {ownerMoney(item.unit_price_kopecks)}</span></li>)}</ul></div>}
         <form onSubmit={event => { event.preventDefault(); void save(); }}>
+          <h4>Работа с обращением</h4>
           <label>Статус<select aria-label="Статус обращения" disabled={locked} value={draft.status} onChange={event => edit({ status: event.target.value as OwnerStatus })}>{[draft.record.status, ...(resource.transitions[draft.record.status] ?? [])].map(status => <option key={status} value={status}>{resource.status_labels[status]}</option>)}</select></label>
           <label>Заметка владельца<textarea aria-label="Заметка владельца" maxLength={2000} rows={5} value={draft.note} disabled={locked} onChange={event => edit({ note: event.target.value })} /></label><p className="max-owner-hint">Видна только владельцу. До 2000 символов.</p>
           {draft.error ? <div role="alert" className="max-owner-error"><p>{conflict(draft.error) ? "Обращение изменилось в другой вкладке. Ваш черновик остался в форме. Загрузите актуальную версию и проверьте правки." : ownerRequestError(draft.error)}</p>{ambiguous(draft.error) && <p>Неизвестно, сохранились ли изменения. Повторите эту же попытку, чтобы проверить результат.</p>}{conflict(draft.error) && <Button type="button" variant="outline" disabled={records.isFetching} onClick={() => void reload()}>Загрузить актуальную версию</Button>}</div> : null}
@@ -149,7 +199,7 @@ function Records({ projectId, resource, onDirtyChange }: { projectId: string; re
           {draft.latest && <div className="max-owner-notice"><p>Текущий статус: {resource.status_labels[draft.latest.status]}. Заметка: {draft.latest.note || "Нет заметки"}</p><Button type="button" variant="outline" onClick={() => setDraft(previous => previous?.latest ? { ...previous, record: previous.latest, status: [previous.latest.status, ...resource.transitions[previous.latest.status]].includes(previous.status) ? previous.status : previous.latest.status, operation: undefined, error: undefined, latest: undefined, reloadMessage: "Черновик перенесён к актуальной версии. Проверьте изменения и сохраните." } : previous)}>Применить к актуальной версии</Button></div>}
           {saved && <p role="status">Изменения сохранены</p>}
           {pending && <p role="status">Сохраняем изменения…</p>}
-          <div className="max-owner-actions"><Button type="submit" aria-busy={pending} disabled={!unsaved || pending || draft.note.length > 2000}>Сохранить обращение</Button><Button type="button" variant="outline" disabled={pending || ambiguous(draft.error)} onClick={() => { setDraft({ record: draft.record, status: draft.record.status, note: draft.record.note ?? "" }); setSaved(false); }}>Отменить правки</Button></div>
+          <div className="max-owner-actions max-owner-form-footer"><Button type="submit" aria-busy={pending} disabled={!unsaved || pending || draft.note.length > 2000}>Сохранить обращение</Button><Button type="button" variant="outline" disabled={pending || ambiguous(draft.error)} onClick={() => { setDraft({ record: draft.record, status: draft.record.status, note: draft.record.note ?? "" }); setSaved(false); }}>Отменить правки</Button></div>
         </form>
       </article>}
     </div>}

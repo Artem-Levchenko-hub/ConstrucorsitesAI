@@ -15,6 +15,7 @@ from yleum_api.services.integration_providers import (
     IntegrationCredentialsInvalid,
     IntegrationProviderError,
     IntegrationProviderUnavailable,
+    parse_yookassa_shop,
 )
 
 _AMOCRM_ACCOUNT_HOST = re.compile(
@@ -271,16 +272,11 @@ async def exchange_code(
                     headers={**headers, "Authorization": f"Bearer {access}"},
                 )
                 _token_error("ЮKassa", profile)
-                me = profile.json()
-                if not isinstance(me, dict):
-                    raise ValueError("invalid YooKassa profile response")
-                account_id = me.get("account_id")
-                if not isinstance(account_id, str) or not account_id.strip():
-                    raise ValueError("invalid YooKassa account identity")
+                shop = parse_yookassa_shop(profile.json())
                 return OAuthResult(
-                    public_config={"shop_id": account_id},
+                    public_config=shop,
                     secret_values={"access_token": access},
-                    account_label=f"Магазин {account_id}",
+                    account_label=f"Магазин {shop['shop_id']}",
                     expires_at=expires_at,
                 )
 

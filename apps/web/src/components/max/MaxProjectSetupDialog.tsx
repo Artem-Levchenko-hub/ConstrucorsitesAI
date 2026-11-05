@@ -29,6 +29,7 @@ import "./max-project-workspace.css";
 import "./max-project-setup.css";
 import { MaxProjectSetupSections, type SetupSection } from "./MaxProjectSetupSections";
 import { MaxProjectDataApplyDialog } from "./MaxProjectDataApplyDialog";
+import { useMaxWorkspaceDraftGuard } from "./use-max-workspace-draft-guard";
 
 const SETUP_SECTIONS: Array<{ id: SetupSection; label: string }> = [
   { id: "details", label: "Основное" },
@@ -56,7 +57,7 @@ export function MaxProjectSetupDialog({
   initialSection = "details",
 }: {
   projectId: string;
-  display?: "panel" | "toolbar" | "header";
+  display?: "panel" | "toolbar" | "header" | "page";
   emphasized?: boolean;
   label?: string;
   open?: boolean;
@@ -65,11 +66,17 @@ export function MaxProjectSetupDialog({
 }) {
   const qc = useQueryClient();
   const tabsId = useId();
+  const isPage = display === "page";
   const scrollRegion = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const pageApplyTrigger = useRef<HTMLButtonElement>(null);
   const [localOpen, setLocalOpen] = useState(false);
-  const open = controlledOpen ?? localOpen;
-  const setOpen = (next: boolean) => { setLocalOpen(next); onOpenChange?.(next); };
+  const open = isPage || (controlledOpen ?? localOpen);
+  const setOpen = (next: boolean) => {
+    if (isPage) return;
+    setLocalOpen(next);
+    onOpenChange?.(next);
+  };
   const [draft, setDraft] = useState<MaxProjectConfigPayload | null>(null);
   const draftVersion = useRef<number | undefined>(undefined);
   const [aiConfig, setAiConfig] = useState<MaxProjectConfig | null>(null);
@@ -145,6 +152,7 @@ export function MaxProjectSetupDialog({
         JSON.stringify(current.legal) !== JSON.stringify(saved.legal),
       ].filter(Boolean).length
     : 0;
+  useMaxWorkspaceDraftGuard(isPage && changedSections > 0, isPage && save.isPending);
 
   const saveIssue = current && (!current.app_name.trim() || !current.summary.trim())
     ? "Для сохранения заполните название и описание в разделе «Основное»."
@@ -164,6 +172,127 @@ export function MaxProjectSetupDialog({
       setAiConfig(config.data);
     }
   };
+
+  const description = termsAccepted
+    ? "Всё, что нужно для публикации, заполнено. Остальные разделы — по желанию: они делают приложение подробнее, но не блокируют запуск."
+    : "Для публикации нужно одно: подтвердить документы приложения во вкладке «Политики». Реквизиты не нужны — их проверяет MAX, остальные разделы можно заполнить позже.";
+
+  const body = (
+    <>
+      <div className="max-setup-tabs">
+        <div role="tablist" aria-label="Разделы данных приложения">
+          {SETUP_SECTIONS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="tab"
+              id={`${tabsId}-${item.id}`}
+              aria-controls={`${tabsId}-panel`}
+              aria-selected={section === item.id}
+              tabIndex={section === item.id ? 0 : -1}
+              onClick={() => selectSection(item.id)}
+              onKeyDown={(event) => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const index = SETUP_SECTIONS.findIndex(tab => tab.id === item.id);
+                const next = event.key === "Home" ? 0 : event.key === "End" ? SETUP_SECTIONS.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + SETUP_SECTIONS.length) % SETUP_SECTIONS.length;
+                selectSection(SETUP_SECTIONS[next].id);
+                document.getElementById(`${tabsId}-${SETUP_SECTIONS[next].id}`)?.focus();
+              }}
+              className="max-setup-tab"
+              data-required={item.id === "policies" ? (termsAccepted ? "done" : "pending") : undefined}
+            >
+              {item.label}
+              {item.id === "policies" && (
+                <span
+                  className="max-setup-tab-mark"
+                  data-state={termsAccepted ? "done" : "pending"}
+                  aria-label={termsAccepted ? "Документы подтверждены" : "Нужно для публикации"}
+                  title={termsAccepted ? "Документы подтверждены" : "Нужно для публикации"}
+                >
+                  {termsAccepted ? <Check className="size-3" aria-hidden="true" /> : null}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {config.isError ? (
+        <div role="alert" className="p-6 text-sm"><p><strong>{MAX_STATUS_COPY.config.title}.</strong> {MAX_STATUS_COPY.config.hint}</p><Button variant="outline" className="mt-3" onClick={() => void config.refetch()}>{MAX_STATUS_COPY.config.retry}</Button></div>
+      ) : config.isLoading || !current ? (
+        <div role="status" className="max-setup-loading">
+          <Loader2 aria-hidden="true" className="h-5 w-5 animate-spin text-accent" />
+          {config.fetchStatus === "paused" ? "Нет соединения. Подключитесь к интернету, чтобы открыть данные." : "Загружаем данные приложения…"}
+        </div>
+      ) : (
+        <>
+          <div
+            className="max-setup-body"
+            ref={scrollRegion}
+            role="tabpanel"
+            id={`${tabsId}-panel`}
+            aria-labelledby={`${tabsId}-${section}`}
+            data-testid="max-settings-scroll-region"
+          >
+            <MaxProjectSetupSections key={section} section={section} projectId={projectId} current={current} onChange={next => {
+              // Capture only on first edit: a background GET cannot rebase a dirty draft.
+              if (!draft) draftVersion.current = config.data?.config_version;
+              setDraft(next);
+            }} />
+          </div>
+
+          <div
+            className="max-setup-footer"
+            data-testid="max-settings-footer"
+          >
+            <p id={`${tabsId}-save-status`} className="max-setup-save-status" role="status" data-state={saveIssue ? "invalid" : changedSections ? "changed" : "saved"}>
+              {saveIssue ? <CircleAlert aria-hidden="true" /> : changedSections ? <Circle aria-hidden="true" /> : <Check aria-hidden="true" />}
+              <span>{saveIssue ?? (save.isPending ? "Сохраняем изменения…" : changedSections > 0
+                ? `Есть несохранённые изменения · разделов: ${changedSections}`
+                : pendingApplication ? "Данные сохранены. Обновление рабочей сборки ещё не подтверждено." : "Все изменения сохранены")}</span>
+            </p>
+            <Button
+              className="max-setup-save"
+              aria-describedby={`${tabsId}-save-status`}
+              disabled={
+                save.isPending ||
+                (changedSections === 0 && !pendingApplication) ||
+                Boolean(saveIssue)
+              }
+              onClick={() => { openAiAfterSave.current = false; save.mutate(current); }}
+            >
+              {save.isPending && (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              )}
+              Сохранить изменения
+            </Button>
+            {(section === "details" || section === "content") && <Button ref={isPage ? pageApplyTrigger : undefined} variant="outline" className="max-setup-save" disabled={save.isPending || Boolean(saveIssue)} onClick={() => requestScreenChanges(current)}>Изменить экраны с ИИ</Button>}
+          </div>
+        </>
+      )}
+    </>
+  );
+
+  const applyDialog = aiConfig && (
+    <MaxProjectDataApplyDialog config={aiConfig} onClose={() => setAiConfig(null)}
+      onReturnFocus={() => {
+        const target = isPage ? pageApplyTrigger.current ?? document.getElementById(`${tabsId}-${section}`) : trigger.current;
+        target?.focus();
+      }} />
+  );
+
+  if (isPage) {
+    return (
+      <>
+        <section className="max-project-setup max-project-setup-page" aria-label="Редактирование данных приложения">
+          <p className="max-setup-page-context">{description}</p>
+          {body}
+        </section>
+        {applyDialog}
+      </>
+    );
+  }
 
   return (
     <>
@@ -210,109 +339,13 @@ export function MaxProjectSetupDialog({
               Данные приложения
             </DialogTitle>
             <LearningButton className="self-start" />
-            <DialogDescription className="max-setup-description">
-              {/* Вкладки выглядели одинаково, хотя публикацию блокирует ровно
-                  одна. Строка сразу отвечает, что ещё нужно, а что по желанию. */}
-              {termsAccepted
-                ? "Всё, что нужно для публикации, заполнено. Остальные разделы — по желанию: они делают приложение подробнее, но не блокируют запуск."
-                : "Для публикации нужно одно: подтвердить документы приложения во вкладке «Политики». Реквизиты не нужны — их проверяет MAX, остальные разделы можно заполнить позже."}
-            </DialogDescription>
+            <DialogDescription className="max-setup-description">{description}</DialogDescription>
           </DialogHeader>
 
-          <div className="max-setup-tabs">
-            <div role="tablist" aria-label="Разделы данных приложения">
-              {SETUP_SECTIONS.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  role="tab"
-                  id={`${tabsId}-${item.id}`}
-                  aria-controls={`${tabsId}-panel`}
-                  aria-selected={section === item.id}
-                  tabIndex={section === item.id ? 0 : -1}
-                  onClick={() => selectSection(item.id)}
-                  onKeyDown={(event) => {
-                    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-                    event.preventDefault();
-                    const index = SETUP_SECTIONS.findIndex(tab => tab.id === item.id);
-                    const next = event.key === "Home" ? 0 : event.key === "End" ? SETUP_SECTIONS.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + SETUP_SECTIONS.length) % SETUP_SECTIONS.length;
-                    selectSection(SETUP_SECTIONS[next].id);
-                    document.getElementById(`${tabsId}-${SETUP_SECTIONS[next].id}`)?.focus();
-                  }}
-                  className="max-setup-tab"
-                  data-required={item.id === "policies" ? (termsAccepted ? "done" : "pending") : undefined}
-                >
-                  {item.label}
-                  {item.id === "policies" && (
-                    <span
-                      className="max-setup-tab-mark"
-                      data-state={termsAccepted ? "done" : "pending"}
-                      aria-label={termsAccepted ? "Документы подтверждены" : "Нужно для публикации"}
-                      title={termsAccepted ? "Документы подтверждены" : "Нужно для публикации"}
-                    >
-                      {termsAccepted ? <Check className="size-3" aria-hidden="true" /> : null}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {config.isError ? (
-            <div role="alert" className="p-6 text-sm"><p><strong>{MAX_STATUS_COPY.config.title}.</strong> {MAX_STATUS_COPY.config.hint}</p><Button variant="outline" className="mt-3" onClick={() => void config.refetch()}>{MAX_STATUS_COPY.config.retry}</Button></div>
-          ) : config.isLoading || !current ? (
-            <div className="flex min-h-44 flex-1 items-center justify-center">
-              <Loader2 className="h-5 w-5 animate-spin text-accent" />
-            </div>
-          ) : (
-            <>
-              <div
-                className="max-setup-body"
-                ref={scrollRegion}
-                role="tabpanel"
-                id={`${tabsId}-panel`}
-                aria-labelledby={`${tabsId}-${section}`}
-                data-testid="max-settings-scroll-region"
-              >
-                <MaxProjectSetupSections key={section} section={section} projectId={projectId} current={current} onChange={next => {
-                  // Capture only on first edit: a background GET cannot rebase a dirty draft.
-                  if (!draft) draftVersion.current = config.data?.config_version;
-                  setDraft(next);
-                }} />
-              </div>
-
-              <div
-                className="max-setup-footer"
-                data-testid="max-settings-footer"
-              >
-                <p id={`${tabsId}-save-status`} className="max-setup-save-status" role="status" data-state={saveIssue ? "invalid" : changedSections ? "changed" : "saved"}>
-                  {saveIssue ? <CircleAlert aria-hidden="true" /> : changedSections ? <Circle aria-hidden="true" /> : <Check aria-hidden="true" />}
-                  <span>{saveIssue ?? (save.isPending ? "Сохраняем изменения…" : changedSections > 0
-                    ? `Есть несохранённые изменения · разделов: ${changedSections}`
-                    : pendingApplication ? "Данные сохранены. Обновление рабочей сборки ещё не подтверждено." : "Все изменения сохранены")}</span>
-                </p>
-                <Button
-                  className="max-setup-save"
-                  aria-describedby={`${tabsId}-save-status`}
-                  disabled={
-                    save.isPending ||
-                    (changedSections === 0 && !pendingApplication) ||
-                    Boolean(saveIssue)
-                  }
-                  onClick={() => { openAiAfterSave.current = false; save.mutate(current); }}
-                >
-                  {save.isPending && (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  )}
-                  Сохранить изменения
-                </Button>
-                {(section === "details" || section === "content") && <Button variant="outline" className="max-setup-save" disabled={save.isPending || Boolean(saveIssue)} onClick={() => requestScreenChanges(current)}>Изменить экраны с ИИ</Button>}
-              </div>
-            </>
-          )}
+          {body}
         </DialogContent>
       </Dialog>
-      {aiConfig && <MaxProjectDataApplyDialog config={aiConfig} onClose={() => setAiConfig(null)} onReturnFocus={() => trigger.current?.focus()} />}
+      {applyDialog}
     </>
   );
 }

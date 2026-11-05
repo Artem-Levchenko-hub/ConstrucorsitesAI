@@ -102,6 +102,33 @@ async def test_verified_yookassa_grant_preserves_shop_and_expiry(
     assert calls[1].headers["authorization"] == "Bearer synthetic-access"
 
 
+@pytest.mark.parametrize(("fields", "mode"), [
+    ({"test": True}, "test"),
+    ({"test": False}, "live"),
+    ({}, None),
+    ({"test": "false", "shop_mode": "live"}, None),
+    ({"test": 0}, None),
+    ({"test": None}, None),
+])
+async def test_yookassa_oauth_mode_comes_only_from_boolean_me_test(provider_http, fields, mode):
+    calls = []
+
+    def provider(request):
+        calls.append((request.method, request.url.path))
+        return httpx.Response(200, json=(
+            {**_TOKEN, "test": True} if request.method == "POST"
+            else {"account_id": "123", **fields}
+        ))
+
+    with provider_http(provider):
+        result = await integration_oauth.exchange_code("yookassa", "synthetic-code")
+    expected = {"shop_id": "123"}
+    if mode is not None:
+        expected["shop_mode"] = mode
+    assert result.public_config == expected
+    assert calls == [("POST", "/oauth/v2/token"), ("GET", "/v3/me")]
+
+
 async def test_yookassa_expiry_requires_reauthorization_without_refresh_http(provider_http):
     calls = []
 

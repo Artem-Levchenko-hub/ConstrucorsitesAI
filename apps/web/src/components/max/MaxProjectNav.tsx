@@ -1,6 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 import {
   Bot,
   ChartNoAxesCombined,
@@ -8,8 +9,8 @@ import {
   FileCheck2,
   PackageOpen,
   Rocket,
-  Smartphone,
   SlidersHorizontal,
+  type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -34,16 +35,15 @@ const navigation: Array<{
   keys: MaxProjectNavKey[];
   label: string;
   suffix: string;
-  icon: typeof Smartphone;
+  icon: LucideIcon;
   stageId?: MaxJourneyStageId;
 }> = [
   { key: "manage", keys: ["manage"], label: "Управление", suffix: "/manage", icon: SlidersHorizontal },
-  { key: "editor", keys: ["editor"], label: "Сборка", suffix: "", icon: Smartphone, stageId: "build" },
   {
     key: "app",
     keys: ["app"],
     label: "Данные приложения",
-    suffix: "?data=details",
+    suffix: "/settings?tab=app",
     icon: FileCheck2,
   },
   {
@@ -79,45 +79,22 @@ export function MaxProjectNav({
   showProgress?: boolean;
   variant?: "sidebar" | "mobile";
 }) {
+  const sidebar = variant === "sidebar";
+  const nav = useRef<HTMLElement>(null);
   const readiness = useQuery({
     queryKey: ["max-readiness", projectId],
     queryFn: () => getMaxReadiness(projectId),
     retry: false,
+    enabled: sidebar,
   });
-  const journey = getMaxJourney(projectId, readiness.data?.items ?? []);
-  const hrefFor = (item: (typeof navigation)[number]) =>
-    `/max/${projectId}${item.suffix}`;
-
-  if (variant === "mobile") {
-    return (
-      <nav className="flex min-w-max gap-1 px-3 py-2" aria-label="Разделы проекта MAX">
-        {navigation.map((item) => {
-          const selected = item.keys.includes(active);
-          const Icon = item.icon;
-          return (
-            <Link
-              key={item.key}
-              href={hrefFor(item)}
-              aria-current={selected ? "page" : undefined}
-              className={cn(
-                "inline-flex h-11 items-center gap-2 rounded-[8px] px-3 text-xs",
-                selected
-                  ? "bg-surface-base font-medium text-fg-primary"
-                  : "text-fg-secondary hover:bg-surface-base",
-              )}
-            >
-              <Icon className="size-3.5" />
-              {item.label}
-            </Link>
-          );
-        })}
-      </nav>
-    );
-  }
+  const journey = sidebar ? getMaxJourney(projectId, readiness.data?.items ?? []) : null;
+  useEffect(() => {
+    if (!sidebar) nav.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [active, sidebar]);
 
   return (
-    <div>
-      {showProgress && (
+    <>
+      {showProgress && journey && (
         <div className="mb-3 rounded-[8px] border border-border-default bg-surface-base px-3 py-3">
           <div className="flex items-center justify-between gap-2 text-[11px] text-fg-tertiary">
             <span>Путь до запуска</span>
@@ -136,28 +113,28 @@ export function MaxProjectNav({
         </div>
       )}
 
-      <nav className="space-y-1" aria-label="Разделы проекта MAX">
+      <nav ref={nav} className={sidebar ? "space-y-1" : "max-project-nav"} aria-label="Разделы проекта MAX">
         {navigation.map((item) => {
           const selected = item.keys.includes(active);
           const stage = item.stageId
-            ? journey.stages.find((candidate) => candidate.id === item.stageId)
+            ? journey?.stages.find((candidate) => candidate.id === item.stageId)
             : undefined;
           const Icon = item.icon;
 
           return (
             <Link
               key={item.key}
-              href={hrefFor(item)}
+              href={`/max/${projectId}${item.suffix}`}
               aria-current={selected ? "page" : undefined}
-              className={cn(
+              className={sidebar ? cn(
                 "flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs transition-colors",
                 selected
                   ? "bg-surface-overlay font-medium text-fg-primary"
                   : "text-fg-secondary hover:bg-surface-base hover:text-fg-primary",
-              )}
+              ) : "max-project-nav-link"}
             >
-              <Icon className={cn("size-4 shrink-0", selected && "text-accent")} />
-              <span className="min-w-0 flex-1 truncate">{item.label}</span>
+              <Icon aria-hidden="true" className={cn("size-4 shrink-0", sidebar && selected && "text-accent")} />
+              <span className={sidebar ? "min-w-0 flex-1 truncate" : undefined}>{item.label}</span>
               {readiness.isSuccess && stage?.status === "completed" && (
                 <span className="grid size-4 shrink-0 place-items-center rounded-full bg-success/10 text-success-fg">
                   <Check className="size-2.5" />
@@ -173,6 +150,6 @@ export function MaxProjectNav({
           );
         })}
       </nav>
-    </div>
+    </>
   );
 }

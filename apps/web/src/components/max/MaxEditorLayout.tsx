@@ -91,7 +91,7 @@ export function MaxEditorLayout({ project, children, navigation, tools, preview,
       </header>
       <div className="max-editor-workspace">
         <section data-learning="editor-conversation" className="max-editor-conversation" aria-label="Редактор приложения">
-          <div className="max-editor-section-heading"><h1>Редактор</h1><p>Создавайте и меняйте приложение в диалоге</p></div>
+          <h1 className="sr-only">Редактор приложения</h1>
           <div className="max-studio-chat min-h-0 flex-1 overflow-hidden">{children}</div>
         </section>
         {desktop && <div data-learning="editor-preview" className="max-editor-desktop-preview">{previewContent}</div>}
