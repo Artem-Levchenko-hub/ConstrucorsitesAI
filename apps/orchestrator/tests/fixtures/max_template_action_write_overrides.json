@@ -8,7 +8,7 @@
     "mode": "100644"
   },
   "src/lib/omnia/integration-client.ts": {
-    "sha256": "5749162d6ca7dcf0ef6d664e439e03af8f27bfe2b4ce8b4b560a5bcec804ab7b",
+    "sha256": "b96f0a90ee28a53dbdc79ff284ee3a3ae9836b80669881e16fde1e4b91e6ff1f",
     "mode": "100644"
   },
   "tests/starter.test.mjs": {

@@ -4,7 +4,7 @@
     "mode": "100644"
   },
   "src/app/api/omnia/integrations/[...path]/route.ts": {
-    "sha256": "7dbcb7e5898b75bbae4a2bb4c3b531d884c9843c1dca191b62606681f8c536f9",
+    "sha256": "da97b4817ed5238bc6f183f43b6f02d6b265e3db9e474db2aa2210a559ce699e",
     "mode": "100644"
   },
   "src/lib/omnia/client.ts": {
