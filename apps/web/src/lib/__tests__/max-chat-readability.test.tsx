@@ -20,7 +20,7 @@ it("keeps author identity, time, attachments and expansion in a MAX owner's mess
     content: "Сделай описание приложения для клиентов.\n".repeat(30),
     reference_images: [{ id: "image", filename: "эскиз.png", mime_type: "image/png", size_bytes: 9, width: 1, height: 1, url: "" }],
   };
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new Blob(["image"]))));
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("image", { headers: { "Content-Type": "image/png" } })));
   vi.stubGlobal("URL", class extends URL {
     static createObjectURL = () => "blob:offline-reference";
     static revokeObjectURL = () => {};
