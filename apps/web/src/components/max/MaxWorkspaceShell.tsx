@@ -10,17 +10,13 @@ import { MaxEditorLayout } from "./MaxEditorLayout";
 import { ChatPanel, type ChatPanelAdaptationHandle } from "@/components/workspace/ChatPanel";
 import { listProjects } from "@/lib/api/projects";
 import { rollback as rollbackSnapshot } from "@/lib/api/snapshots";
-import { getMaxReadiness } from "@/lib/api/max-studio";
 import type { Message, Project, Snapshot } from "@/lib/api/types";
 import { isChatMessageStreaming } from "@/lib/chat-message-status";
 import { readMaxLaunch } from "@/lib/max-launch-runner";
-import { getMaxJourney } from "@/lib/max-journey";
 import { upsertSnapshotNewest } from "@/lib/snapshot-history";
-import { MaxLaunchPanel } from "./MaxLaunchPanel";
 import { MaxLivePreview } from "./MaxLivePreview";
 import { MaxAccountMenu } from "./MaxAccountMenu";
 import { MaxProjectNav } from "./MaxProjectNav";
-import { MaxUsageBreakdown } from "./MaxUsageBreakdown";
 import { useMaxRestoration } from "@/lib/use-max-restoration";
 import { MaxRestorationPanel } from "./MaxRestorationPanel";
 import { useMaxAdaptation, type MaxAdaptationAttachment } from "@/lib/use-max-adaptation";
@@ -48,19 +44,6 @@ export function MaxWorkspaceShell({
   const queryClient = useQueryClient();
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const { currentSnapshotId, versions, historyCurrent, history } = useMaxPreviewHistory(project);
-  const readiness = useQuery({
-    queryKey: ["max-readiness", project.id],
-    queryFn: () => getMaxReadiness(project.id),
-    retry: false,
-    refetchInterval: 10_000,
-  });
-  const journey = getMaxJourney(project.id, readiness.data?.items ?? []);
-  const nextStage = readiness.isSuccess ? journey.currentStage : undefined;
-  const launchLabel = readiness.isLoading
-    ? "Проверяем…"
-    : nextStage
-      ? `Продолжить · ${journey.completedCount}/${journey.total}`
-      : "Проверить запуск";
   const maxProjects = useMemo(
     () => (projects.data ?? []).filter((item) => item.template === "max_miniapp"),
     [projects.data],
@@ -229,9 +212,7 @@ export function MaxWorkspaceShell({
   return (
     <MaxEditorLayout
       project={project}
-      launchStatus={launchLabel}
       preview={preview}
-      launch={<MaxLaunchPanel project={project} standalone />}
       navigation={
         <>
           <div className="max-editor-navigation" data-testid="max-navigation-scroll">
@@ -253,12 +234,6 @@ export function MaxWorkspaceShell({
           <div className="max-editor-account">
             <MaxAccountMenu email={email} />
           </div>
-        </>
-      }
-      tools={
-        <>
-          <MaxUsageBreakdown projectId={project.id} />
-          <Link className="max-editor-nav-link" href={`/max/${project.id}?panel=services`}>Интеграции</Link>
         </>
       }
     >

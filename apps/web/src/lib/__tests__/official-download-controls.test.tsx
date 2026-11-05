@@ -8,7 +8,6 @@ import { DownloadButton } from "@/components/workspace/DownloadButton";
 import { MaxWorkspaceShell } from "@/components/max/MaxWorkspaceShell";
 import type { Project } from "@/lib/api/types";
 
-type LayoutProps = ComponentProps<typeof import("@/components/max/MaxEditorLayout").MaxEditorLayout>;
 type PreviewProps = ComponentProps<typeof import("@/components/max/MaxLivePreview").MaxLivePreview>;
 const state = vi.hoisted(() => ({ admin: false, exportAccount: vi.fn(), downloadProjectFiles: vi.fn(), remove: vi.fn() }));
 vi.mock("@/lib/auth-mock", () => ({ getMaxAdminAccessServer: async () => state.admin }));
@@ -23,10 +22,6 @@ vi.mock("@/lib/api/snapshots", () => ({
 vi.mock("@/lib/api/max-studio", () => ({ getMaxReadiness: async () => ({ items: [] }) }));
 vi.mock("@/lib/use-max-restoration", () => ({ useMaxRestoration: () => ({ enabled: false }) }));
 vi.mock("@/lib/use-max-adaptation", () => ({ useMaxAdaptation: () => ({ attachment: null }) }));
-vi.mock("@/components/max/MaxEditorLayout", () => ({
-  MaxEditorLayout: ({ children, tools, navigation, launch, preview }: LayoutProps) =>
-    <>{navigation}{tools}{launch}{children}{typeof preview === "function" ? preview() : preview}</>,
-}));
 vi.mock("@/components/workspace/ChatPanel", () => ({ ChatPanel: () => <p>Editor chat</p> }));
 vi.mock("@/components/max/MaxLivePreview", () => ({
   MaxLivePreview: ({ versions }: PreviewProps) => <output>{versions.map(version => version.prompt_text).join(", ")}</output>,
@@ -62,8 +57,8 @@ it.each([false, true])("offers personal records without project archive controls
   expect(container.querySelector("a[download], a[href*='/download'], a[href*='/account/export']")).toBeNull();
   expect(container.querySelector("#account-email")?.getAttribute("value")).toBe("fixture@example.invalid");
   expect(container.textContent).toContain("Удалить аккаунт");
-  expect(container.textContent).toContain("Опубликовать приложение");
-  expect(container.querySelector("a[href='/max/test-project?panel=services']")).not.toBeNull();
+  expect(container.querySelector("a[data-testid='max-launch-open']")?.getAttribute("href")).toBe("/max/test-project/publish");
+  expect(container.querySelector("a[href='/max/test-project/integrations?tab=services']")).not.toBeNull();
   expect(!!container.querySelector("a[href='/admin/max']")).toBe(admin);
   expect(state.exportAccount).not.toHaveBeenCalled();
   expect(state.downloadProjectFiles).not.toHaveBeenCalled();

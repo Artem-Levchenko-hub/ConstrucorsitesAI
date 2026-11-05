@@ -26,7 +26,7 @@ describe("getMaxJourney", () => {
     expect(journey.progress).toBe(50);
     expect(journey.currentStage).toMatchObject({
       id: "bot",
-      href: "/max/project-1?panel=max",
+      href: "/max/project-1/integrations",
       status: "current",
     });
   });
@@ -77,18 +77,18 @@ describe("getMaxJourney", () => {
 describe("getMaxJourneyItemHref", () => {
   it("routes each server blocker to the screen where it can be fixed", () => {
     expect(getMaxJourneyItemHref("project-1", "legal")).toBe(
-      "/max/project-1?data=policies",
+      "/max/project-1/settings?tab=app&section=policies",
     );
     expect(getMaxJourneyItemHref("project-1", "publish")).toBe(
-      "/max/project-1?panel=publish",
+      "/max/project-1/publish",
     );
     expect(getMaxJourneyItemHref("project-1", "bot")).toBe(
-      "/max/project-1?panel=max",
+      "/max/project-1/integrations",
     );
   });
 });
 
 it("asks only for publication information, not another product questionnaire", () => {
   const journey = getMaxJourney("p", [item("build", true), item("legal", false)]);
-  expect(journey.currentStage).toMatchObject({ id: "app", label: "Документы приложения", href: "/max/p?data=policies" });
+  expect(journey.currentStage).toMatchObject({ id: "app", label: "Документы приложения", href: "/max/p/settings?tab=app&section=policies" });
 });

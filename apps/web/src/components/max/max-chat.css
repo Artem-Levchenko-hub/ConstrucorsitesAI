@@ -40,6 +40,8 @@
 .max-chat-advice-skeleton span:nth-child(2) { width: 86%; }
 .max-chat-advice-skeleton span:nth-child(3) { width: 65%; }
 [data-max-editor] .max-studio-chat.max-editor-chat { background: var(--color-surface-raised); }
+[data-max-editor] .max-editor-chat > div:first-child { padding-top: 0; }
+[data-max-editor] .max-editor-chat .max-chat-composer { background: var(--color-surface-base); }
 [data-max-editor] .max-studio-prompt.max-chat-composer > .rounded-lg { background: var(--color-surface-base); border-color: var(--color-border-default); box-shadow: none; }
 [data-max-editor] .max-studio-prompt.max-chat-composer > .rounded-lg:focus-within { background: var(--color-surface-raised); }
 [data-max-editor] .max-studio-prompt textarea { min-height: 74px; line-height: 1.6; }
@@ -47,7 +49,8 @@
 [data-max-editor] [data-chat-role] + [data-chat-role=assistant] { padding-top: 4px; }
 [data-max-editor] .max-editor-message-body { color: var(--color-fg-primary); line-height: 1.7; }
 [data-max-editor] .max-editor-message-body > .text-fg-secondary { color: var(--color-fg-primary); }
-[data-max-editor] .max-studio-chat [data-chat-role=user] .max-editor-message-body { border-left: 2px solid var(--color-accent); background: var(--color-accent-subtle); border-radius: 0 10px 10px 0; }
+[data-max-editor] .max-editor-user-message { inline-size: fit-content; max-inline-size: min(85%, 42rem); }
+[data-max-editor] .max-studio-chat [data-chat-role=user] .max-editor-message-body { background: var(--color-accent-subtle); border-radius: 12px 4px 12px 12px; }
 .max-chat-latest {
   position: absolute; bottom: 100%; left: 0; right: 0; z-index: 10;
   display: flex; justify-content: center; padding: 6px 16px;
@@ -75,6 +78,9 @@
   .max-chat-advice-heading h2 { font-size: 17px; }
   .max-chat-advice-item { padding: 16px; }
   .max-chat-composer .max-chat-advice-trigger { padding-inline: 9px; }
+}
+@media (min-width: 1024px) {
+  [data-max-editor] .max-editor-chat .max-chat-composer { padding-bottom: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   .max-chat-advice-panel, .max-chat-thinking span, .max-chat-advice-skeleton span { animation: none; }

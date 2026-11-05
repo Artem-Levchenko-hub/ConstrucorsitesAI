@@ -13,10 +13,6 @@ const workspaceShell = readFileSync(
 );
 const editorStyles = readFileSync(resolve(process.cwd(), "src/components/max/max-editor.css"), "utf8");
 const editorLayout = readFileSync(resolve(process.cwd(), "src/components/max/MaxEditorLayout.tsx"), "utf8");
-const usageBreakdown = readFileSync(
-  resolve(process.cwd(), "src/components/max/MaxUsageBreakdown.tsx"),
-  "utf8",
-);
 
 describe("MAX live preview surface", () => {
   it("keeps the phone on a transparent stage without a grey framing card", () => {
@@ -41,11 +37,7 @@ describe("MAX live preview surface", () => {
     );
   });
 
-  it("shows live gateway-ledger spend by generation stage", () => {
-    expect(workspaceShell).toContain("<MaxUsageBreakdown projectId={project.id}");
-    expect(usageBreakdown).toContain('queryKey: ["max-usage", projectId]');
-    expect(usageBreakdown).toContain("refetchInterval: 5_000");
-    expect(usageBreakdown).toContain("cache_read_tokens");
-    expect(usageBreakdown).toContain("stage.retries");
+  it("keeps internal stage costs out of the customer editor", () => {
+    expect(workspaceShell).not.toContain("MaxUsageBreakdown");
   });
 });

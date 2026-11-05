@@ -68,7 +68,7 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
           <p className={statusError ? "text-danger-fg" : published ? "text-success-fg" : "text-fg-secondary"} role="status">{published ? <Check className="size-4" /> : statusError ? <CircleAlert className="size-4" /> : <Loader2 className={`size-4 ${readiness.isPending || deploy.isPending ? "animate-spin" : ""}`} />}{statusLabel}</p>
           <div className="max-dashboard-actions">
             {url ? <Button asChild><a href={url} target="_blank" rel="noreferrer">Открыть приложение <ArrowUpRight className="size-4" /></a></Button>
-              : <Button asChild><Link href={`/max/${projectId}?panel=publish`}>{active ? "Ход публикации" : "Подготовить запуск"}</Link></Button>}
+              : <Button asChild><Link href={`/max/${projectId}/publish`}>{active ? "Ход публикации" : "Подготовить запуск"}</Link></Button>}
             <Button asChild variant="outline"><Link href={`/max/${projectId}`}>Редактировать</Link></Button>
           </div>
           </div>
@@ -109,7 +109,7 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
         <div className="max-dashboard-system-row"><div><h3>Рабочая среда редактора</h3><p>В ней открывается живое превью, пока вы правите приложение. На опубликованное приложение у пользователей она не влияет.</p></div>
           <div className="max-dashboard-runtime">{runtime.isError ? <p className="text-danger-fg">{MAX_UNKNOWN_LABEL}</p> : runtime.isPending ? <p>Проверяем…</p> : <p>{runtime.data ? runtimeLabels[runtime.data.state] : "Нет данных"}</p>}</div>
         </div>
-        <div className="max-dashboard-system-row"><div><h3>Безопасный вход MAX</h3><p>Подключение бота для входа пользователей</p></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integrationLabel}</span><Button asChild variant="outline" size="sm"><Link href={`/max/${projectId}?panel=max`}>Настроить MAX</Link></Button></div>
+        <div className="max-dashboard-system-row"><div><h3>Безопасный вход MAX</h3><p>Подключение бота для входа пользователей</p></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integrationLabel}</span><Button asChild variant="outline" size="sm"><Link href={`/max/${projectId}/integrations`}>Настроить MAX</Link></Button></div>
         <div className="max-dashboard-system-row"><div><h3>Связь с MAX</h3></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integration.isError ? MAX_UNKNOWN_LABEL : integration.isPending ? "Проверяем…" : integration.data?.status === "active" ? "Подключена" : "Не активна"}</span></div>
       </section>
           </div>

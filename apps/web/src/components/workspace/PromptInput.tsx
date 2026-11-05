@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useImperativeHandle, useRef, useState, t
 import { AnimatePresence, motion } from "framer-motion";
 import { Clock, ImagePlus, Loader2, Mic, Send, Square, StopCircle, Type, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useMaxWorkspaceDraftGuard } from "@/components/max/use-max-workspace-draft-guard";
 import { useVoiceInput } from "@/hooks/useVoiceInput";
 import { EASE_OUT } from "@/lib/motion";
 import { cn } from "@/lib/utils";
@@ -38,6 +39,7 @@ function ProjectPromptInput({
   draftRef,
   toolbarAction,
   sendDisabled = false,
+  guardMaxDraft = false,
   quotaNotice,
   projectId,
 }: {
@@ -60,6 +62,7 @@ function ProjectPromptInput({
   draftRef?: Ref<PromptInputHandle>;
   toolbarAction?: ReactNode;
   sendDisabled?: boolean;
+  guardMaxDraft?: boolean;
   quotaNotice?: ReactNode;
   projectId?: string;
 }) {
@@ -113,6 +116,11 @@ function ProjectPromptInput({
   const setComment = useInspectorStore((s) => s.setComment);
   const removeSelection = useInspectorStore((s) => s.removeSelection);
   const clearSelections = useInspectorStore((s) => s.clear);
+  useMaxWorkspaceDraftGuard(
+    guardMaxDraft && Boolean(value.trim() || hasAttachments || selections.length),
+    guardMaxDraft && (isSubmitting || pendingPrompt !== null),
+    "chat",
+  );
 
   // Auto-resize textarea up to a sensible max.
   useEffect(() => {

@@ -10,7 +10,6 @@ import type { Project } from "@/lib/api/types";
 
 const route = vi.hoisted(() => ({ path: "/max", query: "" }));
 vi.mock("next/navigation", () => ({ usePathname: () => route.path, useSearchParams: () => new URLSearchParams(route.query) }));
-vi.mock("@/components/max/MaxEditorDataDialog", () => ({ MaxEditorDataDialog: () => <button type="button">Данные</button> }));
 
 let root: Root;
 let host: HTMLDivElement;
@@ -321,14 +320,13 @@ describe("product learning", () => {
 
   it.each([
     ['[data-testid="max-navigation-open"]', "Проекты и аккаунт"],
-    ['[aria-label="Инструменты редактора"]', "Инструменты редактора"],
     ['[data-testid="max-mobile-preview-open"]', "Предпросмотр приложения"],
   ])("starts contextual learning from the real transient modal %s without changing its URL", async (selector, title) => {
     route.path = "/max/test-project";
     window.history.replaceState(null, "", route.path);
     await act(async () => root.render(<><MaxEditorLayout project={{ id: "test-project", name: "Проект" } as Project}
-      navigation={<p>Ваши проекты</p>} tools={<p>Доступные инструменты</p>} preview={<p>Экран приложения</p>}
-      launch={<p>Готовность</p>} launchStatus="Проверить"><input aria-label="Черновик редактора" defaultValue="Идея сохранена" /></MaxEditorLayout><ProductLearning userKey="transient-account" /></>));
+      navigation={<p>Ваши проекты</p>} preview={<p>Экран приложения</p>}>
+      <input aria-label="Черновик редактора" defaultValue="Идея сохранена" /></MaxEditorLayout><ProductLearning userKey="transient-account" /></>));
     await act(async () => host.querySelector<HTMLButtonElement>(selector)!.click()); await settle();
     const parent = document.querySelector<HTMLElement>('[role="dialog"]')!;
     expect(parent).not.toBeNull();

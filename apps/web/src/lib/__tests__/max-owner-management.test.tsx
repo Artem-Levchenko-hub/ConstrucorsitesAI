@@ -11,8 +11,12 @@ import { MaxProjectNav } from "@/components/max/MaxProjectNav";
 import type { ManagementOverview, OwnerRecord, ResourceDefinition } from "@/lib/api/max-management";
 import type { MaxProjectConfig } from "@/lib/api/types";
 
-vi.mock("@/components/max/MaxSectionShell", () => ({ MaxSectionShell: ({ children }: { children: React.ReactNode }) => (
-  <div className="max-project-workspace"><Link href="/max/owned">К чату</Link><main>{children}</main></div>
+vi.mock("@/components/max/MaxSectionShell", () => ({ MaxSectionShell: ({ children, projectId }: { children: React.ReactNode; projectId: string }) => (
+  <div className="max-project-workspace">
+    <Link href={`/max/${projectId}`}>К чату</Link>
+    <MaxProjectNav projectId={projectId} active="manage" showProgress={false} variant="mobile" />
+    <main>{children}</main>
+  </div>
 ) }));
 vi.mock("@/components/max/MaxOwnerCatalog", () => ({ MaxOwnerCatalog: ({ embedded }: { embedded?: boolean }) => <div data-embedded={embedded}>Каталог до 100 позиций</div> }));
 const resources = contract.resources as ResourceDefinition[];
@@ -92,10 +96,12 @@ it("waits for the section overview before mounting an editable default section",
   await act(async () => resolveOverview!(Response.json(overview))); await settle();
   expect(button("Заказы")).toBeTruthy();
 });
-it("shows only enabled relevant resources, embedded catalog and baseline sections", async () => {
+it("keeps the catalog in project navigation and shows only enabled resources and settings in management", async () => {
   await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />);
   expect(button("Заказы")).toBeTruthy(); expect(button("Заявки")).toBeUndefined(); expect(button("Записи")).toBeUndefined();
-  await click("Каталог"); expect(node.querySelector('[data-embedded="true"]')).not.toBeNull();
+  expect(node.querySelector('a[href="/max/owned/catalog"]')?.textContent).toContain("Каталог");
+  expect(button("Каталог")).toBeUndefined();
+  expect(node.querySelector('[data-embedded="true"]')).toBeNull();
   await click("Настройки"); expect(node.textContent).toContain("Название приложения");
   expect(button("Статистика")).toBeUndefined();
 });
@@ -105,16 +111,17 @@ it.each(["not_published", "unsupported", "unavailable"] as const)("explains %s w
   expect(records()).toHaveLength(0);
   expect(node.textContent).not.toContain("Обращений пока нет");
   expect(node.textContent).toMatch(state === "not_published" ? /после публикации/i : state === "unsupported" ? /не поддерживает/i : /недоступн/i);
-  expect(button("Настройки")).toBeTruthy(); expect(button("Каталог")).toBeTruthy();
+  expect(button("Настройки")).toBeTruthy(); expect(button("Каталог")).toBeUndefined();
 });
 function legacyUnsupported() {
   overview = { ...overview, state: "unsupported", configured_modules: [], active_modules: [], resources: [] };
   config = { ...config, config: { ...config.config, app_type: "catalog", management_modules: null } };
 }
 function enables() { return requests.filter(request => request.url.endsWith("/management/enable")); }
-it("prepares legacy management only on an explicit click using a fresh version and preserves the mounted catalog", async () => {
+it("prepares legacy management only on an explicit click using a fresh version and preserves settings", async () => {
   legacyUnsupported(); await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />);
-  const catalog = node.querySelector('[data-embedded="true"]');
+  const settings = node.querySelector('[aria-label="Название приложения"]');
+  expect(settings).not.toBeNull();
   expect(enables()).toHaveLength(0);
   config = { ...config, config_version: 9 };
   await click("Подключить управление");
@@ -122,7 +129,7 @@ it("prepares legacy management only on an explicit click using a fresh version a
   expect(JSON.parse(enables()[0].init.body as string)).toEqual({ expected_config_version: 9 });
   expect(node.textContent).toContain("Подготовлено к доработке");
   expect(button("Подключить управление")).toBeUndefined();
-  expect(node.querySelector('[data-embedded="true"]')).toBe(catalog);
+  expect(node.querySelector('[aria-label="Название приложения"]')).toBe(settings);
   expect(node.querySelector('main a[href="/max/owned"]')?.textContent).toContain("редактор");
   expect(requests.filter(request => request.init.method === "POST")).toEqual(enables());
   expect(records()).toHaveLength(0);
@@ -137,12 +144,13 @@ it("does not repeat preparation when an unsupported app already has configured b
 it("retains the section and retries a preparation conflict only with another click and fresh version", async () => {
   legacyUnsupported(); enableMode = "conflict";
   await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />);
-  const catalog = node.querySelector('[data-embedded="true"]');
+  const settings = node.querySelector('[aria-label="Название приложения"]');
+  expect(settings).not.toBeNull();
   await click("Подключить управление");
   expect(enables()).toHaveLength(1);
   expect(node.textContent).not.toContain("private diagnostic");
   expect(node.textContent).toContain("Повторите попытку");
-  expect(node.querySelector('[data-embedded="true"]')).toBe(catalog);
+  expect(node.querySelector('[aria-label="Название приложения"]')).toBe(settings);
   config = { ...config, config_version: 8 }; enableMode = "ok";
   await click("Подключить управление");
   expect(enables()).toHaveLength(2);

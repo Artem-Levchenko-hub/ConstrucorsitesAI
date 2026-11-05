@@ -44,11 +44,17 @@ async function render(mode: IntegrationProvider["connection_mode"] = "partner", 
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
 }
 it("reopens native setup on the validated return route for the currently selected project without automatic claim", async () => {
-  window.history.replaceState({}, "", "/max/selected-project?panel=services&integration=moysklad");
+  window.history.replaceState({}, "", "/max/selected-project/integrations?integration=moysklad");
   await render("partner", "selected-project", true);
   expect(container.querySelector("#moysklad-pairing-code")).not.toBeNull();
   expect(boundary.install).toHaveBeenCalledWith("selected-project");
   expect(boundary.claim).not.toHaveBeenCalled(); expect(boundary.start).not.toHaveBeenCalled();
+});
+it("ignores ambiguous vendor return parameters on the services page", async () => {
+  window.history.replaceState({}, "", "/max/selected-project/integrations?tab=services&integration=moysklad&integration=other");
+  await render("partner", "selected-project", true);
+  expect(container.querySelector("#moysklad-pairing-code")).toBeNull();
+  expect(boundary.install).not.toHaveBeenCalled();
 });
 it("shows honest publication pending instructions without inventing a native URL or asking for API secrets", async () => {
   const open = vi.spyOn(window, "open").mockReturnValue(null); await render();

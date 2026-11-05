@@ -52,7 +52,7 @@ it("puts statistics first and keeps technical details collapsed", async () => {
 it("keeps optional services discoverable outside collapsed readiness details and offers no own-server hosting", async () => {
   await mount(<MaxLaunchPanel project={project} />);
   await settle(() => expect(container.querySelector('[data-testid="max-one-click-launch"]')).not.toBeNull());
-  expect(container.querySelector('a[href="/max/project-surfaces?panel=services"]')!.closest("details")).toBeNull();
+  expect(container.querySelector('a[href="/max/project-surfaces/integrations?tab=services"]')!.closest("details")).toBeNull();
   // MAX apps run on the platform; own-server hosting left with the site builder.
   expect(container.querySelector('a[href*="panel=hosting"]')).toBeNull();
   expect(container.textContent).not.toContain("Собственный сервер");
@@ -83,9 +83,9 @@ it("shows publication blockers without expanding details and links each unfinish
   expect(requirements!.querySelector('[data-requirement="legal"][data-promoted]')).not.toBeNull();
   expect(requirements!.querySelector('[data-requirement="legal"] a')).toBeNull();
   expect(requirements!.textContent).toContain("Делаем сейчас");
-  expect(requirements!.querySelector('[data-requirement="bot"] a')?.getAttribute("href")).toBe("/max/project-surfaces?panel=max");
+  expect(requirements!.querySelector('[data-requirement="bot"] a')?.getAttribute("href")).toBe("/max/project-surfaces/integrations");
   expect(requirements!.querySelector('[data-requirement="max_url"]')?.getAttribute("data-state")).toBe("later");
-  expect(requirements!.querySelector('[data-requirement="max_url"] a')?.getAttribute("href")).toBe("/max/project-surfaces?panel=max");
+  expect(requirements!.querySelector('[data-requirement="max_url"] a')?.getAttribute("href")).toBe("/max/project-surfaces/integrations");
 });
 
 it.each(["loading", "error"])("never marks stale requirements complete while readiness is %s", async state => {

@@ -141,8 +141,11 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
   const [category, setCategory] = useState<IntegrationCategory | "all">("all");
   const [search, setSearch] = useState("");
   const [selectedChoice, setSelected] = useState<IntegrationProvider | null>(null);
-  const [moyskladReturnProject, setMoyskladReturnProject] = useState<string | null>(() =>
-    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("integration") === "moysklad" ? projectId : null);
+  const [moyskladReturnProject, setMoyskladReturnProject] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const vendors = new URLSearchParams(window.location.search).getAll("integration");
+    return vendors.length === 1 && vendors[0] === "moysklad" ? projectId : null;
+  });
   const [values, setValues] = useState<Record<string, string>>({});
   const [moyskladCode, setMoyskladCode] = useState("");
   const [moyskladOrganization, setMoyskladOrganization] = useState("");
@@ -646,15 +649,21 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
   );
   const catalogContent = (
     <>
-      {oauthReturnMessage && <p role="alert" className="mt-4 rounded-[6px] border border-border-default bg-surface-base px-4 py-3 text-sm text-fg-secondary">{oauthReturnMessage}</p>}
-      {/* Абзац предупреждения был первым, что видит человек на экране выбора
-          сервисов. Текст остался, но уступил место самим сервисам. */}
-      <details className="mt-4 max-w-[850px] rounded-[6px] border border-border-subtle bg-surface-base px-4 py-3">
-        <summary className="cursor-pointer text-sm font-medium text-accent-secondary">Что даёт подключение</summary>
-        <p className="mt-2 text-sm leading-6 text-fg-secondary">Подключение сервиса не добавляет экраны автоматически. После авторизации сервиса выберите «Добавить в приложение», проверьте задание для ИИ и запустите доработку. Пользователи увидят изменения после повторной публикации.</p>
-      </details>
-      <section className="max-integration-summary mt-6 grid gap-4 lg:grid-cols-[1fr_220px]">
-        {canOfferPack && <div className="rounded-[12px] border border-border-default bg-surface p-6">
+      {oauthReturnMessage && <p role="alert" className="max-integration-return">{oauthReturnMessage}</p>}
+      <div className="max-integration-overview">
+        <div className="max-integration-overview-status">
+          <ShieldCheck className="size-5 shrink-0" aria-hidden="true" />
+          <div>
+            <strong>{catalog.isSuccess ? `Активные сервисы · ${connectedCount} из ${offeredProviders.length}` : "Подключения проекта"}</strong>
+            <p>Ключи сервисов хранятся зашифрованно.</p>
+          </div>
+        </div>
+        <details className="max-integration-explainer">
+          <summary>Что даёт подключение</summary>
+          <p>Подключение даёт приложению доступ к сервису. Если нужны новые экраны или действия, выберите «Сценарий оплаты» или «Добавить в приложение». После доработки опубликуйте изменения.</p>
+        </details>
+      </div>
+      {canOfferPack && <section className="max-integration-pack rounded-[12px] border border-border-default bg-surface p-5">
           <div className="flex items-start gap-4">
             <span className="grid size-11 shrink-0 place-items-center rounded-[8px] bg-accent text-fg-on-accent"><Sparkles className="size-5" /></span>
             <div>
@@ -667,40 +676,32 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
             {pack.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
             Подключить рекомендуемые
           </Button>
-        </div>}
-        <div className="rounded-[12px] border border-border-default bg-surface p-6">
-          <p className="omnia-kicker text-fg-tertiary">Состояние</p>
-          <p className="mt-3 text-3xl font-semibold">{catalog.isSuccess ? connectedCount : "—"}<span className="text-lg text-fg-tertiary"> / {catalog.isSuccess ? offeredProviders.length : "—"}</span></p>
-          <p className="mt-2 text-xs text-fg-secondary">сервисов активно в этом проекте</p>
-          <div className="mt-5 flex items-center gap-2 text-xs text-success-fg"><ShieldCheck className="size-4" /> Секреты зашифрованы</div>
-        </div>
-      </section>
+        </section>}
 
-      <section className="max-integration-catalog mt-6">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-wrap gap-2">
+      <section className="max-integration-catalog" aria-labelledby="max-service-list-title">
+        <div className="max-integration-service-list">
+          <header className="max-integration-list-heading">
+            <h2 id="max-service-list-title">Сервисы для приложения</h2>
+            <p>Подключите нужный сервис или используйте доступ, который уже есть у бизнеса.</p>
+          </header>
+          <div className="max-integration-filters">
+          <div role="group" aria-label="Категории сервисов" className="flex flex-wrap gap-2">
             {(Object.keys(categories) as Array<IntegrationCategory | "all">).filter(key => key === "all" || offeredProviders.some(provider => provider.category === key)).map((key) => {
               const item = categories[key];
               return (
-                <button key={key} aria-pressed={category === key} onClick={() => setCategory(key)} className={cn("inline-flex h-11 shrink-0 items-center gap-2 rounded-[10px] border px-3 text-xs", category === key ? "border-accent bg-accent-subtle text-accent-secondary" : "border-border-default bg-surface text-fg-secondary")}>
-                  <item.icon className="size-3.5" />{item.label}
+                <button key={key} type="button" aria-pressed={category === key} onClick={() => setCategory(key)} className="max-integration-filter">
+                  <item.icon className="size-4" aria-hidden="true" />{item.label}
                 </button>
               );
             })}
           </div>
-          <label className="relative block w-full lg:w-[280px]">
+          <label className="relative block min-w-0 flex-1">
             <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-fg-tertiary" />
             <Input aria-label="Найти сервис" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти сервис" className="h-11 rounded-[10px] border-border-default bg-surface pl-9" />
           </label>
-        </div>
-
-        <div className="max-integration-service-list">
-          <header className="max-integration-list-heading">
-            <h2>Сервисы для приложения</h2>
-            <p>Подключайте нужные сервисы или используйте доступ, который уже есть у бизнеса.</p>
-          </header>
+          </div>
           {catalog.isLoading ? (
-            <div className="grid min-h-[260px] place-items-center"><Loader2 className="size-5 animate-spin text-accent" /></div>
+            <div role="status" className="max-integration-loading"><Loader2 className="size-5 motion-safe:animate-spin text-accent" aria-hidden="true" />Загружаем сервисы…</div>
           ) : catalog.isError ? (
             <div className="grid min-h-[260px] place-items-center px-6 py-10 text-center">
               <div className="max-w-[420px]">
@@ -802,9 +803,9 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
     return (
       <div className="max-integration-embedded">
         {selected ? (
-          <section className="flex min-h-0 flex-col">{providerContent}</section>
+          <section className="max-integration-detail flex min-h-0 flex-col">{providerContent}</section>
         ) : implementationProvider ? (
-          <section className="grid gap-5">{implementationContent}</section>
+          <section className="max-integration-detail grid gap-5">{implementationContent}</section>
         ) : catalogContent}
       </div>
     );

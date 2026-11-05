@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
-import { redirect } from "next/navigation";
+import { MaxProjectConnections } from "@/components/max/MaxProjectConnections";
+import { MaxSectionShell } from "@/components/max/MaxSectionShell";
+import { maxConnectionSearch, type MaxProjectSearch } from "@/lib/max-editor-entry";
 import { loadMaxProject } from "@/lib/max-project-server";
 
 export const metadata: Metadata = {
-  title: "Интеграции — Yleum",
+  title: "Подключения — Yleum",
   robots: { index: false, follow: false },
 };
 
@@ -12,12 +14,17 @@ export default async function MaxIntegrationsPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams?: Promise<{ oauth?: string | string[] }>;
+  searchParams?: Promise<MaxProjectSearch>;
 }) {
   const { id } = await params;
-  const project = await loadMaxProject(id, `/max/${id}/integrations`);
-  const outcome = (await searchParams)?.oauth;
-  const suffix = typeof outcome === "string" && ["connected", "cancelled", "error", "conflict"].includes(outcome)
-    ? `&oauth=${outcome}` : "";
-  redirect(`/max/${project.id}?panel=services${suffix}`);
+  const search = maxConnectionSearch((await searchParams) ?? {});
+  const project = await loadMaxProject(id, `/max/${id}/integrations${search.size ? `?${search}` : ""}`);
+  const tab = search.size ? "services" : "bot";
+  return (
+    <MaxSectionShell projectId={project.id} projectName={project.name} active="integrations"
+      eyebrow="Настройка проекта" title="Подключения"
+      lead="Подключите бота, через которого открывается приложение в MAX, и сервисы, нужные вашему бизнесу.">
+      <MaxProjectConnections projectId={project.id} projectName={project.name} tab={tab} />
+    </MaxSectionShell>
+  );
 }

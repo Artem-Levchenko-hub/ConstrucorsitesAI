@@ -26,17 +26,44 @@ let holdImage: ((response: Response) => void) | null;
 let pendingGet: boolean;
 let holdGet: ((response: Response) => void) | null;
 let retryApplies: boolean;
+const legacyConfig = { app_name: "Старый каталог", summary: "Прежнее описание", management_modules: ["orders"], legacy_orders_table: "old_orders" };
+let sourceVersion: number | null;
+let sourcePutFailure: Response | Error | null;
+let sourceConfig: typeof legacyConfig;
+let loseSourceResponse: boolean;
 
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   data = { project_id: "owned", config_version: 7, content: [{ ...item }], saved: { state: "saved", config_version: 7 }, public: { ...status }, preview: { ...status } };
   requests = []; patchError = null; pendingPatch = false; holdPatch = null; holdImage = null; pendingGet = false; holdGet = null; retryApplies = false;
+  sourceVersion = null;
+  sourcePutFailure = null;
+  sourceConfig = legacyConfig;
+  loseSourceResponse = false;
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   node = document.createElement("div"); document.body.append(node); root = createRoot(node);
   vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit = {}) => {
     requests.push({ url, init });
     if (url.endsWith("/content-image")) return new Promise<Response>(resolve => { holdImage = resolve; });
-    if (url.endsWith("/max/config")) return Response.json({ project_id: "owned", config_version: data.config_version, config: {} });
+    if (url.endsWith("/max/config")) {
+      if (init.method === "PUT" && sourceVersion !== null) {
+        if (sourcePutFailure instanceof Error) throw sourcePutFailure;
+        if (sourcePutFailure) return sourcePutFailure;
+        const config = JSON.parse(init.body as string);
+        config.content = config.content.map((item: MaxContentItem) => ({ ...item, title: item.title.trim() }));
+        const changed = JSON.stringify(config) !== JSON.stringify({ ...sourceConfig, content: data.content });
+        if (changed && new Headers(init.headers).get("X-Max-Config-Version") !== String(sourceVersion)) {
+          return Response.json({ error: versionConflict }, { status: 409 });
+        }
+        const version = changed ? ++sourceVersion : sourceVersion;
+        data = { ...data, content: config.content, config_version: version, saved: { state: "saved", config_version: version } };
+        if (loseSourceResponse) { loseSourceResponse = false; throw new TypeError("Lost PUT response"); }
+        return Response.json({ project_id: "owned", config_version: version, config, application_mode: "source" });
+      }
+      return Response.json(sourceVersion === null
+        ? { project_id: "owned", config_version: data.config_version, config: {}, application_mode: "runtime" }
+        : { project_id: "owned", config_version: sourceVersion, config: { ...sourceConfig, content: data.content }, application_mode: "source" });
+    }
     if (url === "/api/auth/me") return Response.json({ id: "owner", user_chat_messages_limit: 1, user_chat_messages_remaining: 0 });
     if (!init.method && pendingGet) return new Promise<Response>(resolve => { holdGet = resolve; });
     if (init.method === "PATCH") {
@@ -68,6 +95,95 @@ async function input(label: string, value: string) {
 }
 function patches() { return requests.filter(request => request.init.method === "PATCH"); }
 
+const sourceDependentQueries = [
+  ["snapshots", "owned"], ["max-preview-session", "owned"], ["max-readiness", "owned"],
+  ["project-versions", "owned", "current-build"],
+];
+function warmQuery(key: string[]) {
+  client.setQueryDefaults(key, { gcTime: Infinity, staleTime: 60_000 });
+  client.setQueryData(key, "previous HEAD");
+}
+
+it("saves a source catalog through the versioned config PUT without replacing the rest of the config", async () => {
+  sourceVersion = 7;
+  await mount(); await click("Скрыть"); await click("Сохранить изменения");
+  const writes = requests.filter(request => request.init.method);
+  expect(writes).toHaveLength(1);
+  expect(writes[0]).toMatchObject({ url: "/api/projects/owned/max/config", init: { method: "PUT" } });
+  expect(new Headers(writes[0].init.headers).get("X-Max-Config-Version")).toBe("7");
+  expect(JSON.parse(writes[0].init.body as string)).toEqual({ ...legacyConfig, content: [{ ...item, active: false }] });
+  expect(node.textContent).toContain("Позиции сохранены в исходниках");
+  expect(node.textContent).not.toContain("Правки ещё не сохранены");
+});
+
+it("invalidates the source HEAD caches immediately after PUT, while delivery readback is pending", async () => {
+  sourceVersion = 7;
+  for (const key of [...sourceDependentQueries, ["snapshots", "another-project"]]) warmQuery(key);
+  await mount(); await click("Скрыть");
+  pendingGet = true;
+  await click("Сохранить изменения");
+  expect(sourceDependentQueries.map(key => client.getQueryState(key)?.isInvalidated)).toEqual([true, true, true, true]);
+  expect(client.getQueryState(["snapshots", "another-project"])?.isInvalidated).toBe(false);
+  expect(holdGet).toBeTypeOf("function");
+  pendingGet = false;
+  await act(async () => holdGet!(Response.json(data)));
+});
+
+it("keeps the source catalog draft when the full configuration baseline has moved", async () => {
+  sourceVersion = 8;
+  await mount(); await click("Скрыть"); await click("Сохранить изменения");
+  const writes = requests.filter(request => request.init.method);
+  expect(writes.map(request => request.init.method)).toEqual(["PUT"]);
+  expect(new Headers(writes[0].init.headers).get("X-Max-Config-Version")).toBe("7");
+  expect(data.content).toEqual([item]);
+  expect(node.textContent).toContain("Правки ещё не сохранены");
+  expect(node.querySelector('[role="alert"]')).not.toBeNull();
+});
+
+it("recovers a lost source PUT response without overwriting a newer profile or advancing its version", async () => {
+  sourceVersion = 7;
+  loseSourceResponse = true;
+  await mount(); await click("Изменить");
+  await input("Название элемента 1", "  Обновлённая консультация  ");
+  await click("Сохранить позицию");
+  expect(data.config_version).toBe(8);
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  sourceConfig = { ...sourceConfig, summary: "Новое описание из другой вкладки" };
+  sourceVersion = 9;
+  await click("Сохранить позицию");
+  const writes = requests.filter(request => request.init.method);
+  expect(writes.map(request => request.init.method)).toEqual(["PUT", "PUT"]);
+  expect(new Headers(writes[1].init.headers).get("X-Max-Config-Version")).toBe("7");
+  expect(JSON.parse(writes[1].init.body as string).summary).toBe(sourceConfig.summary);
+  expect(data.config_version).toBe(9);
+  expect(data.content[0].title).toBe("Обновлённая консультация");
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+});
+
+it("saves catalog data for a source project without a snapshot using the same expected version", async () => {
+  sourceVersion = 7;
+  sourcePutFailure = Response.json({ error: { code: "project_empty", message: "У проекта нет исходного снимка" } }, { status: 409 });
+  for (const key of sourceDependentQueries) warmQuery(key);
+  await mount(); await click("Скрыть"); await click("Сохранить изменения");
+  expect(requests.flatMap(request => request.init.method ? [request.init.method] : [])).toEqual(["PUT", "PATCH"]);
+  expect(JSON.parse(patches()[0].init.body as string)).toEqual({ expected_config_version: 7, content: [{ ...item, active: false }] });
+  expect(sourceDependentQueries.map(key => client.getQueryState(key)?.isInvalidated)).toEqual([false, false, false, false]);
+  expect(node.textContent).not.toContain("Правки ещё не сохранены");
+});
+
+it.each([
+  ["version conflict", () => Response.json({ error: versionConflict }, { status: 409 })],
+  ["dangling snapshot", () => Response.json({ error: { code: "project_empty", message: "Текущий снимок проекта не найден" } }, { status: 409 })],
+  ["network error", () => new TypeError("Failed to fetch")],
+] as const)("keeps the draft after a source PUT %s without issuing a second write", async (_case, failure) => {
+  sourceVersion = 7;
+  sourcePutFailure = failure();
+  await mount(); await click("Скрыть"); await click("Сохранить изменения");
+  expect(requests.flatMap(request => request.init.method ? [request.init.method] : [])).toEqual(["PUT"]);
+  expect(node.textContent).toContain("Правки ещё не сохранены");
+  expect(node.querySelector('[role="alert"]')).not.toBeNull();
+});
+
 it("creates and edits through content-only saves, preserving item IDs and free-text prices", async () => {
   await mount(); await click("Добавить позицию");
   await input("Название элемента 1", "Массаж"); await input("Цена или подпись элемента 1", "от 2 000 ₽");
@@ -81,7 +197,7 @@ it("creates and edits through content-only saves, preserving item IDs and free-t
   await input("Название элемента 1", "Новая консультация"); await click("Сохранить позицию");
   const edited = JSON.parse(patches()[1].init.body as string);
   expect(edited.content[0]).toEqual({ ...item, title: "Новая консультация" });
-  expect(requests.every(request => request.url === "/api/projects/owned/max/content")).toBe(true);
+  expect(requests.filter(request => request.init.method).map(request => request.url)).toEqual(Array(2).fill("/api/projects/owned/max/content"));
   expect(document.querySelector('[role="dialog"]')).toBeNull();
 });
 
@@ -225,7 +341,7 @@ it("explicitly reapplies already saved pending content without changing its cont
   expect(node.textContent).toContain("Сохранены"); expect(node.textContent).not.toContain("Обновляется");
   expect([...node.querySelectorAll('.max-catalog-delivery[data-state="applied"]')]).toHaveLength(2);
   expect(button("Повторить применение")).toBeUndefined();
-  expect(requests.every(request => request.url.endsWith("/max/content"))).toBe(true);
+  expect(requests.filter(request => request.init.method).map(request => request.url)).toEqual(Array(2).fill("/api/projects/owned/max/content"));
 });
 
 it("keeps saved data and local drafts safe when an explicit reapply meets a newer catalog", async () => {
@@ -250,12 +366,20 @@ it("never opens generation automatically for a legacy integration or an ordinary
   data.public = { ...status, state: "blocked", reason: "catalog_integration_required" };
   await mount(); expect(button("Подключить каталог")).toBeDefined();
   await click("Скрыть"); expect(button("Подключить каталог").disabled).toBe(true); await click("Сохранить изменения");
-  expect(requests.every(request => request.url.endsWith("/max/content"))).toBe(true);
+  expect(requests.filter(request => request.init.method).map(request => request.url)).toEqual(["/api/projects/owned/max/content"]);
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   await click("Подключить каталог");
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Подключить каталог к приложению");
   expect(button("Запустить доработку").disabled).toBe(true);
   expect(requests.filter(request => request.init.method === "POST")).toHaveLength(0);
+});
+
+it("offers explicit catalog connection when only the unpublished preview needs it", async () => {
+  data.public = { ...status, state: "not_published" };
+  data.preview = { ...status, state: "unknown", reason: "catalog_integration_required" };
+  await mount();
+  expect(button("Подключить каталог")).toBeDefined();
+  expect(requests.filter(request => request.init.method)).toHaveLength(0);
 });
 
 it.each(["", "https://images.example/current.png"])("offers file upload and a URL from the card photo without opening a picker or saving (%s)", async imageUrl => {
@@ -285,7 +409,7 @@ it("keeps photo URL edits in the ordinary draft until an explicit content save",
   expect(document.querySelector<HTMLInputElement>('input[aria-label="Ссылка на фото элемента 1"]')!.value).toBe("https://images.example/linked.png");
   await click("Сохранить позицию");
   expect(JSON.parse(patches()[0].init.body as string)).toEqual({ expected_config_version: 7, content: [{ ...item, image_url: "https://images.example/linked.png" }] });
-  expect(requests.every(request => request.url.endsWith("/max/content"))).toBe(true);
+  expect(requests.filter(request => request.init.method).map(request => request.url)).toEqual(["/api/projects/owned/max/content"]);
 });
 
 it("discards photo edits with the existing cancel-draft action while preserving saved data", async () => {

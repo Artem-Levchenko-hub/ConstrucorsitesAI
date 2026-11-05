@@ -14,7 +14,9 @@ describe("MAX workspace responsive contract", () => {
   it("pins the editor to one viewport with internal scrolling", () => {
     expect(appLayout).toContain("max-h-dvh min-h-0");
     expect(styles).toContain("grid-template-rows: minmax(0, 1fr)");
-    expect(workspace).toContain("max-studio-chat min-h-0 flex-1 overflow-hidden");
+    const conversation = workspace.match(/<section data-learning="editor-conversation"[\s\S]+?<\/section>/)?.[0];
+    expect(conversation).toContain("min-h-0 flex-1 overflow-hidden");
+    expect(conversation).not.toContain("max-studio-chat");
   });
 
   it("uses two work areas on a laptop and a preview drawer on narrow screens", () => {

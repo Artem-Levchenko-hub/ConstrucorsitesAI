@@ -105,7 +105,7 @@ export function MaxPublicationRequirements({ projectId, items, status, promotedI
             <p>Дадим готовый адрес приложения и покажем, куда его вставить.</p>
           </div>
           {addressDone ? <span className="max-requirement-status">Адрес подтверждён</span>
-            : <Link className="max-requirement-action" href={`/max/${projectId}?panel=max`}>Как это сделать<ArrowRight aria-hidden="true" /></Link>}
+            : <Link className="max-requirement-action" href={getMaxJourneyItemHref(projectId, "max_url")}>Как это сделать<ArrowRight aria-hidden="true" /></Link>}
         </li>
       </ul>
     </section>

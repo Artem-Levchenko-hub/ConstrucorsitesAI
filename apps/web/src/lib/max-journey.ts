@@ -57,7 +57,7 @@ const STAGE_DEFINITIONS: Array<{
     shortLabel: "Документы",
     description: "Перед публикацией проверьте политику и условия приложения и подтвердите их. Реквизиты не нужны: бизнес проверяет сам MAX. Описание и оформление можно не дополнять.",
     itemIds: ["legal"],
-    suffix: "?data=policies",
+    suffix: "/settings?tab=app&section=policies",
     actionLabel: "Проверить документы",
   },
   {
@@ -66,7 +66,7 @@ const STAGE_DEFINITIONS: Array<{
     shortLabel: "Бот",
     description: "Подключите бота: через него пользователи будут открывать ваше приложение. Помощник подскажет, где его создать и как получить токен.",
     itemIds: ["bot"],
-    suffix: "?panel=max",
+    suffix: "/integrations",
     actionLabel: "Подключить бота",
   },
   {
@@ -75,7 +75,7 @@ const STAGE_DEFINITIONS: Array<{
     shortLabel: "Публикация",
     description: "Опубликуйте приложение. Мы разместим его на сервере и выдадим постоянную ссылку.",
     itemIds: ["publish"],
-    suffix: "?panel=publish",
+    suffix: "/publish",
     actionLabel: "Перейти к публикации",
   },
   {
@@ -84,7 +84,7 @@ const STAGE_DEFINITIONS: Array<{
     shortLabel: "MAX",
     description: "Добавьте ссылку на приложение в настройках бота MAX. Покажем, куда её вставить.",
     itemIds: ["max_url"],
-    suffix: "?panel=max",
+    suffix: "/integrations",
     actionLabel: "Подключить в MAX",
   },
 ];
@@ -107,7 +107,6 @@ function stageIsDone(
   return itemIds.every((itemId) => items.find((item) => item.id === itemId)?.done === true);
 }
 export function getMaxJourneyItemHref(projectId: string, itemId: string): string {
-  if (itemId === "legal") return `/max/${projectId}?data=policies`;
   const stageId = ITEM_STAGE[itemId] ?? "build";
   const definition = STAGE_DEFINITIONS.find((stage) => stage.id === stageId);
   return `/max/${projectId}${definition?.suffix ?? ""}`;

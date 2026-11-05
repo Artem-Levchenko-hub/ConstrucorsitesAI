@@ -303,6 +303,7 @@ describe("MAX live preview recovery", () => {
   }
 
   it("uses resized stage space without changing the phone viewport or replacing its running document", async () => {
+    let availableWidth = 440;
     let availableHeight = 451;
     let notifyResize = () => {};
     globalThis.ResizeObserver = class {
@@ -312,7 +313,7 @@ describe("MAX live preview recovery", () => {
       observe(target: Element) {
         const stage = target as HTMLElement;
         stage.style.padding = "0px 8px";
-        vi.spyOn(stage, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, 0, 440, availableHeight));
+        vi.spyOn(stage, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, 0, availableWidth, availableHeight));
         notifyResize();
       }
       disconnect() {}
@@ -328,6 +329,12 @@ describe("MAX live preview recovery", () => {
     expect(device.style.transform).toBe("scale(0.5)");
     expect(fittedFrame.style.width).toBe("205px");
     expect(fittedFrame.style.height).toBe("451px");
+
+    availableWidth = 360;
+    act(() => notifyResize());
+    expect(fittedFrame.style.width).toBe("205px");
+    expect(fittedFrame.style.height).toBe("451px");
+    expect(container.querySelector("iframe")).toBe(frame);
 
     availableHeight = 541.2;
     act(() => notifyResize());
@@ -500,7 +507,8 @@ describe("MAX live preview recovery", () => {
     expect(ready).not.toBe(initial);
     expect(listSnapshots).toHaveBeenCalledTimes(2);
     expect(startRuntime).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("Показана сохранённая версия. Текущий запрос завершён.");
+    expect(container.querySelector("[data-testid='max-accepted-preview-status']")?.textContent)
+      .toBe("Запрос завершён. Версия сохранена.");
   });
 
   it("refreshes HEAD after an accepted result arrives during the first snapshot request", async () => {
@@ -638,7 +646,7 @@ describe("MAX live preview recovery", () => {
       expect(syncMaxManagedKit).toHaveBeenCalledTimes(1);
       expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
       expect(startRuntime).not.toHaveBeenCalled();
-      expect(container.textContent).not.toContain("Текущий запрос завершён.");
+      expect(container.textContent).not.toContain("Запрос завершён. Версия сохранена.");
     },
   );
 

@@ -1,9 +1,9 @@
-import { act, createElement, createRef } from "react";
+import { act, createElement, createRef, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MaxChatComposer } from "@/components/max/MaxChatComposer";
-import type { PromptInputHandle } from "@/components/workspace/PromptInput";
+import { PromptInput, type PromptInputHandle } from "@/components/workspace/PromptInput";
 
 const response = {
   version: "2", project_id: "app-a", current_snapshot_id: "version-a",
@@ -20,14 +20,16 @@ describe("MAX chat suggestions and draft", () => {
   let requests: string[];
   let sent: string[];
   let fail: boolean;
+  const originalHref = window.location.href;
   const draftRef = createRef<PromptInputHandle>();
-  const render = (snapshotId: string | null = "version-a", isStreaming = false) => {
+  const render = (snapshotId: string | null = "version-a", isStreaming = false, overrides: Partial<ComponentProps<typeof MaxChatComposer>> = {}) => {
     act(() => root.render(createElement(QueryClientProvider, { client },
       createElement(MaxChatComposer, {
         projectId: "app-a", snapshotId, isStreaming, pendingPrompt: null,
         draftRef,
         onSubmit: async (text: string) => { sent.push(text); return true; },
         onCancel: () => {}, onCancelPending: () => {},
+        ...overrides,
       }),
     )));
   };
@@ -44,8 +46,28 @@ describe("MAX chat suggestions and draft", () => {
     await act(async () => { element.click(); });
     await settleQueries();
   };
+  const typeDraft = (value: string) => {
+    const input = container.querySelector("textarea")!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    return input;
+  };
+  const routeBlocked = (href: string, wrapperClass = "max-editor-header") => {
+    const wrapper = document.createElement("div");
+    wrapper.className = wrapperClass;
+    const link = document.createElement("a"); link.href = href;
+    wrapper.append(link); document.body.append(wrapper);
+    let blocked = false;
+    link.addEventListener("click", event => { blocked = event.defaultPrevented; event.preventDefault(); }, { once: true });
+    act(() => link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })));
+    wrapper.remove();
+    return blocked;
+  };
   beforeEach(() => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    window.history.replaceState(null, "", "/max/app-a");
     container = document.createElement("div"); document.body.append(container);
     root = createRoot(container);
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
@@ -58,7 +80,80 @@ describe("MAX chat suggestions and draft", () => {
     });
   });
   afterEach(() => {
-    act(() => root.unmount()); client.clear(); container.remove(); vi.unstubAllGlobals();
+    act(() => root.unmount()); client.clear(); container.remove();
+    window.history.replaceState(null, "", originalHref);
+    vi.unstubAllGlobals(); vi.restoreAllMocks();
+  });
+
+  it("keeps a cancelled draft when leaving the editor and lets same-page controls operate", () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render();
+    expect(routeBlocked("/max/app-a/manage")).toBe(false);
+    const input = typeDraft("Мои правки");
+    expect(routeBlocked("/max/app-a?data=details")).toBe(false);
+    expect(routeBlocked("/max/app-a/manage", "")).toBe(false);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(routeBlocked("/max/app-a/manage")).toBe(true);
+    expect(input.value).toBe("Мои правки");
+    confirm.mockReturnValue(true);
+    expect(routeBlocked("/max/app-a/integrations")).toBe(false);
+  });
+
+  it("guards the editor's portaled project navigation without guarding other dialogs", () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render();
+    const input = typeDraft("Черновик для MAX");
+    expect(routeBlocked("/max/app-a/publish", "max-editor-modal max-editor-modal-preview")).toBe(false);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(routeBlocked("/max/app-a/publish", "max-editor-modal max-editor-modal-navigation")).toBe(true);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(input.value).toBe("Черновик для MAX");
+    confirm.mockReturnValue(true);
+    expect(routeBlocked("/max/app-a/integrations", "max-editor-modal max-editor-modal-navigation")).toBe(false);
+  });
+
+  it("protects a font-only draft and releases navigation after removal", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    vi.stubGlobal("fetch", async () => Response.json({ id: "font-1", family: "Onest", filename: "brand.woff2", sha256: "a".repeat(64), size_bytes: 4, weight: 400, style: "normal", source: "upload", license: null }));
+    render();
+    await click(container.querySelector<HTMLButtonElement>('[aria-label="Прикрепить шрифт"]')!);
+    const picker = container.querySelector<HTMLInputElement>('[aria-label="Выбрать файл шрифта"]')!;
+    Object.defineProperty(picker, "files", { configurable: true, value: [new File(["font"], "brand.woff2")] });
+    await act(async () => picker.dispatchEvent(new Event("change", { bubbles: true })));
+    expect(container.querySelector("textarea")?.value).toBe("");
+    expect(container.querySelector('[aria-label="Шрифты к запросу"]')?.textContent).toContain("Onest");
+    expect(routeBlocked("/max/app-a/publish")).toBe(true);
+    expect(confirm).toHaveBeenCalledOnce();
+    await click(container.querySelector<HTMLButtonElement>('[aria-label="Удалить шрифт Onest"]')!);
+    expect(routeBlocked("/max/app-a/publish")).toBe(false);
+  });
+
+  it("holds route exits during submission or a queued prompt and releases after acceptance", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    let accept!: (value: boolean) => void;
+    const onSubmit = vi.fn(() => new Promise<boolean>(resolve => { accept = resolve; }));
+    render("version-a", false, { onSubmit });
+    const input = typeDraft("Отправляю изменение");
+    act(() => button("Отправить").click());
+    expect(onSubmit).toHaveBeenCalledOnce();
+    expect(routeBlocked("/max/app-a/manage")).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
+    await act(async () => accept(true));
+    expect(input.value).toBe("");
+    expect(routeBlocked("/max/app-a/manage")).toBe(false);
+    render("version-a", true, { pendingPrompt: "Следующий запрос" });
+    expect(routeBlocked("/max/app-a/publish")).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("leaves ordinary PromptInput route behavior unchanged", () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    act(() => root.render(createElement(PromptInput, {
+      onSubmit: () => true, onCancel: () => {}, onCancelPending: () => {}, isStreaming: false, pendingPrompt: null,
+    })));
+    typeDraft("Другой workspace");
+    expect(routeBlocked("/max/app-a/manage")).toBe(false);
+    expect(confirm).not.toHaveBeenCalled();
   });
 
   it("loads only on explicit open and inserts an editable draft without submitting", async () => {

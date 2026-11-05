@@ -157,7 +157,7 @@ describe("Integration Hub implementation handoff", () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(boundary.push).not.toHaveBeenCalled();
     expect(window.sessionStorage.length).toBe(0);
-    expect(container.textContent).toContain("не добавляет экраны автоматически");
+    expect(container.textContent).toContain("Если нужны новые экраны или действия");
     expect(boundary.success).toHaveBeenCalledWith("Доступ к сервису подтверждён");
   });
   it.each(["error", "needs_setup", null] as const)("does not offer generation or mark connected for binding status %s", async (binding_status) => {
@@ -180,7 +180,7 @@ describe("Integration Hub implementation handoff", () => {
     expect([...container.querySelectorAll("h3")].map(el => el.textContent)).toEqual(["ЮKassaПодключено к приложению", "МойСклад", "amoCRM", "Яндекс Метрика"]);
     expect(button("ИИ")).toBeUndefined();
     expect(button("Запись")).toBeUndefined();
-    expect(container.querySelector(".max-integration-summary")?.textContent).toContain("1 / 4");
+    expect(container.querySelector(".max-integration-overview")?.textContent).toContain("1 из 4");
     await click("CRM");
     expect([...container.querySelectorAll("h3")].map(el => el.textContent)).toEqual(["amoCRM"]);
     await click("Все сервисы");

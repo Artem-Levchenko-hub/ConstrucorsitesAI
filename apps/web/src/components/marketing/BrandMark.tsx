@@ -6,16 +6,18 @@ export function BrandMark({
   inverse = false,
   href = "/",
   label = "Yleum",
+  ariaLabel,
 }: {
   inverse?: boolean;
   href?: string;
   label?: string;
+  ariaLabel?: string;
 }) {
   return (
     <Link
       href={href}
       className="font-display inline-flex items-center gap-2 font-semibold tracking-[-0.025em]"
-      aria-label={`${label} — главная`}
+      aria-label={ariaLabel ?? `${label} — главная`}
     >
       <span
         className={`flex h-8 w-8 items-center justify-center rounded-[8px] ${

@@ -22,7 +22,6 @@ vi.mock("@/lib/api/messages", () => ({ listMessages: async () => [], reportClien
 vi.mock("@/components/workspace/ChatPanel", () => ({ ChatPanel: () => null }));
 vi.mock("@/components/workspace/DownloadButton", () => ({ DownloadButton: () => null }));
 vi.mock("@/components/max/MaxLaunchPanel", () => ({ MaxLaunchPanel: () => null }));
-vi.mock("@/components/max/MaxEditorDataDialog", () => ({ MaxEditorDataDialog: () => <button aria-label="Данные приложения">Данные</button> }));
 vi.mock("@/components/max/MaxAccountMenu", () => ({ MaxAccountMenu: () => null }));
 vi.mock("@/components/max/MaxProjectNav", () => ({ MaxProjectNav: () => null }));
 vi.mock("@/components/max/MaxUsageBreakdown", () => ({ MaxUsageBreakdown: () => null }));
@@ -202,11 +201,14 @@ describe("image version history", () => {
   it("has one launch entry in the editor header and keeps project navigation behind a button", async () => {
     render(<MaxWorkspaceShell project={project} email="a@example.com" />);
     await settle();
-    const launch = container.querySelector<HTMLButtonElement>("header [data-testid='max-launch-open']");
-    expect(launch?.textContent).toContain("Опубликовать");
+    const launch = container.querySelector<HTMLAnchorElement>("header [data-testid='max-launch-open']");
+    expect(launch?.getAttribute("href")).toBe("/max/p/publish");
+    expect(container.querySelector('header a[href="/max/p/manage"]')?.textContent).toContain("Управление");
+    expect(container.querySelector('header a[href="/max/p/integrations?tab=services"]')?.textContent).toContain("Интеграции");
     expect(container.querySelector("[data-testid='max-next-action-bar']")).toBeNull();
     expect(container.querySelector("[data-testid='max-navigation-scroll']")).toBeNull();
-    expect(container.querySelector('header button[aria-label="Данные приложения"]')).not.toBeNull();
+    expect(container.querySelector('header button[aria-label="Данные приложения"]')).toBeNull();
+    expect(container.querySelector('header button[aria-label="Инструменты редактора"]')).toBeNull();
     click("[data-testid='max-navigation-open']");
     await settle();
     expect(document.querySelector("[role='dialog'] [data-testid='max-navigation-scroll']")).not.toBeNull();

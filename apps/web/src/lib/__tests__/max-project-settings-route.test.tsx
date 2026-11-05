@@ -30,8 +30,8 @@ it("opens owner app data as a project page with the chat action and active navig
   expect(document.querySelector('nav a[href="/max/owned/dashboard"]')).not.toBeNull();
 });
 
-it.each([["bot", "max"], ["vps", "publish"], [undefined, "max"], ["old", "max"]] as const)("preserves legacy settings link %s", async (tab, panel) => {
-  await expect(page(tab)).rejects.toThrow(`redirect:/max/owned?panel=${panel}`);
+it.each([["bot", "integrations"], ["vps", "publish"], [undefined, "integrations"], ["old", "integrations"]] as const)("preserves legacy settings link %s", async (tab, destination) => {
+  await expect(page(tab)).rejects.toThrow(`redirect:/max/owned/${destination}`);
   expect(load).toHaveBeenCalledOnce();
 });
 

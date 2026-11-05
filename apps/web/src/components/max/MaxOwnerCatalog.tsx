@@ -7,8 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ApiError } from "@/lib/api/client";
-import { getMaxProjectConfig, getMaxProjectContent, saveMaxProjectContent } from "@/lib/api/max-studio";
-import type { MaxContentDelivery, MaxContentItem, MaxProjectConfig } from "@/lib/api/types";
+import { getMaxProjectConfig, getMaxProjectContent, saveMaxProjectConfig, saveMaxProjectContent } from "@/lib/api/max-studio";
+import type { MaxContentDelivery, MaxContentItem, MaxProjectConfig, MaxProjectContent } from "@/lib/api/types";
 import { catalogDraft, newMaxContentItem, rebaseCatalogDraft, type MaxCatalogDraft } from "@/lib/max-catalog";
 import { MaxContentItemFields } from "./MaxContentItemEditor";
 import { MaxProjectDataApplyDialog } from "./MaxProjectDataApplyDialog";
@@ -19,6 +19,7 @@ import "./max-owner-catalog.css";
 
 const availability = { in_stock: "В наличии", on_request: "Под заказ", out_of_stock: "Нет в наличии" };
 type CatalogSave = MaxCatalogDraft & { reapply?: boolean };
+const SOURCE_DELIVERY = "source_delivery_unverified";
 const deliveryCopy: Record<MaxContentDelivery["state"], string> = {
   applied: "Обновлено", pending: "Обновляется", unknown: "Обновление не подтверждено",
   not_published: "Ещё не опубликовано", blocked: "Обновление приостановлено", deferred: "Обновится после пробуждения", not_created: "Ещё не создан",
@@ -34,6 +35,7 @@ function CatalogShell({ embedded, children, ...props }: ComponentProps<typeof Ma
 
 export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDirtyChange }: { projectId: string; projectName: string; embedded?: boolean; onDirtyChange?: (dirty: boolean) => void }) {
   const qc = useQueryClient();
+  const contentQuery = { queryKey: ["max-content", projectId], queryFn: () => getMaxProjectContent(projectId), retry: false };
   const [draft, setDraft] = useState<MaxCatalogDraft | null>(null);
   const [editor, setEditor] = useState<{ id: string; initial: MaxContentItem; baseline: MaxCatalogDraft; view: "details" | "photo" } | null>(null);
   const [query, setQuery] = useState("");
@@ -52,12 +54,47 @@ export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDi
     if (editorView === "details") editorDialog.current?.querySelector<HTMLInputElement>('input[aria-label="Название элемента 1"]')?.focus();
   }, [editorView]);
   const save = useMutation({
-    onMutate: () => qc.cancelQueries({ queryKey: ["max-content", projectId] }),
-    mutationFn: (value: CatalogSave) => saveMaxProjectContent(projectId, value.version, value.content),
+    onMutate: () => qc.cancelQueries({ queryKey: contentQuery.queryKey }),
+    mutationFn: async (value: CatalogSave): Promise<MaxProjectContent> => {
+      const config = await getMaxProjectConfig(projectId);
+      if (config.application_mode !== "source") return saveMaxProjectContent(projectId, value.version, value.content);
+      // The legacy PUT updates managed files and the source snapshot. A content
+      // PATCH would persist the rows but miss that application path.
+      // Keep the draft version: the server compares the normalized payload and
+      // can confirm an identical save after a lost response without a new HEAD.
+      let saved: MaxProjectConfig;
+      try {
+        saved = await saveMaxProjectConfig(projectId, { ...config.config, content: value.content }, value.version);
+      } catch (error) {
+        // The API distinguishes a new project from a dangling snapshot with
+        // this message. The no-snapshot rejection happens before any write.
+        if (!(error instanceof ApiError) || error.status !== 409 || error.code !== "project_empty" || error.message !== "У проекта нет исходного снимка") {
+          throw error;
+        }
+        return saveMaxProjectContent(projectId, value.version, value.content);
+      }
+      const delivery = {
+        state: "unknown" as const, reason: SOURCE_DELIVERY, desired_config_version: saved.config_version,
+        controller_config_version: null, confirmed_config_version: null, checked_at: null,
+      };
+      return {
+        project_id: saved.project_id, config_version: saved.config_version, content: saved.config.content,
+        saved: { state: "saved", config_version: saved.config_version }, public: delivery, preview: delivery,
+      };
+    },
     onSuccess: async (data, value) => {
       // Also cancel a read queued after onMutate: it must not replace this receipt.
-      await qc.cancelQueries({ queryKey: ["max-content", projectId] });
-      qc.setQueryData(["max-content", projectId], data);
+      await qc.cancelQueries({ queryKey: contentQuery.queryKey });
+      qc.setQueryData(contentQuery.queryKey, data);
+      if (data.public.reason === SOURCE_DELIVERY) {
+        // The preview history refetches versions once the refreshed HEAD moves.
+        void qc.invalidateQueries({ queryKey: ["project-versions", projectId], refetchType: "none" });
+        void qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
+        void qc.invalidateQueries({ queryKey: ["max-preview-session", projectId] });
+        void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
+        // Delivery status can fail independently of the confirmed source write.
+        void qc.fetchQuery({ ...contentQuery, staleTime: 0 }).catch(() => undefined);
+      }
       void qc.invalidateQueries({ queryKey: ["max-config", projectId] });
       if (!value.reapply) { setDraft(null); setEditor(null); setReviewed(false); }
     },
@@ -67,9 +104,9 @@ export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDi
   useMaxWorkspaceDraftGuard(!embedded && dirty, !embedded && savingChanges);
   useEffect(() => { onDirtyChange?.(dirty || savingChanges); return () => onDirtyChange?.(false); }, [onDirtyChange, dirty, savingChanges]);
   const content = useQuery({
-    queryKey: ["max-content", projectId], queryFn: () => getMaxProjectContent(projectId), retry: false,
+    ...contentQuery,
     enabled: !save.isPending,
-    refetchInterval: state => state.state.data && [state.state.data.public.state, state.state.data.preview.state].some(value => value === "pending" || value === "unknown") ? 5_000 : false,
+    refetchInterval: query => query.state.data && [query.state.data.public, query.state.data.preview].some(status => status.reason !== SOURCE_DELIVERY && (status.state === "pending" || status.state === "unknown")) ? 5_000 : false,
   });
   const items = draft?.content ?? content.data?.content ?? [];
   // The displayed form and its baseline must describe the same snapshot.
@@ -81,7 +118,9 @@ export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDi
   const saveErrorCopy = busy && draft
     ? `${errorCopy(save.error)}. Черновик сохранён в форме. После завершения повторите сохранение в этом окне.`
     : errorCopy(save.error);
-  const deliveryPending = content.data && [content.data.public.state, content.data.preview.state].some(state => state === "pending" || state === "unknown");
+  const sourceSaved = save.data?.public.reason === SOURCE_DELIVERY && save.data.config_version === content.data?.config_version;
+  const deliveryPending = !sourceSaved && content.data && [content.data.public.state, content.data.preview.state].some(state => state === "pending" || state === "unknown");
+  const needsCatalogConnection = [content.data?.public.reason, content.data?.preview.reason].includes("catalog_integration_required");
   const categories = [...new Set(items.map(item => item.category).filter(Boolean))].sort();
   if (category && !categories.includes(category)) setCategory("");
   const filtered = items.filter(item => (visibility === "all" || item.active === (visibility === "visible"))
@@ -148,13 +187,14 @@ export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDi
 
   return <CatalogShell embedded={embedded} projectId={projectId} projectName={projectName} active="catalog" eyebrow="Каталог" title="Товары и услуги" lead="Меняйте позиции, цены и наличие. Обычное сохранение не расходует баланс ИИ.">
     <section className="max-owner-catalog" aria-label="Каталог приложения">
-      {content.data && <div className="max-catalog-status" role="status">
+      {sourceSaved && <p className="max-catalog-notice" role="status">Позиции сохранены в исходниках. Проверьте предпросмотр. Чтобы показать изменения посетителям, при необходимости опубликуйте новую версию.</p>}
+      {content.data && !sourceSaved && <div className="max-catalog-status" role="status">
         <div className="max-catalog-delivery" data-state="saved"><span>Данные в Yleum</span><strong>{draft ? "Есть несохранённые правки" : "Сохранены"}</strong></div>
         <DeliveryStatus label="Публичное приложение" status={content.data.public} />
         <DeliveryStatus label="Предпросмотр" status={content.data.preview} />
       </div>}
       {deliveryPending && <div className="max-catalog-notice"><p>Данные сохранены в Yleum. Обновление приложения ещё не подтверждено.</p><Button variant="outline" disabled={Boolean(draft) || Boolean(editor) || uploading || save.isPending || connecting || Boolean(applyConfig)} onClick={() => void reapplySaved()}>{save.isPending && save.variables?.reapply ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}Повторить применение</Button></div>}
-      {content.data?.public.reason === "catalog_integration_required" && <div className="max-catalog-notice">
+      {needsCatalogConnection && <div className="max-catalog-notice">
         <div><strong>Подключите каталог к приложению один раз</strong><p>Позиции уже можно редактировать. Чтобы они появились на экранах, нужна доработка ИИ и публикация. Доработка расходует баланс.</p></div>
         <Button ref={connectTrigger} variant="outline" disabled={connecting || Boolean(draft) || save.isPending} onClick={() => void connectCatalog()}>{connecting && <Loader2 className="size-4 animate-spin" />}Подключить каталог</Button>
       </div>}

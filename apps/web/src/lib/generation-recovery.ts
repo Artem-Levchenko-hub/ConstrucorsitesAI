@@ -97,7 +97,7 @@ export type AcceptedPreviewState = {
 
 export function acceptedPreviewLabel(preview: AcceptedPreviewState, currentRun: GenerationRun | null | undefined): string {
   if (preview.kind !== "accepted") return "Готовая версия приложения пока не подтверждена.";
-  if (preview.isCurrentRequestComplete) return "Показана сохранённая версия. Текущий запрос завершён.";
+  if (preview.isCurrentRequestComplete) return "Запрос завершён. Версия сохранена.";
   const prefix = "Показана последняя сохранённая версия. ";
   if (isGenerationActive(currentRun)) return prefix + "Текущий запрос ещё не завершён.";
   if (currentRun?.status === "failed") return prefix + "Последний запрос завершился с ошибкой.";

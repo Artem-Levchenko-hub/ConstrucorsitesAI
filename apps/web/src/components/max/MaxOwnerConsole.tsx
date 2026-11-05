@@ -3,20 +3,18 @@
 import { useCallback, useRef, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, CircleAlert, Inbox, Loader2, PackageOpen, Settings2, ShoppingBag } from "lucide-react";
+import { CalendarDays, CircleAlert, Inbox, Loader2, Settings2, ShoppingBag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { enableMaxManagement, getMaxManagement, ownerRequestError, type ResourceId } from "@/lib/api/max-management";
 import { getMaxProjectConfig } from "@/lib/api/max-studio";
 import { MaxSectionShell } from "./MaxSectionShell";
-import { MaxOwnerCatalog } from "./MaxOwnerCatalog";
 import { MaxOwnerRecords } from "./MaxOwnerRecords";
 import { MaxOwnerSettings } from "./MaxOwnerSettings";
 import { useMaxWorkspaceDraftGuard } from "./use-max-workspace-draft-guard";
 import "./max-owner-console.css";
 
-type Section = ResourceId | "catalog" | "settings";
+type Section = ResourceId | "settings";
 const sectionIcon = {
-  catalog: PackageOpen,
   orders: ShoppingBag,
   leads: Inbox,
   bookings: CalendarDays,
@@ -55,14 +53,10 @@ function OwnerConsole({ projectId, projectName }: { projectId: string; projectNa
     },
   });
   const overview = useQuery({ queryKey: ["max-management", projectId], queryFn: ({ signal }) => getMaxManagement(projectId, signal), retry: false, refetchOnWindowFocus: false });
-  const configuredCatalog = overview.data?.configured_modules.includes("catalog") || overview.data?.active_modules.includes("catalog");
-  const legacy = useQuery({ queryKey: ["max-config", projectId], queryFn: () => getMaxProjectConfig(projectId), enabled: overview.isSuccess && !configuredCatalog, retry: false, refetchOnWindowFocus: false });
-  const hasCatalog = configuredCatalog || Boolean(legacy.data && legacy.data.config.management_modules == null && (legacy.data.config.content.length || ["catalog", "booking"].includes(legacy.data.config.app_type)));
   const data = overview.data;
   const managementPrepared = Boolean(data?.configured_modules.some(module => module !== "catalog")) || enable.isSuccess;
   const resources = data?.state === "active" ? data.resources.filter(resource => data.active_modules.includes(resource.id)) : [];
   const sections: { id: Section; label: string }[] = [
-    ...(hasCatalog ? [{ id: "catalog" as const, label: "Каталог" }] : []),
     ...resources.map(resource => ({ id: resource.id, label: resource.label })),
     { id: "settings", label: "Настройки" },
   ];
@@ -77,8 +71,7 @@ function OwnerConsole({ projectId, projectName }: { projectId: string; projectNa
   }
   function prepareManagement() {
     if (dirtyRef.current || enable.isPending) return;
-    // Adding the Catalog section must not replace a currently open Settings
-    // form, including a draft started after the enable request was sent.
+    // Keep the current section when the available sections refresh after enabling.
     setSelected(active ?? "settings");
     enable.mutate();
   }
@@ -123,10 +116,6 @@ function OwnerConsole({ projectId, projectName }: { projectId: string; projectNa
           </nav>
         </aside>
         <div className="max-owner-workbench-content">
-          {active === "catalog" && <section aria-label="Каталог">
-            <header className="max-owner-section-heading"><h2>Каталог</h2><p>До 100 позиций каталога, включая скрытые.</p></header>
-            <MaxOwnerCatalog projectId={projectId} projectName={projectName} embedded onDirtyChange={onDirtyChange} />
-          </section>}
           {resource && <MaxOwnerRecords key={resource.id} projectId={projectId} resource={resource} onDirtyChange={onDirtyChange} />}
           {active === "settings" && <MaxOwnerSettings projectId={projectId} onDirtyChange={onDirtyChange} />}
         </div>

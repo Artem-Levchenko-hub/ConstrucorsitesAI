@@ -11,6 +11,7 @@ import {
 import Link from "next/link";
 
 import { BrandMark } from "@/components/marketing/BrandMark";
+import { getMaxHelpBrandProps } from "@/lib/max-help-brand";
 import "@/components/max/max-studio.css";
 import "@/components/marketing/max-public.css";
 import "./quick-start.css";
@@ -72,12 +73,13 @@ const steps = [
   },
 ] as const;
 
-export default function MaxQuickStartPage() {
+export default async function MaxQuickStartPage() {
+  const brand = await getMaxHelpBrandProps("/max/product");
   return (
     <main data-max-studio className="max-docs max-quick-start min-h-screen">
       <header className="border-b border-[#2b2d32] bg-[#191b20]">
         <div className="mx-auto flex min-h-16 max-w-[1120px] items-center justify-between gap-4 px-5 sm:px-8">
-          <BrandMark href="/max/product" />
+          <BrandMark {...brand} />
           <div className="flex items-center gap-2">
             <Link href="/max/guide" className="hidden min-h-11 items-center px-3 text-xs text-[#9fa1b1] hover:text-white sm:inline-flex">
               Полное руководство

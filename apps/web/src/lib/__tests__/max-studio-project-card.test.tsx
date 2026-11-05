@@ -161,9 +161,9 @@ describe("Yleum project card", () => {
   });
 
   it.each([
-    { done: ["legal", "bot", "publish"], title: "Опубликовано, остался адрес в MAX", action: "Подключить в MAX", href: "/max/coffee?panel=max", tone: "connect" },
-    { done: ["legal", "publish", "max_url"], title: "Опубликовано, осталось подключить бота", action: "Подключить бота", href: "/max/coffee?panel=max", tone: "connect" },
-    { done: ["bot", "publish", "max_url"], title: "Опубликовано, остались документы", action: "Проверить документы", href: "/max/coffee?data=policies", tone: "connect" },
+    { done: ["legal", "bot", "publish"], title: "Опубликовано, остался адрес в MAX", action: "Подключить в MAX", href: "/max/coffee/integrations", tone: "connect" },
+    { done: ["legal", "publish", "max_url"], title: "Опубликовано, осталось подключить бота", action: "Подключить бота", href: "/max/coffee/integrations", tone: "connect" },
+    { done: ["bot", "publish", "max_url"], title: "Опубликовано, остались документы", action: "Проверить документы", href: "/max/coffee/settings?tab=app&section=policies", tone: "connect" },
     { done: ["legal", "bot", "publish", "max_url"], title: "Работает у пользователей", action: "Статистика", href: "/max/coffee/dashboard", tone: "live" },
   ])("preserves a published release during a new build while retaining $action", async ({ done, title, action, href, tone }) => {
     const response = readiness(done);

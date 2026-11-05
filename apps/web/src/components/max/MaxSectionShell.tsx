@@ -1,4 +1,4 @@
-import { ArrowLeft, CircleHelp, MessageCircle, Rocket, UserRound } from "lucide-react";
+import { CircleHelp, MessageCircle, UserRound } from "lucide-react";
 import Link from "next/link";
 import { YleumMark } from "@/components/brand/YleumMark";
 import { MaxProjectNav, type MaxProjectNavKey } from "@/components/max/MaxProjectNav";
@@ -23,14 +23,12 @@ export function MaxSectionShell({ projectId, projectName, active, eyebrow, title
     <div data-product-shell data-max-studio className={`max-project-workspace ${className}`}>
       <header className="max-project-header">
         <div className="max-project-header-identity">
-          <Link href="/max" aria-label="Все проекты" className="max-project-back"><ArrowLeft aria-hidden="true" className="size-4" /></Link>
-          <Link href="/max" className="max-project-brand"><YleumMark className="max-project-brand-mark" />Yleum</Link>
+          <Link href="/max" aria-label="Yleum — все проекты" className="max-project-brand"><YleumMark className="max-project-brand-mark" />Yleum</Link>
           <span className="max-project-header-name" title={projectName}>{projectName}</span>
         </div>
         <div className="max-project-header-actions">
           {active !== "editor" && <Link href={projectHref} className="max-project-chat"><MessageCircle aria-hidden="true" className="size-4" />К чату</Link>}
           <LearningButton />
-          {active !== "publish" && <Link href={`${projectHref}?panel=publish`} className="max-project-launch"><Rocket aria-hidden="true" className="size-4" />Запуск</Link>}
           <Link href="/account" aria-label="Аккаунт" className="max-project-back"><UserRound aria-hidden="true" className="size-4" /></Link>
         </div>
       </header>

@@ -50,6 +50,8 @@ it("protects unsaved app data on workspace navigation and saves it in place with
       </div>
     </QueryClientProvider>));
     await act(async () => { await vi.waitFor(() => expect(container.querySelector("#max-config-name")).not.toBeNull()); });
+    expect(container.querySelector('a[href="/max/qa/catalog"]')?.textContent).toContain("Открыть каталог");
+    expect([...container.querySelectorAll('[role="tab"]')].map(tab => tab.textContent?.trim())).not.toContain("Контент");
     const name = container.querySelector<HTMLInputElement>("#max-config-name")!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "Новое название");
@@ -69,6 +71,8 @@ it("protects unsaved app data on workspace navigation and saves it in place with
     await act(async () => save.click());
     await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain("Все изменения сохранены")); });
     expect(mocks.save).toHaveBeenCalledWith("qa", saved.config, 1);
+    expect(mocks.success.mock.calls[0][1].description).toContain("Подключённые экраны");
+    expect(mocks.success.mock.calls[0][1].description).not.toContain("документы обновлены");
     expect(container.querySelector<HTMLInputElement>("#max-config-name")?.value).toBe("Новое название");
     expect(clickLink()).toBe(false);
     expect(confirm).toHaveBeenCalledOnce();
@@ -325,7 +329,7 @@ it.each([false, true])("saves/retries the owner tab and refreshes preview withou
     });
     await wait(() => expect(mocks.success).toHaveBeenCalled());
     expect(mocks.save).toHaveBeenCalledWith("qa", updated.config, 1);
-    expect(mocks.success.mock.calls[0][1].description).toContain("Данные и документы обновлены");
+    expect(mocks.success.mock.calls[0][1].description).toContain("Доставка данных в предпросмотр подтверждена");
     expect(mocks.success.mock.calls[0][1].description).toContain("ИИ не запускался");
     expect(mocks.send).not.toHaveBeenCalled();
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["max-preview-session", "qa"] });
@@ -373,7 +377,7 @@ it.each(["я".repeat(19_992) + "КОНЕЦ ТЗ", "я".repeat(20_001)])("keeps t
 });
 
 
-it.each(["panel", "page"] as const)("saves content before offering the version-bound AI screen action in %s", async (display) => {
+it.each(["panel", "page"] as const)("saves the draft before offering the version-bound AI screen action in %s", async (display) => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   mocks.get.mockResolvedValue(record);
   let finishSave!: (value: MaxProjectConfig) => void;
@@ -388,14 +392,23 @@ it.each(["panel", "page"] as const)("saves content before offering the version-b
     await act(async () => root.render(<QueryClientProvider client={client}><MaxProjectSetupDialog projectId="qa" display={display} /></QueryClientProvider>));
     if (display === "panel") await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
     await act(async () => { await vi.waitFor(() => expect(document.querySelector("#max-config-name")).not.toBeNull()); });
-    await click("Контент");
-    await click("Добавить позицию");
+    if (display === "panel") {
+      await click("Контент");
+      await click("Добавить позицию");
+    } else {
+      const name = container.querySelector<HTMLInputElement>("#max-config-name")!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "Обновлённое приложение");
+        name.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    }
     await click("Изменить экраны с ИИ");
     expect(mocks.send).not.toHaveBeenCalled();
     expect(mocks.push).not.toHaveBeenCalled();
     expect(button("Запустить доработку")).toBeUndefined();
     const updated = { ...record, config_version: 2, config: mocks.save.mock.calls[0][1] };
-    expect(updated.config.content).toHaveLength(1);
+    if (display === "panel") expect(updated.config.content).toHaveLength(1);
+    else expect(updated.config.app_name).toBe("Обновлённое приложение");
     const policies = document.querySelector<HTMLButtonElement>('[role="tab"][id$="-policies"]');
     if (display === "page") await act(async () => policies!.click());
     mocks.get.mockResolvedValue(updated);
@@ -484,6 +497,7 @@ it("показывает снаружи, какая вкладка блокир�
 
 it.each([
   { code: "generation_draining", error: new ApiError(503, { code: "generation_draining", message: "Generation is draining for deployment" }), level: "info", title: "Сервис обновляется", description: "Подождите несколько минут и повторите сохранение. Введённые данные останутся в форме." },
+  { code: "saved-delivery-unconfirmed", error: new ApiError(503, { code: "orchestrator_unavailable", message: "Данные сохранены на сервере, но ещё не применены. Повторите сохранение — генерация не нужна." }), level: "info", title: "Данные сохранены", description: "Данные сохранены на сервере, но ещё не применены. Повторите сохранение — генерация не нужна." },
   { code: "other-api", error: new ApiError(503, { code: "internal_error", message: "Другая ошибка сохранения" }), level: "error", title: "Не удалось сохранить", description: "Другая ошибка сохранения" },
   { code: "active-build", error: new ApiError(409, { code: "conflict", message: "Дождитесь завершения сборки" }), level: "info", title: "Сборка ещё выполняется", description: "Дождитесь завершения сборки" },
   { code: "network", error: new Error("Network failed"), level: "error", title: "Не удалось сохранить", description: "Попробуйте ещё раз" },

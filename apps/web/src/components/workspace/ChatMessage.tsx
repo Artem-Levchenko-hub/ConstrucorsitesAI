@@ -79,6 +79,7 @@ export function ChatMessage({
 }) {
   const isUser = message.role === "user";
   const studio = presentation === "studio";
+  const studioUser = studio && isUser;
   const quiz = isUser ? parseQuizBrief(message.content) : null;
   const parts: AssistantPart[] = isUser ? [] : parseAssistantContent(message.content);
 
@@ -88,21 +89,22 @@ export function ChatMessage({
       initial="hidden"
       animate="visible"
       data-chat-role={studio ? message.role : undefined}
+      role={studioUser ? "article" : undefined}
+      aria-label={studioUser ? "Ваше сообщение" : undefined}
       className={cn(
         "flex gap-3 px-4 py-3",
         studio && "px-8 py-3.5",
+        studioUser && "justify-end",
       )}
     >
-      <div
+      {!studioUser && <div
         aria-hidden="true"
         className={cn(
           "h-7 w-7 rounded-full flex items-center justify-center shrink-0",
           isUser
             ? "bg-accent-subtle border border-accent/40"
             : "bg-surface-overlay border border-border-default",
-          studio && "h-8 w-8 border-0",
-          studio && isUser && "bg-accent-subtle text-accent",
-          studio && !isUser && "bg-accent-subtle",
+          studio && "h-8 w-8 border-0 bg-accent-subtle",
         )}
       >
         {isUser ? (
@@ -112,16 +114,16 @@ export function ChatMessage({
         ) : (
           <Bot className="h-3.5 w-3.5 text-fg-secondary" />
         )}
-      </div>
+      </div>}
 
-      <div className="flex-1 min-w-0 space-y-1.5">
-        <div className="flex items-center gap-2 text-xs">
-          <span className="font-semibold text-fg-primary tracking-tight">
+      <div className={cn("min-w-0 space-y-1.5", studioUser ? "max-editor-user-message" : "flex-1")}>
+        <div className={cn("flex items-center gap-2 text-xs", studioUser && "justify-end")}>
+          {!studioUser && <span className="font-semibold text-fg-primary tracking-tight">
             {isUser ? "Вы" : "Yleum"}
-          </span>
-          <span className="text-fg-tertiary">
+          </span>}
+          <time dateTime={message.created_at} className="text-fg-tertiary">
             {formatRelativeTime(message.created_at)}
-          </span>
+          </time>
         </div>
 
         <div
@@ -256,6 +258,7 @@ function UserBubble({ text, plain = false }: { text: string; plain?: boolean }) 
         {collapsible && (
           <button
             type="button"
+            aria-expanded={expanded}
             onClick={() => setExpanded((current) => !current)}
             className="mt-2 text-xs font-medium text-inherit underline-offset-2 hover:underline"
           >

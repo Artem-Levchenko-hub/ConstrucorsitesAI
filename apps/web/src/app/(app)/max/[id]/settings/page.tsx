@@ -15,18 +15,20 @@ export default async function MaxSettingsPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; section?: string }>;
 }) {
   const { id } = await params;
   const query = await searchParams;
   const tab = query.tab === "app" || query.tab === "vps" ? query.tab : "bot";
-  const project = await loadMaxProject(id, `/max/${id}/settings?tab=${tab}`);
-  if (tab !== "app") redirect(`/max/${project.id}?panel=${tab === "vps" ? "publish" : "max"}`);
+  const section = query.section === "owner" || query.section === "policies" ? query.section : "details";
+  const sectionQuery = tab === "app" && section !== "details" ? `&section=${section}` : "";
+  const project = await loadMaxProject(id, `/max/${id}/settings?tab=${tab}${sectionQuery}`);
+  if (tab !== "app") redirect(`/max/${project.id}/${tab === "vps" ? "publish" : "integrations"}`);
   return (
     <MaxSectionShell projectId={project.id} projectName={project.name} active="app"
       eyebrow="Настройка проекта" title="Данные приложения"
-      lead="Обновляйте описание, контент и документы перед публикацией приложения в MAX.">
-      <MaxProjectSetupDialog key={project.id} projectId={project.id} display="page" />
+      lead="Храните описание, оформление и документы приложения. Здесь можно уточнить задание для изменения экранов.">
+      <MaxProjectSetupDialog key={project.id} projectId={project.id} display="page" initialSection={section} />
     </MaxSectionShell>
   );
 }

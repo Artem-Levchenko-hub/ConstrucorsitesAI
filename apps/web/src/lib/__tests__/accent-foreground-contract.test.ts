@@ -14,8 +14,8 @@ const chatMessage = source("src/components/workspace/ChatMessage.tsx");
 const button = source("src/components/ui/button.tsx");
 
 describe("semantic foreground contracts", () => {
-  it("keeps Yleum user messages and journey markers readable on blue", () => {
-    expect(chatMessage).toContain('studio && isUser && "bg-accent-subtle text-accent"');
+  it("keeps MAX message links readable on tinted bubbles", () => {
+    expect(chatMessage).toContain('studioUser ? "max-editor-user-message"');
     expect(chatMessage).toContain("text-inherit");
     expect(chatMessage).not.toContain("text-white/80 underline-offset-2");
     expect(chatMessage).not.toContain("text-inherit opacity-80");

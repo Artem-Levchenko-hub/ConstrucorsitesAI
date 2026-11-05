@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import MaxGuidePage from "@/app/max/guide/page";
 
@@ -18,6 +18,8 @@ import {
 } from "@/components/max/guide/GuideVisuals";
 import { guideScreenshots } from "@/components/max/guide/guide-screenshots";
 
+vi.mock("@/lib/auth-mock", () => ({ getSession: async () => null }));
+
 function renderScreenshot(id: string) {
   return new DOMParser().parseFromString(
     renderToStaticMarkup(<GuideScreenshot id={id} />),
@@ -26,8 +28,8 @@ function renderScreenshot(id: string) {
 }
 
 describe("MAX guide screenshots", () => {
-  it("connects the visual launch journey to real chapters in the order a new owner needs them", () => {
-    const page = new DOMParser().parseFromString(renderToStaticMarkup(<MaxGuidePage />), "text/html");
+  it("connects the visual launch journey to real chapters in the order a new owner needs them", async () => {
+    const page = new DOMParser().parseFromString(renderToStaticMarkup(await MaxGuidePage()), "text/html");
     const journey = new DOMParser().parseFromString(renderToStaticMarkup(<GoldenPathVisual />), "text/html");
     const links = [...journey.querySelectorAll('nav[aria-label="Путь от проекта до запуска"] a')];
 
@@ -53,8 +55,8 @@ describe("MAX guide screenshots", () => {
     }
   });
 
-  it("renders all linked chapters with existing captures and current MAX field names", () => {
-    const document = new DOMParser().parseFromString(renderToStaticMarkup(<MaxGuidePage />), "text/html");
+  it("renders all linked chapters with existing captures and current MAX field names", async () => {
+    const document = new DOMParser().parseFromString(renderToStaticMarkup(await MaxGuidePage()), "text/html");
     const anchors = ["start", "account", "project", "builder", "settings", "integrations", "amocrm", "max-bot", "publish", "partner", "acceptance", "operations", "billing", "errors", "checklists"];
 
     for (const anchor of anchors) {
@@ -63,7 +65,8 @@ describe("MAX guide screenshots", () => {
     const pictures = [...document.querySelectorAll<HTMLElement>("[data-guide-screenshot]")];
     expect(new Set(pictures.map((picture) => picture.dataset.guideScreenshot))).toEqual(new Set(Object.keys(guideScreenshots)));
     expect(document.getElementById("partner")?.textContent).toContain("Введите ссылку");
-    expect(document.getElementById("settings")?.textContent).toContain("не нужен запуск ИИ");
+    expect(document.getElementById("settings")?.textContent).toContain("обновляются без генерации после доставки данных");
+    expect(document.getElementById("settings")?.textContent).not.toContain("«Данные» → «Контент»");
     expect(document.body.textContent).not.toContain("Шаг 6 из 6");
     expect(document.body.textContent).not.toContain("Расширенные настройки → Настроить");
   });

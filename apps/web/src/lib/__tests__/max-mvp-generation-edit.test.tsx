@@ -1,4 +1,4 @@
-import { act, type ComponentProps, type ReactNode } from "react";
+import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -17,15 +17,10 @@ vi.mock("@/lib/api/snapshots", () => ({
 }));
 vi.mock("@/lib/api/restorations", () => ({ listRestorations: api.restorations, prepareRestoration: api.prepare }));
 vi.mock("@/lib/api/max-studio", () => ({ getMaxReadiness: async () => ({ items: [] }) }));
-vi.mock("@/components/max/MaxEditorLayout", () => ({
-  MaxEditorLayout: ({ children, preview, launch }: { children: ReactNode; preview: () => ReactNode; launch: ReactNode }) =>
-    <>{children}{preview()}{launch}</>,
-}));
 vi.mock("@/components/max/MaxLivePreview", () => ({ MaxLivePreview: (props: PreviewProps) => {
   api.observed = props; return <div data-testid="current-preview" />;
 } }));
 vi.mock("@/components/workspace/ChatPanel", () => ({ ChatPanel: () => <textarea aria-label="Опишите приложение или правки" /> }));
-vi.mock("@/components/max/MaxLaunchPanel", () => ({ MaxLaunchPanel: () => <button>Опубликовать приложение</button> }));
 vi.mock("@/components/max/MaxAccountMenu", () => ({ MaxAccountMenu: () => null }));
 vi.mock("@/components/max/MaxProjectNav", () => ({ MaxProjectNav: () => null }));
 vi.mock("@/components/max/MaxUsageBreakdown", () => ({ MaxUsageBreakdown: () => null }));
@@ -65,7 +60,7 @@ it("preserves generation/edit, current preview and publication without historica
   expect(api.rollback).not.toHaveBeenCalled();
   expect(container.querySelector("textarea")).not.toBeNull();
   expect(container.querySelector('[data-testid="current-preview"]')).not.toBeNull();
-  expect(container.textContent).toContain("Опубликовать приложение");
+  expect(container.querySelector('[data-testid="max-launch-open"]')?.getAttribute("href")).toBe("/max/mvp/publish");
   expect(container.textContent).not.toContain("адаптаци");
   expect(container.textContent).not.toContain("восстанов");
   const composer = container.querySelector("textarea")!;

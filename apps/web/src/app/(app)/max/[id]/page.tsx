@@ -6,6 +6,7 @@ import { getSession } from "@/lib/auth-mock";
 import { mockApi, USE_MOCKS } from "@/lib/api/mocks";
 import { serverApiFetchResult, type ServerFetchResult } from "@/lib/api/server";
 import type { Project } from "@/lib/api/types";
+import { legacyMaxEditorDestination, type MaxProjectSearch } from "@/lib/max-editor-entry";
 
 export const metadata: Metadata = {
   title: "Редактор MAX Mini App",
@@ -25,8 +26,10 @@ async function loadProject(id: string): Promise<ServerFetchResult<Project>> {
 
 export default async function MaxWorkspacePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<MaxProjectSearch>;
 }) {
   const { id } = await params;
   const session = await getSession();
@@ -41,6 +44,8 @@ export default async function MaxWorkspacePage({
   const project = result.data;
   // Only MAX Mini Apps have an editor here; anything else goes back to the cabinet.
   if (project.template !== "max_miniapp") redirect("/max");
+  const destination = legacyMaxEditorDestination(project.id, (await searchParams) ?? {});
+  if (destination) redirect(destination);
 
   return <MaxWorkspaceShell project={project} email={session.email} />;
 }

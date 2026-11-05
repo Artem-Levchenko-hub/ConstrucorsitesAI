@@ -5,19 +5,28 @@ const boundary = vi.hoisted(() => ({ redirect: vi.fn(), load: vi.fn() }));
 vi.mock("next/navigation", () => ({ redirect: boundary.redirect }));
 vi.mock("@/lib/max-project-server", () => ({ loadMaxProject: boundary.load }));
 
-describe("integration OAuth return to the editor", () => {
+describe("standalone project connections", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    boundary.load.mockResolvedValue({ id: "owned-project" });
+    boundary.load.mockResolvedValue({ id: "owned-project", name: "Мой магазин" });
   });
   it("preserves the conflict outcome so the owner sees that no grant was replaced", async () => {
-    await MaxIntegrationsPage({ params: Promise.resolve({ id: "owned-project" }), searchParams: Promise.resolve({ oauth: "conflict" }) });
-    expect(boundary.redirect).toHaveBeenCalledWith("/max/owned-project?panel=services&oauth=conflict");
+    const page = await MaxIntegrationsPage({ params: Promise.resolve({ id: "owned-project" }), searchParams: Promise.resolve({ oauth: "conflict" }) });
+    expect(boundary.load).toHaveBeenCalledWith("owned-project", "/max/owned-project/integrations?oauth=conflict");
+    expect(boundary.redirect).not.toHaveBeenCalled();
+    expect(page.props).toMatchObject({ active: "integrations", title: "Подключения" });
+    expect(page.props.children.props.tab).toBe("services");
   });
   it("does not forward arbitrary or multiple provider query values", async () => {
     for (const oauth of ["<untrusted>", ["conflict", "connected"]]) {
-      await MaxIntegrationsPage({ params: Promise.resolve({ id: "owned-project" }), searchParams: Promise.resolve({ oauth }) });
-      expect(boundary.redirect).toHaveBeenLastCalledWith("/max/owned-project?panel=services");
+      const page = await MaxIntegrationsPage({ params: Promise.resolve({ id: "owned-project" }), searchParams: Promise.resolve({ oauth }) });
+      expect(boundary.load).toHaveBeenLastCalledWith("owned-project", "/max/owned-project/integrations");
+      expect(page.props.children.props.tab).toBe("bot");
     }
+  });
+  it("opens the services tab on a supported installation return", async () => {
+    const page = await MaxIntegrationsPage({ params: Promise.resolve({ id: "owned-project" }), searchParams: Promise.resolve({ integration: "moysklad" }) });
+    expect(page.props.children.props.tab).toBe("services");
+    expect(boundary.redirect).not.toHaveBeenCalled();
   });
 });

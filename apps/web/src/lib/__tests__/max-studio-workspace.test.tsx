@@ -341,7 +341,7 @@ it("uses readiness for the next project action and falls back to management when
   mocks.readiness.mockResolvedValue({ items: [{ id: "build", done: true }] });
   await act(async () => { await client.invalidateQueries({ queryKey: ["max-readiness", "coffee"] }); });
   await settle(() => expect(container.querySelector('.max-project-next')?.textContent).toContain("Проверить документы"));
-  expect(container.querySelector('.max-project-next')?.getAttribute("href")).toBe("/max/coffee?data=policies");
+  expect(container.querySelector('.max-project-next')?.getAttribute("href")).toBe("/max/coffee/settings?tab=app&section=policies");
 });
 
 it("предлагает готовые идеи вместо пустых двух третей экрана", async () => {

@@ -1,6 +1,7 @@
 "use client";
 
 import { type ReactNode, useEffect, useRef } from "react";
+import Link from "next/link";
 import { Check, PackageOpen, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,10 +34,11 @@ function Intro({ title, children, publication = false }: { title: string; childr
   return <div className="max-setup-intro"><span className="max-setup-purpose" data-publication={publication}>{publication ? "Есть обязательные пункты для публикации" : "Можно заполнить позже"}</span><h3>{title}</h3><p>{children}</p></div>;
 }
 
-export function MaxProjectSetupSections({ section, projectId, current, onChange }: {
+export function MaxProjectSetupSections({ section, projectId, current, showCatalogLink, onChange }: {
   section: SetupSection;
   projectId: string;
   current: MaxProjectConfigPayload;
+  showCatalogLink?: boolean;
   onChange: (value: MaxProjectConfigPayload) => void;
 }) {
   const contentList = useRef<HTMLDivElement>(null);
@@ -76,17 +78,19 @@ export function MaxProjectSetupSections({ section, projectId, current, onChange 
   }
 
   if (section === "details") return <section className="max-setup-section">
-    <Intro title="Описание и оформление">Здесь сохранена идея вашего приложения — заполнять её заново не нужно. Уточняйте аудиторию, функции и стиль только если хотите изменить результат.</Intro>
+    <Intro title="Описание и оформление">Здесь сохранена идея приложения. Название и описание обновятся после сохранения там, где экраны уже используют данные Yleum. Чтобы поменять дизайн, кнопки или сценарии, выберите «Изменить экраны с ИИ».</Intro>
     <Group title="О приложении">
       <div className="max-setup-field">
         <Label htmlFor="max-config-name">Название</Label>
-        <Input id="max-config-name" value={current.app_name} maxLength={100} placeholder="Например, Кофе рядом"
+        <Input id="max-config-name" value={current.app_name} maxLength={100} aria-describedby="max-config-name-hint" placeholder="Например, Кофе рядом"
           onChange={event => onChange({ ...current, app_name: event.target.value })} />
+        <p id="max-config-name-hint" className="max-setup-hint">Название для посетителей на подключённых экранах.</p>
       </div>
       <div className="max-setup-field">
         <Label htmlFor="max-config-action">Главное действие</Label>
-        <Input id="max-config-action" value={current.primary_action} maxLength={200} placeholder="Например, оформить заказ"
+        <Input id="max-config-action" value={current.primary_action} maxLength={200} aria-describedby="max-config-action-hint" placeholder="Например, оформить заказ"
           onChange={event => onChange({ ...current, primary_action: event.target.value })} />
+        <p id="max-config-action-hint" className="max-setup-hint">Что должен сделать посетитель. ИИ учтёт это при изменении экранов.</p>
       </div>
       <div className="max-setup-field max-setup-wide">
         <Label htmlFor="max-config-summary">Описание сервиса</Label>
@@ -139,7 +143,7 @@ export function MaxProjectSetupSections({ section, projectId, current, onChange 
         )}
       </div>
     </Group>
-    <Group title="Оформление" description="Можно оставить текущий стиль. Дополнительные цвета не нужны для публикации.">
+    <Group title="Оформление" description="Цвета и визуальный стиль задают направление для ИИ. Чтобы применить их к дизайну экранов, запустите отдельную доработку.">
       <div className="max-setup-field">
         <Label htmlFor="max-config-colors">Цвета бренда</Label>
         <Input id="max-config-colors" value={current.brand_colors} placeholder="Например: #1F6F4A, тёплый бежевый"
@@ -152,6 +156,9 @@ export function MaxProjectSetupSections({ section, projectId, current, onChange 
         </select>
       </div>
     </Group>
+    {showCatalogLink && <Group title="Товары и услуги" description="Позиции, цены, фото и наличие редактируются в каталоге.">
+      <div><Button asChild variant="outline"><Link href={`/max/${projectId}/catalog`}>Открыть каталог</Link></Button></div>
+    </Group>}
   </section>;
 
   if (section === "content") {

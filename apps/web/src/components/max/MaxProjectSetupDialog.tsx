@@ -37,6 +37,7 @@ const SETUP_SECTIONS: Array<{ id: SetupSection; label: string }> = [
   { id: "owner", label: "Документы" },
   { id: "policies", label: "Политики" },
 ];
+const PAGE_SETUP_SECTIONS = SETUP_SECTIONS.filter(item => item.id !== "content");
 
 function errorMessage(error: unknown) {
   return error instanceof ApiError ? error.message : "Попробуйте ещё раз";
@@ -67,6 +68,8 @@ export function MaxProjectSetupDialog({
   const qc = useQueryClient();
   const tabsId = useId();
   const isPage = display === "page";
+  const sections = isPage ? PAGE_SETUP_SECTIONS : SETUP_SECTIONS;
+  const entrySection = isPage && initialSection === "content" ? "details" : initialSection;
   const scrollRegion = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const pageApplyTrigger = useRef<HTMLButtonElement>(null);
@@ -81,16 +84,16 @@ export function MaxProjectSetupDialog({
   const draftVersion = useRef<number | undefined>(undefined);
   const [aiConfig, setAiConfig] = useState<MaxProjectConfig | null>(null);
   const openAiAfterSave = useRef(false);
-  const [section, setSection] = useState<SetupSection>(initialSection);
-  const [entry, setEntry] = useState({ open, initialSection, projectId });
-  if (entry.open !== open || entry.initialSection !== initialSection || entry.projectId !== projectId) {
-    setEntry({ open, initialSection, projectId });
+  const [section, setSection] = useState<SetupSection>(entrySection);
+  const [entry, setEntry] = useState({ open, entrySection, projectId });
+  if (entry.open !== open || entry.entrySection !== entrySection || entry.projectId !== projectId) {
+    setEntry({ open, entrySection, projectId });
     if (entry.projectId !== projectId) {
       setDraft(null);
       setAiConfig(null);
     }
     if (open) {
-      setSection(initialSection);
+      setSection(entrySection);
       setAiConfig(null);
     }
     else if (entry.open) setDraft(null);
@@ -118,9 +121,9 @@ export function MaxProjectSetupDialog({
         id: `max-config-save-${projectId}`,
         description: data.application_mode === "runtime"
           ? (data.synced_snapshot_id
-            ? "Данные и документы обновлены. Подключённый каталог подхватит изменения автоматически. ИИ не запускался."
-            : "Данные сохранены. Обновление рабочей сборки ещё не подтверждено; статус можно проверить в разделе «Каталог». ИИ не запускался.")
-          : "Настройки и документы сохранены. ИИ не запускался. Для изменения экранов есть отдельная кнопка «Изменить экраны с ИИ».",
+            ? "Доставка данных в предпросмотр подтверждена. Подключённые экраны получат изменения. Статус публикации можно проверить в «Каталоге». ИИ не запускался."
+            : "Данные сохранены. Доставка в предпросмотр ещё не подтверждена. ИИ не запускался.")
+          : "Данные записаны в исходники. Проверьте предпросмотр. ИИ не запускался.",
       });
       if (openAiAfterSave.current) setAiConfig(data);
       openAiAfterSave.current = false;
@@ -131,6 +134,12 @@ export function MaxProjectSetupDialog({
       openAiAfterSave.current = false;
       if (error instanceof ApiError && error.code === "generation_draining") {
         toast.info("Сервис обновляется", { id: `max-config-save-${projectId}`, description: "Подождите несколько минут и повторите сохранение. Введённые данные останутся в форме.", duration: 8000 });
+        return;
+      }
+      if (error instanceof ApiError && (error.details?.saved === true || (
+        error.code === "orchestrator_unavailable" && error.message.startsWith("Данные сохранены на сервере, но ещё не применены.")
+      ))) {
+        toast.info("Данные сохранены", { id: `max-config-save-${projectId}`, description: error.message, duration: 8000 });
         return;
       }
       if (error instanceof ApiError && error.status === 409 && error.message.includes("Дождитесь завершения сборки")) {
@@ -181,7 +190,7 @@ export function MaxProjectSetupDialog({
     <>
       <div className="max-setup-tabs">
         <div role="tablist" aria-label="Разделы данных приложения">
-          {SETUP_SECTIONS.map((item) => (
+          {sections.map((item) => (
             <button
               key={item.id}
               type="button"
@@ -194,10 +203,10 @@ export function MaxProjectSetupDialog({
               onKeyDown={(event) => {
                 if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
                 event.preventDefault();
-                const index = SETUP_SECTIONS.findIndex(tab => tab.id === item.id);
-                const next = event.key === "Home" ? 0 : event.key === "End" ? SETUP_SECTIONS.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + SETUP_SECTIONS.length) % SETUP_SECTIONS.length;
-                selectSection(SETUP_SECTIONS[next].id);
-                document.getElementById(`${tabsId}-${SETUP_SECTIONS[next].id}`)?.focus();
+                const index = sections.findIndex(tab => tab.id === item.id);
+                const next = event.key === "Home" ? 0 : event.key === "End" ? sections.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + sections.length) % sections.length;
+                selectSection(sections[next].id);
+                document.getElementById(`${tabsId}-${sections[next].id}`)?.focus();
               }}
               className="max-setup-tab"
               data-required={item.id === "policies" ? (termsAccepted ? "done" : "pending") : undefined}
@@ -235,7 +244,7 @@ export function MaxProjectSetupDialog({
             aria-labelledby={`${tabsId}-${section}`}
             data-testid="max-settings-scroll-region"
           >
-            <MaxProjectSetupSections key={section} section={section} projectId={projectId} current={current} onChange={next => {
+            <MaxProjectSetupSections key={section} section={section} projectId={projectId} current={current} showCatalogLink={isPage} onChange={next => {
               // Capture only on first edit: a background GET cannot rebase a dirty draft.
               if (!draft) draftVersion.current = config.data?.config_version;
               setDraft(next);
@@ -250,7 +259,7 @@ export function MaxProjectSetupDialog({
               {saveIssue ? <CircleAlert aria-hidden="true" /> : changedSections ? <Circle aria-hidden="true" /> : <Check aria-hidden="true" />}
               <span>{saveIssue ?? (save.isPending ? "Сохраняем изменения…" : changedSections > 0
                 ? `Есть несохранённые изменения · разделов: ${changedSections}`
-                : pendingApplication ? "Данные сохранены. Обновление рабочей сборки ещё не подтверждено." : "Все изменения сохранены")}</span>
+                : pendingApplication ? "Данные сохранены. Доставка в предпросмотр ещё не подтверждена." : "Все изменения сохранены")}</span>
             </p>
             <Button
               className="max-setup-save"
