@@ -364,6 +364,8 @@ describe("MAX live preview recovery", () => {
     renderPreview("snapshot-1", { versions: [{ ...buildVersion("ready"), snapshot_id: "snapshot-1" }] });
     const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
     expect(container.textContent).toContain("Показана последняя сохранённая версия. Текущий запрос ещё не завершён.");
+    const status = container.querySelector<HTMLElement>("[data-testid='max-accepted-preview-status']")!;
+    expect(status.title).toBe(status.textContent);
     const sessions = createMaxPreviewSession.mock.calls.length;
     await act(async () => { queryClient.setQueryData(["generation", PROJECT.id], {
       ...current, recovery: { ...current.recovery!, phase: "working" },

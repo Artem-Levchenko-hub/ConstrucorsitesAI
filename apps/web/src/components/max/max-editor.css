@@ -70,6 +70,7 @@
 }
 .max-editor-conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .max-editor-desktop-preview { min-height: 0; overflow: hidden; border-left: 1px solid #e3e0dc; background: #fff; }
+.max-editor-desktop-preview [data-testid=max-accepted-preview-status] { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .max-editor-mobile-preview-trigger { display: none; }
 .max-editor-overlay { position: fixed; inset: 0; z-index: 100; background: rgb(21 32 51 / .32); backdrop-filter: blur(3px); }
 .max-editor-drawer, .max-editor-launch-drawer { position: fixed; z-index: 101; top: 0; bottom: 0; right: 0; width: min(100%, 460px); display: flex; flex-direction: column; background: #fff; box-shadow: -12px 0 50px rgb(21 32 51 / .12); animation: max-editor-enter .2s ease-out; }

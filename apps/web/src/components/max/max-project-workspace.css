@@ -2,7 +2,7 @@
   --max-project-gutter: clamp(16px, 3vw, 28px);
   --max-project-width: 1184px;
   display: grid;
-  grid-template-columns: 204px minmax(0, 1fr);
+  grid-template-columns: 224px minmax(0, 1fr);
   grid-template-rows: 72px minmax(0, 1fr);
   height: 100dvh;
   min-height: 0;

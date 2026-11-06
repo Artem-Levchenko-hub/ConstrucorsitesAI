@@ -640,6 +640,7 @@ export function MaxLivePreview({
         <p
           className="mb-1 w-full max-w-md shrink-0 px-2 text-center text-xs text-fg-secondary"
           data-testid="max-accepted-preview-status"
+          title={acceptanceLabel}
           role="status"
           aria-live="polite"
           hidden={viewingHistorical || currentRun === null}

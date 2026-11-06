@@ -152,7 +152,7 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
             <div className="max-connect-diagram"><span><Bot aria-hidden="true" /><small>Ваш бот</small></span><ArrowRight aria-hidden="true" /><span><Smartphone aria-hidden="true" /><small>Приложение</small></span></div>
             <figcaption>Бот открывает ваше приложение внутри MAX</figcaption>
           </figure>
-          <p>В кабинете MAX создайте чат-бота и дождитесь его модерации. Если бот уже готов, переходите дальше.</p>
+          <p className="max-connect-instructions">В кабинете MAX создайте чат-бота и дождитесь его модерации. Если бот уже готов, переходите дальше.</p>
           <div className="max-connect-primary"><Button onClick={() => setBotPrepared(true)}>Бот готов — далее <ArrowRight aria-hidden="true" /></Button></div>
         </>}
         {step === 2 && <>
@@ -169,7 +169,7 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
         {step === 3 && <>
           <h2 id="max-connect-step-title">Опубликуйте приложение</h2>
           <p className="max-connect-lead">Бот подключён. Теперь получите постоянный HTTPS-адрес приложения.</p>
-          <p>На шаге публикации Yleum покажет, что ещё нужно заполнить, и подготовит приложение к запуску. После публикации вернитесь сюда, чтобы добавить адрес в MAX.</p>
+          <p className="max-connect-instructions">На шаге публикации Yleum покажет, что ещё нужно заполнить, и подготовит приложение к запуску. После публикации вернитесь сюда, чтобы добавить адрес в MAX.</p>
           <div className="max-connect-primary"><Button disabled={busy} onClick={() => onNavigate("publish")}><Rocket aria-hidden="true" />Перейти к публикации</Button></div>
         </>}
         {step === 4 && productionUrl && <>
@@ -180,7 +180,7 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
             setCopyNotice(copied ? "Адрес скопирован" : "Не удалось скопировать. Выделите адрес и скопируйте его вручную.");
           }}><Copy aria-hidden="true" />Скопировать адрес</Button></div>
           {copyNotice && <p className="max-connect-hint" role="status">{copyNotice}</p>}
-          <p>В кабинете MAX откройте бота и пройдите по шагам:</p>
+          <p className="max-connect-instructions">В кабинете MAX откройте бота и пройдите по шагам:</p>
           <p className="max-connect-path">Чат-боты → ⋮ у нужного бота → Настройки → Мини-приложение → Введите ссылку → Сохранить</p>
           {cabinetLink}
           <label className="max-connect-acknowledgement"><input type="checkbox" checked={acknowledged} disabled={busy} onChange={event => { setAcknowledgedUrl(event.target.checked ? productionUrl : null); confirmUrl.reset(); }} /><span>Я вставил адрес и сохранил настройки в MAX</span></label>
