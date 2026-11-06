@@ -79,7 +79,11 @@ afterEach(async () => { await act(async () => root.unmount()); node.remove(); cl
 async function settle() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 25)); }); }
 async function render(element: React.ReactNode) { await act(async () => root.render(<QueryClientProvider client={client}>{element}</QueryClientProvider>)); await settle(); }
 function button(label: string) { return [...node.querySelectorAll<HTMLButtonElement>("button")].find(element => element.textContent?.trim() === label)!; }
-async function click(label: string) { expect(button(label), label).toBeTruthy(); await act(async () => button(label).click()); await settle(); }
+async function click(label: string) {
+  await act(async () => { await vi.waitFor(() => expect(button(label), label).toBeTruthy()); });
+  await act(async () => button(label).click());
+  await settle();
+}
 async function change(label: string, value: string) {
   const field = node.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(`[aria-label="${label}"]`)!;
   expect(field, label).toBeTruthy();

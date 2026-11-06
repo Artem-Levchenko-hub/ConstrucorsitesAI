@@ -42,6 +42,7 @@ function ProjectPromptInput({
   guardMaxDraft = false,
   quotaNotice,
   projectId,
+  compact = false,
 }: {
   onSubmit: (
     text: string,
@@ -65,6 +66,7 @@ function ProjectPromptInput({
   guardMaxDraft?: boolean;
   quotaNotice?: ReactNode;
   projectId?: string;
+  compact?: boolean;
 }) {
   const [value, setValue] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -127,8 +129,8 @@ function ProjectPromptInput({
     const el = ref.current;
     if (!el) return;
     el.style.height = "0px";
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-  }, [value, ref]);
+    el.style.height = `${Math.min(el.scrollHeight, compact ? 144 : 200)}px`;
+  }, [value, ref, compact]);
 
   const send = useCallback(async () => {
     if (sendLockRef.current || sendDisabled || attachmentsBlocked) return;
@@ -283,7 +285,7 @@ function ProjectPromptInput({
         onRemove={removeSelection}
       />
 
-      <div className="rounded-lg border border-border-default bg-surface-input transition-all focus-within:border-accent focus-within:shadow-[0_0_0_3px_rgba(79,129,247,0.13)]">
+      <div className="prompt-input-surface rounded-lg border border-border-default bg-surface-input transition-all focus-within:border-accent focus-within:shadow-[0_0_0_3px_rgba(79,129,247,0.13)]">
         <textarea
           ref={ref}
           aria-label={ariaLabel}
@@ -306,7 +308,7 @@ function ProjectPromptInput({
                 ? "Общий комментарий (необязательно) — правки по элементам уже заданы…"
                 : placeholder ?? "Опишите, что изменить или добавить…"
           }
-          rows={2}
+          rows={compact ? 1 : 2}
           className="w-full bg-transparent px-3.5 py-3 text-sm text-fg-primary placeholder:text-fg-tertiary resize-none focus:outline-none"
         />
 
@@ -314,14 +316,14 @@ function ProjectPromptInput({
           <div className="flex min-w-0 flex-wrap items-center gap-2">
           {projectId && <><input ref={filesRef} type="file" multiple accept={REFERENCE_IMAGE_ACCEPT} className="sr-only" tabIndex={-1} aria-label="Выбрать изображения"
             onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void references.add(files); }} />
-            <Button type="button" variant="secondary" size="sm" aria-label="Прикрепить изображения" title={`PNG, JPEG, WebP · до ${REFERENCE_IMAGE_LIMITS.count} файлов по ${REFERENCE_IMAGE_LIMITS.bytes / 1024 / 1024} МБ`} className="h-11 px-2.5 sm:h-8"
+            <Button type="button" variant="secondary" size="sm" aria-label="Прикрепить изображения" title={`PNG, JPEG, WebP · до ${REFERENCE_IMAGE_LIMITS.count} файлов по ${REFERENCE_IMAGE_LIMITS.bytes / 1024 / 1024} МБ`} className="prompt-input-attachment h-11 px-2.5 sm:h-8"
               disabled={isSubmitting || references.busy || references.items.length >= REFERENCE_IMAGE_LIMITS.count} onClick={() => filesRef.current?.click()}>
               {references.busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
             </Button></>}
           {projectId && <Button type="button" variant="secondary" size="sm" aria-label="Прикрепить шрифт" title="Выбрать шрифт или загрузить файл"
             aria-expanded={fontPanelOpen} aria-controls={fontPanelOpen ? fontPanelId : undefined}
             disabled={isSubmitting || fonts.busy || fonts.items.length >= FONT_LIMITS.count}
-            onClick={() => setFontPanelOpen(open => !open)} className="h-11 px-2.5 sm:h-8"><Type aria-hidden="true" className="h-4 w-4" /></Button>}
+            onClick={() => setFontPanelOpen(open => !open)} className="prompt-input-attachment h-11 px-2.5 sm:h-8"><Type aria-hidden="true" className="h-4 w-4" /></Button>}
           {toolbarAction}
           {voice.state === "recording" ? (
             <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-danger">

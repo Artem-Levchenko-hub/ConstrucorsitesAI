@@ -13,7 +13,7 @@ const helpHref: Record<MaxProjectNavKey, string> = {
   publish: "/max/guide#publish", dashboard: "/max/guide#operations",
 };
 
-export function MaxSectionShell({ projectId, projectName, active, eyebrow, title, lead, children, className = "" }: {
+export function MaxSectionShell({ projectId, projectName, active, title, lead, children, className = "" }: {
   projectId: string; projectName: string; active: MaxProjectNavKey;
   eyebrow: string; title: string; lead: string; children: React.ReactNode;
   className?: string;
@@ -36,7 +36,7 @@ export function MaxSectionShell({ projectId, projectName, active, eyebrow, title
       <main data-learning="project-section" className="max-project-main">
         <div className="max-project-content">
           <header className="max-project-page-heading">
-            <div><p className="max-project-eyebrow">{eyebrow}</p><h1>{title}</h1><p className="max-project-lead">{lead}</p></div>
+            <div><h1>{title}</h1><p className="max-project-lead">{lead}</p></div>
             <Link data-learning="project-help" href={helpHref[active]} aria-label="Помощь" className="max-project-help"><CircleHelp aria-hidden="true" className="size-4" /><span>Помощь</span></Link>
           </header>
           {children}

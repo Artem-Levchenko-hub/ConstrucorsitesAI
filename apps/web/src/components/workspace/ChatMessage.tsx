@@ -57,6 +57,7 @@ export function ChatMessage({
   onFix,
   onSuggest,
   onRetry,
+  onReturnToPrompt,
   presentation = "default",
 }: {
   message: Message;
@@ -75,6 +76,7 @@ export function ChatMessage({
    *  Omitted in replays / screenshots → chips render non-interactive. */
   onSuggest?: (prompt: string) => void;
   onRetry?: () => Promise<boolean>;
+  onReturnToPrompt?: () => void;
   presentation?: "default" | "studio";
 }) {
   const isUser = message.role === "user";
@@ -156,7 +158,7 @@ export function ChatMessage({
           )}
 
           {!isUser && message.generation_status === "failed" && message.generation_failure && (
-            <GenerationFailureCard failure={message.generation_failure} onRetry={onRetry} />
+            <GenerationFailureCard failure={message.generation_failure} onRetry={onRetry} onReturnToPrompt={onReturnToPrompt} />
           )}
 
           {isUser && !!message.reference_images?.length && <div className="flex flex-wrap gap-2" aria-label="Изображения в сообщении">

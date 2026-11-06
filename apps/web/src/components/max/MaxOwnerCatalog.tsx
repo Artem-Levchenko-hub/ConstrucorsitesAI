@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ApiError } from "@/lib/api/client";
 import { getMaxProjectConfig, getMaxProjectContent, saveMaxProjectConfig, saveMaxProjectContent } from "@/lib/api/max-studio";
-import type { MaxContentDelivery, MaxContentItem, MaxProjectConfig, MaxProjectContent } from "@/lib/api/types";
+import type { MaxContentItem, MaxProjectConfig, MaxProjectContent } from "@/lib/api/types";
 import { catalogDraft, newMaxContentItem, rebaseCatalogDraft, type MaxCatalogDraft } from "@/lib/max-catalog";
 import { MaxContentItemFields } from "./MaxContentItemEditor";
 import { MaxProjectDataApplyDialog } from "./MaxProjectDataApplyDialog";
@@ -20,15 +20,7 @@ import "./max-owner-catalog.css";
 const availability = { in_stock: "В наличии", on_request: "Под заказ", out_of_stock: "Нет в наличии" };
 type CatalogSave = MaxCatalogDraft & { reapply?: boolean };
 const SOURCE_DELIVERY = "source_delivery_unverified";
-const deliveryCopy: Record<MaxContentDelivery["state"], string> = {
-  applied: "Обновлено", pending: "Обновляется", unknown: "Обновление не подтверждено",
-  not_published: "Ещё не опубликовано", blocked: "Обновление приостановлено", deferred: "Обновится после пробуждения", not_created: "Ещё не создан",
-};
 function errorCopy(error: unknown) { return error instanceof ApiError ? error.message : "Не удалось выполнить запрос. Повторите попытку."; }
-function DeliveryStatus({ label, status }: { label: string; status: MaxContentDelivery }) {
-  return <div className="max-catalog-delivery" data-state={status.state}><span>{label}</span><strong>{deliveryCopy[status.state]}</strong></div>;
-}
-
 function CatalogShell({ embedded, children, ...props }: ComponentProps<typeof MaxSectionShell> & { embedded?: boolean }) {
   return embedded ? <>{children}</> : <MaxSectionShell {...props}>{children}</MaxSectionShell>;
 }
@@ -119,7 +111,9 @@ export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDi
     ? `${errorCopy(save.error)}. Черновик сохранён в форме. После завершения повторите сохранение в этом окне.`
     : errorCopy(save.error);
   const sourceSaved = save.data?.public.reason === SOURCE_DELIVERY && save.data.config_version === content.data?.config_version;
-  const deliveryPending = !sourceSaved && content.data && [content.data.public.state, content.data.preview.state].some(state => state === "pending" || state === "unknown");
+  const deliveryStates = content.data ? [content.data.public.state, content.data.preview.state] : [];
+  const deliveryBlocked = deliveryStates.includes("blocked");
+  const deliveryPending = !sourceSaved && deliveryStates.some(state => state === "pending" || state === "unknown" || state === "blocked");
   const needsCatalogConnection = [content.data?.public.reason, content.data?.preview.reason].includes("catalog_integration_required");
   const categories = [...new Set(items.map(item => item.category).filter(Boolean))].sort();
   if (category && !categories.includes(category)) setCategory("");
@@ -188,12 +182,7 @@ export function MaxOwnerCatalog({ projectId, projectName, embedded = false, onDi
   return <CatalogShell embedded={embedded} projectId={projectId} projectName={projectName} active="catalog" eyebrow="Каталог" title="Товары и услуги" lead="Меняйте позиции, цены и наличие. Обычное сохранение не расходует баланс ИИ.">
     <section className="max-owner-catalog" aria-label="Каталог приложения">
       {sourceSaved && <p className="max-catalog-notice" role="status">Позиции сохранены в исходниках. Проверьте предпросмотр. Чтобы показать изменения посетителям, при необходимости опубликуйте новую версию.</p>}
-      {content.data && !sourceSaved && <div className="max-catalog-status" role="status">
-        <div className="max-catalog-delivery" data-state="saved"><span>Данные в Yleum</span><strong>{draft ? "Есть несохранённые правки" : "Сохранены"}</strong></div>
-        <DeliveryStatus label="Публичное приложение" status={content.data.public} />
-        <DeliveryStatus label="Предпросмотр" status={content.data.preview} />
-      </div>}
-      {deliveryPending && <div className="max-catalog-notice"><p>Данные сохранены в Yleum. Обновление приложения ещё не подтверждено.</p><Button variant="outline" disabled={Boolean(draft) || Boolean(editor) || uploading || save.isPending || connecting || Boolean(applyConfig)} onClick={() => void reapplySaved()}>{save.isPending && save.variables?.reapply ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}Повторить применение</Button></div>}
+      {deliveryPending && <div className="max-catalog-notice" role="status"><p>{deliveryBlocked ? "Данные сохранены в Yleum. Обновление приостановлено. Проверьте приложение перед повторным применением." : "Данные сохранены в Yleum. Обновление приложения ещё не подтверждено."}</p><Button variant="outline" disabled={Boolean(draft) || Boolean(editor) || uploading || save.isPending || connecting || Boolean(applyConfig)} onClick={() => void reapplySaved()}>{save.isPending && save.variables?.reapply ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}Повторить применение</Button></div>}
       {needsCatalogConnection && <div className="max-catalog-notice">
         <div><strong>Подключите каталог к приложению один раз</strong><p>Позиции уже можно редактировать. Чтобы они появились на экранах, нужна доработка ИИ и публикация. Доработка расходует баланс.</p></div>
         <Button ref={connectTrigger} variant="outline" disabled={connecting || Boolean(draft) || save.isPending} onClick={() => void connectCatalog()}>{connecting && <Loader2 className="size-4 animate-spin" />}Подключить каталог</Button>

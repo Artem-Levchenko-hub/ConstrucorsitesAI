@@ -164,7 +164,7 @@ describe("light MAX editor theme", () => {
   });
   it("overrides the legacy dark composer surface, not just its border", () => {
     let background: string | undefined;
-    postcss.parse(editorCss).walkRules("[data-max-editor] .max-studio-prompt > .rounded-lg", (rule) => {
+    postcss.parse(editorCss).walkRules("[data-max-editor] .max-studio-prompt > .prompt-input-surface", (rule) => {
       rule.walkDecls("background", (declaration) => { background = declaration.value; });
     });
     expect(background).toBe("#fff");

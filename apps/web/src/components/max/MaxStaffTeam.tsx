@@ -85,8 +85,8 @@ export function MaxStaffTeam({ projectId, team, onDirtyChange }: {
   }
 
   return <section className="max-staff-team" aria-label="Команда">
-    <header className="max-staff-board-heading"><div><p className="max-staff-kicker">Доступ сотрудников</p>
-      <h2>Команда</h2><p>Пригласите сотрудников и выберите, с какими обращениями они будут работать.</p></div>
+    <header className="max-staff-board-heading max-staff-team-intro"><div>
+      <p>Пригласите сотрудников и выберите, с какими обращениями они будут работать.</p></div>
       <Button asChild variant="outline"><Link href={maxStaffProjectPath(projectId)}>Открыть рабочий кабинет <ArrowUpRight aria-hidden="true" /></Link></Button>
     </header>
     {team.isPending && <p role="status" className="max-staff-notice">Загружаем команду…</p>}
@@ -97,18 +97,25 @@ export function MaxStaffTeam({ projectId, team, onDirtyChange }: {
       <form className="max-staff-panel" onSubmit={event => { event.preventDefault(); if (settingsDraft && !pending) settings.mutate(settingsDraft); }}>
         <header><h3>Настройки очередей</h3><p>Включайте очереди после публикации версии приложения, которая их поддерживает.</p></header>
         <fieldset disabled={pending} className="max-staff-settings-fields">
-          <label className="max-staff-checkbox"><input type="checkbox" checked={current.leads_enabled}
-            disabled={team.data.settings.leads_enabled} onChange={event => { setSettingsDraft({ ...current, leads_enabled: event.target.checked }); settings.reset(); }} />
-            <span><strong>Заявки</strong><small>{team.data.settings.leads_enabled ? "Рабочая очередь включена." : "Сотрудники смогут брать заявки и отмечать итог."}</small></span>
-          </label>
-          <label className="max-staff-field">Оплата заказов<select value={current.orders_mode ?? ""} disabled={team.data.settings.orders_mode !== null}
-            onChange={event => { setSettingsDraft({ ...current, orders_mode: (event.target.value || null) as TeamSettings["orders_mode"] }); settings.reset(); }}>
-            <option value="">Заказы выключены</option><option value="pickup">При получении</option><option value="yookassa">Онлайн через ЮKassa</option>
-          </select><small>{team.data.settings.orders_mode ? "Способ оплаты уже выбран для этой очереди." : "Способ оплаты фиксируется при включении очереди заказов."}</small></label>
-          {current.orders_mode && <label className="max-staff-field">Время приготовления, мин
-            <Input type="number" min={1} max={120} required value={Number.isNaN(current.prep_minutes) ? "" : current.prep_minutes}
-              onChange={event => { setSettingsDraft({ ...current, prep_minutes: event.target.valueAsNumber }); settings.reset(); }} />
-          </label>}
+          <div className="max-staff-queue-setting">
+            <p className="max-staff-field-label">Заявки</p>
+            <label className="max-staff-checkbox"><input type="checkbox" checked={current.leads_enabled}
+              disabled={team.data.settings.leads_enabled} onChange={event => { setSettingsDraft({ ...current, leads_enabled: event.target.checked }); settings.reset(); }} />
+              <span>Принимать заявки</span>
+            </label>
+            <p className="max-staff-field-help">{team.data.settings.leads_enabled ? "Рабочая очередь включена." : "Сотрудники смогут брать заявки и отмечать итог."}</p>
+          </div>
+          <div className="max-staff-queue-setting">
+            <label className="max-staff-field">Оплата заказов<select value={current.orders_mode ?? ""} disabled={team.data.settings.orders_mode !== null}
+              onChange={event => { setSettingsDraft({ ...current, orders_mode: (event.target.value || null) as TeamSettings["orders_mode"] }); settings.reset(); }}>
+              <option value="">Заказы выключены</option><option value="pickup">При получении</option><option value="yookassa">Онлайн через ЮKassa</option>
+            </select></label>
+            <p className="max-staff-field-help">{team.data.settings.orders_mode ? "Способ оплаты уже выбран для этой очереди." : "Способ оплаты фиксируется при включении очереди заказов."}</p>
+            {current.orders_mode && <label className="max-staff-field">Время приготовления, мин
+              <Input type="number" min={1} max={120} required value={Number.isNaN(current.prep_minutes) ? "" : current.prep_minutes}
+                onChange={event => { setSettingsDraft({ ...current, prep_minutes: event.target.valueAsNumber }); settings.reset(); }} />
+            </label>}
+          </div>
         </fieldset>
         {current.orders_mode === "yookassa" && <div className="max-staff-settings-hint">
           <p>Подключите ЮKassa в разделе «Бот и подключения». Для старого приложения попросите в чате «Подключи рабочую очередь и оплату через ЮKassa по сохранённому заказу», затем опубликуйте версию.</p>

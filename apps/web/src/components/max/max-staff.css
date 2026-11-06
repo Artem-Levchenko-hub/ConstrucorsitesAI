@@ -109,7 +109,14 @@
 .max-staff-team, .max-staff-form-fields, .max-staff-settings-fields { display: grid; gap: 14px; min-width: 0; }
 .max-staff-team > .max-staff-board-heading { margin-bottom: 0; }
 .max-staff-team-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
-.max-staff-settings-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+.max-staff-settings-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 24px; }
+.max-staff-team-intro { align-items: center; }
+.max-staff-team-intro p { margin: 0; max-width: 64ch; }
+.max-staff-queue-setting { display: grid; align-content: start; gap: 5px; min-width: 0; }
+.max-staff-field-label { font-size: 13px; font-weight: 600; }
+.max-staff-field-help { color: var(--color-fg-secondary); font-size: 12px; line-height: 1.6; }
+.max-staff-queue-setting > .max-staff-checkbox { background: var(--color-surface-raised); border-color: var(--color-border-default); }
+.max-staff-queue-setting > .max-staff-field:not(:first-child) { margin-top: 12px; }
 .max-staff-field, .max-staff-checkbox > span { display: grid; gap: 5px; min-width: 0; font-size: 13px; font-weight: 600; }
 .max-staff-field :is(input, select, textarea) {
   width: 100%; min-height: 44px; min-width: 0; padding: 8px 10px; color: var(--color-fg-primary); font-size: 14px; font-weight: 400;

@@ -144,7 +144,6 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
         </li>)}
       </ol>
       <section className="max-connect-step" aria-labelledby="max-connect-step-title">
-        <p className="max-connect-eyebrow">Шаг {step} из 4</p>
         {step === 1 && <>
           <h2 id="max-connect-step-title">Создайте бота в MAX</h2>
           <p className="max-connect-lead">Бот — страница вашего бизнеса в MAX. Через неё пользователи смогут открыть приложение.</p>

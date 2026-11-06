@@ -172,6 +172,25 @@ describe("MAX chat suggestions and draft", () => {
     await click(button("Отправить"));
     expect(sent).toEqual([response.items[0].prompt]);
   });
+  it("starts with one MAX row, bounds long drafts and preserves the ordinary workspace size", () => {
+    render();
+    const input = container.querySelector("textarea")!;
+    expect(input.rows).toBe(1);
+    Object.defineProperty(input, "scrollHeight", { configurable: true, value: 400 });
+    typeDraft("Длинное уточнение\n".repeat(20));
+    expect(input.style.height).toBe("144px");
+    expect(input.value).toContain("Длинное уточнение");
+    expect(sent).toEqual([]);
+    act(() => root.render(createElement(PromptInput, {
+      onSubmit: () => true, onCancel: () => {}, onCancelPending: () => {}, isStreaming: false, pendingPrompt: null,
+    })));
+    const ordinary = container.querySelector("textarea")!;
+    expect(ordinary.rows).toBe(2);
+    Object.defineProperty(ordinary, "scrollHeight", { configurable: true, value: 400 });
+    typeDraft("Обычный workspace");
+    expect(ordinary.style.height).toBe("200px");
+    expect(requests).toEqual([]);
+  });
   it("accepts a restoration draft through the external handle without sending or losing edits", () => {
     render();
     const input = container.querySelector("textarea")!;

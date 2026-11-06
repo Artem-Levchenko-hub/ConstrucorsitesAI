@@ -43,7 +43,7 @@ import { FREE_CHAT_UPGRADE_MESSAGE } from "@/lib/owner-chat-quota";
 import { OwnerChatQuotaNotice } from "./OwnerChatQuotaNotice";
 import { useChatScroll } from "@/hooks/useChatScroll";
 import { Button } from "@/components/ui/button";
-import { bindMessageGeneration } from "@/lib/generation-lifecycle";
+import { bindMessageGeneration, isGenerationActive } from "@/lib/generation-lifecycle";
 import { isChatMessageStreaming } from "@/lib/chat-message-status";
 import { readMaxLaunch } from "@/lib/max-launch-runner";
 import type { MaxAdaptationAttachment } from "@/lib/use-max-adaptation";
@@ -307,6 +307,10 @@ export function ChatPanel({
   const last = messages?.[messages.length - 1];
   const isStreaming = isChatMessageStreaming(last);
   const streamingId = isStreaming ? last?.id : null;
+  const generationActive = latest.data?.project_id === projectId && isGenerationActive(latest.data);
+  const retryAvailable = !quota.exhausted && !isPending && !pendingPrompt && !isStreaming && !generationActive;
+  const retryLatestRequest = () => submitWithCredentialIntake("Попробуй ещё раз", []);
+  const returnToPrompt = () => inputRef.current?.focus();
 
   // Progressive-discovery quick replies (P1): chips belong to the LATEST
   // assistant question. Reading the client cache the prompt hook populated on
@@ -451,8 +455,8 @@ export function ChatPanel({
             streaming={m.id === streamingId}
             projectId={projectId}
             onFix={quota.exhausted ? undefined : handleFix}
-            onRetry={!quota.exhausted && m.id === messages?.at(-1)?.id && !isPending && !pendingPrompt
-              ? () => submitWithCredentialIntake("Попробуй ещё раз", []) : undefined}
+            onRetry={retryAvailable && m.id === last?.id ? retryLatestRequest : undefined}
+            onReturnToPrompt={!isPending && m.id === last?.id ? returnToPrompt : undefined}
             onSuggest={quota.exhausted ? undefined : handleSuggest}
             presentation="studio"
           />

@@ -108,8 +108,7 @@ function OwnerConsole({ projectId, projectName, initialTeam }: OwnerConsoleProps
         </>)}
       </div>}
       <div className="max-owner-workbench">
-        <aside className="max-owner-rail">
-          <p className="max-owner-rail-label">Рабочие разделы</p>
+        <div className="max-owner-rail">
           <nav className="max-owner-tabs" aria-label="Разделы управления">
             {sections.map(section => {
               const Icon = sectionIcon[section.id];
@@ -119,7 +118,7 @@ function OwnerConsole({ projectId, projectName, initialTeam }: OwnerConsoleProps
               </Button>;
             })}
           </nav>
-        </aside>
+        </div>
         <div className="max-owner-workbench-content">
           {overview.isPending && active !== "team" && <div role="status" className="max-owner-notice max-owner-loading">
             <Loader2 aria-hidden="true" className="size-5 motion-safe:animate-spin" />

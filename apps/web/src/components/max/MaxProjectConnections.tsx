@@ -18,15 +18,16 @@ export function MaxProjectConnections({ projectId, projectName, tab }: {
   const [busy, setBusy] = useState(false);
   const projectHref = `/max/${projectId}`;
   const connectionsHref = `${projectHref}/integrations`;
+  const isBotTab = tab === "bot";
   useMaxWorkspaceDraftGuard(false, busy);
 
   return (
-    <div className="max-project-connections">
+    <div className={`max-project-connections${isBotTab ? " max-project-connections--bot" : ""}`}>
       <nav className="max-connections-nav" aria-label="Тип подключения">
-        <Link href={connectionsHref} aria-current={tab === "bot" ? "page" : undefined}><Bot aria-hidden="true" />Бот MAX</Link>
-        <Link href={`${connectionsHref}?tab=services`} aria-current={tab === "services" ? "page" : undefined}><Plug aria-hidden="true" />Сервисы</Link>
+        <Link href={connectionsHref} aria-current={isBotTab ? "page" : undefined}><Bot aria-hidden="true" />Бот MAX</Link>
+        <Link href={`${connectionsHref}?tab=services`} aria-current={!isBotTab ? "page" : undefined}><Plug aria-hidden="true" />Сервисы</Link>
       </nav>
-      {tab === "bot"
+      {isBotTab
         ? <MaxConnectionWizard key={projectId} projectId={projectId} onBusyChange={setBusy}
             onNavigate={() => router.push(`${projectHref}/publish`)} />
         : <FigmaIntegrationHub key={projectId} projectId={projectId} projectName={projectName}

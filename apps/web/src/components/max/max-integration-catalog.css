@@ -34,6 +34,7 @@
 .max-integration-provider-state[data-state=reusable] { border-color: color-mix(in srgb, var(--color-accent) 16%, transparent); background: var(--color-accent-subtle); color: var(--color-accent-secondary); }
 .max-integration-provider-actions { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .max-integration-provider-actions .max-integration-provider-action { height: auto; min-height: 44px; max-width: 100%; padding: 8px 12px; border-radius: 8px; font-size: 14px; font-weight: 500; white-space: normal; }
+.max-integration-provider-actions .max-integration-provider-choice { flex: 0 0 144px; width: 144px; height: 44px; padding: 0 12px; white-space: nowrap; }
 .max-integration-provider-icon-action { display: grid; place-items: center; flex: 0 0 44px; width: 44px; height: 44px; border: 1px solid var(--color-border-default); border-radius: 10px; background: var(--color-surface); color: var(--color-fg-secondary); transition: color 160ms ease, border-color 160ms ease, background-color 160ms ease; }
 .max-integration-provider-icon-action:hover { border-color: var(--color-accent); background: var(--color-accent-subtle); color: var(--color-accent-secondary); }
 .max-integration-provider-disconnect:hover { border-color: color-mix(in srgb, var(--color-danger) 30%, var(--color-border-default)); background: color-mix(in srgb, var(--color-danger) 5%, var(--color-surface)); color: var(--color-danger-fg); }

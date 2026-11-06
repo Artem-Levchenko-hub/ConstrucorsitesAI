@@ -17,13 +17,14 @@ import { type HeartbeatWatch, heartbeatStale, formatElapsed, observeHeartbeat, p
 import { useMaxPublicationGuard } from "@/hooks/useMaxPublicationGuard";
 import { guardedMaxReadiness } from "@/lib/max-publication-guard";
 import { getMaxPublicationState } from "@/lib/max-publication-state";
-import { MAX_STATUS_COPY, MAX_UNKNOWN_LABEL } from "@/lib/max-status-copy";
+import { MAX_STATUS_COPY } from "@/lib/max-status-copy";
 import { useWorkspaceStore } from "@/store/workspace";
 import { MaxLaunchButton } from "./MaxLaunchButton";
 import { MaxDataMigration } from "./MaxDataMigration";
-import { MaxPublicationRequirements, PUBLICATION_REQUIREMENTS } from "./MaxPublicationRequirements";
+import { MaxPublicationRequirements } from "./MaxPublicationRequirements";
 import "./max-studio.css";
 import "./max-project-workspace.css";
+import "./max-launch-page.css";
 
 const ACTIVE_PHASES = new Set<DeployPhase>(["queued", "building", "pushing", "swapping", "cancelling"]);
 const TERMINAL_PHASES = new Set<DeployPhase>(["done", "failed", "cancelled"]);
@@ -62,7 +63,6 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
   const effectiveReadiness = guardedMaxReadiness(readiness.data, guard);
   const items = effectiveReadiness?.items ?? [];
   const available = readiness.isSuccess && guard !== "checking" && items.length > 0;
-  const requiredDone = PUBLICATION_REQUIREMENTS.filter(required => items.find(item => item.id === required.id)?.done).length;
   const journey = getMaxJourney(project.id, items);
   const currentStage = available ? journey.currentStage : undefined;
   const stateError = readiness.isError || deploy.isError;
@@ -92,11 +92,10 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
   }
 
   return (
-    <aside data-product-shell data-max-studio data-testid="max-launch-panel" className={`max-launch-panel max-studio-launch${standalone ? " max-studio-launch-standalone" : ""}`}>
+    <aside data-product-shell data-max-studio data-testid="max-launch-panel" className={`max-launch-panel max-studio-launch${standalone ? " max-studio-launch-standalone max-launch-page" : ""}`}>
       {!standalone && <header className="max-launch-dialog-heading"><div><p className="max-project-eyebrow">{project.name}</p><h2>Запуск в MAX</h2></div><button type="button" onClick={onClose ?? toggleTimeline} aria-label="Свернуть панель запуска" className="max-project-back"><X className="size-5" /></button></header>}
       <div className="max-launch-panel-scroll max-studio-launch-body">
         <section aria-live="polite" role={stateError ? "alert" : undefined} data-testid="max-launch-current-step" className="max-launch-focus">
-          <span className="max-project-eyebrow">{busyDeploy ? "Публикуем" : published ? "Публикация" : "Следующий шаг"}</span>
           <h2>{stateError && <CircleAlert className="size-5 shrink-0 text-danger-fg" />}{busyDeploy && <Loader2 className="size-5 animate-spin" />}{title}</h2>
           <p>{stateError ? MAX_STATUS_COPY.readiness.hint : busyDeploy ? stageLabel || "Публикация выполняется на сервере." : migrationPending ? "Перед публикацией нужны проверка изменения структуры данных и резервная копия." : !available ? "Статусы появятся после ответа сервера." : deploy.isPending ? "Уточняем статус публикации и постоянный адрес приложения." : published ? "Приложение доступно пользователям по постоянному адресу." : currentStage?.description ?? "Проверьте данные приложения перед запуском."}</p>
           {busyDeploy && <div data-testid="max-launch-publication-progress" className="max-launch-publication-progress" aria-live="polite">

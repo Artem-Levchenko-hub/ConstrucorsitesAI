@@ -252,7 +252,7 @@ it("pauses background reads during PATCH and rejects a queued older GET after th
   await act(async () => { resolveStale(Response.json(previous)); await queued; await background; }); await settle();
   expect(client.getQueryData<MaxProjectContent>(["max-content", "owned"])?.config_version).toBe(8);
   expect(node.querySelector<HTMLButtonElement>('button[aria-label="Показать Консультация"]')).not.toBeNull();
-  expect(node.textContent).toContain("Обновляется");
+  expect(node.textContent).toContain("Обновление приложения ещё не подтверждено");
   expect(backgroundReads).toBe(0);
 });
 
@@ -321,25 +321,35 @@ it("shows pending save, prevents duplicate submission, then restores honest deli
   expect(patches()).toHaveLength(1);
   data = { ...data, config_version: 8, content: [{ ...item, active: false }], saved: { state: "saved", config_version: 8 }, public: { ...status, state: "pending", desired_config_version: 8 }, preview: { ...status, state: "deferred", desired_config_version: 8 } };
   await act(async () => holdPatch!(Response.json(data))); await settle();
-  expect(node.textContent).toContain("Сохранены"); expect(node.textContent).toContain("Обновляется"); expect(node.textContent).toContain("Обновится после пробуждения");
+  expect(node.querySelector(".max-catalog-savebar")).toBeNull(); expect(node.textContent).toContain("Обновление приложения ещё не подтверждено"); expect(button("Повторить применение")).toBeDefined();
   await act(async () => root.render(null)); client.clear(); await mount();
-  expect(node.textContent).toContain("Обновляется"); expect(node.textContent).not.toContain("Есть несохранённые правки");
+  expect(node.textContent).toContain("Обновление приложения ещё не подтверждено"); expect(node.textContent).not.toContain("Есть несохранённые правки");
   expect(data.content[0].active).toBe(false); expect(patches()).toHaveLength(1);
+});
+
+it("keeps a blocked catalogue update visible without redundant saved-status panels or an automatic retry", async () => {
+  data.public = { ...status, state: "blocked" };
+  await mount();
+  expect(node.textContent).toContain("Обновление приостановлено");
+  expect(button("Повторить применение")).toBeDefined();
+  expect(node.querySelector(".max-catalog-status")).toBeNull();
+  expect(patches()).toHaveLength(0);
 });
 
 it("explicitly reapplies already saved pending content without changing its content or version", async () => {
   await mount(); await click("Скрыть"); pendingPatch = true; await click("Сохранить изменения");
   data = { ...data, config_version: 8, content: [{ ...item, active: false }], saved: { state: "saved", config_version: 8 }, public: { ...status, state: "pending", desired_config_version: 8 }, preview: { ...status, state: "unknown", desired_config_version: 8 } };
   await act(async () => holdPatch!(Response.json(data))); await settle();
-  expect(node.textContent).toContain("Сохранены");
+  expect(node.querySelector(".max-catalog-savebar")).toBeNull();
   expect(node.textContent).not.toContain("Есть несохранённые правки");
   const saved = structuredClone(data);
   pendingPatch = false; retryApplies = true;
   await click("Повторить применение");
   expect(JSON.parse(patches()[1].init.body as string)).toEqual({ expected_config_version: 8, content: saved.content });
   expect(data.config_version).toBe(8); expect(data.content).toEqual(saved.content);
-  expect(node.textContent).toContain("Сохранены"); expect(node.textContent).not.toContain("Обновляется");
-  expect([...node.querySelectorAll('.max-catalog-delivery[data-state="applied"]')]).toHaveLength(2);
+  expect(node.querySelector(".max-catalog-savebar")).toBeNull(); expect(node.textContent).not.toContain("Обновляется");
+  expect(node.querySelector(".max-catalog-status")).toBeNull();
+  expect(data.public.state).toBe("applied"); expect(data.preview.state).toBe("applied");
   expect(button("Повторить применение")).toBeUndefined();
   expect(requests.filter(request => request.init.method).map(request => request.url)).toEqual(Array(2).fill("/api/projects/owned/max/content"));
 });
@@ -352,7 +362,7 @@ it("keeps saved data and local drafts safe when an explicit reapply meets a newe
   expect(JSON.parse(patches()[0].init.body as string)).toEqual({ expected_config_version: 7, content: [item] });
   expect(data.content[0].title).toBe("Изменено в другой вкладке");
   expect(data.config_version).toBe(8);
-  expect(node.textContent).toContain("Сохранены"); expect(node.textContent).not.toContain("Не удалось сохранить");
+  expect(node.querySelector(".max-catalog-savebar")).toBeNull(); expect(node.textContent).not.toContain("Не удалось сохранить");
   expect(node.textContent).toContain("Обновите каталог перед повторным применением");
   await click("Изменить"); await input("Цена или подпись элемента 1", "Мой черновик цены");
   expect(button("Повторить применение").disabled).toBe(true);

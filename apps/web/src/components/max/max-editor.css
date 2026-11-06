@@ -54,8 +54,8 @@
 .max-editor-header-actions > button, .max-editor-header-actions > a { min-height: 44px; border-radius: 6px; font-size: 13px; }
 .max-editor-header-actions .max-editor-publish { background: #0062ee; color: #fff; padding-inline: 18px; }
 .max-editor-workspace {
-  /* Room for the scaled 410 × 902 device, its gutters and the status line. */
-  --max-preview-width: clamp(360px, calc(46dvh - 12px), 440px);
+  /* Trim spare gutters; the 410 × 902 device still fits its available height. */
+  --max-preview-width: clamp(320px, calc(46dvh - 44px), 440px);
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--max-preview-width);
   grid-template-rows: minmax(0, 1fr);
@@ -63,7 +63,11 @@
   min-height: 0;
   overflow: hidden;
 }
-.max-editor-workspace:has(.max-editor-desktop-preview .max-version-rail) { --max-preview-width: clamp(440px, 30%, 520px); }
+.max-editor-workspace:has(.max-editor-desktop-preview .max-version-rail) {
+  /* Keep the existing cap when width constrains the phone, and reclaim only
+     the excess alongside a height-constrained phone and its 104px rail. */
+  --max-preview-width: min(clamp(440px, 30%, 520px), clamp(360px, calc(46dvh + 60px), 520px));
+}
 .max-editor-conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .max-editor-desktop-preview { min-height: 0; overflow: hidden; border-left: 1px solid #e3e0dc; background: #fff; }
 .max-editor-mobile-preview-trigger { display: none; }
@@ -90,8 +94,8 @@
 .max-editor-empty p { max-width: 440px; color: #55555f; line-height: 1.65; }
 [data-max-editor] .max-studio-chat { background: #f9f8f6; }
 [data-max-editor] .max-studio-prompt { padding: 8px 28px; background: transparent; border-top: 0; }
-[data-max-editor] .max-studio-prompt > .rounded-lg { background: #fff; border-color: #b8c8e2; box-shadow: 0 2px 8px rgb(25 35 53 / .03); border-radius: 10px; }
-[data-max-editor] .max-studio-prompt > .rounded-lg:focus-within { border-color: #0062ee; box-shadow: 0 0 0 3px rgb(0 98 238 / .12); }
+[data-max-editor] .max-studio-prompt > .prompt-input-surface { background: #fff; border-color: #b8c8e2; box-shadow: 0 2px 8px rgb(25 35 53 / .03); border-radius: 10px; }
+[data-max-editor] .max-studio-prompt > .prompt-input-surface:focus-within { border-color: #0062ee; box-shadow: 0 0 0 3px rgb(0 98 238 / .12); }
 [data-max-editor].max-editor-version-dialog { background: #fff; }
 [data-max-editor] .max-studio-prompt textarea { min-height: 78px; padding: 16px; font-size: 15px; }
 [data-max-editor] .max-studio-prompt button { border-radius: 6px; min-height: 44px; }

@@ -97,6 +97,7 @@ const providerIcons: Record<string, LucideIcon> = {
 
 // The public selector is intentionally narrower than the stored connection catalog.
 const offeredProviderKeys = new Set(["moysklad", "amocrm", "yandex_metrica", "yookassa"]);
+const providerChoiceClassName = "max-integration-provider-action max-integration-provider-choice";
 
 const readyForImplementation = (
   provider: IntegrationProvider | undefined,
@@ -774,7 +775,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
                           ) : <button type="button" disabled={verify.isPending} onClick={() => verify.mutate(provider.key)} className="max-integration-provider-icon-action" aria-label={`Проверить ${provider.name}`}><RefreshCw className="size-3.5" aria-hidden="true" /></button>}
                           {getBuiltinIntegrationRequest(provider.key) && <Button size="sm" variant="outline" className="max-integration-provider-action" onClick={() => openImplementation(provider.key)}>{yookassa ? "Сценарий оплаты" : "Добавить в приложение"}</Button>}
                           <button onClick={() => disconnect.mutate(provider.key)} className="max-integration-provider-icon-action max-integration-provider-disconnect" aria-label={`Отключить ${provider.name}`}><Trash2 className="size-3.5" /></button>
-                          <Button size="sm" variant="outline" className="max-integration-provider-action" onClick={() => openProvider(provider)}>Настроить</Button>
+                          <Button size="sm" variant="outline" className={providerChoiceClassName} onClick={() => openProvider(provider)}>Настроить</Button>
                         </>
                       ) : connection?.status === "error" ? (
                         <>
@@ -782,9 +783,9 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
                           <Button size="sm" variant="outline" className="max-integration-provider-action" onClick={() => openProvider(provider)}>Переподключить</Button>
                         </>
                       ) : reusable ? (
-                        <Button size="sm" variant="outline" className="max-integration-provider-action" onClick={() => bind.mutate(provider.key)}>Использовать</Button>
+                        <Button size="sm" variant="outline" className={providerChoiceClassName} onClick={() => bind.mutate(provider.key)}>Использовать</Button>
                       ) : provider.available ? (
-                        <Button size="sm" variant="outline" className="max-integration-provider-action" onClick={() => openProvider(provider)}>Подключить <ChevronRight className="size-3.5" /></Button>
+                        <Button size="sm" variant="outline" className={providerChoiceClassName} onClick={() => openProvider(provider)}>Подключить <ChevronRight className="size-3.5" /></Button>
                       ) : (
                         <a href={provider.docs_url} target="_blank" rel="noreferrer" className="max-integration-provider-docs">Требования <ExternalLink className="size-3" /></a>
                       )}

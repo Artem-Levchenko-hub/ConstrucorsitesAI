@@ -330,7 +330,7 @@ describe("MAX live preview recovery", () => {
     expect(fittedFrame.style.width).toBe("205px");
     expect(fittedFrame.style.height).toBe("451px");
 
-    availableWidth = 360;
+    availableWidth = 320;
     act(() => notifyResize());
     expect(fittedFrame.style.width).toBe("205px");
     expect(fittedFrame.style.height).toBe("451px");
