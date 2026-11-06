@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import os
 import subprocess
 import tarfile
@@ -639,6 +640,8 @@ class _FakeContainer:
                 if not _sync_excludes_path(path, script)
             }
             archive_path = command[command.index("-cf") + 1]
+            if archive_path == "-":
+                return _FakeExecResult(output=_archive(source_files, root="."))
             self.temp_files[archive_path] = _archive(source_files, root=".")
             return _FakeExecResult()
         if command[:3] == ["stat", "-c", "%s"]:
@@ -765,9 +768,61 @@ class _FakeContainers:
         return [item for item in self.items.values() if item.labels.get(key) == expected]
 
 
+def _exec_frame(payload: bytes, stream: int = 1) -> bytes:
+    return bytes((stream, 0, 0, 0)) + len(payload).to_bytes(4, "big") + payload
+
+
+class _FakeBinaryStream:
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+        self.closed = False
+        self.timeouts: list[float] = []
+
+    def settimeout(self, value: float) -> None:
+        self.timeouts.append(value)
+
+    def recv(self, size: int) -> bytes:
+        size = min(size, 517)  # Exercise partial headers and payload boundaries.
+        result, self.payload = self.payload[:size], self.payload[size:]
+        return result
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeExecAPI:
+    base_url = "unix:///var/run/docker.sock"
+    timeout = 60
+
+    def __init__(self, client: _FakeClient) -> None:
+        self.client = client
+        self.executions: dict[str, dict[str, Any]] = {}
+        self.streams: list[_FakeBinaryStream] = []
+
+    def exec_create(self, container_id: str, command: list[str], **kwargs: Any) -> dict[str, str]:
+        container = next(c for c in self.client.containers.items.values() if c.id == container_id)
+        execution_id = "fixture-exec-" + str(len(self.executions))
+        self.executions[execution_id] = {"container": container, "command": command,
+                                         "options": kwargs}
+        return {"Id": execution_id}
+
+    def exec_start(self, execution_id: str, **kwargs: Any) -> _FakeBinaryStream:
+        assert kwargs == {"socket": True, "tty": False}
+        item = self.executions[execution_id]
+        result = item["container"].exec_run(item["command"])
+        item["result"] = result
+        stream = _FakeBinaryStream(_exec_frame(result.output))
+        self.streams.append(stream)
+        return stream
+
+    def exec_inspect(self, execution_id: str) -> dict[str, Any]:
+        return {"ID": execution_id, "Running": False,
+                "ExitCode": self.executions[execution_id]["result"].exit_code}
+
+
 class _FakeClient:
     def __init__(self) -> None:
-        self.api = type("API", (), {"base_url": "unix:///var/run/docker.sock"})()
+        self.api = _FakeExecAPI(self)
         self.ping_calls = 0
         self.events: list[str] = []
         self.volumes = _FakeVolumes()
@@ -1457,6 +1512,8 @@ async def test_workspace_source_read_excludes_runtime_caches_and_secrets(
     assert "--exclude=./.pnpm-store" in command
     assert helper["kwargs"]["labels"]["omnia.resource_kind"] == "workspace-source-read"
     assert len(commands) == 1  # No numeric stat or binary cat over exec stdout.
+    assert commands[0][-3:] == ["-cf", "-", "."]
+    assert all(not item["container"].get_archive_calls for item in client.api.executions.values())
     assert client.containers.items == {}
 
 
@@ -1478,13 +1535,12 @@ async def test_workspace_source_read_rejects_oversize_archive_and_cleans_helper(
 
 
 @pytest.mark.parametrize("fault", [
-    None, "missing_metadata", "wrong_stat_name", "missing_size", "bool_size", "negative_size",
-    "oversize", "directory_stat", "symlink_stat", "posix_type_stat", "link_target", "wrong_member",
-    "symlink_member", "hardlink_member", "directory_member", "multiple_members", "concatenated",
-    "corrupt_transfer", "truncated_data", "missing_eof", "metadata_size_mismatch", "invalid_chunk",
-    "transfer_budget", "corrupt_source_tar",
+    None, "stderr", "empty_tar", "oversize", "stderr_oversize", "bad_stream", "reserved",
+    "partial_header", "partial_payload", "empty_stream", "corrupt_tar", "partial_tar_block",
+    "missing_tar_eof", "concatenated_tar", "nonzero_tail", "invalid_chunk", "socket_timeout",
+    "oversize_header", "zero_frame", "oversize_recv",
 ])
-async def test_workspace_source_export_requires_exact_bounded_regular_file(
+async def test_workspace_source_stream_is_binary_bounded_and_complete(
     monkeypatch: pytest.MonkeyPatch, fault: str | None,
 ) -> None:
     client = _FakeClient()
@@ -1493,113 +1549,203 @@ async def test_workspace_source_export_requires_exact_bounded_regular_file(
                                                         files=dict(source))
     backend = _backend(client)
     backend.archive_limit_bytes = 32 * 1024
-    original = _FakeContainer.get_archive
-    closed: list[bool] = []
+    original_start = client.api.exec_start
 
-    class Stream:
-        def __init__(self, chunks: list[Any]) -> None:
-            self.chunks = chunks
-
-        def __iter__(self):
-            return iter(self.chunks)
-
-        def close(self) -> None:
-            closed.append(True)
-
-    def export(container: _FakeContainer, path: str) -> tuple[Any, Any]:
-        chunks, metadata = original(container, path)
-        inner = container.temp_files[path]
-        name = PurePosixPath(path).name
-        raw = chunks[0]
-        if fault == "missing_metadata":
-            metadata = None
-        elif fault == "wrong_stat_name":
-            metadata["name"] = "other.tar"
-        elif fault == "missing_size":
-            metadata.pop("size")
-        elif fault == "bool_size":
-            metadata["size"] = True
-        elif fault == "negative_size":
-            metadata["size"] = -1
+    def start(execution_id: str, **kwargs: Any) -> _FakeBinaryStream:
+        stream = original_start(execution_id, **kwargs)
+        raw = _archive(source, root=".")
+        if fault == "empty_tar":
+            raw = b"\0" * 1024
         elif fault == "oversize":
-            metadata["size"] = backend.archive_limit_bytes + 1
-        elif fault in {"directory_stat", "symlink_stat", "posix_type_stat"}:
-            metadata["mode"] = {"directory_stat": 1 << 31, "symlink_stat": 1 << 27,
-                                "posix_type_stat": 0o100644}[fault]
-        elif fault == "link_target":
-            metadata["linkTarget"] = "other"
-        elif fault == "wrong_member":
-            raw = _docker_file_archive("other.tar", inner)
-        elif fault in {"symlink_member", "hardlink_member", "directory_member"}:
-            raw = _docker_file_archive(name, b"", kind={
-                "symlink_member": tarfile.SYMTYPE, "hardlink_member": tarfile.LNKTYPE,
-                "directory_member": tarfile.DIRTYPE,
-            }[fault])
-        elif fault == "multiple_members":
-            raw = raw[:-1024] + _docker_file_archive("extra", b"not accepted")
-        elif fault == "concatenated":
-            raw += _docker_file_archive("extra", b"hidden after EOF")
-        elif fault == "corrupt_transfer":
-            raw = b"not a tar stream"
-        elif fault == "truncated_data":
-            raw = raw[:512 + len(inner) - 1]
-        elif fault == "missing_eof":
-            raw = raw[:-512]
-        elif fault == "metadata_size_mismatch":
-            metadata["size"] = len(inner) + 1
-        elif fault == "corrupt_source_tar":
-            inner = b"not source tar"
-            raw = _docker_file_archive(name, inner)
-            metadata["size"] = len(inner)
-        if fault == "invalid_chunk":
-            return Stream(["not bytes"]), metadata
-        if fault == "transfer_budget":
-            size = (backend.archive_limit_bytes
-                    + docker_py_cell_backend._WORKSPACE_SOURCE_TRANSFER_OVERHEAD)
-            return Stream([b"x" * (size + 1)]), metadata
-        # Exercise real streamed chunk boundaries, including inside TAR headers.
-        return Stream([raw[:13], raw[13:519], raw[519:]]), metadata
+            raw = b"x" * (backend.archive_limit_bytes + 1)
+        elif fault == "corrupt_tar":
+            raw = b"x" * 2048
+        elif fault == "partial_tar_block":
+            raw = raw[:-1]
+        elif fault == "missing_tar_eof":
+            raw = raw[:2560]  # Ends at the last data block: no two EOF blocks.
+        elif fault == "concatenated_tar":
+            raw += _archive({"hidden": b"extra"}, root=".")
+        elif fault == "nonzero_tail":
+            raw += b"x" * 512
+        stream.payload = _exec_frame(raw)
+        if fault == "stderr":
+            stream.payload = _exec_frame(b"private warning\x00\xff", 2) + stream.payload
+        elif fault == "stderr_oversize":
+            stream.payload = _exec_frame(b"x" * (64 * 1024 + 1), 2) + stream.payload
+        elif fault == "bad_stream":
+            stream.payload = _exec_frame(raw, 3)
+        elif fault == "reserved":
+            stream.payload = b"\x01\x01\0\0" + stream.payload[4:]
+        elif fault == "partial_header":
+            stream.payload += b"\x01\0\0"
+        elif fault == "partial_payload":
+            stream.payload = stream.payload[:-1]
+        elif fault == "empty_stream":
+            stream.payload = b""
+        elif fault == "invalid_chunk":
+            stream.recv = lambda _size: "not binary"  # type: ignore[method-assign,assignment]
+        elif fault == "socket_timeout":
+            def timeout(_size: int) -> bytes:
+                raise TimeoutError("private internal socket details")
+            stream.recv = timeout  # type: ignore[method-assign]
+        elif fault == "oversize_header":
+            stream.payload = b"\x01\0\0\0\xff\xff\xff\xff"
+        elif fault == "zero_frame":
+            stream.payload = _exec_frame(b"") + stream.payload
+        elif fault == "oversize_recv":
+            stream.recv = lambda _size: b"x" * 9  # type: ignore[method-assign]
+        return stream
 
-    monkeypatch.setattr(_FakeContainer, "get_archive", export)
-    if fault is None:
-        assert await backend.read_workspace_source_files("workspace-vol") == source
+    monkeypatch.setattr(client.api, "exec_start", start)
+    if fault in {None, "stderr", "empty_tar", "zero_frame"}:
+        expected = {} if fault == "empty_tar" else source
+        assert await backend.read_workspace_source_files("workspace-vol") == expected
     else:
-        with pytest.raises(CellResourceError):
+        with pytest.raises(CellResourceError) as error:
             await backend.read_workspace_source_files("workspace-vol")
-    assert closed == [True]
+        assert "private" not in str(error.value) and "same source" not in str(error.value)
+    assert len(client.api.streams) == 1 and client.api.streams[0].closed
+    assert all(0 < timeout <= 60 for timeout in client.api.streams[0].timeouts)
     assert client.containers.items == {}
     assert client.volumes.items["workspace-vol"].files == source
 
 
-@pytest.mark.parametrize("exit_code", [None, False, "0", 127])
-async def test_source_tar_creation_requires_confirmed_zero_before_export(
-    monkeypatch: pytest.MonkeyPatch, exit_code: Any,
+@pytest.mark.parametrize("fault", [None, False, "0", 127, "running", "missing_running",
+                                  "wrong_id", "missing_status"])
+async def test_source_stream_requires_exact_confirmed_finished_exec(
+    monkeypatch: pytest.MonkeyPatch, fault: Any,
 ) -> None:
     client = _FakeClient()
     client.volumes.items["workspace-vol"] = _FakeVolume("workspace-vol", _labels("workspace"),
                                                         files={"source": b"retained"})
-    exports = []
+    def inspect(execution_id: str) -> Any:
+        result = {"ID": execution_id, "Running": False, "ExitCode": fault}
+        if fault == "running":
+            result.update(Running=True, ExitCode=0)
+        elif fault == "missing_running":
+            result.pop("Running")
+            result["ExitCode"] = 0
+        elif fault == "wrong_id":
+            result.update(ID="other-exec", ExitCode=0)
+        elif fault == "missing_status":
+            return None
+        return result
 
-    def execute(_container: _FakeContainer, command: list[str], **kwargs: Any) -> Any:
-        assert command[0] == "tar"
-        return SimpleNamespace(exit_code=exit_code, output=b"unconfirmed tar output")
-
-    def export(_container: _FakeContainer, path: str) -> Any:
-        exports.append(path)
-        raise AssertionError("unconfirmed tar cannot become a source snapshot")
-
-    monkeypatch.setattr(_FakeContainer, "exec_run", execute)
-    monkeypatch.setattr(_FakeContainer, "get_archive", export)
+    monkeypatch.setattr(client.api, "exec_inspect", inspect)
     with pytest.raises(CellResourceError):
         await _backend(client).read_workspace_source_files("workspace-vol")
-    assert exports == [] and client.containers.items == {}
+    assert len(client.api.executions) == 1 and client.api.streams[0].closed
+    assert client.containers.items == {}
+    assert client.volumes.items["workspace-vol"].files == {"source": b"retained"}
+
+
+@pytest.mark.parametrize("api_timeout", [None, False, 0, -1, 61, float("inf"), float("nan")])
+async def test_source_stream_rejects_unbounded_api_timeout_before_exec(api_timeout: Any) -> None:
+    client = _FakeClient()
+    client.api.timeout = api_timeout
+    client.volumes.items["workspace-vol"] = _FakeVolume("workspace-vol", _labels("workspace"))
+    with pytest.raises(CellResourceError, match="API timeout"):
+        await _backend(client).read_workspace_source_files("workspace-vol")
+    assert not client.api.executions and not client.containers.items
+
+
+@pytest.mark.parametrize("fault", [
+    "missing_identity", "empty_identity", "create", "start", "inspect",
+])
+async def test_source_exec_setup_or_inspection_failure_cleans_only_own_helper(
+    monkeypatch: pytest.MonkeyPatch, fault: str,
+) -> None:
+    client = _FakeClient()
+    source = {"source": b"retained"}
+    client.volumes.items["workspace-vol"] = _FakeVolume(
+        "workspace-vol", _labels("workspace"), files=dict(source),
+    )
+    if fault in {"missing_identity", "empty_identity"}:
+        result = {} if fault == "missing_identity" else {"Id": ""}
+        monkeypatch.setattr(client.api, "exec_create", lambda *args, **kwargs: result)
+    else:
+        def fail(*args: Any, **kwargs: Any) -> Any:
+            raise _docker_api_error(500, "private daemon response")
+        monkeypatch.setattr(client.api, "exec_" + fault, fail)
+    with pytest.raises(CellResourceError) as error:
+        await _backend(client).read_workspace_source_files("workspace-vol")
+    assert "private" not in str(error.value)
+    assert not client.containers.items and client.volumes.items["workspace-vol"].files == source
+    assert all(stream.closed for stream in client.api.streams)
+
+
+def test_source_stream_total_deadline_includes_empty_frames(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = iter(range(100))
+    monkeypatch.setattr(docker_py_cell_backend.time, "monotonic", lambda: next(clock))
+    stream = _FakeBinaryStream(_exec_frame(b"") * 100)
+    with pytest.raises(CellResourceError, match="timed out"):
+        docker_py_cell_backend._read_source_exec_frames(stream, max_bytes=1024)
+
+
+def test_source_stream_rejects_confirmation_after_its_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeClient()
+    client.volumes.items["workspace-vol"] = _FakeVolume(
+        "workspace-vol", _labels("workspace"), files={"source": b"retained"},
+    )
+    helper = client.containers.create(
+        "fixture", name="own-fixture", labels=_labels("workspace-source-read"),
+        volumes={"workspace-vol": {"bind": "/volume", "mode": "ro"}},
+    )
+    helper.start()
+    clock = [0.0]
+    monkeypatch.setattr(docker_py_cell_backend.time, "monotonic", lambda: clock[0])
+    original = client.api.exec_inspect
+
+    def inspect(execution_id: str) -> Any:
+        clock[0] = 61.0
+        return original(execution_id)
+
+    monkeypatch.setattr(client.api, "exec_inspect", inspect)
+    with pytest.raises(CellResourceError, match="confirmation timed out"):
+        _backend(client)._stream_workspace_source_archive(
+            helper, ["tar", "-C", "/volume", "-cf", "-", "."],
+        )
+    assert len(client.api.executions) == 1 and client.api.streams[0].closed
+
+
+async def test_cancel_source_read_retires_helper_then_drains_thread_without_replay() -> None:
+    client = _FakeClient()
+    client.volumes.items["workspace-vol"] = _FakeVolume(
+        "workspace-vol", _labels("workspace"), files={"source": b"retained"},
+    )
+    started, retired = threading.Event(), threading.Event()
+    attempts = []
+
+    class BlockingBackend(DockerPyCellBackend):
+        def _stream_workspace_source_archive(self, container: Any, command: list[str]) -> bytes:
+            attempts.append(container.id)
+            started.set()
+            assert retired.wait(5), "own helper was not retired on cancellation"
+            return _archive({"source": b"retained"}, root=".")
+
+        async def _remove_container_object(self, container: Any) -> None:
+            await super()._remove_container_object(container)
+            retired.set()
+
+    backend = BlockingBackend("unused", "backup", client_factory=lambda _: client)
+    task = asyncio.create_task(backend.read_workspace_source_files("workspace-vol"))
+    assert await asyncio.to_thread(started.wait, 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert retired.is_set() and len(attempts) == 1 and not client.containers.items
     assert client.volumes.items["workspace-vol"].files == {"source": b"retained"}
 
 
 @pytest.mark.skipif(os.environ.get("YLEUM_TEST_LOCAL_DOCKER") != "1",
                     reason="explicit disposable local Docker fixture only")
-async def test_workspace_source_archive_real_docker_file_metadata() -> None:
-    """Native Docker stat is Go permission mode, and its file TAR has one basename."""
+async def test_workspace_source_archive_real_docker_binary_stream() -> None:
+    """Real exec framing, binary source, exact exit proof and disposable cleanup."""
     image = os.environ.get("YLEUM_TEST_SOURCE_ARCHIVE_IMAGE", "alpine:3.20")
     client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
     client.images.get(image)  # Existing fixture image only; never pull/install.
@@ -1607,21 +1753,57 @@ async def test_workspace_source_archive_real_docker_file_metadata() -> None:
     labels = {**_labels("workspace"), "test.disposable": name}
     volume = client.volumes.create(name=name, labels=labels)
     seed = None
-    observed = []
+    observed: list[dict[str, Any]] = []
+    helpers: list[dict[str, Any]] = []
 
     class ObservedBackend(DockerPyCellBackend):
         async def _start_helper_container(self, **kwargs: Any) -> Any:
             container = await super()._start_helper_container(**kwargs)
             if kwargs["labels"]["omnia.resource_kind"] == "workspace-source-read":
-                original = container.get_archive
-
-                def export(path: str) -> Any:
-                    chunks, metadata = original(path)
-                    observed.append(metadata)
-                    return chunks, metadata
-
-                container.get_archive = export
+                container.reload()
+                helpers.append(container.attrs)
             return container
+
+        def _stream_workspace_source_archive(self, container: Any, command: list[str]) -> bytes:
+            api = self._client_obj().api
+            original = api.exec_inspect
+
+            def inspect(execution_id: str) -> Any:
+                status = original(execution_id)
+                observed.append(status)
+                return status
+
+            api.exec_inspect = inspect
+            try:
+                return super()._stream_workspace_source_archive(container, command)
+            except Exception as exc:
+                # Only this disposable fixture's synthetic source is inspected.
+                # Preserve exact command outputs before the helper finally retires.
+                container.reload()
+                probes = []
+                for probe in (
+                    ["sh", "-eu", "-c", "tar -C /volume -cf /tmp/archive-probe.tar src; "
+                     "stat -c '%s %F %a' /tmp/archive-probe.tar; "
+                     "ls -ld /tmp /tmp/archive-probe.tar /volume /volume/src"],
+                    ["tar", "-C", "/volume", "-cf", "-", "src"],
+                ):
+                    try:
+                        result = container.exec_run(probe, demux=True)
+                        stdout, stderr = result.output
+                        probes.append({"command": probe, "exit_code": result.exit_code,
+                                       "stdout_hex": (stdout or b"")[:32768].hex(),
+                                       "stderr_hex": (stderr or b"")[:4096].hex(),
+                                       "stdout_bytes": len(stdout or b"")})
+                    except Exception as probe_error:
+                        probes.append({"command": probe, "error": repr(probe_error)})
+                diagnostics = {"api_version": api._version, "daemon_version": client.version(),
+                               "image": container.attrs.get("Image"),
+                               "mounts": container.attrs.get("Mounts"),
+                               "host_config": container.attrs.get("HostConfig"),
+                               "exec_statuses": observed, "probes": probes}
+                raise AssertionError(json.dumps(diagnostics, sort_keys=True)) from exc
+            finally:
+                api.exec_inspect = original
 
     backend = ObservedBackend("unix:///var/run/docker.sock", image)
     try:
@@ -1644,9 +1826,16 @@ async def test_workspace_source_archive_real_docker_file_metadata() -> None:
             "src/page.tsx": b"same source", "src/data.bin": b"\x00\xff\x80binary\n",
         }
         assert len(observed) == 1
-        assert observed[0]["name"] == "workspace-source.tar"
-        assert type(observed[0]["mode"]) is int and 0 <= observed[0]["mode"] <= 0o777
-        assert observed[0]["size"] > 0 and observed[0]["linkTarget"] == ""
+        assert observed[0]["Running"] is False
+        assert type(observed[0]["ExitCode"]) is int and observed[0]["ExitCode"] == 0
+        assert observed[0]["ID"]
+        assert len(helpers) == 1
+        assert helpers[0]["HostConfig"]["ReadonlyRootfs"] is True
+        assert helpers[0]["HostConfig"]["NetworkMode"] == "none"
+        assert helpers[0]["HostConfig"]["CapDrop"] == ["ALL"]
+        assert all(mount["RW"] is False for mount in helpers[0]["Mounts"]
+                   if mount["Type"] == "volume")
+        assert client.containers.list(all=True, filters={"label": "test.disposable=" + name}) == []
     finally:
         if seed is not None:
             await backend._remove_container_object(seed)

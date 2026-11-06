@@ -8,6 +8,7 @@ import io
 import posixpath
 import shlex
 import tarfile
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
@@ -75,8 +76,8 @@ _HELPER_MEMORY_LIMIT_BYTES = 256 * 1024 * 1024
 _HELPER_PIDS_LIMIT = 64
 _ARCHIVE_LIMIT_BYTES = 128 * 1024 * 1024
 _POSTGRES_VOLUME_PROBE_TIMEOUT_SECONDS = 30.0
-_WORKSPACE_SOURCE_ARCHIVE_PATH = "/tmp/workspace-source.tar"
-_WORKSPACE_SOURCE_TRANSFER_OVERHEAD = 1024 * 1024
+_WORKSPACE_SOURCE_STREAM_TIMEOUT_SECONDS = 60.0
+_WORKSPACE_SOURCE_STDERR_LIMIT_BYTES = 64 * 1024
 _ONE_SHOT_HELPERS = frozenset({"postgres-ownership", "postgres-init"})
 _WORKSPACE_SYNC_PRESERVE_PATTERNS = (
     "node_modules",
@@ -145,6 +146,72 @@ def _read_archive_bytes(
             raise CellResourceError(f"{label} archive exceeds {max_bytes} bytes")
         parts.append(data)
     return b"".join(parts)
+
+
+def _read_source_exec_frames(channel: Any, *, max_bytes: int) -> bytes:
+    """Read Docker's non-TTY binary frames with a finite overall deadline.
+
+    docker-py7's frame iterator waits in an unbounded poll and treats partial
+    headers/bodies as EOF. This bounded reader must reject either truncation.
+    """
+    deadline = time.monotonic() + _WORKSPACE_SOURCE_STREAM_TIMEOUT_SECONDS
+    output = bytearray()
+    stderr_bytes = 0
+
+    def receive(size: int, *, allow_eof: bool = False) -> bytes:
+        data = bytearray()
+        while len(data) < size:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise CellResourceError("workspace source archive stream timed out")
+            channel.settimeout(remaining)
+            chunk = channel.recv(min(size - len(data), 65536))
+            if not isinstance(chunk, bytes) or len(chunk) > size - len(data):
+                raise CellResourceError("workspace source archive returned invalid stream bytes")
+            if not chunk:
+                if allow_eof and not data:
+                    return b""
+                raise CellResourceError("workspace source archive stream was truncated")
+            data.extend(chunk)
+        return bytes(data)
+
+    while header := receive(8, allow_eof=True):
+        stream = header[0]
+        if stream not in {1, 2} or header[1:4] != b"\0\0\0":
+            raise CellResourceError("workspace source archive returned invalid stream header")
+        size = int.from_bytes(header[4:], "big")
+        if stream == 1:
+            if len(output) + size > max_bytes:
+                raise CellResourceError(f"workspace source archive exceeds {max_bytes} bytes")
+        else:
+            stderr_bytes += size
+            if stderr_bytes > _WORKSPACE_SOURCE_STDERR_LIMIT_BYTES:
+                raise CellResourceError("workspace source archive stderr exceeds budget")
+            # Keep diagnostics out of binary source and public exceptions. Tar's
+            # exit status, checked separately, decides whether warnings are fatal.
+        while size:
+            chunk = receive(min(size, 65536))
+            size -= len(chunk)
+            if stream == 1:
+                output.extend(chunk)
+    return bytes(output)
+
+
+def _source_archive_to_files(raw: bytes) -> dict[str, bytes]:
+    """Accept a complete uncompressed source tar, including its EOF blocks."""
+    try:
+        if len(raw) % 512:
+            raise ValueError("partial tar block")
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as archive:
+            end = 0
+            for member in archive.getmembers():
+                end = member.offset_data + ((member.size + 511) // 512) * 512
+            padding = raw[end:]
+            if len(padding) < 1024 or any(padding):
+                raise ValueError("missing EOF or unexpected trailing data")
+        return _archive_to_files(raw, root_prefix="")
+    except (tarfile.TarError, ValueError, OSError) as exc:
+        raise CellResourceError("workspace source archive payload is invalid") from exc
 
 
 def _archive_to_files(raw: bytes, *, root_prefix: str) -> dict[str, bytes]:
@@ -466,16 +533,10 @@ printf '%s\n' 'empty'
             return {}
         labels = self._labels(volume)
         expected_identity = self._source_identity(name)
-        source_tmpfs = dict(_HELPER_TMPFS)
-        source_tmpfs["/tmp"] = (
-            f"rw,nosuid,nodev,noexec,size="
-            f"{self.archive_limit_bytes + _WORKSPACE_SOURCE_TRANSFER_OVERHEAD}"
-        )
         container = await self._start_helper_container(
             name=self._helper_name("workspace-source-read", name),
             labels=self._source_helper_labels(name, labels, "workspace-source-read"),
             volumes={name: {"bind": _VOLUME_ROOT, "mode": "ro"}},
-            tmpfs=source_tmpfs,
             image=self.write_helper_image if expected_identity is not None else None,
         )
         try:
@@ -488,82 +549,58 @@ printf '%s\n' 'empty'
                 _VOLUME_ROOT,
                 *(f"--exclude={item}" for item in _WORKSPACE_SOURCE_ARCHIVE_EXCLUDES),
                 "-cf",
-                _WORKSPACE_SOURCE_ARCHIVE_PATH,
+                "-",
                 ".",
             ]
-            await asyncio.to_thread(
-                self._exec_checked,
-                container,
-                archive_command,
-                f"archive workspace source {name}",
-                require_confirmed_exit=True,
+            raw = await self._run_source_helper(
+                container, self._stream_workspace_source_archive, container, archive_command,
             )
-            raw = await asyncio.to_thread(
-                self._get_workspace_source_archive,
-                container,
-                name,
-            )
-            try:
-                return _archive_to_files(raw, root_prefix="")
-            except (tarfile.TarError, ValueError) as exc:
-                raise CellResourceError("workspace source archive payload is invalid") from exc
+            return _source_archive_to_files(raw)
         finally:
             await self._remove_container_object(container)
 
-    def _get_workspace_source_archive(self, container: Any, name: str) -> bytes:
-        """Read the trusted temporary file through Docker's binary archive API."""
-        expected_name = PurePosixPath(_WORKSPACE_SOURCE_ARCHIVE_PATH).name
-        chunks, metadata = reader_dispatch(container.get_archive, _WORKSPACE_SOURCE_ARCHIVE_PATH)
+    def _stream_workspace_source_archive(self, container: Any, command: list[str]) -> bytes:
+        """Stream trusted tar stdout without tmpfs copying or merged stderr."""
+        api = self._client_obj().api
+        # SDK create/start/inspect requests must also have a finite timeout. Do
+        # not temporarily mutate the shared client's timeout across concurrent IO.
+        timeout = getattr(api, "timeout", None)
+        if (
+            not isinstance(timeout, (int, float)) or isinstance(timeout, bool)
+            or not 0 < timeout <= 60
+        ):
+            raise CellResourceError("workspace source archive API timeout is invalid")
         try:
-            if (
-                not isinstance(metadata, dict) or metadata.get("name") != expected_name
-                or type(metadata.get("size")) is not int or metadata["size"] <= 0
-                # Docker reports Go FileMode: ordinary files contain permission
-                # bits (e.g. 0644), not POSIX S_IFREG. The trusted new tar has no
-                # special mode flags; links/devices/directories are not accepted.
-                or type(metadata.get("mode")) is not int or not 0 <= metadata["mode"] <= 0o777
-                or metadata.get("linkTarget") != ""
-            ):
-                raise CellResourceError("workspace source archive metadata is invalid")
-            if metadata["size"] > self.archive_limit_bytes:
-                raise CellResourceError(
-                    f"{name} source archive exceeds {self.archive_limit_bytes} bytes"
-                )
-            raw = _read_archive_bytes(
-                chunks, label=f"workspace source transfer {name}",
-                max_bytes=self.archive_limit_bytes + _WORKSPACE_SOURCE_TRANSFER_OVERHEAD,
+            execution = reader_dispatch(
+                api.exec_create, container.id, command,
+                stdin=False, stdout=True, stderr=True, tty=False, user="0:0",
             )
+            execution_id = execution.get("Id") if isinstance(execution, dict) else None
+            if not isinstance(execution_id, str) or not execution_id:
+                raise CellResourceError("workspace source archive exec identity is invalid")
+            stream = reader_dispatch(api.exec_start, execution_id, socket=True, tty=False)
+            source_deadline = time.monotonic() + _WORKSPACE_SOURCE_STREAM_TIMEOUT_SECONDS
             try:
-                with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as archive:
-                    member = archive.next()
-                    if (
-                        member is None or member.name != expected_name
-                        or member.type not in {tarfile.REGTYPE, tarfile.AREGTYPE}
-                        or member.size != metadata["size"]
-                    ):
-                        raise CellResourceError("workspace source archive member is invalid")
-                    payload = archive.extractfile(member)
-                    if payload is None:
-                        raise CellResourceError("workspace source archive member is missing")
-                    data = payload.read(self.archive_limit_bytes + 1)
-                    if len(data) != metadata["size"]:
-                        raise CellResourceError("workspace source archive payload size changed")
-                    # A Docker file archive contains precisely one regular member
-                    # and at least two zero end blocks. Do not accept hidden extra
-                    # members, concatenated archives or nonzero trailing data.
-                    end = member.offset_data + ((member.size + 511) // 512) * 512
-                    padding = raw[end:]
-                    if len(padding) < 1024 or any(padding):
-                        raise CellResourceError(
-                            "workspace source archive has extra or truncated data"
-                        )
-                    return data
-            except (tarfile.TarError, ValueError, OSError) as exc:
-                raise CellResourceError("workspace source archive transfer is invalid") from exc
-        finally:
-            close = getattr(chunks, "close", None)
-            if callable(close):
-                close()
+                channel = getattr(stream, "_sock", stream)
+                raw = _read_source_exec_frames(
+                    channel, max_bytes=min(self.archive_limit_bytes, _ARCHIVE_LIMIT_BYTES),
+                )
+            finally:
+                stream.close()
+            if time.monotonic() >= source_deadline:
+                raise CellResourceError("workspace source archive stream timed out")
+            status = reader_dispatch(api.exec_inspect, execution_id)
+            if time.monotonic() >= source_deadline:
+                raise CellResourceError("workspace source archive confirmation timed out")
+            if (
+                not isinstance(status, dict) or status.get("ID") != execution_id
+                or status.get("Running") is not False
+                or type(status.get("ExitCode")) is not int or status["ExitCode"] != 0
+            ):
+                raise CellResourceError("workspace source archive exec did not confirm success")
+            return raw
+        except (docker.errors.DockerException, requests.RequestException, OSError) as exc:
+            raise CellResourceError("workspace source archive stream unavailable") from exc
 
     async def write_volume_files(self, name: str, files: dict[str, bytes]) -> None:
         if not files:
@@ -1733,19 +1770,11 @@ printf '%s\n' 'empty'
         label: str,
         environment: dict[str, str] | None = None,
         user: str | None = None,
-        *,
-        require_confirmed_exit: bool = False,
     ) -> bytes:
         kwargs: dict[str, object] = {"environment": environment, "demux": False}
         if user is not None:
             kwargs["user"] = user
         result = reader_dispatch(container.exec_run, command, **kwargs)
-        if require_confirmed_exit:
-            raw_exit = result[0] if isinstance(result, tuple) and len(result) == 2 else getattr(
-                result, "exit_code", None,
-            )
-            if type(raw_exit) is not int:
-                raise CellResourceError(f"{label} returned unconfirmed exec exit status")
         exit_code, output = self._exec_result_parts(result)
         if exit_code != 0:
             detail = output.decode("utf-8", "ignore")
