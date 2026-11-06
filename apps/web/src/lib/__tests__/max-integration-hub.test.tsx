@@ -69,6 +69,13 @@ describe("Integration Hub implementation handoff", () => {
     boundary.catalog.mockResolvedValue(data);
     await act(async () => root.render(createElement(QueryClientProvider, { client }, createElement(FigmaIntegrationHub, { projectId: "project-1", projectName: "Project" }))));
   }
+  async function waitForConnection(expected: AppIntegration, checkView: () => void) {
+    await vi.waitFor(async () => {
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+      expect(client.getQueryData<IntegrationCatalog>(["app-integrations", "project-1"])?.connections[0]).toEqual(expected);
+      checkView();
+    });
+  }
   it("explains a conflicting OAuth return without claiming that access was granted", async () => {
     window.history.replaceState(null, "", "/max/project-1?panel=services&oauth=conflict");
     try {
@@ -226,12 +233,9 @@ describe("Integration Hub implementation handoff", () => {
     boundary.verify.mockResolvedValue(checked);
     boundary.catalog.mockResolvedValue(catalog([checked]));
     await click("Проверить магазин");
-    await act(async () => {
-      await vi.waitFor(() => {
-        expect(client.getQueryData<IntegrationCatalog>(["app-integrations", "project-1"])?.connections[0]).toEqual(checked);
-      });
+    await waitForConnection(checked, () => {
+      expect(container.querySelector('[data-testid="yookassa-shop-mode"]')?.textContent).toBe(label);
     });
-    expect(container.querySelector('[data-testid="yookassa-shop-mode"]')?.textContent).toBe(label);
     expect(boundary.success).toHaveBeenCalledWith(mode ? label : "Доступ к сервису подтверждён");
     expect(boundary.verify).toHaveBeenCalledWith("project-1", "yookassa");
     expect(boundary.push).not.toHaveBeenCalled();
@@ -245,14 +249,11 @@ describe("Integration Hub implementation handoff", () => {
     boundary.verify.mockRejectedValue(new ApiError(422, { code: "integration_credentials_invalid", message: "Магазин изменился" }));
     boundary.catalog.mockResolvedValue(catalog([failed]));
     await click("Проверить магазин");
-    await act(async () => {
-      await vi.waitFor(() => {
-        expect(client.getQueryData<IntegrationCatalog>(["app-integrations", "project-1"])?.connections[0]).toEqual(failed);
-      });
+    await waitForConnection(failed, () => {
+      expect(container.textContent).toContain("Требуется настройка");
+      expect(container.textContent).not.toContain("Рабочий магазин");
+      expect(button("Сценарий оплаты")).toBeUndefined();
     });
-    expect(container.textContent).toContain("Требуется настройка");
-    expect(container.textContent).not.toContain("Рабочий магазин");
-    expect(button("Сценарий оплаты")).toBeUndefined();
   });
   it("lets a previously failed connection retry verification without replacing credentials", async () => {
     await render([{ ...connection, status: "error", binding_status: "error" }]);
