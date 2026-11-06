@@ -20,6 +20,7 @@ from yleum_api.models.project import Project
 from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from yleum_api.models.restoration import Restoration
 from yleum_api.services.agent_progress import bounded_redacted_diagnostic
+from yleum_api.services.project_versions import sync_generation_version_locked
 
 ACTIVE_GENERATION_STATUSES = (
     "pending",
@@ -312,6 +313,7 @@ async def terminalize_generation_run_locked(
     from yleum_api.services.generation_billing import seal_terminal_locked
 
     await seal_terminal_locked(session, run)
+    await sync_generation_version_locked(session, run)
 
 
 async def record_generation_product_failure(
@@ -602,16 +604,19 @@ async def promote_generation_after_admission(
                 mark_capacity_dispatch_admitted(run, token=dispatch_token)
         elif run.status == "running":
             admitted_token = capacity_admitted_dispatch_token(run)
-            if dispatch_token is not None:
-                return "admitted" if admitted_token == dispatch_token else "lost"
-            return (
-                "lost" if has_capacity_admitted_dispatch_token(run) else "admitted"
-            )
+            if (
+                dispatch_token is not None and admitted_token != dispatch_token
+            ) or (dispatch_token is None and has_capacity_admitted_dispatch_token(run)):
+                return "lost"
+            await sync_generation_version_locked(session, run)
+            await session.commit()
+            return "admitted"
         else:
             return "lost"
         run.status = "running"
         run.started_at = run.started_at or datetime.now(UTC)
         note_generation_release(run)
+        await sync_generation_version_locked(session, run)
         await session.commit()
         return "admitted"
 
@@ -941,7 +946,8 @@ async def set_generation_run_status(
         if run is None:
             return
         if run.status in {"completed", "failed", "cancelled"}:
-            await session.rollback()
+            await sync_generation_version_locked(session, run)
+            await session.commit()
             return
         if run.status == "cancel_requested" and new_status not in {"cancelled", "failed"}:
             await session.rollback()
@@ -960,6 +966,7 @@ async def set_generation_run_status(
             )
         else:
             run.status = new_status
+            await sync_generation_version_locked(session, run)
         if new_status == "running" and run.started_at is None:
             run.started_at = now
         if error is not None and new_status not in {"cancelled", "completed", "failed"}:
@@ -1000,6 +1007,7 @@ async def _finalize_generation_run(session: AsyncSession, run_id: UUID) -> str:
     if run is None:
         return "failed"
     if run.status in {"completed", "failed", "cancelled"}:
+        await sync_generation_version_locked(session, run)
         await session.commit()
         return run.status
     if run.status == "cancel_requested":

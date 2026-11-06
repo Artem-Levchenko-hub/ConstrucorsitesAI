@@ -61,6 +61,11 @@ async def _read_progress(recorder: progress.GenerationProgress):
         return events, message.agent_steps
 
 
+def _identified_step(step, event):
+    return {**step, "eventId": str(event.id),
+            "runId": str(event.generation_run_id), "seq": event.seq}
+
+
 async def test_provider_response_keeps_bounded_structured_failure_reason(monkeypatch):
     recorder = progress.GenerationProgress(None, uuid4(), uuid4(), uuid4())
     recorded = []
@@ -250,7 +255,8 @@ async def test_mixed_progress_keeps_wire_payload_order_and_independent_durable_s
     ]
     events, transcript = await _read_progress(recorder)
     other_events, other_transcript = await _read_progress(other)
-    assert transcript == [first_step, retry_step]
+    assert transcript == [_identified_step(first_step, events[0]),
+                          _identified_step(retry_step, events[2])]
     assert [event.seq for event in events] == [1, 2, 3, 4]
     assert [event.event_type for event in events] == [
         "agent.step",
@@ -311,7 +317,8 @@ async def test_transcript_stops_at_first_200_steps_while_durable_events_continue
     await recorder.record_generation_event("preview.ready", {"path": "/"})
 
     events, transcript = await _read_progress(recorder)
-    assert transcript == expected_steps[:200]
+    assert transcript == [_identified_step(step, event)
+                          for step, event in zip(expected_steps[:200], events[:200], strict=True)]
     assert len(events) == len(published) == 202
     assert [event.seq for event in events] == list(range(1, 203))
     assert [event.event_type for event in events] == ["agent.step"] * 201 + ["preview.ready"]
@@ -354,7 +361,7 @@ async def test_publish_failure_observes_committed_event_and_transcript_before_ra
             assert event.generation_run_id == recorder.run_id
             assert event.message_id == recorder.assistant_message_id
             assert event.payload == {"message_id": str(message.id), **step}
-            assert message.agent_steps == [step]
+            assert message.agent_steps == [_identified_step(step, event)]
             visible.append(event.id)
         raise RuntimeError("synthetic publisher unavailable")
 
@@ -362,4 +369,4 @@ async def test_publish_failure_observes_committed_event_and_transcript_before_ra
     await recorder.record_agent_step(step)  # Publication failure must be swallowed.
     events, transcript = await _read_progress(recorder)
     assert visible == [events[0].id]
-    assert len(events) == 1 and transcript == [step]
+    assert len(events) == 1 and transcript == [_identified_step(step, events[0])]

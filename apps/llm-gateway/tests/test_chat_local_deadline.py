@@ -10,6 +10,44 @@ from yleum_gateway.routers import chat
 from yleum_gateway.services import provider_calls
 
 
+async def test_local_response_timeout_is_distinct_from_an_upstream_502(monkeypatch):
+    from yleum_gateway.core.errors import ProviderResponseDeadlineError
+    from yleum_gateway.providers import llmgw
+
+    monkeypatch.setattr(llmgw, "_key_and_url", lambda _: ("unit-only-key", "https://unit.invalid"))
+    upstream = AsyncMock(side_effect=TimeoutError("PRIVATE local budget detail"))
+    monkeypatch.setattr(llmgw.native_stream, "collect_response", upstream)
+    with pytest.raises(ProviderResponseDeadlineError) as caught:
+        await llmgw.acompletion(model="claude-sonnet-5.5", messages=[], response_budget=7)
+    assert upstream.await_count == 1
+    assert caught.value.http_status == 504
+    assert caught.value.details["provider_charge_ambiguous"] is True
+    assert caught.value.details["retry_safe"] is False
+    assert caught.value.details["provider_failure_kind"] == "response_deadline"
+    assert "PRIVATE" not in caught.value.message
+
+
+def test_local_response_deadline_keeps_ambiguous_journal_without_redispatch(
+    monkeypatch, neutralize_lifespan, neutralize_side_effects,
+):
+    from yleum_gateway.core.errors import ProviderResponseDeadlineError
+
+    upstream = AsyncMock(side_effect=ProviderResponseDeadlineError())
+    monkeypatch.setattr(chat.llmgw, "acompletion", upstream)
+    with TestClient(create_app()) as client:
+        response = client.post("/v1/chat/completions", json={
+            "model": "claude-sonnet-5.5", "messages": [{"role": "user", "content": "x"}],
+        })
+    assert upstream.await_count == 1
+    chat.billing.charge.assert_not_awaited()
+    assert provider_calls.finish_call.await_args.kwargs["status"] == "ambiguous"
+    assert response.status_code == 504
+    error = response.json()["detail"]["error"]
+    assert error["code"] == "response_deadline_exceeded"
+    assert error["details"]["provider_charge_ambiguous"] is True
+    assert error["details"]["retry_safe"] is False
+
+
 def test_local_deadline_before_dispatch_has_distinct_wire_contract(
     monkeypatch, neutralize_lifespan, neutralize_side_effects,
 ):

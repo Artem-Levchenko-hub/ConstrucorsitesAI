@@ -1,4 +1,5 @@
 import type { AgentStep, GenerationEventEnvelope } from "@/lib/api/types";
+import { agentStepKind } from "@/lib/agent-steps";
 
 const PHASE_TITLE: Record<string, string> = {
   prepare: "Подготавливаю среду",
@@ -21,11 +22,9 @@ export function generationEventStep(envelope: GenerationEventEnvelope): AgentSte
   const { data } = envelope;
   const base = { runId: envelope.run_id, seq: envelope.seq, path: "", step: null };
   if (envelope.type === "agent.step") {
-    const kind = data.kind === "escalate" || data.kind === "stalled" || data.kind === "retry"
-      ? data.kind : "step";
     return {
       ...base, eventId: envelope.event_id,
-      step: typeof data.step === "number" ? data.step : null, kind,
+      step: typeof data.step === "number" ? data.step : null, kind: agentStepKind(data.kind),
       action: typeof data.action === "string" ? data.action : "",
       path: typeof data.path === "string" ? data.path : "",
       tool: typeof data.tool === "string" ? data.tool : undefined,

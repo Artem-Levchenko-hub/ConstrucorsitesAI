@@ -40,6 +40,7 @@ import httpx
 from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.errors import (
     DispatchDeadlineError,
+    ProviderResponseDeadlineError,
     UpstreamProviderError,
     ValidationFailedError,
 )
@@ -668,11 +669,24 @@ async def acompletion(
                 else "transport",
             },
         ) from exc
-    except (TimeoutError, native_stream.StreamReceiptError) as exc:
+    except TimeoutError as exc:
+        status = evidence.get("upstream_http_status")
+        if type(status) is int and 400 <= status <= 599:
+            # A local body deadline cannot erase an already observed HTTP refusal.
+            raise UpstreamProviderError(
+                "llmgw error response receipt incomplete",
+                details=failure_details(evidence, upstream_http_status=status,
+                                        transport_stage=evidence.get("transport_stage")),
+            ) from exc
+        raise ProviderResponseDeadlineError(details=failure_details(
+            evidence, transport_stage=evidence.get("transport_stage"),
+            upstream_http_status=evidence.get("upstream_http_status"),
+        )) from exc
+    except native_stream.StreamReceiptError as exc:
         raise UpstreamProviderError(
             "llmgw response receipt incomplete",
             details=failure_details(evidence,
-                receipt_failure=exc.reason if isinstance(exc, native_stream.StreamReceiptError) else None,
+                receipt_failure=exc.reason,
                 transport_stage=evidence.get("transport_stage"),
                 upstream_http_status=evidence.get("upstream_http_status")),
         ) from exc

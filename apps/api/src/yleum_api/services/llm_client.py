@@ -327,6 +327,20 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
     details = details if isinstance(details, dict) else {}
     if (
         response.status_code == 504 and len(response.content) <= 16_384
+        and raw_code == "response_deadline_exceeded"
+        and details.get("provider_failure_kind") == "response_deadline"
+        and details.get("provider_charge_ambiguous") is True
+        and details.get("retry_safe") is False
+        and not (type(details.get("upstream_http_status")) is int
+                 and 400 <= details["upstream_http_status"] <= 599)
+    ):
+        return LLMError(
+            "Локальный лимит ожидания ответа модели истёк; результат запроса требует сверки.",
+            code="response_deadline_exceeded", http_status=504,
+            provider_charge_ambiguous=True, retry_safe=False,
+        )
+    if (
+        response.status_code == 504 and len(response.content) <= 16_384
         and raw_code == "deadline_before_dispatch"
         and set(error) <= {"code", "message", "details"}
         and set(details) == {"provider_failure_kind", "provider_charge_ambiguous", "retry_safe"}

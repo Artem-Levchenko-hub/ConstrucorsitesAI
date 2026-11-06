@@ -21,6 +21,7 @@ from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.project import Project
 from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from yleum_api.models.project_version import ProjectVersion
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.models.user import User
 from yleum_api.models.wallet_charge import WalletCharge
@@ -213,6 +214,8 @@ def release_store(monkeypatch):
                     return message
                 if entity is ProjectCellOperation:
                     return operation
+                if entity is ProjectVersion:
+                    return None  # This legacy run has no allocated user version.
             raise AssertionError(f"unexpected scalar query: {rendered}")
 
         async def execute(self, query, *_args, **_kwargs):

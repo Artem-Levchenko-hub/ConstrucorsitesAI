@@ -50,6 +50,21 @@ class UpstreamProviderError(GatewayError):
     http_status = 502
 
 
+class ProviderResponseDeadlineError(GatewayError):
+    """The gateway's local response window ended after dispatch, not an HTTP refusal."""
+
+    code = "response_deadline_exceeded"
+    http_status = 504
+
+    def __init__(self, *, details: dict[str, Any] | None = None) -> None:
+        super().__init__("Local provider response budget exhausted", details={
+            **(details or {}),
+            "provider_failure_kind": "response_deadline",
+            "provider_charge_ambiguous": True,
+            "retry_safe": False,
+        })
+
+
 class DispatchDeadlineError(GatewayError):
     """The local request budget ended before any upstream request was sent."""
 

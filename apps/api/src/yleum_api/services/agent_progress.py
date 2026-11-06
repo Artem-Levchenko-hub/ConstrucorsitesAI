@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from uuid import UUID
 
 REDACTED = "[REDACTED]"
 PROVIDER_RESPONSE_DETAIL = "Ответ модели проверен перед применением действий."
@@ -149,10 +150,29 @@ def _provider_error_display(category: object, known_upstream_422: bool) -> tuple
     return action, PROVIDER_ERROR_DETAIL
 
 
+def _step_identity(step: dict[str, Any]) -> dict[str, Any]:
+    identity: dict[str, Any] = {}
+    for key in ("eventId", "runId"):
+        value = step.get(key)
+        if not isinstance(value, str) or len(value) != 36:
+            return {}
+        try:
+            if str(UUID(value)) != value:
+                return {}
+        except ValueError:
+            return {}
+        identity[key] = value
+    seq = step.get("seq")
+    if type(seq) is int and seq > 0:
+        identity["seq"] = seq
+    return identity
+
+
 def sanitize_agent_step(step: dict[str, Any]) -> dict[str, Any]:
     """Copy one agent-step payload while redacting every textual surface."""
 
-    safe = dict(step)
+    identity = _step_identity(step)
+    safe = {key: value for key, value in step.items() if key not in {"eventId", "runId", "seq"}}
     provider_error = safe.get("kind") == "provider_error"
     provider_trace = provider_error or safe.get("tool") == "provider_response"
     error_origin, known_upstream_422 = (
@@ -203,6 +223,7 @@ def sanitize_agent_step(step: dict[str, Any]) -> dict[str, Any]:
         value = safe.get(key)
         if isinstance(value, str):
             safe[key] = redact_sensitive_text(value)
+    safe.update(identity)
     return safe
 
 

@@ -180,6 +180,11 @@ _SOURCE_CHANGE_REQUIRED = (
 # Caps so one fat observation can't blow the context window.
 _MAX_OBS_CHARS = 6_000
 _MAX_READ_CHARS = 16_000
+# Source finishing runway, not a shorter model timeout. Do not begin a new
+# paid response in the final 90s + 15s receipt window; use that time for one
+# deterministic check. Admitted calls keep their existing response budget.
+_MIN_PROVIDER_WINDOW_SECONDS = 105.0
+_DEADLINE_CHECK_SECONDS = 60.0
 
 
 @dataclass
@@ -906,6 +911,74 @@ async def _run_agent_segment(
             )
         return fallback
 
+    async def _record_build_observation(obs: dict[str, Any], step_no: int) -> None:
+        nonlocal last_build_ok, pending_truncation, fast_check_fresh
+        nonlocal writes_since_build, rewrites_since_build, blocked_rewrites
+        nonlocal build_pressure_nudged, red_build_streak
+        # Only a positive executor receipt proves the check; truthy strings do not.
+        last_build_ok = obs.get("ok") is True
+        if last_build_ok:
+            pending_truncation = False
+        fast_check_fresh = last_build_ok
+        writes_since_build = rewrites_since_build = blocked_rewrites = 0
+        paths_since_build.clear()
+        build_pressure_nudged = False
+        if last_build_ok:
+            red_build_streak = 0
+        else:
+            red_build_streak += 1
+            if red_build_streak >= _RED_BUILD_ESCALATE_AT:
+                await _escalate(step_no, "red_build")
+
+    async def _finish_source_window(step_no: int, remaining: float) -> AgentResult:
+        """Verify once instead of dispatching a response that cannot finish in time.
+
+        This is a fresh-dispatch decision, never recovery from an ambiguous paid
+        POST. A current FAST_CHECK and the unchanged completion policy only hand
+        the candidate to the normal coordinator; they do not publish it here.
+        """
+        nonlocal completion_inventory, fast_check_fresh, pending_source_build
+        fallback = AgentResult(
+            done=False, summary="Сохраняю время для итоговой проверки исходников.",
+            files=written, steps=step_no, transcript=convo, stop_reason="source_deadline",
+        )
+        eligible = (
+            coordinator_handoff and ship_green_on_abort and bool(written)
+            and snapshot_files is not None and completion_check is not None
+            and not pending_truncation and not _source_change_pending()
+        )
+        if not eligible:
+            return fallback
+        if fast_check_fresh or remaining <= 0:
+            return _ship_green_or(fallback, step_no, "deadline")
+        action = Action(name="build", args={})
+        try:
+            async with asyncio.timeout(min(_DEADLINE_CHECK_SECONDS, remaining)):
+                assert snapshot_files is not None
+                before = dict(await snapshot_files())
+                tool = getattr(continuation, "tool", None)
+                obs = (
+                    await tool("legacy-deadline-build", action, lambda: execute(action))
+                    if tool is not None else await execute(action)
+                )
+                after = dict(await snapshot_files())
+        except TimeoutError:
+            fast_check_fresh = False
+            return fallback
+        completion_inventory = after
+        pending_source_build = False
+        await _step_result(action, step_no, obs)
+        fallback.steps = step_no + 1
+        # A check that changed source is not a fresh receipt for the candidate
+        # we handed it. Preserve the draft and let ordinary stopped-run recovery
+        # restore accepted source, rather than inventing an edit/proof receipt.
+        if before != after or obs.get("files") or obs.get("environment_mutated") is True:
+            fast_check_fresh = False
+            return fallback
+        await _record_build_observation(obs, step_no)
+        convo.append({"role": "user", "content": _format_observation(action, obs)})
+        return _ship_green_or(fallback, step_no, "deadline")
+
     def _exploration_failure(step: int) -> AgentResult:
         return AgentResult(
             done=False, summary="stuck exploring without successful source changes",
@@ -993,6 +1066,9 @@ async def _run_agent_segment(
                 (edit_deadline - datetime.now(UTC)).total_seconds()
                 if edit_deadline is not None else None
             )
+            if (uses_gateway and not restoring and remaining is not None
+                    and 0 < remaining <= _MIN_PROVIDER_WINDOW_SECONDS):
+                return await _finish_source_window(step, remaining)
             if not restoring and remaining is not None and remaining <= 0:
                 return AgentResult(
                     done=False, summary="Время работы с исходниками завершилось.",
@@ -1140,7 +1216,9 @@ async def _run_agent_segment(
                     ),
                     "completion_tokens": failure.completion_tokens if failure is not None else None,
                 }
-                local_deadline = failure is not None and failure.code == "deadline_before_dispatch"
+                local_deadline = failure is not None and failure.code in {
+                    "deadline_before_dispatch", "response_deadline_exceeded",
+                }
                 if local_deadline:
                     diagnostic["error_origin"] = "gateway"
                 if emit:
@@ -1158,7 +1236,12 @@ async def _run_agent_segment(
                         else "provider_request_failed"
                     )
                     if local_deadline:
-                        classification = "generation deadline exceeded before provider dispatch"
+                        assert failure is not None
+                        classification = (
+                            "generation deadline exceeded before provider dispatch"
+                            if failure.code == "deadline_before_dispatch"
+                            else "generation deadline exceeded during provider response"
+                        )
                     elif (
                         failure is not None and failure.code == "wallet_empty"
                         and failure.http_status == 402
@@ -1610,29 +1693,7 @@ async def _run_agent_segment(
         else:
             infra_dead_streak = 0
         if action.name == "build":
-            last_build_ok = bool(obs.get("ok"))
-            if last_build_ok:
-                pending_truncation = False
-            fast_check_fresh = last_build_ok
-            # Building clears the build-pressure / rotation window: the agent got
-            # real typecheck feedback, so writes that follow are progress (a
-            # targeted fix), not blind churn.
-            writes_since_build = 0
-            rewrites_since_build = 0
-            blocked_rewrites = 0
-            paths_since_build.clear()
-            build_pressure_nudged = False
-            # A persistent red typecheck the cheap model can't clear is exactly
-            # when the stronger reasoner earns its cost. Escalate ONCE (the
-            # `escalated` one-shot in `_escalate` bounds it) after two consecutive
-            # red builds, so the loop grinds to green with the strong model
-            # instead of declaring done on a broken app. Green resets the streak.
-            if last_build_ok:
-                red_build_streak = 0
-            else:
-                red_build_streak += 1
-                if red_build_streak >= _RED_BUILD_ESCALATE_AT:
-                    await _escalate(step, "red_build")
+            await _record_build_observation(obs, step)
         if action.name == "runtime_check":
             # A runtime_check observed the CURRENT app state → clears the
             # "wrote but never verified" debt; its ok/fail feeds the green-gate.

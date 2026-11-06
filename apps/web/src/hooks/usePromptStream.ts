@@ -381,15 +381,18 @@ export function usePromptStream(projectId: string, projectSlug: string) {
 
       if (event.type === "agent.step") {
         // Agentic builder transcript: accumulate each tool step per message so
-        // AgentTranscript renders the live Claude-Code-style step list. Append in
-        // arrival order; skip an exact consecutive duplicate (the loop can re-emit
-        // a step around a retry/escalate).
+        // AgentTranscript renders the live Claude-Code-style step list. New
+        // legacy publications carry the same identity as saved history; retain
+        // consecutive-content dedup only for older identity-free senders.
         const mid = event.data.message_id;
         qc.setQueryData<AgentStep[]>(
           ["agent-steps", projectId, mid],
           (prev) => {
             const list = prev ?? [];
             const next: AgentStep = {
+              eventId: event.data.eventId,
+              runId: event.data.runId,
+              seq: event.data.seq,
               step: event.data.step ?? null,
               kind: event.data.kind ?? "step",
               action: event.data.action ?? "",
@@ -399,6 +402,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
               ok: event.data.ok ?? null,
               skipped: event.data.skipped === true,
             };
+            if (next.eventId) return mergeAgentStepsBySequence(list, [next]);
             const last = list[list.length - 1];
             if (
               last &&

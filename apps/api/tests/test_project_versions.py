@@ -1,3 +1,4 @@
+import pytest
 from sqlalchemy import select
 
 from tests.session_authority import authenticated_session_token
@@ -7,7 +8,12 @@ from yleum_api.models.project import Project
 from yleum_api.models.project_version import ProjectVersion
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.models.user import User
-from yleum_api.services.project_versions import ensure_generation_version, record_restored_version
+from yleum_api.services.project_versions import (
+    ensure_generation_version,
+    reconcile_generation_version,
+    record_manual_version,
+    record_restored_version,
+)
 
 
 async def fixture(db):
@@ -42,6 +48,69 @@ async def accepted(db, project, number, status="completed"):
     db.add(run)
     await db.flush()
     return run, assistant
+
+
+@pytest.mark.parametrize("terminal", ["failed", "cancelled"])
+async def test_terminal_projection_and_run_roll_back_together(db_session, terminal):
+    from yleum_api.services.generation_runs import terminalize_generation_run_locked
+
+    _, project, base = await fixture(db_session)
+    run, _ = await accepted(db_session, project, 1, "running")
+    version = await ensure_generation_version(db_session, run, project)
+    await db_session.commit()
+    run_id, version_id, snapshot_id = run.id, version.id, base.id
+
+    await terminalize_generation_run_locked(db_session, run, status=terminal)
+    await db_session.flush()
+    assert run.status == version.status == terminal
+    await db_session.rollback()
+
+    durable_run = await db_session.get(GenerationRun, run_id)
+    durable_version = await db_session.get(ProjectVersion, version_id)
+    assert durable_run.status == durable_version.status == "running"
+    assert durable_run.finished_at is None
+    assert durable_version.snapshot_id == snapshot_id
+
+
+async def test_explicit_stale_projection_reconcile_is_owned_exact_and_caller_committed(db_session):
+    from uuid import uuid4
+
+    owner, project, base = await fixture(db_session)
+    saved = await record_manual_version(db_session, project, base, label="Accepted version")
+    run, _ = await accepted(db_session, project, 2, "failed")
+    version = await ensure_generation_version(db_session, run, project)
+    version.status = "queued"  # The pre-fix durable projection from the incident.
+    await db_session.commit()
+    run_id, project_id, owner_id, version_id, saved_id = (
+        run.id, project.id, owner.id, version.id, saved.id,
+    )
+    history = (run.status, run.finished_at, run.error, run.agent_state)
+
+    assert await reconcile_generation_version(
+        db_session, run_id=run_id, project_id=project_id, owner_id=uuid4(),
+    ) is None
+    assert await reconcile_generation_version(
+        db_session, run_id=run_id, project_id=uuid4(), owner_id=owner_id,
+    ) is None
+    result = await reconcile_generation_version(
+        db_session, run_id=run_id, project_id=project_id, owner_id=owner_id,
+    )
+    assert result.id == version_id and result.status == "failed"
+    assert (run.status, run.finished_at, run.error, run.agent_state) == history
+    await db_session.rollback()
+    assert (await db_session.get(ProjectVersion, version_id)).status == "queued"
+
+    await reconcile_generation_version(
+        db_session, run_id=run_id, project_id=project_id, owner_id=owner_id,
+    )
+    await db_session.commit()
+    db_session.expire_all()
+    assert (await db_session.get(ProjectVersion, version_id)).status == "failed"
+    assert (await db_session.get(ProjectVersion, saved_id)).status == "ready"
+    durable_run = await db_session.get(GenerationRun, run_id)
+    assert (
+        durable_run.status, durable_run.finished_at, durable_run.error, durable_run.agent_state,
+    ) == history
 
 
 async def test_versions_are_durable_idempotent_failed_and_paginated(client, db_session):

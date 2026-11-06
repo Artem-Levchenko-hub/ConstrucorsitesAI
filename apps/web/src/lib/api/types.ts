@@ -971,12 +971,14 @@ export type MultipassStage =
  * a Claude-Code-style step list while the agent works.
  */
 export type AgentStep = {
-  /** Durable identity is absent only on compatibility rows written before replay v2. */
+  /** Stable per-record identity; older compatibility rows may omit it. */
   eventId?: string;
   runId?: Uuid;
+  /** Durable event order; legacy publication supplies identity without a sequence. */
   seq?: number;
   step: number | null;
-  kind: "step" | "escalate" | "stalled" | "retry" | "heartbeat";
+  kind: "step" | "escalate" | "stalled" | "retry" | "heartbeat"
+    | "checkpoint" | "continuation" | "tool" | "provider_error";
   action: string;
   path: string;
   operationId?: Uuid;
@@ -1167,8 +1169,11 @@ export type WsEvent =
       type: "agent.step";
       data: {
         message_id: Uuid;
+        eventId?: Uuid;
+        runId?: Uuid;
+        seq?: number;
         step: number | null;
-        kind: "step" | "escalate" | "stalled" | "retry";
+        kind: AgentStep["kind"];
         action: string;
         path: string;
         tool?: string;

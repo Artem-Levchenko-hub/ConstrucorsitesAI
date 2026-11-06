@@ -86,6 +86,25 @@ afterEach(async () => {
 });
 
 describe("tool liveness in the actual stream and transcript", () => {
+  it("deduplicates identified legacy delivery while preserving actual repeated actions", async () => {
+    const data = { message_id: "message-1", eventId: "legacy-event-1", runId: "run-1",
+      step: 1, kind: "step" as const, action: "Читаю файл", path: "page.tsx" };
+    await act(async () => {
+      TestSocket.instances[0].emit({ type: "agent.step", data });
+      TestSocket.instances[0].emit({ type: "agent.step", data });
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(steps()).toHaveLength(1);
+    expect(steps()[0]).toMatchObject({ eventId: "legacy-event-1", runId: "run-1" });
+    expect(container.textContent).toContain("1 шаг.");
+    await act(async () => {
+      TestSocket.instances[0].emit({ type: "agent.step", data: { ...data, eventId: "legacy-event-2" } });
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(steps()).toHaveLength(2);
+    expect(container.textContent).toContain("2 шаг.");
+  });
+
   it("updates a call_id tool instead of appending heartbeat actions", async () => {
     await emit("agent.step", { step: 1, kind: "step", action: "done", tool: "done", ok: true });
     await emit("generation.phase", { phase: "final_build" });

@@ -32,6 +32,7 @@ from yleum_api.services.generation_runs import (
     recover_interrupted_generation_runs,
     reserve_generation_run,
 )
+from yleum_api.services.project_versions import ensure_generation_version
 
 
 async def test_queued_for_capacity_is_a_durable_active_generation_status() -> None:
@@ -129,6 +130,7 @@ async def test_process_failure_preserves_primary_error_after_finalization(
         response_mode="build",
     )
     db_session.add(run)
+    version = await ensure_generation_version(db_session, run, project)
     await db_session.commit()
     monkeypatch.setenv("USE_PROJECT_MEMORY", "true")
     get_settings.cache_clear()
@@ -155,7 +157,9 @@ async def test_process_failure_preserves_primary_error_after_finalization(
     await finalize_generation_run(run.id)
     await db_session.refresh(run)
     await db_session.refresh(assistant)
+    await db_session.refresh(version)
     assert run.status == "failed"
+    assert version.status == "failed"
     assert run.error == "PROVIDER_AUTH_FAILED: access denied PRIVATE_DIAGNOSTIC"
     assert assistant.tokens_out == 0
     assert "провайдер модели отклонил доступ" in assistant.content
@@ -1051,6 +1055,8 @@ async def test_product_outcome_finalizer_never_overwrites_cancelled_build(
 ) -> None:
     finished_at = object()
     run = SimpleNamespace(
+        id=uuid.uuid4(),
+        project_id=uuid.uuid4(),
         status="cancelled",
         assistant_message_id=None,
         response_mode="build",
@@ -1058,8 +1064,11 @@ async def test_product_outcome_finalizer_never_overwrites_cancelled_build(
         error=None,
     )
     session = AsyncMock(spec=AsyncSession)
-    session.get.return_value = run
-    session.scalar.return_value = run
+    session.scalar.return_value = None  # No version was allocated for this legacy run.
+    monkeypatch.setattr(
+        "yleum_api.services.generation_runs._lock_generation_for_completion",
+        AsyncMock(return_value=run),
+    )
     compile_memory = AsyncMock()
     monkeypatch.setattr(
         "yleum_api.services.generation_runs.compile_terminal_run_memory",
@@ -1377,12 +1386,17 @@ async def test_build_with_snapshot_is_completed_product_outcome(
         response_mode="build",
     )
     db_session.add(run)
+    version = await ensure_generation_version(db_session, run, project)
     await db_session.commit()
 
     assert await finalize_generation_run(run.id, db_session) == "completed"
 
     await db_session.refresh(run)
+    await db_session.refresh(version)
     assert run.status == "completed"
+    assert version.status == "ready"
+    assert version.snapshot_id == snapshot.id
+    assert version.commit_sha == snapshot.commit_sha
     assert run.finished_at is not None
 
 
@@ -1438,13 +1452,16 @@ async def test_startup_recovery_releases_interrupted_run(
         status="running",
     )
     db_session.add(run)
+    version = await ensure_generation_version(db_session, run, project)
     await db_session.commit()
 
     assert await recover_interrupted_generation_runs(db_session) == 1
 
     await db_session.refresh(run)
     await db_session.refresh(assistant)
+    await db_session.refresh(version)
     assert run.status == "failed"
+    assert version.status == "failed"
     assert run.finished_at is not None
     assert assistant.tokens_out == 0
     assert "прервана перезапуском сервера" in assistant.content

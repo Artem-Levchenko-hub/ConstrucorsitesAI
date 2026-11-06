@@ -113,3 +113,48 @@ def test_restoration_deadline_keeps_explicit_history_recovery_path():
     ))
     assert failure.retryable is False
     assert "историю версий" in failure.message and "Продолжи сборку" not in failure.message
+
+
+def response_deadline(**changes):
+    details = {"provider_failure_kind": "response_deadline",
+               "provider_charge_ambiguous": True, "retry_safe": False, **changes}
+    return httpx.Response(504, json={"detail": {"error": {
+        "code": "response_deadline_exceeded", "details": details,
+        "message": "PRIVATE provider text must not reach the user",
+    }}})
+
+
+def test_local_response_deadline_preserves_unknown_charge_without_retry():
+    failure = llm_client._gateway_failure(response_deadline())
+    assert failure.code == "response_deadline_exceeded" and failure.http_status == 504
+    assert failure.provider_charge_ambiguous is True and failure.retry_safe is False
+    assert failure.upstream_http_status is None and "PRIVATE" not in str(failure)
+    public = public_generation_failure(SimpleNamespace(
+        status="failed", agent_state={},
+        error="generation deadline exceeded during provider response: internal",
+    ))
+    assert public.code == "deadline" and public.retryable is False
+    assert public.diagnostics.error_origin == "gateway"
+    assert public.diagnostics.error_code == "response_deadline_exceeded"
+    assert public.diagnostics.provider_charge_ambiguous is True
+    assert public.diagnostics.retry_safe is False
+    assert "не отправлен" not in public.message
+
+
+@pytest.mark.parametrize("changes", [
+    {"provider_failure_kind": "preconnect"}, {"provider_charge_ambiguous": False},
+    {"retry_safe": True}, {"upstream_http_status": 502},
+])
+def test_conflicting_response_deadline_cannot_claim_local_origin(changes):
+    failure = llm_client._gateway_failure(response_deadline(**changes))
+    assert failure.code != "response_deadline_exceeded" and failure.retry_safe is False
+
+
+@pytest.mark.parametrize("field", [
+    "provider_failure_kind", "provider_charge_ambiguous", "retry_safe",
+])
+def test_incomplete_response_deadline_is_not_trusted(field):
+    body = response_deadline().json()
+    del body["detail"]["error"]["details"][field]
+    failure = llm_client._gateway_failure(httpx.Response(504, json=body))
+    assert failure.code != "response_deadline_exceeded" and failure.retry_safe is False

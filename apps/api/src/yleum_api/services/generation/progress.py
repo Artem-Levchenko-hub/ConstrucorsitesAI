@@ -4,7 +4,7 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -52,6 +52,8 @@ class GenerationProgress:
         *,
         transcript_step: dict[str, Any] | None = None,
     ) -> None:
+        wire_payload = {**dict(payload), "message_id": str(self.assistant_message_id)}
+        next_steps = None
         async with self.factory() as progress_session:
             event = await append_generation_event(
                 progress_session,
@@ -59,19 +61,35 @@ class GenerationProgress:
                 project_id=self.project_id,
                 message_id=self.assistant_message_id,
                 event_type=event_type,
-                payload={**dict(payload), "message_id": str(self.assistant_message_id)},
+                payload=wire_payload,
             )
+            if transcript_step is not None:
+                # Exact identity survives different detail limits on the event
+                # and history surfaces. Legacy publication has no durable seq.
+                identity: dict[str, Any] = {
+                    "eventId": str(event.id if event is not None else uuid4()),
+                    "runId": str(self.run_id),
+                }
+                if event is not None:
+                    identity["seq"] = event.seq
+                step = {**transcript_step, **identity}
+                wire_payload.update(identity)
             if transcript_step is not None and len(self.steps) < 200:
-                self.steps.append(transcript_step)
+                next_steps = [*self.steps, step]
                 progress_message = await progress_session.get(Message, self.assistant_message_id)
                 if progress_message is not None:
-                    progress_message.agent_steps = list(self.steps)
+                    progress_message.agent_steps = next_steps
             await progress_session.commit()
-            await progress_session.refresh(event)
-            progress_session.expunge(event)
+            if next_steps is not None:
+                self.steps = next_steps
+            if event is not None:
+                await progress_session.refresh(event)
+                progress_session.expunge(event)
         try:
             await publish_event(
-                self.project_id, "generation.event", dict(generation_event_envelope(event))
+                self.project_id,
+                "generation.event" if event is not None else event_type,
+                dict(generation_event_envelope(event)) if event is not None else wire_payload,
             )
         except Exception:
             _log.warning(

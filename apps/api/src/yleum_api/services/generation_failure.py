@@ -10,6 +10,7 @@ from yleum_api.schemas.message import GenerationFailure, GenerationFailureDiagno
 
 NO_TERMINAL_EVENTS = object()
 _LOCAL_DISPATCH_DEADLINE = "generation deadline exceeded before provider dispatch:"
+_LOCAL_RESPONSE_DEADLINE = "generation deadline exceeded during provider response:"
 _EVENT_IDENTITIES = (
     "run_id", "generation_run_id", "project_id", "message_id", "assistant_message_id",
     "snapshot_id",
@@ -158,7 +159,12 @@ def _provider_diagnostics(
     marker establishes that link; numeric fallback supports historical runs.
     """
     error = raw_error if isinstance(raw_error, str) else ""
-    if error.startswith(_LOCAL_DISPATCH_DEADLINE):
+    if error.startswith(_LOCAL_RESPONSE_DEADLINE):
+        return GenerationFailureDiagnostics(
+            error_code="response_deadline_exceeded", error_origin="gateway", http_status=504,
+            provider_charge_ambiguous=True, retry_safe=False,
+        )
+    elif error.startswith(_LOCAL_DISPATCH_DEADLINE):
         # This exact internal marker is emitted only for the closed gateway
         # pre-dispatch contract, not inferred from earlier provider observations.
         return GenerationFailureDiagnostics(
@@ -217,7 +223,14 @@ def failure_for_error(raw_error: object, *, restoration: bool = False) -> Genera
     # The gateway category reaches terminal/history errors as an internal marker.
     # Exact prefixes prevent arbitrary provider text from claiming a category.
     refusal = re.match(r"\Aprovider_refusal_(access|funds|rate_limit):", error)
-    if error.startswith(_LOCAL_DISPATCH_DEADLINE):
+    if error.startswith(_LOCAL_RESPONSE_DEADLINE):
+        code = "deadline"
+        retryable = False
+        message = (
+            "Локальный лимит ожидания ответа модели истёк. "
+            "Результат запроса не подтверждён; автоматический повтор остановлен."
+        )
+    elif error.startswith(_LOCAL_DISPATCH_DEADLINE):
         code = "deadline"
         message = (
             "Для следующего запроса к модели не осталось времени. "

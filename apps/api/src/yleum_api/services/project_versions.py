@@ -13,6 +13,16 @@ from yleum_api.models.project import Project
 from yleum_api.models.project_version import ProjectVersion
 from yleum_api.models.snapshot import Snapshot
 
+_GENERATION_VERSION_STATUS = {
+    "pending": "queued",
+    "queued_for_capacity": "queued",
+    "running": "running",
+    "cancel_requested": "running",
+    "cancelled": "cancelled",
+    "failed": "failed",
+    "completed": "unchanged",
+}
+
 
 async def _lock(session: AsyncSession, project: Project) -> int:
     await session.execute(select(Project.id).where(Project.id == project.id).with_for_update())
@@ -61,11 +71,13 @@ async def ensure_generation_version(
         commit_sha=base.commit_sha if base else None,
         prompt_text=message.content if message else "",
         model_id=assistant.model_id if assistant else None,
-        status="queued",
+        status=_GENERATION_VERSION_STATUS[run.status],
         created_at=run.created_at,
     )
     session.add(version)
     await session.flush()
+    if run.status == "completed":
+        await _apply_generation_version(session, version, run)
     return version
 
 
@@ -145,18 +157,20 @@ async def resolve_version(
         if version.generation_run_id
         else None
     )
+    return await _resolve_generation_version(session, version, run)
+
+
+async def _resolve_generation_version(
+    session: AsyncSession,
+    version: ProjectVersion,
+    run: GenerationRun | None,
+) -> tuple[str, Snapshot | None]:
     status = version.status
     snapshot_id = version.snapshot_id
     if run:
-        status = {
-            "pending": "queued",
-            "queued_for_capacity": "queued",
-            "running": "running",
-            "cancel_requested": "running",
-            "cancelled": "cancelled",
-            "failed": "failed",
-            "completed": "unchanged",
-        }[run.status]
+        if run.id != version.generation_run_id or run.project_id != version.project_id:
+            raise ValueError("generation belongs to another version project")
+        status = _GENERATION_VERSION_STATUS[run.status]
         if run.status == "completed":
             assistant = (
                 await session.get(Message, run.assistant_message_id)
@@ -192,6 +206,69 @@ async def resolve_version(
     if snapshot and snapshot.project_id != version.project_id:
         snapshot = None
     return status, snapshot
+
+
+async def _apply_generation_version(
+    session: AsyncSession, version: ProjectVersion, run: GenerationRun
+) -> ProjectVersion:
+    status, snapshot = await _resolve_generation_version(session, version, run)
+    version.status = status
+    if run.status == "completed" and snapshot is not None:
+        version.snapshot_id = snapshot.id
+        version.commit_sha = snapshot.commit_sha
+    return version
+
+
+async def sync_generation_version_locked(
+    session: AsyncSession, run: GenerationRun
+) -> ProjectVersion | None:
+    """Project a locked run onto its existing version in the caller transaction.
+
+    Never allocate a version or take a Project lock after the Run lock. Failed
+    attempts retain their base references as recovery evidence, not ready output.
+    Completion callers retain the existing acceptance guard before reaching here.
+    """
+    version = await session.scalar(
+        select(ProjectVersion)
+        .where(
+            ProjectVersion.generation_run_id == run.id,
+            ProjectVersion.project_id == run.project_id,
+        )
+        .execution_options(populate_existing=True)
+        .with_for_update()
+    )
+    if version is None:
+        return None
+    return await _apply_generation_version(session, version, run)
+
+
+async def reconcile_generation_version(
+    session: AsyncSession,
+    *,
+    project_id: UUID,
+    run_id: UUID,
+    owner_id: UUID,
+) -> ProjectVersion | None:
+    """Repair one owner's exact projection from its durable, locked run.
+
+    The caller chooses and commits the transaction; run history, billing and
+    snapshots are unchanged. This is not a global backfill or a run transition.
+    """
+    run = await session.scalar(
+        select(GenerationRun)
+        .join(Project, Project.id == GenerationRun.project_id)
+        .where(
+            GenerationRun.id == run_id,
+            GenerationRun.project_id == project_id,
+            GenerationRun.user_id == owner_id,
+            Project.owner_id == owner_id,
+        )
+        .execution_options(populate_existing=True)
+        .with_for_update(of=GenerationRun)
+    )
+    if run is None:
+        return None
+    return await sync_generation_version_locked(session, run)
 
 
 def preview_fields(snapshot: Snapshot | None) -> tuple[str, list[dict[str, Any]]]:

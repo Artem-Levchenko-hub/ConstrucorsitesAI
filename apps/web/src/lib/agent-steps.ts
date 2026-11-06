@@ -1,6 +1,35 @@
 import { CAPACITY_WAITING_COPY } from "@/lib/agent-transcript";
 import type { AgentStep } from "@/lib/api/types";
 
+/** Live replay and message history must agree which records are actions. */
+export function agentStepKind(kind: unknown): AgentStep["kind"] {
+  switch (kind) {
+    case "step":
+    case "escalate":
+    case "stalled":
+    case "retry":
+    case "heartbeat":
+    case "checkpoint":
+    case "continuation":
+    case "tool":
+    case "provider_error":
+      return kind;
+    case null:
+    case undefined:
+      return "step";
+    default:
+      // An unknown observation can remain visible without inventing an action.
+      return "heartbeat";
+  }
+}
+
+export function countAgentActions(steps: AgentStep[]): number {
+  return steps.reduce((count, step) => count + (
+    agentStepKind(step.kind) === "step" && step.action !== CAPACITY_WAITING_COPY.title
+      ? step.repeatedCount ?? 1 : 0
+  ), 0);
+}
+
 /**
  * Ожидание мощности приходит повторяющимся событием (раз в 15 секунд и на
  * каждое изменение позиции в очереди). Владелец 26.09 показал скриншот, где
@@ -45,7 +74,7 @@ function identity(step: AgentStep, index: number): string {
 function semanticIdentity(step: AgentStep): string {
   return JSON.stringify([
     step.step,
-    step.kind,
+    agentStepKind(step.kind),
     step.action,
     step.path,
     step.tool,
@@ -108,10 +137,10 @@ export function restorePersistedAgentSteps(
 ): AgentStep[] | undefined {
   if (!persisted?.length) return current;
   if (!current?.length) return persisted;
-  const sequenced = [...current, ...persisted].some(
-    (step) => step.eventId && typeof step.seq === "number",
+  const identified = [...current, ...persisted].some(
+    (step) => step.eventId || (step.runId && typeof step.seq === "number"),
   );
-  if (sequenced) return mergeAgentStepsBySequence(current, persisted);
+  if (identified) return mergeAgentStepsBySequence(current, persisted);
   if (persisted.length <= current.length) return current;
 
   // Legacy streams can omit consecutive duplicates. Accept a fuller snapshot

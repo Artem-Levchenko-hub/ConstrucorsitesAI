@@ -29,7 +29,7 @@ import { getLatestGeneration } from "@/lib/api/messages";
 import { isGenerationActive } from "@/lib/generation-lifecycle";
 import type { AgentStep, GenerationRunStatus } from "@/lib/api/types";
 import { agentElapsedSeconds } from "@/lib/agent-elapsed";
-import { collapseAgentSteps } from "@/lib/agent-steps";
+import { collapseAgentSteps, countAgentActions } from "@/lib/agent-steps";
 import { humanPath, stepCopy, type StepIconName, type StepTone } from "@/lib/agent-step-copy";
 import { CAPACITY_WAITING_COPY, agentTranscriptTitle } from "@/lib/agent-transcript";
 import { generationVerifiedActionLabel, isGenerationResultConfirmed, parseGenerationRecovery } from "@/lib/generation-recovery";
@@ -204,10 +204,7 @@ export function AgentTranscript({
   // Одинаковое действие подряд — одна строка со счётчиком повторов: десять
   // строк «Ожидаю ресурсы сервера» читаются как поломка, а не как ожидание.
   const rows = collapseAgentSteps(visibleSteps);
-  const actionCount = rows.reduce((count, row) => count + (
-    row.step.kind === "step" && row.step.action !== CAPACITY_WAITING_COPY.title
-      ? row.repeats : 0
-  ), 0);
+  const actionCount = countAgentActions(visibleSteps);
   if (!projectId || (visibleSteps.length === 0 && !capacityWaiting && !hasRecovery)) return null;
   const incomplete =
     !streaming &&
