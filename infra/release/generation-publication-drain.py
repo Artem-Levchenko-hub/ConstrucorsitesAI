@@ -164,6 +164,20 @@ _PORTABLE_QUIESCENCE_FULL_BUILD_STARTUP_SOURCES = {
     "routers.workspace": "8eb9c5504c1bc85e694261a1289bfa1a03259e4473a903819240bb9ca4d95008",
     "services.machine_startup": "9b02eae20e5760f6735f9fb9dbf1f2c1150bc8291662baf71d31af630f85b794",
 }
+# Reviewed platform-bootstrap v2 successor: the existing fenced BOOTSTRAP role
+# may apply only the controller-owned management migration. The route retains
+# its operation/command locks and machine_effect/reader_dispatch boundaries;
+# project_migrations supplies the exact SQL selection/execution contract. Bind
+# that helper only after matching this complete producer, never as a substitute
+# for historical FULL_BUILD19 or as independently interchangeable source hashes.
+_PORTABLE_QUIESCENCE_PLATFORM_BOOTSTRAP_V2_SOURCES = {
+    **_PORTABLE_QUIESCENCE_FULL_BUILD_STARTUP_SOURCES,
+    "routers.workspace": "607857f5c390cfc45450bb6d4cb1f82ab44fa3828b45e5e75f16379d8579f2a5",
+    "services.machine_adapter": "bac93a863ee7eb73ad023f21cc53c08f2ecc039c38a2895ff6778a053ba5cc30",
+    "services.project_migrations": (
+        "3f68b1cd69a260aad7afee8d5069cf43218a896ec993d8ae157e7ec36b0db0eb"
+    ),
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -177,8 +191,9 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_CONNECT_SOURCES,
     _PORTABLE_QUIESCENCE_NATIVE_STARTUP_SOURCES,
     _PORTABLE_QUIESCENCE_FULL_BUILD_STARTUP_SOURCES,
+    _PORTABLE_QUIESCENCE_PLATFORM_BOOTSTRAP_V2_SOURCES,
 )
-# These modules already exist in old releases, but their new startup contracts
+# These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.
 _PORTABLE_QUIESCENCE_CONDITIONAL_SOURCE_NAMES = frozenset(
     {
@@ -186,6 +201,7 @@ _PORTABLE_QUIESCENCE_CONDITIONAL_SOURCE_NAMES = frozenset(
         "core.cell_resources",
         "services.source_write_journal",
         "services.command_receipts",
+        "services.project_migrations",
     }
 )
 _PORTABLE_QUIESCENCE_SOURCE_NAMES = tuple(

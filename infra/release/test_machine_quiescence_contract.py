@@ -84,6 +84,10 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             "routers.workspace": "8eb9c5504c1bc85e694261a1289bfa1a03259e4473a903819240bb9ca4d95008",
             "services.machine_startup": "9b02eae20e5760f6735f9fb9dbf1f2c1150bc8291662baf71d31af630f85b794",
         }
+        self.platform_bootstrap = json.loads(
+            (Path(__file__).parent / "fixtures/platform-bootstrap-v2-quiescence-sources.json")
+            .read_text()
+        )
         self.reviewed = (
             self.old, self.new, self.snapshot, self.catalog, self.legacy_catalog, self.owner,
             self.connect,
@@ -219,8 +223,7 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
         self.assertEqual(len(self.native), 19)
         self.checker._require_reviewed_portable_sources(self.native)
 
-    def test_full_build_bundle_matches_exact_current_source(self):
-        root = Path(__file__).resolve().parents[2] / "apps/orchestrator/src/yleum_orchestrator"
+    def test_full_build_historical_bundle_remains_supported(self):
         self.assertEqual(self.checker._PORTABLE_QUIESCENCE_FULL_BUILD_STARTUP_SOURCES, self.full_build)
         self.assertEqual(len(self.full_build), 19)
         self.assertEqual(set(self.full_build), set(self.native))
@@ -228,12 +231,103 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             {name for name in self.full_build if self.full_build[name] != self.native[name]},
             {"routers.workspace", "services.machine_startup"},
         )
-        for name, expected in self.full_build.items():
+        self.checker._require_reviewed_portable_sources(self.full_build)
+
+    def test_platform_bootstrap_v2_bundle_matches_exact_current_source(self):
+        root = Path(__file__).resolve().parents[2] / "apps/orchestrator/src/yleum_orchestrator"
+        self.assertEqual(
+            self.checker._PORTABLE_QUIESCENCE_PLATFORM_BOOTSTRAP_V2_SOURCES,
+            self.platform_bootstrap,
+        )
+        self.assertEqual(len(self.platform_bootstrap), 20)
+        self.assertEqual(
+            set(self.platform_bootstrap) - set(self.full_build), {"services.project_migrations"},
+        )
+        self.assertEqual(
+            {name for name in self.full_build
+             if self.full_build[name] != self.platform_bootstrap[name]},
+            {"routers.workspace", "services.machine_adapter"},
+        )
+        self.assertIn(
+            "services.project_migrations",
+            self.checker._PORTABLE_QUIESCENCE_CONDITIONAL_SOURCE_NAMES,
+        )
+        self.checker._require_reviewed_portable_sources(self.platform_bootstrap)
+        for name, expected in self.platform_bootstrap.items():
             source = root.joinpath(*name.split(".")).with_suffix(".py").read_bytes()
             # Git checkouts on Windows may materialize CRLF; live Linux bytes
             # and the authority table remain exact LF source, never normalized.
             actual = hashlib.sha256(source.replace(b"\r\n", b"\n")).hexdigest()
             self.assertEqual(actual, expected, name)
+
+    def test_platform_bootstrap_mixed_missing_unknown_or_extra_sources_are_denied(self):
+        changed = ("routers.workspace", "services.machine_adapter", "services.project_migrations")
+        for selected in product((False, True), repeat=len(changed)):
+            value = dict(self.full_build)
+            for name, use_new in zip(changed, selected, strict=True):
+                if use_new:
+                    value[name] = self.platform_bootstrap[name]
+            with self.subTest(selected=selected):
+                if value in (self.full_build, self.platform_bootstrap):
+                    self.checker._require_reviewed_portable_sources(value)
+                else:
+                    with self.assertRaisesRegex(
+                        self.checker.PhysicalDrainError, "quiescence_unsupported_source",
+                    ):
+                        self.checker._require_reviewed_portable_sources(value)
+        for name in self.platform_bootstrap:
+            for mode in ("missing", "unknown"):
+                value = dict(self.platform_bootstrap)
+                if mode == "missing":
+                    del value[name]
+                else:
+                    value[name] = "0" * 64
+                with self.subTest(name=name, mode=mode), self.assertRaisesRegex(
+                    self.checker.PhysicalDrainError, "quiescence_unsupported_source",
+                ):
+                    self.checker._require_reviewed_portable_sources(value)
+        with self.assertRaisesRegex(
+            self.checker.PhysicalDrainError, "quiescence_unsupported_source",
+        ):
+            self.checker._require_reviewed_portable_sources(
+                {**self.platform_bootstrap, "services.unreviewed_producer": "0" * 64}
+            )
+
+    def test_historical_full_build_collection_ignores_existing_bootstrap_dependency(self):
+        # The SQL helper already exists in historical releases. Its new contract
+        # is selected only by the exact new producer; never change old authority
+        # merely because the expanded collector knows another dependency name.
+        real_sha256 = hashlib.sha256
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            origins, digests = {}, {}
+            for name, digest in self.full_build.items():
+                content = f"# immutable historical FULL_BUILD fixture: {name}\n".encode()
+                path = root / (name + ".py")
+                path.write_bytes(content)
+                origins["yleum_orchestrator." + name] = SimpleNamespace(origin=str(path))
+                digests[content] = digest
+            helper_name = "yleum_orchestrator.services.project_migrations"
+            helper = root / "existing-project-migrations.py"
+            helper.write_bytes(b"# historical SQL helper is not new bootstrap authority\n")
+            origins[helper_name] = SimpleNamespace(origin=str(helper))
+            probes = []
+
+            def find_spec(name):
+                probes.append(name)
+                return origins.get(name)
+
+            def digest_bytes(content):
+                if content not in digests:
+                    return real_sha256(content)
+                return SimpleNamespace(hexdigest=lambda: digests[content])
+
+            with (
+                patch.object(importlib.util, "find_spec", side_effect=find_spec),
+                patch.object(hashlib, "sha256", side_effect=digest_bytes),
+            ):
+                self.assertEqual(self.checker._portable_quiescence_sources(), self.full_build)
+            self.assertNotIn(helper_name, probes)
 
     def test_full_build_mixed_or_partial_bundle_never_inherits_native_authority(self):
         changed = ("routers.workspace", "services.machine_startup")
@@ -344,23 +438,20 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
                     self.checker._require_reviewed_portable_sources(sources)
         self.assertEqual(len(accepted), len(self.reviewed))
 
-    def test_collection_binds_current_helper_bytes_and_rejects_absence_or_tamper(self):
+    def test_collection_binds_current_bootstrap_bytes_and_rejects_absence_or_tamper(self):
         root = Path(__file__).resolve().parents[2] / "apps/orchestrator/src/yleum_orchestrator"
         with tempfile.TemporaryDirectory() as temporary:
             origins = {}
-            for name in self.full_build:
+            for name in self.platform_bootstrap:
                 source = root.joinpath(*name.split(".")).with_suffix(".py").read_bytes()
                 path = Path(temporary) / (name + ".py")
                 path.write_bytes(source.replace(b"\r\n", b"\n"))
                 origins["yleum_orchestrator." + name] = SimpleNamespace(origin=str(path))
             with patch.object(importlib.util, "find_spec", side_effect=origins.get):
-                self.assertEqual(self.checker._portable_quiescence_sources(), self.full_build)
-                helpers = (
-                    "services.app_business_config", "services.machine_startup",
-                    "schemas.workspace", "core.cell_resources",
-                    "services.command_receipts", "services.source_write_journal",
+                self.assertEqual(
+                    self.checker._portable_quiescence_sources(), self.platform_bootstrap,
                 )
-                for name in helpers:
+                for name in self.platform_bootstrap:
                     with self.subTest(helper=name):
                         key = "yleum_orchestrator." + name
                         helper = origins.pop(key)
