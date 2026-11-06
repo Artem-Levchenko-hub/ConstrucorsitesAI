@@ -411,6 +411,8 @@ jobs:
       - name: Verify binary source archive transfer on disposable Docker
         working-directory: apps/orchestrator
         env:
+          DATABASE_URL: postgresql://postgres:ci-restoration-only@127.0.0.1:5432/restoration_policy_test
+          INTERNAL_TOKEN: ci-source-archive-only
           YLEUM_TEST_LOCAL_DOCKER: "1"
           # Same immutable legacy source-reader image observed in production.
           YLEUM_TEST_SOURCE_ARCHIVE_IMAGE: >-
