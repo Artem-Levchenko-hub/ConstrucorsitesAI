@@ -165,6 +165,11 @@ def _step_identity(step: dict[str, Any]) -> dict[str, Any]:
     seq = step.get("seq")
     if type(seq) is int and seq > 0:
         identity["seq"] = seq
+    count = step.get("actionCount")
+    if type(count) is int and 0 <= count <= 2**31 - 1:
+        identity["actionCount"] = count
+    if type(step.get("historyTruncated")) is bool:
+        identity["historyTruncated"] = step["historyTruncated"]
     return identity
 
 
@@ -172,7 +177,8 @@ def sanitize_agent_step(step: dict[str, Any]) -> dict[str, Any]:
     """Copy one agent-step payload while redacting every textual surface."""
 
     identity = _step_identity(step)
-    safe = {key: value for key, value in step.items() if key not in {"eventId", "runId", "seq"}}
+    safe = {key: value for key, value in step.items()
+            if key not in {"eventId", "runId", "seq", "actionCount", "historyTruncated"}}
     provider_error = safe.get("kind") == "provider_error"
     provider_trace = provider_error or safe.get("tool") == "provider_response"
     error_origin, known_upstream_422 = (

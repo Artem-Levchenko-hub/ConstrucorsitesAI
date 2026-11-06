@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -62,8 +64,8 @@ async def _read_progress(recorder: progress.GenerationProgress):
 
 
 def _identified_step(step, event):
-    return {**step, "eventId": str(event.id),
-            "runId": str(event.generation_run_id), "seq": event.seq}
+    return {**step, **{key: event.payload[key] for key in
+                      ("eventId", "runId", "seq", "actionCount", "historyTruncated")}}
 
 
 async def test_provider_response_keeps_bounded_structured_failure_reason(monkeypatch):
@@ -255,6 +257,8 @@ async def test_mixed_progress_keeps_wire_payload_order_and_independent_durable_s
     ]
     events, transcript = await _read_progress(recorder)
     other_events, other_transcript = await _read_progress(other)
+    expected_payloads[0] = {"message_id": message_id, **_identified_step(first_step, events[0])}
+    expected_payloads[2] = {"message_id": message_id, **_identified_step(retry_step, events[2])}
     assert transcript == [_identified_step(first_step, events[0]),
                           _identified_step(retry_step, events[2])]
     assert [event.seq for event in events] == [1, 2, 3, 4]
@@ -289,7 +293,7 @@ async def test_mixed_progress_keeps_wire_payload_order_and_independent_durable_s
     ]
 
 
-async def test_transcript_stops_at_first_200_steps_while_durable_events_continue(
+async def test_transcript_keeps_first_199_and_latest_with_full_action_count(
     test_engine,
     monkeypatch,
 ):
@@ -317,14 +321,18 @@ async def test_transcript_stops_at_first_200_steps_while_durable_events_continue
     await recorder.record_generation_event("preview.ready", {"path": "/"})
 
     events, transcript = await _read_progress(recorder)
-    assert transcript == [_identified_step(step, event)
-                          for step, event in zip(expected_steps[:200], events[:200], strict=True)]
+    retained = [*range(199), 200]
+    assert transcript == [_identified_step(expected_steps[i], events[i]) for i in retained]
+    assert transcript[-1]["actionCount"] == 201 and transcript[-1]["historyTruncated"] is True
     assert len(events) == len(published) == 202
     assert [event.seq for event in events] == list(range(1, 203))
     assert [event.event_type for event in events] == ["agent.step"] * 201 + ["preview.ready"]
     assert [event.payload for event in events[:201]] == [
-        {"message_id": str(recorder.assistant_message_id), **step} for step in expected_steps
+        {"message_id": str(recorder.assistant_message_id), **_identified_step(step, event)}
+        for step, event in zip(expected_steps, events[:201], strict=True)
     ]
+    assert [event.payload["actionCount"] for event in events[:201]] == list(range(1, 202))
+    assert [event.payload["historyTruncated"] for event in events[:201]] == [False] * 200 + [True]
     assert events[-1].payload == {
         "message_id": str(recorder.assistant_message_id),
         "path": "/",
@@ -360,7 +368,7 @@ async def test_publish_failure_observes_committed_event_and_transcript_before_ra
             assert event is not None and event.seq == 1
             assert event.generation_run_id == recorder.run_id
             assert event.message_id == recorder.assistant_message_id
-            assert event.payload == {"message_id": str(message.id), **step}
+            assert event.payload == {"message_id": str(message.id), **_identified_step(step, event)}
             assert message.agent_steps == [_identified_step(step, event)]
             visible.append(event.id)
         raise RuntimeError("synthetic publisher unavailable")
@@ -370,3 +378,38 @@ async def test_publish_failure_observes_committed_event_and_transcript_before_ra
     events, transcript = await _read_progress(recorder)
     assert visible == [events[0].id]
     assert len(events) == 1 and transcript == [_identified_step(step, events[0])]
+
+
+async def test_two_recorders_serialize_the_same_message_counter(test_engine, monkeypatch):
+    recorder = await _new_progress(async_sessionmaker(test_engine, expire_on_commit=False))
+    other = progress.GenerationProgress(
+        recorder.factory, recorder.run_id, recorder.project_id, recorder.assistant_message_id,
+    )
+    monkeypatch.setattr(progress, "publish_event", AsyncMock())
+    step = {"step": 1, "kind": "step", "action": "Read"}
+    await asyncio.gather(recorder.record_agent_step(step), other.record_agent_step(step))
+    events, transcript = await _read_progress(recorder)
+    assert [row["actionCount"] for row in transcript] == [1, 2]
+    assert [event.payload["actionCount"] for event in events] == [1, 2]
+    assert transcript[0]["eventId"] != transcript[1]["eventId"]
+
+
+async def test_restarted_recorder_continues_committed_truncated_counter(test_engine, monkeypatch):
+    recorder = await _new_progress(async_sessionmaker(test_engine, expire_on_commit=False))
+    rows = [{"step": n, "kind": "step", "action": "Read", "eventId": str(uuid4()),
+             "runId": str(recorder.run_id), "actionCount": n, "historyTruncated": False}
+            for n in range(1, 200)]
+    rows.append({"step": 450, "kind": "step", "action": "Read", "eventId": str(uuid4()),
+                 "runId": str(recorder.run_id), "actionCount": 450, "historyTruncated": True})
+    async with recorder.factory() as session:
+        message = await session.get(Message, recorder.assistant_message_id)
+        message.agent_steps = rows
+        await session.commit()
+    monkeypatch.setattr(progress, "publish_event", AsyncMock())
+    assert recorder.steps == []
+    await recorder.record_agent_step({"step": 451, "kind": "step", "action": "Read"})
+    events, transcript = await _read_progress(recorder)
+    assert len(transcript) == len(recorder.steps) == 200
+    assert transcript[:199] == rows[:199]
+    assert transcript[-1]["actionCount"] == events[-1].payload["actionCount"] == 451
+    assert transcript[-1]["historyTruncated"] is True

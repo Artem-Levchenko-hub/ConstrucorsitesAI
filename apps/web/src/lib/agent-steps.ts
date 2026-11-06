@@ -23,10 +23,24 @@ export function agentStepKind(kind: unknown): AgentStep["kind"] {
   }
 }
 
-export function countAgentActions(steps: AgentStep[]): number {
-  return steps.reduce((count, step) => count + (
-    agentStepKind(step.kind) === "step" && step.action !== CAPACITY_WAITING_COPY.title
-      ? step.repeatedCount ?? 1 : 0
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function hasCounter(step: AgentStep): boolean {
+  return typeof step.eventId === "string" && UUID_PATTERN.test(step.eventId)
+    && typeof step.runId === "string" && UUID_PATTERN.test(step.runId)
+    && Number.isInteger(step.actionCount) && step.actionCount! >= 0 && step.actionCount! <= 2 ** 31 - 1;
+}
+
+/** Null means a truncated history cannot prove its full action count. */
+export function countAgentActions(steps: AgentStep[], runId?: string): number | null {
+  const scoped = steps.filter(step => !runId || !step.runId || step.runId === runId);
+  if (scoped.some(step => step.historyTruncated === true && !hasCounter(step))) return null;
+  const counted = scoped.filter(hasCounter);
+  if (new Set(counted.map(step => step.runId)).size > 1) return null;
+  if (counted.length) return Math.max(...counted.map(step => step.actionCount!));
+  return scoped.reduce((count, step) => count + (
+    agentStepKind(step.kind) === "step" && step.tool !== "capacity_wait"
+      && step.action !== CAPACITY_WAITING_COPY.title ? step.repeatedCount ?? 1 : 0
   ), 0);
 }
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -19,12 +20,41 @@ from yleum_api.services.agent_progress import (
 )
 from yleum_api.services.generation.agent_messages import _humanize_step
 from yleum_api.services.generation.recovery_trace import bind_recovery_payload, safe_recovery_trace
-from yleum_api.services.generation_events import append_generation_event, generation_event_envelope
+from yleum_api.services.generation_events import (
+    append_generation_event,
+    generation_event_envelope,
+    redact_event_payload,
+)
 
 """Durable generation progress and the bounded assistant transcript."""
 
 
 _log = logging.getLogger("yleum_api.routers.messages")
+_STEP_METADATA = {"eventId", "runId", "seq", "actionCount", "historyTruncated"}
+
+
+def _is_action(step: Mapping[str, Any]) -> bool:
+    return ((step.get("kind") is None or step.get("kind") == "step")
+            and step.get("tool") != "capacity_wait"
+            and step.get("action") != "Ожидаю ресурсы сервера")
+
+
+def _committed_steps(value: object, run_id: UUID) -> tuple[list[dict[str, Any]], int, bool]:
+    rows = [sanitize_agent_step(row) for row in value if isinstance(row, dict)] \
+        if isinstance(value, list) else []
+    if any(row.get("runId") not in {None, str(run_id)} for row in rows):
+        raise ValueError("transcript belongs to another run")
+    truncated = isinstance(value, list) and any(
+        isinstance(row, dict) and row.get("historyTruncated") is True for row in value
+    )
+    if truncated and (not rows or type(rows[-1].get("actionCount")) is not int):
+        raise ValueError("truncated transcript action count is unavailable")
+    tail = 0
+    for row in reversed(rows):
+        if type(row.get("actionCount")) is int:
+            return rows, row["actionCount"] + tail, truncated
+        tail += int(_is_action(row))
+    return rows, tail, truncated
 
 
 @dataclass
@@ -34,10 +64,12 @@ class GenerationProgress:
     project_id: UUID
     assistant_message_id: UUID
     steps: list[dict[str, Any]] = field(default_factory=list)
+    _record_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     async def record_agent_step(self, step_row: dict[str, Any]) -> None:
         safe = sanitize_agent_step(bind_recovery_payload(
-            step_row, run_id=str(self.run_id), event_type="agent.step",
+            {key: value for key, value in step_row.items() if key not in _STEP_METADATA},
+            run_id=str(self.run_id), event_type="agent.step",
         ))
         await self._record("agent.step", safe, transcript_step=safe)
 
@@ -52,6 +84,15 @@ class GenerationProgress:
         *,
         transcript_step: dict[str, Any] | None = None,
     ) -> None:
+        # Keep publication/final-publication cache order aligned with each
+        # recorder's committed SQL order, including concurrent callbacks.
+        async with self._record_lock:
+            await self._record_locked(event_type, payload, transcript_step=transcript_step)
+
+    async def _record_locked(
+        self, event_type: str, payload: Mapping[str, object], *,
+        transcript_step: dict[str, Any] | None,
+    ) -> None:
         wire_payload = {**dict(payload), "message_id": str(self.assistant_message_id)}
         next_steps = None
         async with self.factory() as progress_session:
@@ -64,21 +105,42 @@ class GenerationProgress:
                 payload=wire_payload,
             )
             if transcript_step is not None:
+                # Durable append already holds Run. Lock/reload Message next;
+                # a restarted recorder must continue the committed counter.
+                progress_message = await progress_session.get(
+                    Message, self.assistant_message_id,
+                    with_for_update=True, populate_existing=True,
+                )
+                if progress_message is None or progress_message.project_id != self.project_id:
+                    raise ValueError("transcript message project mismatch")
+                previous, count, truncated = _committed_steps(
+                    progress_message.agent_steps, self.run_id,
+                )
+                count += int(_is_action(transcript_step))
+                if count > 2**31 - 1:
+                    raise ValueError("transcript action count exceeds limit")
                 # Exact identity survives different detail limits on the event
                 # and history surfaces. Legacy publication has no durable seq.
                 identity: dict[str, Any] = {
                     "eventId": str(event.id if event is not None else uuid4()),
                     "runId": str(self.run_id),
+                    "actionCount": count,
+                    "historyTruncated": truncated or len(previous) >= 200,
                 }
                 if event is not None:
                     identity["seq"] = event.seq
                 step = {**transcript_step, **identity}
                 wire_payload.update(identity)
-            if transcript_step is not None and len(self.steps) < 200:
-                next_steps = [*self.steps, step]
-                progress_message = await progress_session.get(Message, self.assistant_message_id)
-                if progress_message is not None:
-                    progress_message.agent_steps = next_steps
+                next_steps = [*previous[:199], step] if len(previous) >= 200 else [*previous, step]
+                progress_message.agent_steps = next_steps
+                if event is not None:
+                    # Replace JSON, not an in-place mutation. Trusted metadata
+                    # goes first so payload bounds cannot drop the counter.
+                    event.payload = redact_event_payload({
+                        **identity,
+                        **{key: value for key, value in event.payload.items()
+                           if key not in _STEP_METADATA},
+                    })
             await progress_session.commit()
             if next_steps is not None:
                 self.steps = next_steps

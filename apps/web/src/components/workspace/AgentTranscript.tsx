@@ -204,7 +204,9 @@ export function AgentTranscript({
   // Одинаковое действие подряд — одна строка со счётчиком повторов: десять
   // строк «Ожидаю ресурсы сервера» читаются как поломка, а не как ожидание.
   const rows = collapseAgentSteps(visibleSteps);
-  const actionCount = countAgentActions(visibleSteps);
+  const actionCount = countAgentActions(visibleSteps, boundRun?.id);
+  const historyTruncated = visibleSteps.some(step => step.historyTruncated === true
+    && (!boundRun || !step.runId || step.runId === boundRun.id));
   if (!projectId || (visibleSteps.length === 0 && !capacityWaiting && !hasRecovery)) return null;
   const incomplete =
     !streaming &&
@@ -253,7 +255,8 @@ export function AgentTranscript({
             </span>
           )}
           <span>
-            {actionCount > 0 ? `${actionCount} шаг. · детали`
+            {actionCount === null ? "Число шагов недоступно · детали"
+              : actionCount > 0 ? `${actionCount} шаг. · детали`
               : rows.length > 0 ? `${rows.length} этап. · детали` : "детали"}
           </span>
         </span>
@@ -271,6 +274,12 @@ export function AgentTranscript({
             {capacityWaiting && visibleSteps.length === 0 && (
               <p className="px-3 py-2 text-xs text-fg-secondary">
                 {CAPACITY_WAITING_COPY.detail}
+              </p>
+            )}
+            {historyTruncated && (
+              <p className="px-3 py-2 text-xs text-fg-secondary">
+                Сохранённая история сокращена: показаны начало и последнее событие.
+                {actionCount === null ? " Общее число шагов недоступно." : " Счётчик учитывает всю работу."}
               </p>
             )}
             {hasRecovery && (

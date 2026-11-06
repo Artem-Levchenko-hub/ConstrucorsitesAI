@@ -393,6 +393,8 @@ export function usePromptStream(projectId: string, projectSlug: string) {
               eventId: event.data.eventId,
               runId: event.data.runId,
               seq: event.data.seq,
+              actionCount: event.data.actionCount,
+              historyTruncated: event.data.historyTruncated,
               step: event.data.step ?? null,
               kind: event.data.kind ?? "step",
               action: event.data.action ?? "",

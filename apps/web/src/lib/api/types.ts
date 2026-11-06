@@ -976,6 +976,9 @@ export type AgentStep = {
   runId?: Uuid;
   /** Durable event order; legacy publication supplies identity without a sequence. */
   seq?: number;
+  /** Server cumulative count for this run, independent of retained history size. */
+  actionCount?: number;
+  historyTruncated?: boolean;
   step: number | null;
   kind: "step" | "escalate" | "stalled" | "retry" | "heartbeat"
     | "checkpoint" | "continuation" | "tool" | "provider_error";
@@ -1172,6 +1175,8 @@ export type WsEvent =
         eventId?: Uuid;
         runId?: Uuid;
         seq?: number;
+        actionCount?: number;
+        historyTruncated?: boolean;
         step: number | null;
         kind: AgentStep["kind"];
         action: string;

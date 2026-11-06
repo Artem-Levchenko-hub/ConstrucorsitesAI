@@ -7,6 +7,7 @@ import { AgentTranscript } from "@/components/workspace/AgentTranscript";
 import { usePromptStream } from "@/hooks/usePromptStream";
 import { getLatestGeneration } from "@/lib/api/messages";
 import type { AgentStep, GenerationRun, Message, WsEvent } from "@/lib/api/types";
+import { restorePersistedAgentSteps } from "@/lib/agent-steps";
 
 vi.mock("@/lib/api/messages", () => ({
   cancelGeneration: vi.fn(), getLatestGeneration: vi.fn(), sendPrompt: vi.fn(),
@@ -86,6 +87,30 @@ afterEach(async () => {
 });
 
 describe("tool liveness in the actual stream and transcript", () => {
+  it("carries the full legacy counter through stream, history restore and replay", async () => {
+    const runId = "11111111-1111-1111-1111-111111111111";
+    await act(async () => {
+      client.setQueryData<GenerationRun>(["generation", "project-1"], previous => ({ ...previous!, id: runId }));
+      TestSocket.instances[0].emit({ type: "agent.step", data: {
+        message_id: "message-1", eventId: "22222222-2222-2222-2222-222222222222", runId,
+        step: 201, kind: "step", action: "Читаю файл", path: "page.tsx",
+        actionCount: 201, historyTruncated: true,
+      } });
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(steps()).toHaveLength(1);
+    expect(steps()[0]).toMatchObject({ actionCount: 201, historyTruncated: true });
+    expect(container.textContent).toContain("201 шаг.");
+    expect(container.textContent).toContain("Сохранённая история сокращена");
+    await act(async () => {
+      const persisted = [{ ...steps()[0], detail: "Saved detail" }];
+      client.setQueryData(["agent-steps", "project-1", "message-1"], restorePersistedAgentSteps(steps(), persisted));
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(steps()).toHaveLength(1);
+    expect(container.textContent).toContain("201 шаг.");
+  });
+
   it("deduplicates identified legacy delivery while preserving actual repeated actions", async () => {
     const data = { message_id: "message-1", eventId: "legacy-event-1", runId: "run-1",
       step: 1, kind: "step" as const, action: "Читаю файл", path: "page.tsx" };

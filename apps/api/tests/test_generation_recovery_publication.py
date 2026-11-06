@@ -49,6 +49,11 @@ async def test_owned_publication_ack_loss_never_repeats_git_snapshot_or_quota(
     claim = state.continuation_claim
     assert claim is not None
     await db_session.refresh(run)
+    from tests.test_generation_publication_steps import committed_history
+
+    retained_steps = committed_history(run.id)
+    message.agent_steps = retained_steps
+    await db_session.commit()
     from yleum_api.services.generation import recovery_store
     from yleum_api.services.orchestrator_client import ProjectCellWorkspaceIdentity
 
@@ -128,7 +133,7 @@ async def test_owned_publication_ack_loss_never_repeats_git_snapshot_or_quota(
         files=harness.files,
         ids=GenerationIds(run.id, run.project_id, run.user_id, run.user_message_id, message.id),
         model_id="synthetic",
-        progress=SimpleNamespace(steps=2),
+        progress=SimpleNamespace(steps=[]),  # Supported finalization-only cold recovery.
         project_info=SimpleNamespace(template="max_miniapp"),
         prompt_text="task_density_v1",
         runtime=GenerationRuntime(handle=coordinator.executor, coordinator=coordinator),
@@ -145,6 +150,10 @@ async def test_owned_publication_ack_loss_never_repeats_git_snapshot_or_quota(
             with pytest.raises(RecoveryContractError if before_sql else OSError):
                 await agent_publication.publish_agent_candidate(**kwargs)
             await db_session.refresh(run)
+            await db_session.refresh(message)
+            assert message.agent_steps == retained_steps
+            assert message.agent_steps[-1]["actionCount"] == 201
+            assert message.agent_steps[-1]["historyTruncated"] is True
             current = ex.recovery_state(run)
             # The authoritative receipt is read without re-running finalization,
             # source preparation, Git, quota or a second model request.
@@ -208,6 +217,10 @@ async def test_owned_publication_ack_loss_never_repeats_git_snapshot_or_quota(
             else:
                 await agent_pipeline.resume_agent_generation(claim)
             original_pipeline.assert_not_awaited()
+            await db_session.refresh(message)
+            assert message.agent_steps[:199] == retained_steps[:199]
+            assert message.agent_steps[-1]["actionCount"] >= 201
+            assert message.agent_steps[-1]["historyTruncated"] is True
             assert len(calls) == 1 and len(quota) == expected_count
         finally:
             ex._SESSION_OWNER.reset(token)

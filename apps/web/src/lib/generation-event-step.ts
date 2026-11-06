@@ -24,6 +24,8 @@ export function generationEventStep(envelope: GenerationEventEnvelope): AgentSte
   if (envelope.type === "agent.step") {
     return {
       ...base, eventId: envelope.event_id,
+      actionCount: typeof data.actionCount === "number" ? data.actionCount : undefined,
+      historyTruncated: data.historyTruncated === true,
       step: typeof data.step === "number" ? data.step : null, kind: agentStepKind(data.kind),
       action: typeof data.action === "string" ? data.action : "",
       path: typeof data.path === "string" ? data.path : "",

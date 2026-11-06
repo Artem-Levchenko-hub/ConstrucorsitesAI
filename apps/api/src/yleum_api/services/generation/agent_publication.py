@@ -435,6 +435,11 @@ async def publish_agent_candidate(
     _promotion_permit: PromotionPermit | None = None,
     continuation: ExecutionDriver | None = None,
 ) -> None:
+    """Publish result fields without replacing the recorder's committed history.
+
+    ``progress.steps`` is an invocation-local cache and may be empty or stale
+    after recovery. GenerationProgress owns transcript writes in its transaction.
+    """
     async with factory() as session:
         run = await session.get(GenerationRun, ids.run_id)
         if run is None:
@@ -516,7 +521,6 @@ async def publish_agent_candidate(
                 msg.content = accumulated
                 msg.snapshot_id = snapshot.id
                 msg.tokens_out = msg.tokens_out or 0
-                msg.agent_steps = progress.steps or None
             await _consume_free_generation(session)
             if continuation is not None:
                 await _confirm_publication(
@@ -594,7 +598,6 @@ async def publish_agent_candidate(
             if msg is not None:
                 msg.content = accumulated
                 msg.tokens_out = msg.tokens_out or 0
-                msg.agent_steps = progress.steps or None
             if continuation is not None:
                 await _confirm_publication(
                     session,

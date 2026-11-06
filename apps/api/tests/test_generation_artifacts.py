@@ -62,6 +62,7 @@ def records():
         content="before",
         tokens_in=7,
         tokens_out=None,
+        agent_steps=[{"action": "write", "path": "page.txt"}],
     )
     run = GenerationRun(
         id=uuid4(),

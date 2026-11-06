@@ -58,6 +58,50 @@ function render(initialSteps: AgentStep[], cachedSteps?: AgentStep[]) {
 }
 
 describe("per-message action count across live events and history", () => {
+  const countedRun = "11111111-1111-1111-1111-111111111111";
+  const countedRow = (number: number): AgentStep => ({
+    eventId: `00000000-0000-0000-0000-${number.toString(16).padStart(12, "0")}`,
+    runId: countedRun, step: number, kind: "step", action: "Читаю файл", path: "",
+    actionCount: number, historyTruncated: number > 200,
+  });
+
+  it("keeps the full201 action count with only first199 and latest retained after reload", () => {
+    const live = Array.from({ length: 201 }, (_, index) => countedRow(index + 1));
+    const saved = [...live.slice(0, 199), live[200]];
+    expect(countAgentActions(live, countedRun)).toBe(201);
+    expect(countAgentActions(saved, countedRun)).toBe(201);
+    expect(countAgentActions(restorePersistedAgentSteps(live, saved)!, countedRun)).toBe(201);
+    expect(countAgentActions(mergeAgentStepsBySequence(saved, live), countedRun)).toBe(201);
+  });
+
+  it("takes a maximum within the bound run without summing heartbeats or foreign counters", () => {
+    const zero = { ...countedRow(1), actionCount: 0, kind: "checkpoint" as const };
+    expect(countAgentActions([zero, zero], countedRun)).toBe(0);
+    const current = countedRow(201);
+    const foreign = { ...countedRow(2), runId: "22222222-2222-2222-2222-222222222222", actionCount: 999 };
+    expect(countAgentActions([current, { ...current, kind: "provider_error" }, foreign], countedRun)).toBe(201);
+    expect(countAgentActions([current, foreign])).toBeNull();
+    expect(countAgentActions([{ ...zero, actionCount: undefined, tool: "capacity_wait" },
+      { ...zero, actionCount: undefined, kind: "step", action: "Ожидаю ресурсы сервера" }])).toBe(0);
+  });
+
+  it.each([undefined, -1, 2 ** 31, Number.NaN, 1.5])("shows unknown for a truncated history with counter=%s", (actionCount) => {
+    const step = { ...countedRow(201), actionCount };
+    expect(countAgentActions([countedRow(199), step], countedRun)).toBeNull();
+  });
+
+  it("renders an honest truncated-history notice and an unavailable count", () => {
+    const client = new QueryClient();
+    const html = renderToStaticMarkup(<QueryClientProvider client={client}>
+      <AgentTranscript projectId="project" messageId="count-message" streaming
+        initialSteps={[{ ...countedRow(201), actionCount: undefined }]} />
+    </QueryClientProvider>);
+    expect(html).toContain("Число шагов недоступно");
+    expect(html).toContain("Сохранённая история сокращена");
+    expect(html).not.toContain("199 шаг.");
+    client.clear();
+  });
+
   it("counts the same 48 actions live and after reload, keeping older failures isolated", () => {
     const snapshot = history();
     const liveHtml = render(snapshot, replay(snapshot));
