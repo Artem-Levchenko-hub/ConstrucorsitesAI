@@ -8,6 +8,7 @@ import {
   Check,
   CheckCircle2,
   CircleHelp,
+  CirclePlay,
   ExternalLink,
   LifeBuoy,
 } from "lucide-react";
@@ -16,6 +17,8 @@ import type { ReactNode } from "react";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import { GuideLearning } from "@/components/learning/ProductLearning";
 import { GoldenPathVisual, GuideScreenshot } from "@/components/max/guide/GuideVisuals";
+import { GuideVideoLesson } from "@/components/max/guide/GuideVideoLesson";
+import { guideChapters, guideVideoId, type GuideLessonId } from "@/lib/guide-lessons";
 import { getMaxHelpBrandProps } from "@/lib/max-help-brand";
 import "@/components/max/max-studio.css";
 import "@/components/marketing/max-public.css";
@@ -24,26 +27,8 @@ import "./guide-page.css";
 export const metadata: Metadata = {
   title: "Полное руководство Yleum",
   description:
-    "Как создать приложение в Yleum, наполнить каталог, подключить сервисы, опубликовать и запустить в MAX. Пошаговое руководство с реальными снимками экранов.",
+    "Как создать приложение в Yleum, наполнить каталог, подключить сервисы, опубликовать и запустить в MAX. Пошаговое руководство с видеоуроками и снимками экранов.",
 };
-
-const chapters = [
-  ["start", "Перед началом", "00"],
-  ["account", "Регистрация и вход", "01"],
-  ["project", "Создание приложения", "02"],
-  ["builder", "Редактор и проверка", "03"],
-  ["settings", "Документы и каталог", "04"],
-  ["integrations", "Подключение сервисов", "05"],
-  ["amocrm", "Заявки в amoCRM", "05.1"],
-  ["max-bot", "Бот и подключение MAX", "06"],
-  ["publish", "Публикация приложения", "07"],
-  ["partner", "Адрес приложения в MAX", "08"],
-  ["acceptance", "Проверка в MAX", "09"],
-  ["operations", "Ежедневная работа", "10"],
-  ["billing", "Баланс и тариф", "11"],
-  ["errors", "Если что-то не работает", "12"],
-  ["checklists", "Списки для запуска", "13"],
-] as const;
 
 function GuideSection({
   id,
@@ -53,7 +38,7 @@ function GuideSection({
   lead,
   children,
 }: {
-  id: string;
+  id: GuideLessonId;
   number: string;
   eyebrow: string;
   title: string;
@@ -67,7 +52,10 @@ function GuideSection({
         <h2 id={`${id}-title`}>{title}</h2>
         <p className="guide-chapter-lead">{lead}</p>
       </header>
-      <div className="guide-chapter-body">{children}</div>
+      <div className="guide-chapter-body">
+        <GuideVideoLesson lesson={id} title={title} />
+        {children}
+      </div>
     </section>
   );
 }
@@ -137,13 +125,13 @@ function Checklist({ title, items }: { title: string; items: string[] }) {
   );
 }
 
-function ChapterLinks() {
+function ChapterLinks({ videos = false }: { videos?: boolean }) {
   return (
-    <div className="guide-chapter-links">
-      {chapters.map(([id, label, number]) => (
-        <a key={id} href={`#${id}`}>
+    <div className={videos ? "guide-chapter-links guide-video-links" : "guide-chapter-links"}>
+      {guideChapters.map(({ id, title, number }) => (
+        <a key={id} href={`#${videos ? guideVideoId(id) : id}`}>
           <span className="w-6 shrink-0 font-mono text-[10px] text-[#828491]">{number}</span>
-          {label}
+          {title}
         </a>
       ))}
     </div>
@@ -177,6 +165,7 @@ export default async function MaxGuidePage() {
             <p className="mt-7 max-w-[750px] text-base leading-7 text-white/60 sm:text-lg">От регистрации и первой сборки до каталога, подключения бота и ежедневной работы. На настоящих экранах показываем, куда нажать, зачем это нужно и что проверить после.</p>
             <div className="mt-8 flex flex-wrap gap-3">
               <div className="guide-learning-entry"><GuideLearning /></div>
+              <a href="#video-lessons" className="omnia-button min-h-11 border border-white/20 px-5 text-white hover:bg-white/5"><CirclePlay className="size-4" aria-hidden="true" />Видеоуроки</a>
               <Link href="/max/start" className="omnia-button omnia-button-primary min-h-11 px-5">Быстрый старт <ArrowRight className="size-4" aria-hidden="true" /></Link>
               <a href="#errors" className="omnia-button min-h-11 border border-white/20 px-5 text-white hover:bg-white/5">Нужна помощь <LifeBuoy className="size-4" aria-hidden="true" /></a>
             </div>
@@ -188,9 +177,10 @@ export default async function MaxGuidePage() {
               <li>Для первого запуска идите по главам 01–09.</li>
               <li>Номера и стрелки на снимках указывают на нужные действия.</li>
               <li>Снимок можно открыть крупнее по ссылке под ним.</li>
+              <li>В каждой главе есть видео с озвучкой и русскими субтитрами.</li>
               <li>Проверяйте результат каждого шага в своём приложении.</li>
             </ul>
-            <p className="mt-5 border-t border-white/10 pt-4 text-xs leading-5 text-white/45">Обновлено 30 октября 2026. Источник и дата каждого настоящего снимка указаны под ним.</p>
+            <p className="mt-5 border-t border-white/10 pt-4 text-xs leading-5 text-white/45">Обновлено <time dateTime="2026-11-06">6 ноября 2026 года</time>. Источник и дата каждого снимка указаны под ним.</p>
           </div>
         </div>
         <div className="guide-journey-wrap"><GoldenPathVisual /></div>
@@ -209,6 +199,12 @@ export default async function MaxGuidePage() {
             <summary className="cursor-pointer text-sm font-semibold">Оглавление руководства</summary>
             <nav aria-label="Главы руководства" className="mt-3"><ChapterLinks /></nav>
           </details>
+
+          <section id="video-lessons" className="guide-video-index" aria-labelledby="video-lessons-title">
+            <h2 id="video-lessons-title">Видеоуроки</h2>
+            <p>Выберите тему. Ролик откроется в соответствующей главе.</p>
+            <nav aria-label="Темы видеоуроков"><ChapterLinks videos /></nav>
+          </section>
 
           <GuideSection id="start" number="00" eyebrow="Перед началом" title="Подготовьте идею, почту и телефон" lead="Начать можно с простого описания: для кого приложение и что человек должен в нём сделать. Бота и внешние сервисы вы подключите, когда дойдёте до запуска.">
             <div className="grid gap-4 sm:grid-cols-2">
@@ -231,7 +227,7 @@ export default async function MaxGuidePage() {
             <p className="text-sm leading-6 text-[#9fa1b1]">После регистрации и входа вы попадёте к своим приложениям. На снимке ниже показан этот результат.</p>
             <GuideScreenshot id="projects" />
             <StepList steps={[
-              { title: "Заполните форму", text: <>Откройте <Link href="/max/register" className="text-accent hover:underline">регистрацию</Link>. Укажите рабочий email и телефон с кодом страны. Придумайте пароль не короче 8 символов хотя бы с одной цифрой и повторите его.</> },
+              { title: "Заполните форму", text: <>Откройте <Link href="/max/register" className="text-accent hover:underline">регистрацию</Link>. Укажите рабочий email и телефон с кодом страны. Придумайте пароль и повторите его. Актуальные требования показаны рядом с полем пароля.</> },
               { title: "Прочитайте условия и продолжите", text: <>Отметьте обязательные согласия и нажмите <strong>«Продолжить»</strong>. Получение новостей выбирайте по желанию.</> },
               { title: "Подтвердите телефон", text: <>В появившейся форме нажмите <strong>«Получить код по SMS»</strong>. Введите полученные 6 цифр в поле <strong>«Код из SMS»</strong> и нажмите <strong>«Подтвердить телефон»</strong>. Если код не пришёл, проверьте номер и воспользуйтесь повторной отправкой, когда она станет доступна.</>, result: "Открылся аккаунт Yleum; можно перейти к своим приложениям." },
               { title: "При следующем входе используйте email и пароль", text: <>Откройте <Link href="/login?next=/max" className="text-accent hover:underline">страницу входа</Link>. Если забыли пароль, воспользуйтесь восстановлением на ней. Отдельное подтверждение email для начала работы не требуется.</> },
@@ -351,7 +347,7 @@ export default async function MaxGuidePage() {
           <GuideSection id="acceptance" number="09" eyebrow="Проверка в MAX" title="Пройдите путь настоящего пользователя" lead="Постоянный адрес и сохранённая настройка бота — повод начать проверку в MAX. Пройдите свой основной сценарий и убедитесь, что результат сохранился.">
             <StepList steps={[
               { title: "Откройте своего бота в MAX", text: <>Запустите мини-приложение доступной у бота кнопкой. Сверьте название, первый экран и каталог. Если открывается другое приложение, перепроверьте бота и адрес в его настройках.</> },
-              { title: "Создайте пробную заявку, заказ или запись", text: <>Выберите то действие, ради которого вы делали приложение. Используйте понятные тестовые данные, чтобы отличить проверку от обращений клиентов. Убедитесь, что появилась подтверждённая запись, а не только сообщение на экране.</> },
+              { title: "Создайте пробную заявку, заказ или запись", text: <>Выберите главное действие приложения и используйте понятные тестовые данные. Для пробной оплаты подключите тестовый магазин ЮKassa. Убедитесь, что запись сохранилась.</> },
               { title: "Закройте и снова откройте приложение", text: <>Проверьте, сохранился ли результат там, где его должен видеть пользователь. В Yleum откройте <strong>«Управление»</strong> и найдите пробное обращение, если этот раздел предусмотрен вашим приложением.</> },
               { title: "Попросите второго пользователя повторить путь", text: <>Используйте другой аккаунт MAX. Второй человек должен видеть свои данные. Убедитесь, что личные заявки, заказы и профиль первого пользователя ему недоступны.</>, result: "Главный сценарий работает внутри MAX, результат сохраняется, личные данные пользователей разделены." },
             ]} />
@@ -367,6 +363,14 @@ export default async function MaxGuidePage() {
               { title: "Добавляйте новые функции через редактор", text: <>Опишите доработку ИИ, проверьте её в предпросмотре и опубликуйте. После публикации повторно проверьте изменённый сценарий в MAX.</> },
             ]} />
             <Note title="Если управление пока не подключено">Прочитайте сообщение в разделе. Если предложено <strong>«Подключить управление»</strong>, это сохранит подготовленные настройки. Для появления новых функций в старом приложении может потребоваться совместимая доработка в редакторе и публикация. Не считайте сохранение настройки завершённым запуском функции.</Note>
+          </GuideSection>
+
+          <GuideSection id="staff" number="10.1" eyebrow="Команда и рабочие очереди" title="Настройте доступ команды к заказам и заявкам" lead="Владелец открывает «Управление», затем «Команда». Здесь настраивают очереди и выбирают рабочие разделы для каждого сотрудника.">
+            <StepList steps={[
+              { title: "Настройте рабочие очереди", text: <>Для включения очереди нужна совместимая опубликованная версия. Если Yleum попросит обновить приложение, подготовьте доработку в чате, опубликуйте версию и вернитесь в «Команду». В блоке <strong>«Настройки очередей»</strong> отметьте <strong>«Принимать заявки»</strong> для заявок. Для заказов выберите способ в поле <strong>«Оплата заказов»</strong> и укажите время приготовления. Для онлайн-оплаты подключите ЮKassa в разделе «Бот и подключения».</> },
+              { title: "Пригласите сотрудника", text: <>Укажите имя и email, отметьте доступные рабочие разделы и нажмите <strong>«Создать приглашение»</strong>. Передайте персональную ссылку сотруднику. Она действует до указанного срока и сработает один раз для аккаунта с указанным подтверждённым email. В списке команды можно изменить или отозвать доступ.</> },
+              { title: "Проверьте рабочий кабинет", text: <>Нажмите <strong>«Открыть рабочий кабинет»</strong> и выберите доступную очередь. Сотрудник открывает обращение и нажимает <strong>«Взять в работу»</strong>. У заказа можно отметить готовность и выдачу. При закрытии заявки нужно указать итог. Заказы с тестовой оплатой доступны по фильтру <strong>«Проверка»</strong>.</> },
+            ]} />
           </GuideSection>
 
           <GuideSection id="billing" number="11" eyebrow="Баланс и тариф" title="Проверяйте условия перед оплатой" lead="Откройте меню аккаунта. В нём есть «Баланс», «Тариф» и «Операции». Генерации и правки нужны для работы ИИ; обычное редактирование данных каталога их не расходует.">

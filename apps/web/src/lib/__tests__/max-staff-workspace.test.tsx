@@ -4,10 +4,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MaxStaffInvite } from "@/components/max/MaxStaffInvite";
 import { MaxStaffQueue } from "@/components/max/MaxStaffQueue";
+import { MaxStaffShell } from "@/components/max/MaxStaffShell";
 import type { StaffLead, StaffOrder } from "@/lib/api/max-staff";
 
 const router = vi.hoisted(() => ({ replace: vi.fn(), refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
+vi.mock("@/app/(auth)/actions", () => ({ logoutAction: vi.fn() }));
 
 const project = "00000000-0000-4000-8000-000000000001";
 const acceptedPath = `/max/staff/${project}`;
@@ -66,6 +68,14 @@ async function openRow(title: string) {
 function error(code: string, status: number) {
   return Response.json({ error: { code, message: "Fixture" } }, { status });
 }
+
+it("links staff to their video lesson in a new tab", async () => {
+  await render(<MaxStaffShell project><p>Рабочая очередь</p></MaxStaffShell>);
+  const link = container.querySelector<HTMLAnchorElement>('header a[href="/max/guide#video-staff"]');
+  expect(link?.textContent?.trim()).toMatch(/^Обучение/);
+  expect(link?.target).toBe("_blank");
+  expect(link?.relList.contains("noopener")).toBe(true);
+});
 
 it("scrubs the invite, preserves it across auth, and accepts only after an explicit click", async () => {
   const fetch = vi.fn(async (_url: string, _init: RequestInit) => Response.json({ project_id: project }));

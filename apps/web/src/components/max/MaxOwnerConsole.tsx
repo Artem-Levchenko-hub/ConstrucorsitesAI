@@ -84,7 +84,8 @@ function OwnerConsole({ projectId, projectName, initialTeam }: OwnerConsoleProps
     setSelected(active ?? "team");
     enable.mutate();
   }
-  return <MaxSectionShell projectId={projectId} projectName={projectName} active="manage" eyebrow="Ежедневная работа" title="Управление" lead="Работайте с обращениями и управляйте доступом сотрудников.">
+  return <MaxSectionShell projectId={projectId} projectName={projectName} active="manage" eyebrow="Ежедневная работа" title="Управление"
+    lead="Работайте с обращениями и управляйте доступом сотрудников." learningContext={active === "team" || staffResource ? "staff-team" : undefined}>
     <div className="max-owner-console">
       {overview.isError && <div role="alert" className="max-owner-notice" data-tone="error">
         <strong><CircleAlert aria-hidden="true" className="size-4" />Не удалось открыть управление</strong>
@@ -132,7 +133,7 @@ function OwnerConsole({ projectId, projectName, initialTeam }: OwnerConsoleProps
           </div>}
           {resource && (!needsTeamSettings || team.isSuccess || teamSettings) && (staffResource ? <>
             <MaxStaffQueue key={staffResource} projectId={projectId} resource={staffResource} members={team.data?.members} onDirtyChange={onDirtyChange} />
-            <LegacyRecords key={resource.id} projectId={projectId} resource={resource} />
+            <LegacyRecords key={`legacy-${resource.id}`} projectId={projectId} resource={resource} />
           </> : <MaxOwnerRecords key={resource.id} projectId={projectId} resource={resource} onDirtyChange={onDirtyChange} />)}
           {active === "team" && <MaxStaffTeam projectId={projectId} team={team} onDirtyChange={onDirtyChange} />}
         </div>

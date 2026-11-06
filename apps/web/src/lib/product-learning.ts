@@ -1,45 +1,53 @@
-export type LearningStep = { id: string; selector: string; title: string; body: string };
-export type LearningDefinition = { id: string; title: string; steps: readonly LearningStep[] };
+import { guideChapters, type GuideLessonId } from "./guide-lessons";
+import { maxConnectionSearch } from "./max-editor-entry";
+
+export type LearningStep = { id: string; selector: string; title: string; body: string; lesson?: GuideLessonId };
+export type LearningDefinition = { id: string; title: string; steps: readonly LearningStep[]; lesson: GuideLessonId };
 type Rect = { left: number; top: number; width: number; height: number };
 
-const step = (id: string, title: string, body: string, selector = `[data-learning="${id}"]`): LearningStep => ({ id, selector, title, body });
-const cabinet: LearningDefinition = { id: "cabinet", title: "Обучение", steps: [
-  step("create-project", "Создайте первое приложение", "Начните с описания своей идеи."),
-  step("projects-search", "Найдите своё приложение", "Введите название в поиске, чтобы вернуться к нужному проекту."),
+function step(id: string, title: string, body: string, { selector = `[data-learning="${id}"]`, lesson }: {
+  selector?: string; lesson?: GuideLessonId;
+} = {}): LearningStep {
+  return { id, selector, title, body, lesson };
+}
+
+const cabinet: LearningDefinition = { id: "cabinet", title: "Обучение", lesson: "start", steps: [
+  step("create-project", "Создайте первое приложение", "Начните с описания своей идеи.", { lesson: "project" }),
+  step("projects-search", "Найдите своё приложение", "Введите название в поиске, чтобы вернуться к нужному проекту.", { lesson: "project" }),
   step("projects-help", "Помощь всегда рядом", "Здесь находятся быстрый старт по созданию приложения и подробная инструкция по его запуску в MAX."),
-  step("account-menu", "Ваш аккаунт", "В меню аккаунта доступны профиль, безопасность, баланс, операции и тариф."),
+  step("account-menu", "Ваш аккаунт", "В меню аккаунта доступны профиль, безопасность, баланс, операции и тариф.", { lesson: "account" }),
 ] };
-const editor: LearningDefinition = { id: "editor", title: "Редактор приложения", steps: [
+const editor: LearningDefinition = { id: "editor", title: "Редактор приложения", lesson: "builder", steps: [
   step("editor-conversation", "Опишите нужное изменение", "В диалоге с ИИ создают и меняют экраны и функции. Проверяйте результат перед публикацией."),
   step("editor-preview", "Проверьте приложение", "Предпросмотр помогает пройти сценарий пользователя. На узком экране он открывается отдельной кнопкой."),
-  step("editor-manage", "Управляйте приложением", "Из «Управления» можно перейти к заказам, каталогу, данным приложения и статистике."),
-  step("editor-services", "Подключите нужные сервисы", "В «Интеграциях» выбирают сервис и проверяют подключение. Обучение не запрашивает доступ и не запускает доработку."),
-  step("editor-publish", "Подготовьте запуск", "Кнопка публикации открывает проверку готовности и следующий шаг запуска в MAX."),
-  step("editor-projects", "Проекты и аккаунт", "Это меню возвращает к вашим проектам и настройкам аккаунта."),
+  step("editor-manage", "Управляйте приложением", "Из «Управления» можно перейти к заказам, каталогу, данным приложения и статистике.", { lesson: "operations" }),
+  step("editor-services", "Подключите нужные сервисы", "В «Интеграциях» выбирают сервис и проверяют подключение. Обучение не запрашивает доступ и не запускает доработку.", { lesson: "integrations" }),
+  step("editor-publish", "Подготовьте запуск", "Кнопка публикации открывает проверку готовности и следующий шаг запуска в MAX.", { lesson: "publish" }),
+  step("editor-projects", "Проекты и аккаунт", "Это меню возвращает к вашим проектам и настройкам аккаунта.", { lesson: "account" }),
 ] };
 
-const panel = (id: string, title: string, body: string): LearningDefinition => ({ id, title, steps: [
+const panel = (id: string, title: string, body: string, lesson: GuideLessonId): LearningDefinition => ({ id, title, lesson, steps: [
   step("editor-panel", title, body),
 ] });
 const panels = {
-  publish: panel("publish", "Проверьте готовность к публикации", "Здесь показаны условия запуска и доступное следующее действие. Проверьте сборку, документы и подключение MAX. Публикацию выполняете вы сами."),
-  max: panel("max", "Подключите приложение к MAX", "Пройдите этапы подключения бота по порядку. Токены вводят только в предназначенную для них форму, не в диалог с ИИ."),
-  services: panel("services", "Выберите нужную интеграцию", "Выберите сервис и изучите условия подключения. Подключение аккаунта и изменение приложения — отдельные действия; обучение их не выполняет."),
-  navigation: panel("navigation", "Проекты и аккаунт", "Здесь находятся переходы к проектам и настройкам аккаунта. Обучение не переключает проект: выберите нужную ссылку после его закрытия."),
-  tools: panel("tools", "Инструменты редактора", "В этом окне собраны доступные инструменты проекта. Изучите их назначение перед использованием; обучение ничего не запускает."),
-  preview: panel("preview", "Предпросмотр приложения", "Здесь можно пройти сценарий пользователя и проверить результат. Обучение не нажимает кнопки внутри приложения и не отправляет его формы."),
+  publish: panel("publish", "Проверьте готовность к публикации", "Здесь показаны условия запуска и доступное следующее действие. Проверьте сборку, документы и подключение MAX. Публикацию выполняете вы сами.", "publish"),
+  max: panel("max", "Подключите приложение к MAX", "Пройдите этапы подключения бота по порядку. Токены вводят только в предназначенную для них форму, не в диалог с ИИ.", "max-bot"),
+  services: panel("services", "Выберите нужную интеграцию", "Выберите сервис и изучите условия подключения. Подключение аккаунта и изменение приложения — отдельные действия; обучение их не выполняет.", "integrations"),
+  navigation: panel("navigation", "Проекты и аккаунт", "Здесь находятся переходы к проектам и настройкам аккаунта. Обучение не переключает проект: выберите нужную ссылку после его закрытия.", "account"),
+  tools: panel("tools", "Инструменты редактора", "В этом окне собраны доступные инструменты проекта. Изучите их назначение перед использованием; обучение ничего не запускает.", "builder"),
+  preview: panel("preview", "Предпросмотр приложения", "Здесь можно пройти сценарий пользователя и проверить результат. Обучение не нажимает кнопки внутри приложения и не отправляет его формы.", "builder"),
 };
-const details: LearningDefinition = { id: "details", title: "Данные приложения", steps: [
-  step("data-sections", "Выберите раздел данных", "Вкладки разделяют основные сведения, контент, документы и политики. Обучение не переключает вкладки и не меняет введённые данные.", '.max-setup-tabs [role="tablist"]'),
-  step("data-content", "Проверьте данные перед сохранением", "Изменяйте поля самостоятельно. Для изменения экранов с ИИ предусмотрено отдельное действие.", '[data-testid="max-settings-scroll-region"]'),
+const details: LearningDefinition = { id: "details", title: "Данные приложения", lesson: "settings", steps: [
+  step("data-sections", "Выберите раздел данных", "Вкладки разделяют основные сведения, контент, документы и политики. Обучение не переключает вкладки и не меняет введённые данные.", { selector: '.max-setup-tabs [role="tablist"]' }),
+  step("data-content", "Проверьте данные перед сохранением", "Изменяйте поля самостоятельно. Для изменения экранов с ИИ предусмотрено отдельное действие.", { selector: '[data-testid="max-settings-scroll-region"]' }),
 ] };
-const projectSections: Record<string, [string, string]> = {
-  catalog: ["Каталог приложения", "Здесь управляют позициями каталога. После сохранения проверьте название, цену и доступность в своём приложении."],
-  manage: ["Ежедневная работа", "Здесь собраны доступные разделы управления. Их набор зависит от функций вашего приложения."],
-  dashboard: ["Статистика приложения", "Изучайте показатели и состояния, доступные на этой странице. Обучение не читает данные ваших клиентов."],
-  settings: ["Настройки приложения", "Здесь находятся параметры приложения. Проверяйте внесённые изменения перед сохранением."],
-  integrations: ["Интеграции приложения", "Выберите сервис и проверьте статус его подключения. Доступ предоставляется только вашим отдельным действием."],
-  publish: ["Запуск приложения", "Проверьте готовность сборки и условия публикации, затем выполните нужный шаг самостоятельно."],
+const projectSections: Record<string, [title: string, body: string, lesson: GuideLessonId]> = {
+  catalog: ["Каталог приложения", "Здесь управляют позициями каталога. После сохранения проверьте название, цену и доступность в своём приложении.", "settings"],
+  manage: ["Ежедневная работа", "Здесь собраны доступные разделы управления. Их набор зависит от функций вашего приложения.", "operations"],
+  dashboard: ["Статистика приложения", "Изучайте показатели и состояния, доступные на этой странице. Обучение не читает данные ваших клиентов.", "operations"],
+  settings: ["Настройки приложения", "Здесь находятся параметры приложения. Проверяйте внесённые изменения перед сохранением.", "settings"],
+  integrations: ["Интеграции приложения", "Выберите сервис и проверьте статус его подключения. Доступ предоставляется только вашим отдельным действием.", "integrations"],
+  publish: ["Запуск приложения", "Проверьте готовность сборки и условия публикации, затем выполните нужный шаг самостоятельно.", "publish"],
 };
 const accounts: Record<string, [string, string, string]> = {
   "/account": ["account", "Ваш профиль", "Основные сведения аккаунта находятся здесь. Обучение ничего не сохраняет и не меняет."],
@@ -48,31 +56,24 @@ const accounts: Record<string, [string, string, string]> = {
   "/billing/plan": ["plan", "Ваш тариф", "Здесь показаны режим эксплуатации приложения и доступные лимиты. Обучение не меняет тариф."],
   "/billing/transactions": ["transactions", "История операций", "Здесь проверяют платежи, начисления и их статусы. Обучение не выполняет финансовых операций."],
 };
-const guideChapters = [
-  ["start", "Перед началом", "Определите задачу приложения и главный сценарий клиента."],
-  ["account", "Регистрация и вход", "Изучите порядок входа и подтверждения аккаунта."],
-  ["project", "Создание приложения", "Пройдите от описания идеи до подтверждения данных проекта."],
-  ["builder", "Редактор и проверка", "Узнайте, как описывать изменения и проверять результат."],
-  ["settings", "Документы и каталог", "Разберитесь, где сохраняются данные приложения и позиции каталога."],
-  ["integrations", "Подключение сервисов", "Изучите подключение оплаты, CRM и аналитики."],
-  ["amocrm", "Заявки в amoCRM", "Этот пример пригодится, если вашему приложению нужна CRM."],
-  ["max-bot", "Бот и подключение MAX", "Подготовьте бота и изучите этапы его подключения."],
-  ["publish", "Публикация приложения", "Проверьте условия получения постоянного адреса приложения."],
-  ["partner", "Адрес приложения в MAX", "Узнайте, где указать опубликованный адрес в настройках бота."],
-  ["acceptance", "Проверка в MAX", "Пройдите основной сценарий настоящего пользователя."],
-  ["operations", "Ежедневная работа", "Изучите разделы управления после запуска."],
-  ["billing", "Баланс и тариф", "Проверьте условия использования до оплаты."],
-  ["errors", "Если что-то не работает", "Найдите подходящий порядок проверки и обращения в поддержку."],
-  ["checklists", "Списки для запуска", "Используйте списки для самостоятельной проверки готовности."],
-] as const;
-const guide: LearningDefinition = { id: "guide", title: "Руководство Yleum", steps: [
+const guide: LearningDefinition = { id: "guide", title: "Руководство Yleum", lesson: "start", steps: [
   step("guide-journey", "Ваш путь к запуску", "Переходите по шагам кнопками «Далее» и «Назад»: обучение прокрутит руководство и выделит настоящий заголовок. Действия в приложении остаются за вами."),
-  ...guideChapters.map(([id, title, body]) => step(id, title, body, `#${id} h2`)),
+  ...guideChapters.map(({ id, title, description }) => step(id, title, description, { selector: `#${id} h2`, lesson: id })),
 ] };
+
+function projectSectionLearning(id: string, lesson?: GuideLessonId): LearningDefinition {
+  const [title, body, sectionLesson] = projectSections[id];
+  return { id, title, lesson: lesson ?? sectionLesson, steps: [
+    step("project-section", title, body),
+    step("project-navigation", "Разделы приложения", "Переключайтесь между редактором, данными, управлением и другими доступными разделами."),
+    step("project-help", "Подробная инструкция", "Помощь открывает соответствующий раздел руководства."),
+  ] };
+}
 
 /** A real open surface can differ from the URL for transient editor dialogs. */
 export function learningForSurface(surface: string): LearningDefinition | null {
   if (surface === "details") return details;
+  if (surface === "staff-team") return projectSectionLearning("manage", "staff");
   return Object.hasOwn(panels, surface) ? panels[surface as keyof typeof panels] : null;
 }
 
@@ -80,22 +81,18 @@ export function learningForRoute(pathname: string, query: string): LearningDefin
   if (pathname === "/max/guide") return guide;
   if (pathname === "/max") return cabinet;
   const account = accounts[pathname];
-  if (account) return { id: account[0], title: account[1], steps: [
-    step("account-content", account[1], account[2], ".account-content"),
+  if (account) return { id: account[0], title: account[1], lesson: pathname.startsWith("/billing") ? "billing" : "account", steps: [
+    step("account-content", account[1], account[2], { selector: ".account-content" }),
     step("account-navigation", "Разделы аккаунта", "Переключайтесь между профилем, безопасностью, балансом, операциями и тарифом."),
-    step("account-projects", "Вернитесь к приложениям", "Эта ссылка возвращает в вашу студию."),
+    step("account-projects", "Вернитесь к приложениям", "Эта ссылка возвращает в вашу студию.", { lesson: "project" }),
   ] };
   const match = /^\/max\/([^/]+)(?:\/(catalog|manage|dashboard|settings|integrations|publish))?$/.exec(pathname);
   if (!match || ["onboarding", "start", "guide", "new", "preview"].includes(match[1])) return null;
-  if (match[2]) {
-    const [title, body] = projectSections[match[2]];
-    return { id: match[2], title, steps: [
-      step("project-section", title, body),
-      step("project-navigation", "Разделы приложения", "Переключайтесь между редактором, данными, управлением и другими доступными разделами."),
-      step("project-help", "Подробная инструкция", "Помощь открывает соответствующий раздел руководства."),
-    ] };
-  }
   const params = new URLSearchParams(query);
+  if (match[2]) {
+    const botTab = match[2] === "integrations" && !maxConnectionSearch(Object.fromEntries(params)).size;
+    return projectSectionLearning(match[2], botTab ? "max-bot" : undefined);
+  }
   const selected = params.get("panel");
   const selectedPanel = selected ? learningForSurface(selected) : null;
   if (selectedPanel) return selectedPanel;

@@ -13,10 +13,10 @@ const helpHref: Record<MaxProjectNavKey, string> = {
   publish: "/max/guide#publish", dashboard: "/max/guide#operations",
 };
 
-export function MaxSectionShell({ projectId, projectName, active, title, lead, children, className = "" }: {
+export function MaxSectionShell({ projectId, projectName, active, title, lead, children, className = "", learningContext }: {
   projectId: string; projectName: string; active: MaxProjectNavKey;
   eyebrow: string; title: string; lead: string; children: React.ReactNode;
-  className?: string;
+  className?: string; learningContext?: string;
 }) {
   const projectHref = `/max/${projectId}`;
   return (
@@ -26,7 +26,7 @@ export function MaxSectionShell({ projectId, projectName, active, title, lead, c
           <Link href="/max" aria-label="Yleum — все проекты" className="max-project-brand"><YleumMark className="max-project-brand-mark" />Yleum</Link>
           <span className="max-project-header-name" title={projectName}>{projectName}</span>
         </div>
-        <div className="max-project-header-actions">
+        <div className="max-project-header-actions" data-learning-context={learningContext}>
           {active !== "editor" && <Link href={projectHref} className="max-project-chat"><MessageCircle aria-hidden="true" className="size-4" />К чату</Link>}
           <LearningButton />
           <Link href="/account" aria-label="Аккаунт" className="max-project-back"><UserRound aria-hidden="true" className="size-4" /></Link>

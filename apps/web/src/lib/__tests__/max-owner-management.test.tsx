@@ -11,8 +11,8 @@ import type { ManagementOverview, OwnerRecord, ResourceDefinition } from "@/lib/
 import type { MaxProjectConfig } from "@/lib/api/types";
 import type { TeamView } from "@/lib/api/max-staff";
 
-vi.mock("@/components/max/MaxSectionShell", () => ({ MaxSectionShell: ({ children, projectId }: { children: React.ReactNode; projectId: string }) => (
-  <div className="max-project-workspace">
+vi.mock("@/components/max/MaxSectionShell", () => ({ MaxSectionShell: ({ children, projectId, learningContext }: { children: React.ReactNode; projectId: string; learningContext?: string }) => (
+  <div className="max-project-workspace" data-learning-context={learningContext}>
     <Link href={`/max/${projectId}`}>К чату</Link>
     <MaxProjectNav projectId={projectId} active="manage" showProgress={false} variant="mobile" />
     <main>{children}</main>
@@ -162,6 +162,7 @@ it("switches an enabled resource to the live staff queue and leaves prior record
   expect(mode.disabled).toBe(true);
   await click("Заказы");
   expect(node.querySelector('[aria-label="Рабочая очередь"]')?.textContent).toContain("Готовить сейчас");
+  expect(node.querySelector(".max-project-workspace")?.getAttribute("data-learning-context")).toBe("staff-team");
   expect(requests.some(request => request.url.includes("/management/records"))).toBe(false);
   const details = node.querySelector<HTMLDetailsElement>("details.max-staff-legacy")!;
   await act(async () => details.querySelector("summary")!.click()); await settle();
