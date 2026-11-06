@@ -473,6 +473,9 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
     # a nonempty original user turn. Preserve its real owned Message/run link.
     original_prompt = prompt or "Создай сервис внутри MAX"
     user_message = Message(id=UUID(int=6), project_id=pid, role="user", content=original_prompt)
+    assistant_message = Message(
+        id=mid, project_id=pid, role="assistant", content="", agent_steps=None,
+    )
     run = GenerationRun(id=rid, project_id=pid, user_id=uid, status="running", agent_state={},
                         idempotency_key="config-render-contract",
                         prompt_hash=hashlib.sha256(original_prompt.encode()).hexdigest(),
@@ -521,7 +524,9 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
             if model is GenerationRun:
                 return run if ident == rid else None
             if model is Message:
-                return user_message if ident == user_message.id else None
+                return {user_message.id: user_message, assistant_message.id: assistant_message}.get(
+                    ident
+                )
             if model is MaxProjectConfig:
                 state["config_reads"] += 1
                 target = (caller == "seed" and state["config_reads"] == 2) or state["model_ran"]
@@ -557,6 +562,12 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         def expunge(self, value):
             pass
 
+    fixture_session = Session()
+    assert await fixture_session.get(Message, run.user_message_id) is user_message
+    assert await fixture_session.get(Message, run.assistant_message_id) is assistant_message
+    assert await fixture_session.get(Message, UUID(int=99)) is None
+    assert assistant_message.id != user_message.id and assistant_message.project_id == pid
+
     def no_network(*args, **kwargs):
         raise AssertionError("network forbidden")
 
@@ -583,9 +594,18 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
     )
     monkeypatch.setattr(lifecycle, "clear_stream_state", AsyncMock())
     monkeypatch.setattr(lifecycle, "publish_event", AsyncMock())
-    monkeypatch.setattr(
-        progress, "append_generation_event", AsyncMock(return_value=SimpleNamespace())
-    )
+    event_sequence = 0
+
+    async def append_event(_session, **kwargs):
+        nonlocal event_sequence
+        event_sequence += 1
+        return SimpleNamespace(
+            id=UUID(int=100 + event_sequence), generation_run_id=kwargs["run_id"],
+            project_id=kwargs["project_id"], message_id=kwargs["message_id"],
+            event_type=kwargs["event_type"], seq=event_sequence, payload=dict(kwargs["payload"]),
+        )
+
+    monkeypatch.setattr(progress, "append_generation_event", append_event)
     monkeypatch.setattr(progress, "generation_event_envelope", lambda event: {})
     monkeypatch.setattr(lifecycle, "set_generation_run_status", AsyncMock())
     monkeypatch.setattr(agent_preparation, "_build_agent_seed_parts", AsyncMock(return_value=[]))

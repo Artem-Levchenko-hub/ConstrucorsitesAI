@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import Select, select
+from sqlalchemy.dialects import postgresql
 
 from yleum_api.services.generation import agent_messages, runtime, supervisor
 
@@ -14,6 +16,8 @@ os.environ.setdefault("DATABASE_URL", "postgresql://test:test@127.0.0.1:5432/tes
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-at-least-32-bytes")
 
 from yleum_api.core.errors import ApiError
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project_version import ProjectVersion
 from yleum_api.services.agent_builder import Action
 from yleum_api.services.generation_runs import promote_generation_after_admission
 
@@ -48,6 +52,19 @@ def test_cancel_protocol_signals_only_genuinely_running_generation() -> None:
     assert supervisor._generation_cancel_protocol("cancel_requested") == "already_requested"
 
 
+def _promotion_run(
+    status: str, *, agent_state: dict[str, object] | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=uuid4(),
+        project_id=uuid4(),
+        status=status,
+        agent_state=agent_state if agent_state is not None else {},
+        started_at=None,
+        error=None,
+    )
+
+
 class _PromotionSession:
     def __init__(self, run: SimpleNamespace) -> None:
         self.run = run
@@ -59,8 +76,34 @@ class _PromotionSession:
     async def __aexit__(self, *_args: object) -> None:
         return None
 
-    async def scalar(self, _statement: object) -> SimpleNamespace:
-        return self.run
+    async def scalar(self, statement: Select) -> SimpleNamespace | None:
+        queries = (
+            (
+                select(GenerationRun).where(GenerationRun.id == self.run.id).with_for_update(),
+                self.run,
+            ),
+            (
+                select(ProjectVersion)
+                .where(
+                    ProjectVersion.generation_run_id == self.run.id,
+                    ProjectVersion.project_id == self.run.project_id,
+                )
+                .execution_options(populate_existing=True)
+                .with_for_update(),
+                None,  # This promotion fixture has no existing Version.
+            ),
+        )
+        dialect = postgresql.dialect()
+        actual_sql = statement.compile(dialect=dialect)
+        for expected, result in queries:
+            expected_sql = expected.compile(dialect=dialect)
+            if (
+                str(actual_sql) == str(expected_sql)
+                and actual_sql.params == expected_sql.params
+                and statement.get_execution_options() == expected.get_execution_options()
+            ):
+                return result
+        raise AssertionError("Unexpected promotion query or parameters")
 
     async def commit(self) -> None:
         self.commits += 1
@@ -75,20 +118,57 @@ class _PromotionSessionFactory:
 
 
 @pytest.mark.asyncio
+async def test_promotion_session_rejects_unexpected_queries_and_parameters() -> None:
+    run = _promotion_run("pending")
+    session = _PromotionSession(run)
+    run_query = select(GenerationRun).where(GenerationRun.id == run.id)
+    version_query = select(ProjectVersion).where(
+        ProjectVersion.generation_run_id == run.id,
+        ProjectVersion.project_id == run.project_id,
+    )
+    unexpected = (
+        run_query,  # Missing row lock.
+        run_query.with_for_update(skip_locked=True),
+        select(GenerationRun).where(GenerationRun.id == uuid4()).with_for_update(),
+        version_query.execution_options(populate_existing=True),  # Missing row lock.
+        version_query.with_for_update(),  # Missing authoritative refresh.
+        version_query.execution_options(populate_existing=True).with_for_update(nowait=True),
+        select(ProjectVersion)
+        .where(
+            ProjectVersion.generation_run_id == uuid4(),
+            ProjectVersion.project_id == run.project_id,
+        )
+        .execution_options(populate_existing=True)
+        .with_for_update(),
+        select(ProjectVersion)
+        .where(
+            ProjectVersion.generation_run_id == run.id,
+            ProjectVersion.project_id == uuid4(),
+        )
+        .execution_options(populate_existing=True)
+        .with_for_update(),
+        select(ProjectVersion.id).with_for_update(),
+    )
+    for statement in unexpected:
+        with pytest.raises(AssertionError, match="Unexpected promotion query or parameters"):
+            await session.scalar(statement)
+
+
+@pytest.mark.asyncio
 async def test_immediate_pending_dispatch_token_wins_without_queueing() -> None:
     winner_token = uuid4()
     stale_token = uuid4()
-    run = SimpleNamespace(status="pending", agent_state={}, started_at=None)
+    run = _promotion_run("pending")
     session = _PromotionSession(run)
 
     winner_result = await promote_generation_after_admission(  # type: ignore[arg-type]
         _PromotionSessionFactory(session),  # type: ignore[arg-type]
-        run_id=uuid4(),
+        run_id=run.id,
         dispatch_token=winner_token,
     )
     stale_result = await promote_generation_after_admission(  # type: ignore[arg-type]
         _PromotionSessionFactory(session),  # type: ignore[arg-type]
-        run_id=uuid4(),
+        run_id=run.id,
         dispatch_token=stale_token,
     )
 
@@ -110,12 +190,12 @@ async def test_immediate_pending_dispatch_token_wins_without_queueing() -> None:
 async def test_pending_dispatch_with_existing_ownership_marker_fails_closed(
     agent_state: dict[str, object],
 ) -> None:
-    run = SimpleNamespace(status="pending", agent_state=agent_state, started_at=None)
+    run = _promotion_run("pending", agent_state=agent_state)
     session = _PromotionSession(run)
 
     result = await promote_generation_after_admission(  # type: ignore[arg-type]
         _PromotionSessionFactory(session),  # type: ignore[arg-type]
-        run_id=uuid4(),
+        run_id=run.id,
         dispatch_token=uuid4(),
     )
 
@@ -128,26 +208,25 @@ async def test_pending_dispatch_with_existing_ownership_marker_fails_closed(
 async def test_stale_dispatch_token_cannot_reenter_run_promoted_by_new_winner() -> None:
     winner_token = uuid4()
     stale_token = uuid4()
-    run = SimpleNamespace(
-        status="queued_for_capacity",
+    run = _promotion_run(
+        "queued_for_capacity",
         agent_state={
             "capacity_dispatch_claim": {
                 "token": str(winner_token),
                 "expires_at": "2026-09-02T00:00:30+00:00",
             }
         },
-        started_at=None,
     )
     session = _PromotionSession(run)
 
     winner_result = await promote_generation_after_admission(  # type: ignore[arg-type]
         _PromotionSessionFactory(session),  # type: ignore[arg-type]
-        run_id=uuid4(),
+        run_id=run.id,
         dispatch_token=winner_token,
     )
     stale_result = await promote_generation_after_admission(  # type: ignore[arg-type]
         _PromotionSessionFactory(session),  # type: ignore[arg-type]
-        run_id=uuid4(),
+        run_id=run.id,
         dispatch_token=stale_token,
     )
 
@@ -160,21 +239,25 @@ async def test_stale_dispatch_token_cannot_reenter_run_promoted_by_new_winner() 
 @pytest.mark.asyncio
 async def test_winning_dispatch_token_may_replay_its_admission() -> None:
     winner_token = uuid4()
-    run = SimpleNamespace(
-        status="running",
+    run = _promotion_run(
+        "running",
         agent_state={"capacity_admitted_dispatch_token": str(winner_token)},
-        started_at=None,
     )
     session = _PromotionSession(run)
 
     result = await promote_generation_after_admission(  # type: ignore[arg-type]
         _PromotionSessionFactory(session),  # type: ignore[arg-type]
-        run_id=uuid4(),
+        run_id=run.id,
         dispatch_token=winner_token,
     )
 
     assert result == "admitted"
-    assert session.commits == 0
+    assert run.status == "running"
+    assert run.started_at is None
+    assert run.error is None
+    assert run.agent_state == {"capacity_admitted_dispatch_token": str(winner_token)}
+    # Idempotent replay commits Version synchronization without redispatching the Run.
+    assert session.commits == 1
 
 
 @pytest.mark.asyncio

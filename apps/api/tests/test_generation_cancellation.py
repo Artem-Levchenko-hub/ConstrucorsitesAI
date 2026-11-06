@@ -25,6 +25,7 @@ from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.project import Project
 from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from yleum_api.models.project_version import ProjectVersion
 from yleum_api.models.usage import Usage
 from yleum_api.models.user import User
 from yleum_api.models.wallet_charge import WalletCharge
@@ -75,6 +76,18 @@ class Session:
     async def scalar(self, statement):
         compiled = statement.compile(dialect=postgresql.dialect())
         sql = str(compiled)
+        if statement.column_descriptions[0].get("entity") is ProjectVersion:
+            expected = (
+                select(ProjectVersion)
+                .where(
+                    ProjectVersion.generation_run_id == self.run.id,
+                    ProjectVersion.project_id == self.run.project_id,
+                )
+                .with_for_update()
+                .compile(dialect=postgresql.dialect())
+            )
+            assert sql == str(expected) and compiled.params == expected.params
+            return None  # These legacy characterization rows have no allocated version.
         assert "messages.id =" in sql and "messages.project_id =" in sql
         assert sql.endswith("FOR UPDATE")
         assert set(compiled.params.values()) == {self.run.assistant_message_id, self.run.project_id}

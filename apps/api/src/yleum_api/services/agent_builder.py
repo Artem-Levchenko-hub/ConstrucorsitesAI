@@ -1066,7 +1066,9 @@ async def _run_agent_segment(
                 (edit_deadline - datetime.now(UTC)).total_seconds()
                 if edit_deadline is not None else None
             )
-            if (uses_gateway and not restoring and remaining is not None
+            # The finishing runway belongs to the coordinator's source stage.
+            # Standalone repairs retain their explicit smaller response windows.
+            if (uses_gateway and coordinator_handoff and not restoring and remaining is not None
                     and 0 < remaining <= _MIN_PROVIDER_WINDOW_SECONDS):
                 return await _finish_source_window(step, remaining)
             if not restoring and remaining is not None and remaining <= 0:
