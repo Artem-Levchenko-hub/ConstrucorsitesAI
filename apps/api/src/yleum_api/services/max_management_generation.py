@@ -8,11 +8,13 @@ Generated code is parsed, never executed. Runtime probes remain a separate gate.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import posixpath
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import lru_cache
 
@@ -151,12 +153,43 @@ class _Connections:
         self.catalog_selection = False
         self.unsupported_constant_control = False
         self.unsupported_effects = False
+        self.first_unsupported: tuple[str, int, int, str, str, str] | None = None
+        self.effects_only_depth = 0
+        self.strict_effects_depth = 0
         self.render_suppression = 0
         self.active: set[tuple[str, int]] = set()
         self.steps = 0
         self.event_depth = 0
         self.projection_depth = 0
         self.projections: dict[tuple[str, int], bool] = {}
+
+    def unsupported(self, node: Node | None, path: str, reason: str) -> None:
+        """Identify a rejected source shape without copying source values into feedback."""
+        self.unsupported_effects = True
+        if self.first_unsupported is None and node is not None:
+            safe_path = (
+                path if re.fullmatch(r"src/[A-Za-z0-9_./-]{1,180}\.tsx?", path) else "source"
+            )
+            self.first_unsupported = (
+                safe_path, node.start_point.row + 1, node.start_point.column + 1,
+                node.type, reason, hashlib.sha256(node.text or b"").hexdigest()[:16],
+            )
+
+    @contextmanager
+    def effects_only(self, *, strict: bool = False) -> Iterator[None]:
+        created, rendered = set(self.created), set(self.rendered)
+        selected, checkout = self.catalog_selection, set(self.checkout_calls)
+        self.effects_only_depth += 1
+        self.strict_effects_depth += int(strict)
+        try:
+            yield
+        finally:
+            self.effects_only_depth -= 1
+            self.strict_effects_depth -= int(strict)
+            self.created, self.rendered = created, rendered
+            self.catalog_selection = selected
+            # Legacy checkout is negative evidence, never a connection witness.
+            self.checkout_calls = checkout | (self.checkout_calls & _LEGACY_CHECKOUT)
 
     @staticmethod
     def _source_base(path: str, source: str) -> str:
@@ -307,11 +340,13 @@ class _Connections:
                 return False
         return True
 
-    def bind(self, pattern: Node | None, value: _Value, env: dict[str, _Value]) -> None:
+    def bind(
+        self, pattern: Node | None, value: _Value, env: dict[str, _Value], path: str,
+    ) -> None:
         if pattern is None:
             return
         if not self.binding_is_supported(pattern, value):
-            self.unsupported_effects = True
+            self.unsupported(pattern, path, "unsupported_binding")
             return
         self.bind_supported(pattern, value, env)
 
@@ -369,11 +404,12 @@ class _Connections:
                         declaration.child_by_field_name("name"),
                         self.value(declaration.child_by_field_name("value"), env, path),
                         env,
+                        path,
                     )
         elif node.type == "expression_statement":
             self.statement(node, env, path, False)
         elif node.type not in _TYPE_ONLY_DECLARATIONS | {"comment", "empty_statement"}:
-            self.unsupported_effects = True
+            self.unsupported(node, path, "unsupported_declaration")
 
     def member(self, value: _Value, key: str) -> _Value:
         if key in value.props:
@@ -518,6 +554,183 @@ class _Connections:
             return None
         return path, body, closure, names
 
+    @staticmethod
+    def passive_value(value: _Value) -> bool:
+        return (
+            value.passive or bool(value.tags)
+            or type(value.literal) in {bool, str, float}
+            or value.literal is _NULL_LITERAL
+        ) and value.function is None and not value.sdk and value.setter is None
+
+    def read_only_callback(self, fn: _Value, args: list[_Value], depth: int = 0) -> bool:
+        """Prove effects only: this never creates rendered-data or write witnesses."""
+        callback = self.callback_expression(fn, len(args))
+        if callback is None:
+            return False
+        path, body, closure, names = callback
+        scope = {**closure, **dict(zip(names, args, strict=True))}
+        return self.read_only_value(body, scope, path, depth + 1) is not None
+
+    def read_only_value(
+        self, node: Node | None, env: dict[str, _Value], path: str, depth: int = 0,
+    ) -> _Value | None:
+        """A bounded passive-expression subset for non-rendering statistics.
+
+        SDK rows are JSON data. Pure field reads, operators and literal objects
+        cannot mutate them; arbitrary calls, bindings, getters, spreads and
+        statements remain unsupported. Unlike the normal interpreter this
+        probe neither executes an opaque call nor grants a connection witness.
+        """
+        self.steps += 1
+        if node is None or depth > 32 or self.steps > 4000:
+            return None
+        kind = node.type
+        if kind == "identifier":
+            bound = env.get(_text(node), _Value())
+            return bound if self.passive_value(bound) else None
+        if kind in {"true", "false", "string", "number", "null"}:
+            literal = _primitive_literal(node)
+            return None if literal is _UNSUPPORTED_LITERAL else _Value(literal=literal)
+        if kind in {"parenthesized_expression", "as_expression", "non_null_expression"}:
+            return self.read_only_value(
+                node.named_children[0] if node.named_children else None, env, path, depth + 1,
+            )
+        if kind == "member_expression":
+            source = self.read_only_value(node.child_by_field_name("object"), env, path, depth + 1)
+            if source is not None and self.passive_value(source):
+                return self.member(source, _text(node.child_by_field_name("property")))
+            return None
+        if kind == "array":
+            values = []
+            expecting_value = True
+            for child in node.children:
+                if child.type == ",":
+                    if expecting_value:
+                        return None
+                    expecting_value = True
+                elif child.is_named and child.type != "comment":
+                    value = self.read_only_value(child, env, path, depth + 1)
+                    if value is None or not self.passive_value(value):
+                        return None
+                    values.append(value)
+                    expecting_value = False
+            return (
+                _Value(elements=tuple(values), passive=True)
+                if len(values) <= _MAX_COLLECTION_ITEMS else None
+            )
+        if kind == "binary_expression":
+            if _text(node.child_by_field_name("operator")) not in {
+                "===", "!==", "==", "!=", "<", ">", "<=", ">=",
+                "+", "-", "*", "/", "%", "&&", "||", "??",
+            }:
+                return None
+            operands = [node.child_by_field_name(key) for key in ("left", "right")]
+        elif kind == "ternary_expression":
+            operands = [node.child_by_field_name(key) for key in (
+                "condition", "consequence", "alternative",
+            )]
+        elif kind == "unary_expression" and _text(node.children[0]) in {"!", "+", "-", "typeof"}:
+            operands = [node.child_by_field_name("argument")]
+        elif kind == "object":
+            props = {}
+            for child in node.named_children:
+                if child.type == "comment":
+                    continue
+                if child.type == "pair":
+                    key = child.child_by_field_name("key")
+                    if (key is None or key.type != "property_identifier"
+                            or _text(key) == "__proto__"):
+                        return None
+                    name, value_node = _text(key), child.child_by_field_name("value")
+                elif child.type == "shorthand_property_identifier":
+                    name, value_node = _text(child), child
+                else:
+                    return None
+                value = (
+                    env.get(name) if value_node is child
+                    else self.read_only_value(value_node, env, path, depth + 1)
+                )
+                if value is None or not self.passive_value(value):
+                    return None
+                props[name] = value
+            return _Value(props=props, passive=True)
+        elif kind == "call_expression":
+            target = node.child_by_field_name("function")
+            arguments = node.child_by_field_name("arguments")
+            if target is None or target.type != "member_expression" or arguments is None:
+                return None
+            source = self.read_only_value(
+                target.child_by_field_name("object"), env, path, depth + 1,
+            )
+            operation = _text(target.child_by_field_name("property"))
+            arg_nodes = list(arguments.named_children)
+            if source is None or source.elements is None or operation not in {"filter", "reduce"}:
+                return None
+            if len(arg_nodes) != (1 if operation == "filter" else 2):
+                return None
+            callback_node = arg_nodes[0]
+            if callback_node.type in {"arrow_function", "function_expression"}:
+                callback = _Value(function=(path, callback_node, env))
+            elif callback_node.type == "identifier":
+                callback = env.get(_text(callback_node), _Value())
+            else:
+                return None
+            initial = (
+                self.read_only_value(arg_nodes[1], env, path, depth + 1)
+                if operation == "reduce" else None
+            )
+            if operation == "reduce" and initial is None:
+                return None
+            for element in source.elements or (_Value(passive=True),):
+                args = [element]
+                if operation == "reduce":
+                    assert initial is not None
+                    args.insert(0, initial)
+                if not self.read_only_callback(callback, args, depth + 1):
+                    return None
+            # Only this internal effects probe carries the filter collection;
+            # call() deliberately discards its result's SDK identity.
+            return _Value(elements=source.elements if operation == "filter" else None, passive=True)
+        else:
+            return None
+        if all(
+            self.read_only_value(operand, env, path, depth + 1) is not None
+            for operand in operands
+        ):
+            return _Value(passive=True)
+        return None
+
+    def statistic_call_is_read_only(
+        self, operation: str, args: list[_Value], source: _Value,
+    ) -> bool:
+        elements = source.elements or (_Value(passive=True),)
+        if operation == "filter" and len(args) == 1:
+            return all(self.read_only_callback(args[0], [element]) for element in elements)
+        if operation == "reduce" and len(args) == 2 and self.passive_value(args[1]):
+            return all(
+                self.read_only_callback(args[0], [args[1], element])
+                for element in elements
+            )
+        return False
+
+    def statistic_alias_roots(self, fn: _Value, args: list[_Value]) -> tuple[_Value, ...]:
+        callback = self.callback_expression(fn, len(args))
+        if callback is None:
+            return ()
+        _, body, closure, names = callback
+        scope = {**closure, **dict(zip(names, args, strict=True))}
+        pending, referenced = [body], set()
+        while pending and self.steps <= 4000:
+            node = pending.pop()
+            self.steps += 1
+            if node.type == "identifier":
+                referenced.add(_text(node))
+            pending.extend(node.named_children)
+        return tuple(
+            scope[name] for name in sorted(referenced)
+            if name in scope and self.contains_authority([scope[name]])
+        )
+
     def sort_is_read_only(self, fn: _Value, elements: tuple[_Value, ...]) -> bool:
         # Only the candidate's proven timestamp comparison, never arbitrary sort
         # callbacks which could mutate records/collections while returning them.
@@ -571,6 +784,16 @@ class _Connections:
         if callback is None:
             return False
         path, body, closure, names = callback
+        if body.type == "binary_expression" and _text(body.child_by_field_name("operator")) == "&&":
+            active = body.child_by_field_name("left")
+            if (active is None or active.type != "member_expression"
+                    or _text(active.child_by_field_name("property")) != "active"
+                    or _text(active.child_by_field_name("object")) != names[0]):
+                return False
+            candidate = body.child_by_field_name("right")
+            if candidate is None:
+                return False
+            body = candidate
         if body.type != "binary_expression" or _text(body.child_by_field_name("operator")) != "===":
             return False
         operands = [body.child_by_field_name("left"), body.child_by_field_name("right")]
@@ -619,11 +842,13 @@ class _Connections:
             (pattern, args[index] if index < len(args) else _Value())
             for index, pattern in enumerate(patterns)
         ]
-        if not all(self.binding_is_supported(pattern, value) for pattern, value in bindings):
-            self.unsupported_effects = True
-            return _Value()
-        if self.projection_depth and not self.projection_is_bounded(path, node):
-            self.unsupported_effects = True
+        for pattern, value in bindings:
+            if not self.binding_is_supported(pattern, value):
+                self.unsupported(pattern, path, "unsupported_parameter_binding")
+                return _Value()
+        if (self.projection_depth and not self.projection_is_bounded(path, node)
+                and not self.read_only_callback(fn, args)):
+            self.unsupported(node, path, "unproven_projection_callback")
             return _Value()
         self.active.add(key)
         env = dict(closure)
@@ -693,6 +918,99 @@ class _Connections:
         finally:
             self.checkout_legacy_probe = previous
 
+    def passive_local_array(self, value: _Value) -> bool:
+        """A source-owned JSON array, with no SDK authority or opaque elements."""
+        if value.elements is None:
+            return False
+        pending, seen = [value], set()
+        while pending:
+            item = pending.pop()
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
+            self.steps += 1
+            if (self.steps > 4000 or len(seen) > 512 or not self.passive_value(item)
+                    or item.tags or item.pending is not None or item.mutation_roots):
+                return False
+            pending.extend([*item.props.values(), *(item.elements or ())])
+        return True
+
+    def contains_authority(self, values: list[_Value]) -> bool:
+        pending, seen = list(values), set()
+        while pending:
+            value = pending.pop()
+            if id(value) in seen:
+                continue
+            seen.add(id(value))
+            self.steps += 1
+            if self.steps > 4000 or len(seen) > 512 or value.tags or value.sdk or value.setter:
+                return True
+            pending.extend([*value.props.values(), *(value.elements or ()), *value.mutation_roots])
+            if value.pending is not None:
+                pending.append(value.pending)
+        return False
+
+    def local_array_loop(self, node: Node, env: dict[str, _Value], path: str) -> None:
+        target, body = node.child_by_field_name("left"), node.child_by_field_name("body")
+        if (target is None or target.type != "identifier" or body is None
+                or _text(node.child_by_field_name("operator")) != "of"
+                or _text(node.child_by_field_name("kind")) not in {"const", "let"}
+                or any(child.type == "await" for child in node.children)):
+            self.unsupported(node, path, "unsupported_loop_shape")
+            return
+        pending = [body]
+        while pending:
+            child = pending.pop()
+            self.steps += 1
+            if self.steps > 4000 or child.type in {
+                "return_statement", "throw_statement", "break_statement", "continue_statement",
+                "yield_expression", "await_expression", "for_statement", "for_in_statement",
+                "while_statement", "do_statement", "switch_statement", "try_statement",
+                "variable_declaration",
+            }:
+                self.unsupported(child, path, "unsupported_loop_control")
+                return
+            pending.extend(child.named_children)
+        source = self.value(node.child_by_field_name("right"), env, path)
+        if not self.passive_local_array(source):
+            self.unsupported(node, path, "unproven_loop_iterable")
+            return
+        # Inspect one symbolic JSON element even for an initially empty state
+        # array. Shared aliases retain invalidation; loop-local bindings do not
+        # leak and hypothetical loop bodies cannot grant connection evidence.
+        scope = {**env, _text(target): _Value(passive=True)}
+        with self.effects_only(strict=True):
+            self.loop_body_effects(body, scope, path)
+
+    def loop_body_effects(self, node: Node, env: dict[str, _Value], path: str) -> None:
+        if node.type == "statement_block":
+            scope = dict(env)
+            for child in node.named_children:
+                if child.type == "lexical_declaration":
+                    for declaration in child.named_children:
+                        if declaration.type == "variable_declarator":
+                            self.bind_supported(
+                                declaration.child_by_field_name("name"), _Value(), scope,
+                            )
+                elif child.type == "function_declaration":
+                    self.declare(child, scope, path)
+            for child in node.named_children:
+                self.loop_body_effects(child, scope, path)
+        elif node.type == "if_statement":
+            condition = self.value(node.child_by_field_name("condition"), env, path)
+            if condition.literal is _UNSUPPORTED_LITERAL:
+                self.unsupported_constant_control = True
+                return
+            truth = _literal_truth(condition.literal)
+            consequence = node.child_by_field_name("consequence")
+            alternative = node.child_by_field_name("alternative")
+            if truth is not False and consequence is not None:
+                self.loop_body_effects(consequence, dict(env), path)
+            if truth is not True and alternative is not None and alternative.named_children:
+                self.loop_body_effects(alternative.named_children[-1], dict(env), path)
+        else:
+            self.statement(node, env, path, False)
+
     def statement(
         self, node: Node, env: dict[str, _Value], path: str, render: bool
     ) -> tuple[bool, _Value]:
@@ -718,7 +1036,7 @@ class _Connections:
                         if handler_body is not None:
                             handler_env = dict(env)
                             parameter = handler.child_by_field_name("parameter")
-                            self.bind(parameter, _Value(), handler_env)
+                            self.bind(parameter, _Value(), handler_env, path)
                             handled, _ = self.checkout_legacy_branch(
                                 handler_body, handler_env, path, render
                             )
@@ -731,8 +1049,10 @@ class _Connections:
                             if finalized:
                                 return True, final_value
                 return returned, value
+        elif node.type == "for_in_statement":
+            self.local_array_loop(node, env, path)
         elif node.type not in _TYPE_ONLY_DECLARATIONS | {"comment", "empty_statement"}:
-            self.unsupported_effects = True
+            self.unsupported(node, path, "unsupported_statement")
         return False, _Value()
 
     def value_for_effects(self, node: Node | None, env: dict[str, _Value], path: str) -> _Value:
@@ -784,7 +1104,7 @@ class _Connections:
                 )
                 if (key is None or key.type not in {"property_identifier", "string", "number"}
                         or not isinstance(name, str) or name == "__proto__"):
-                    self.unsupported_effects = True
+                    self.unsupported(key, path, "unsupported_object_key")
                     passive = False
                 props[str(name)] = self.value(child.child_by_field_name("value"), env, path)
             elif child.type == "shorthand_property_identifier":
@@ -796,13 +1116,13 @@ class _Connections:
                 if source.passive or source.tags:
                     props.update(source.props)
                 else:
-                    self.unsupported_effects = True
+                    self.unsupported(child, path, "unproven_object_spread")
                     passive = False
                     self.invalidate(source)
             else:
                 # Getter/method/computed syntax can execute source closures
                 # during construction or a later spread. Never omit it silently.
-                self.unsupported_effects = True
+                self.unsupported(child, path, "unsupported_object_member")
                 passive = False
         return _Value(props=props, passive=passive)
 
@@ -813,6 +1133,8 @@ class _Connections:
         if node is None or self.steps > 4000:
             return _Value()
         kind = node.type
+        if kind == "comment":
+            return _Value()
         if kind == "identifier":
             result = env.get(_text(node), _Value())
         elif kind in {"arrow_function", "function_expression", "function_declaration"}:
@@ -904,7 +1226,7 @@ class _Connections:
         elif kind == "object":
             result = self.object_value(node, env, path)
         elif kind in {"class", "class_expression"}:
-            self.unsupported_effects = True
+            self.unsupported(node, path, "unsupported_class")
             result = _Value()
         elif kind == "template_string":
             # Preserve passive labels used by existing pages, without evaluating
@@ -914,7 +1236,7 @@ class _Connections:
                     for expression in child.named_children:
                         self.value_for_effects(expression, env, path)
                 elif child.type not in {"string_fragment", "escape_sequence"}:
-                    self.unsupported_effects = True
+                    self.unsupported(child, path, "unsupported_template_part")
             result = _Value(literal=_UNSUPPORTED_LITERAL)
         elif kind == "call_expression":
             result = self.call(node, env, path, render)
@@ -940,7 +1262,7 @@ class _Connections:
             )
         else:
             if kind not in {"undefined", "this", "super", "regex"}:
-                self.unsupported_effects = True
+                self.unsupported(node, path, "unsupported_expression")
             result = _Value()
         if render and not self.render_suppression:
             self.rendered.update(result.tags)
@@ -954,9 +1276,13 @@ class _Connections:
             if arguments
             else []
         )
+        local_array_push = False
         if target is not None and target.type == "member_expression":
             source = self.value(target.child_by_field_name("object"), env, path)
             operation = _text(target.child_by_field_name("property"))
+            local_array_push = operation == "push" and self.passive_local_array(source)
+            if self.strict_effects_depth and not local_array_push:
+                self.unsupported(node, path, "unproven_loop_call")
             if (
                 operation == "all"
                 and _text(target.child_by_field_name("object")) == "Promise"
@@ -972,6 +1298,10 @@ class _Connections:
                 )
             if source.elements is not None:
                 if operation == "map" and len(args) == 1 and args[0].function is not None:
+                    if not source.elements:
+                        with self.effects_only():
+                            self.invoke(args[0], [_Value(passive=True)], render)
+                        return _Value(elements=(), passive=True)
                     self.projection_depth += int(not render)
                     try:
                         return _Value(
@@ -1004,12 +1334,44 @@ class _Connections:
                     # A proven read-only lookup preserves the collection, but
                     # its numeric result is never rendered-item evidence.
                     return _Value()
+                if (operation in {"filter", "reduce"} and not render
+                        and not self.render_suppression):
+                    # Statistics can read a collection without corrupting its
+                    # later direct JSX connection. Derived values grant no
+                    # SDK-row identity, even for filter().map(...).
+                    if self.statistic_call_is_read_only(operation, args, source):
+                        if operation == "filter":
+                            if not self.contains_authority([source]):
+                                return _Value(elements=source.elements, passive=True)
+                            return _Value(
+                                props={"length": _Value(passive=True)},
+                                mutation_roots=(source,), passive=True,
+                            )
+                        roots = tuple(
+                            root for element in source.elements or (_Value(passive=True),)
+                            for root in self.statistic_alias_roots(args[0], [args[1], element])
+                        )
+                        return _Value(mutation_roots=roots, passive=True)
+                    self.unsupported(node, path, "unproven_statistic_callback")
                 if operation != "then":
                     self.invalidate(source)
             if operation == "then" and args and source.pending is not None:
                 result = self.invoke(args[0], [source.pending])
                 return _Value(pending=result.pending or result)
         fn = self.value(target, env, path)
+        if self.effects_only_depth and fn.setter is not None and args:
+            if self.strict_effects_depth or self.contains_authority([fn.setter, *args]):
+                self.unsupported(node, path, "unproven_loop_setter")
+            elif args[0].function is not None:
+                # A React updater is executed later by React, not an inert
+                # function value. Inspect it for captured SDK effects too.
+                updated = self.invoke(args[0], [fn.setter])
+                if self.contains_authority([updated]):
+                    self.unsupported(node, path, "unproven_loop_setter")
+                args = [updated, *args[1:]]
+        if ((self.effects_only_depth and fn.sdk)
+                or (self.strict_effects_depth and not local_array_push)):
+            self.unsupported(node, path, "unproven_loop_call")
         if fn.sdk == "useState":
             initial = args[0] if args else _Value()
             return _Value(
@@ -1160,10 +1522,17 @@ def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
     if connections.steps > 4000:
         return "Managed source connection analysis exceeded its bounded AST budget.", frozenset()
     if connections.unsupported_effects:
+        issue = connections.first_unsupported
+        diagnostic = (
+            f" Source location: {issue[0]}:{issue[1]}:{issue[2]}; "
+            f"AST {issue[3]}; reason {issue[4]}; fingerprint {issue[5]}."
+            if issue is not None else ""
+        )
         return (
             "Managed source connection analysis cannot prove call or binding effects. "
-            "Use passive bindings and explicit body statements instead of default, rest "
-            "or computed bindings.",
+            "Simplify the identified source shape to a passive expression or explicit "
+            "body statements; do not change unrelated bindings or replace live SDK data "
+            "with static records." + diagnostic,
             frozenset(),
         )
     if connections.unsupported_constant_control:

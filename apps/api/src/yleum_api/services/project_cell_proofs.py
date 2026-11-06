@@ -18,6 +18,7 @@ from yleum_api.services.agent_progress import bounded_redacted_text, redact_sens
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_DETAIL_BYTES = 4096
 _MAX_ARTIFACT_REF_BYTES = 512
+MAX_BOOTSTRAP_CONTRACT_VERSION = "max-platform-bootstrap-v2"
 
 
 class ProjectCellProofConflict(RuntimeError):
@@ -191,7 +192,13 @@ class ProofIdentity:
             "resource_profile_version": self.resource_profile_version,
         }
         if dimension is ProofDimension.BOOTSTRAP:
-            payload = common
+            # Bootstrap now certifies trusted platform SQL as well as packages.
+            # An old install-only proof or a different migration source cannot
+            # satisfy this contract; ordinary product edits still reuse it.
+            payload = {
+                **common, "contract": MAX_BOOTSTRAP_CONTRACT_VERSION,
+                "schema_data_digest": self.schema_data_digest,
+            }
         elif dimension is ProofDimension.FAST_CHECK:
             payload = {
                 **common,

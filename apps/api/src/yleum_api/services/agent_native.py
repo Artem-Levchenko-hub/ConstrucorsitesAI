@@ -1882,6 +1882,7 @@ async def _run_native_segment(
                             detail="Saved response reconciled after the original editing deadline.",
                         )
             except Exception as exc:
+                raise_if_terminal_cell_error(exc)
                 if isinstance(exc, TimeoutError) and call_budget.expired():
                     return await _finish_without_provider(
                         steps=step, reason="finalization_reserve",

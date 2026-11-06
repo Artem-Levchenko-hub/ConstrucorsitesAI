@@ -79,6 +79,7 @@ from yleum_api.services.generation.recovery_contract import (
 from yleum_api.services.generation.source_repair_context import MAX_REPAIR_CONTEXT_BYTES
 from yleum_api.services.max_generation_contract import _is_product_source
 from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
+from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 from yleum_api.services.secret_safety import max_model_write_rejection
 
 if TYPE_CHECKING:
@@ -1184,6 +1185,7 @@ async def _run_agent_segment(
                 )})
                 break
             except Exception as exc:
+                raise_if_terminal_cell_error(exc)
                 failure = exc if isinstance(exc, llm_client.LLMError) else None
                 retry_safe = failure is not None and failure.retry_safe is True
                 will_retry = retry_safe and attempt < 4

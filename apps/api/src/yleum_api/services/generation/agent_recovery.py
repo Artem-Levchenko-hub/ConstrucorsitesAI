@@ -33,6 +33,14 @@ from yleum_api.services.project_cell_executor import (
 _log = logging.getLogger("yleum_api.routers.messages")
 
 
+def _rollback_failure(detail: object) -> RuntimeError:
+    """Retain a bounded, redacted restoration cause in both error and chain."""
+    diagnostic = bounded_redacted_diagnostic(
+        str(detail) or "restored runtime verification failed", max_bytes=1500,
+    )
+    return RuntimeError(diagnostic)
+
+
 async def recover_stopped_candidate(
     *,
     _agent_res: agent_builder.AgentResult,
@@ -78,7 +86,7 @@ async def recover_stopped_candidate(
                 probe_build=operations.probe_build,
                 source_only=_source_only,
             )
-            if _rollback_build.get("ok"):
+            if _rollback_build.get("ok") is True:
                 _rollback_verified = True
                 _max_seed_files = {}
                 _agent_res = agent_builder.AgentResult(
@@ -111,10 +119,15 @@ async def recover_stopped_candidate(
                         "ok": False,
                     },
                 )
+            else:
+                _rollback_error = _rollback_failure(
+                    _rollback_build.get("detail") or _rollback_build.get("error")
+                    or "restored runtime verification failed",
+                )
         except Exception as _rollback_exc:
             raise_if_terminal_cell_error(_rollback_exc)
-            _rollback_error = _rollback_exc
-            print(f"[PP] hard-limit rollback failed: {_rollback_exc!r}", flush=True)
+            _rollback_error = _rollback_failure(_rollback_exc)
+            print(f"[PP] hard-limit rollback failed: {_rollback_error}", flush=True)
     elif _must_restore_previous and _first_max_without_product:
         # Config sync creates a legitimate snapshot before the first AI
         # build, but that snapshot may contain only managed files and no
@@ -131,7 +144,7 @@ async def recover_stopped_candidate(
                 probe_build=operations.probe_build,
                 source_only=_source_only,
             )
-            if _rollback_build.get("ok"):
+            if _rollback_build.get("ok") is True:
                 _rollback_verified = True
                 _max_seed_files = {}
                 _agent_res = agent_builder.AgentResult(
@@ -162,16 +175,19 @@ async def recover_stopped_candidate(
                     },
                 )
             else:
+                _rollback_error = _rollback_failure(
+                    _rollback_build.get("detail") or _rollback_build.get("error")
+                    or "restored runtime verification failed",
+                )
                 print(
-                    "[PP] first-MAX safe fallback build red: "
-                    f"{_rollback_build.get('detail') or _rollback_build.get('error')}",
+                    f"[PP] first-MAX safe fallback build red: {_rollback_error}",
                     flush=True,
                 )
         except Exception as _rollback_exc:
             raise_if_terminal_cell_error(_rollback_exc)
-            _rollback_error = _rollback_exc
+            _rollback_error = _rollback_failure(_rollback_exc)
             print(
-                f"[PP] first-MAX safe fallback failed: {_rollback_exc!r}",
+                f"[PP] first-MAX safe fallback failed: {_rollback_error}",
                 flush=True,
             )
 
@@ -186,7 +202,8 @@ async def recover_stopped_candidate(
     # guard can mistake the restored baseline for a failed accepted edit.
     if _must_restore_previous and _source_only:
         status = "rolled_back" if _rollback_verified else "rollback_unverified"
-        raise RuntimeError(f"{_stopped_cause}; {status}") from _rollback_error
+        detail = f": {_rollback_error}" if _rollback_error is not None else ""
+        raise RuntimeError(f"{_stopped_cause}; {status}{detail}") from _rollback_error
 
     return _agent_res, _first_max_without_product, _max_seed_files, _seg
 

@@ -361,7 +361,7 @@ def invalidated_dimensions(
             }
         )
     if before.schema_data_digest != after.schema_data_digest:
-        invalid.update({ProofDimension.RUNTIME, ProofDimension.RELEASE})
+        invalid.update({ProofDimension.BOOTSTRAP, ProofDimension.RUNTIME, ProofDimension.RELEASE})
     if before.build_config_digest != after.build_config_digest:
         invalid.update(
             {
@@ -529,6 +529,49 @@ def valid_project_migration_receipt(
             and re.fullmatch(r"[0-9a-f]{64}", receipt[key]) is not None
             for key in ("source_digest", "database_identity", "catalog_digest")
         )
+    )
+
+
+def valid_platform_bootstrap_receipt(
+    receipt: object, *, before: ProofIdentity, after: ProofIdentity,
+    operation_id: UUID, source: str,
+) -> bool:
+    """Only the bound controller proof can certify pre-model platform DDL."""
+    from yleum_api.services.project_cell_proofs import MAX_BOOTSTRAP_CONTRACT_VERSION
+
+    if not valid_project_migration_receipt(
+        receipt, workspace_id=before.workspace_id,
+        generation_run_id=before.generation_run_id, fencing_epoch=before.fencing_epoch,
+        source_revision=before.workspace_revision, adaptation=False,
+    ) or not isinstance(receipt, dict):
+        return False
+    core = receipt.get("platform_core_bootstrap")
+    expected = {
+        "contract": MAX_BOOTSTRAP_CONTRACT_VERSION,
+        "migration_path": "drizzle/0003_owner_management.sql",
+        "migration_sha256": hashlib.sha256(source.encode()).hexdigest(),
+        "operation_id": str(operation_id),
+        "schema_data_digest": after.schema_data_digest,
+    }
+    return (
+        type(receipt.get("fencing_epoch")) is int
+        and receipt["migration_count"] >= 1
+        and type(core) is dict and core == expected
+        and replace(before, base_image_digest=after.base_image_digest,
+                    toolchain_digest=after.toolchain_digest) == after
+    )
+
+
+def _requires_platform_bootstrap_receipt(files: dict[str, str]) -> bool:
+    if "drizzle/0003_owner_management.sql" not in files:
+        return False
+    try:
+        manifest = json.loads(files.get(".omnia/cell.json", ""))
+    except (TypeError, ValueError):
+        return False  # The controller rejects a malformed portable manifest before execution.
+    return (
+        isinstance(manifest, dict) and type(manifest.get("app_config_protocol")) is int
+        and manifest["app_config_protocol"] == 1
     )
 
 
@@ -1369,12 +1412,25 @@ async def maybe_create_project_cell_executor(
                 == before.cell_manifest_digest
             )
         )
+        bootstrap_ok = (
+            role is not ProjectCellCommandRole.BOOTSTRAP
+            or not result.ok or restoration_adaptation
+            or not _requires_platform_bootstrap_receipt(workspace_files)
+            or valid_platform_bootstrap_receipt(
+                getattr(result, "project_migration_receipt", None),
+                before=before, after=after, operation_id=result.operation_id,
+                source=workspace_files["drizzle/0003_owner_management.sql"],
+            )
+        )
         return ProjectCellCommandObservation(
             operation_id=result.operation_id,
             role=role,
-            ok=result.ok and migration_ok and compilation_ok,
+            ok=result.ok and migration_ok and compilation_ok and bootstrap_ok,
             timed_out=result.timed_out,
             redacted_detail=(
+                "Platform bootstrap migration receipt is missing or stale; model launch rejected"
+                if not bootstrap_ok
+                else
                 "Restored compilation receipt is missing or stale; rollback rejected"
                 if not compilation_ok
                 else result.detail

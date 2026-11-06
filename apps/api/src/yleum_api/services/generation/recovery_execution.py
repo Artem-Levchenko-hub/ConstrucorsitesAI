@@ -642,6 +642,7 @@ class ExecutionDriver:
     context: dict[str, Any]
     snapshot: Callable[[], Awaitable[tuple[RecoveryBinding, dict[str, str]]]]
     runtime_control: tuple[UUID | None, int | None] | None = None
+    before_fresh_provider: Callable[[], Awaitable[None]] | None = None
     _reconcile_response: bool = field(init=False)
     _tool_position: int = field(default=0, init=False)
 
@@ -978,6 +979,20 @@ class ExecutionDriver:
                 call_deadline=call_deadline,
             )
         else:
+            admission = self.before_fresh_provider
+            if admission is not None:
+                # Reconcile the retained paid response first. Only a genuinely
+                # new request can initialize the current fenced platform core.
+                await admission()
+                # A durable role can renew the claim, advance the revision and
+                # consume the remaining clock. Re-read all dispatch authority.
+                await self.soft_boundary()
+                claim = self.state.continuation_claim
+                if claim is None:
+                    raise RecoveryContractError("provider admission lost its current claim")
+                outer_attempt, outer_allowance = _frame_retry(
+                    frame, self.context.get("active_frame"), reconcile=False,
+                )
             continuing = outer_attempt > 0
             seq = self.state.execution.logical_step_seq + (0 if continuing else 1)
             cursor = ProviderEffectCursor(
@@ -1007,6 +1022,8 @@ class ExecutionDriver:
                 }
             )
             await self.save(execution, context={**self.context, "active_frame": frame})
+            if admission is not None:
+                self.before_fresh_provider = None
         try:
             with provider_effect_scope(cursor):
                 response = await invoke()

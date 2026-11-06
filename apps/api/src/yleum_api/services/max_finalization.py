@@ -452,13 +452,7 @@ class MaxFinalizationCoordinator:
         await self._raise_persisted_infrastructure_failure()
         if self.executor.prove_restoration_adaptation is not None:
             return await self._adaptation_fast_check()
-        identity = await self._normal_fast_check_identity()
-        proof = await self._proof(identity)
-        bootstrap = await self._find(proof, ProofDimension.BOOTSTRAP)
-        if bootstrap is None:
-            bootstrap, identity, proof = await self._run_bootstrap(proof, identity)
-        else:
-            await self._counter("proof_hit")
+        bootstrap, identity, proof = await self._normal_bootstrap()
         if bootstrap.outcome != ProofOutcome.GREEN.value:
             return bootstrap
         result = await self._find(proof, ProofDimension.FAST_CHECK)
@@ -472,6 +466,28 @@ class MaxFinalizationCoordinator:
             role=ProjectCellCommandRole.FAST_CHECK,
             phase=GenerationPhase.FAST_CHECK,
         )
+
+    async def ensure_bootstrap(self) -> ProjectCellProofResult | None:
+        """Check the current platform proof without compiling unfinished product code."""
+        await self._reconcile_tool_commands()
+        await self._raise_persisted_infrastructure_failure()
+        if self.executor.prove_restoration_adaptation is not None:
+            # A historical database is owned by the explicit adaptation protocol.
+            return None
+        bootstrap, _identity, _proof = await self._normal_bootstrap()
+        return bootstrap
+
+    async def _normal_bootstrap(
+        self,
+    ) -> tuple[ProjectCellProofResult, ProofIdentity, ProjectCellProof]:
+        identity = await self._normal_fast_check_identity()
+        proof = await self._proof(identity)
+        bootstrap = await self._find(proof, ProofDimension.BOOTSTRAP)
+        if bootstrap is None:
+            bootstrap, identity, proof = await self._run_bootstrap(proof, identity)
+        else:
+            await self._counter("proof_hit")
+        return bootstrap, identity, proof
 
     async def finalize(
         self,
@@ -2258,9 +2274,12 @@ class MaxFinalizationCoordinator:
     ) -> ProjectCellCommandObservation:
         # Proof reuse is dimension-specific; commands carry the full fenced
         # envelope and must never alias after another identity field changes.
-        contract_version = (
-            MAX_FULL_BUILD_CONTRACT_VERSION if role is ProjectCellCommandRole.FULL_BUILD else "v1"
-        )
+        from yleum_api.services.project_cell_proofs import MAX_BOOTSTRAP_CONTRACT_VERSION
+
+        contract_version = {
+            ProjectCellCommandRole.BOOTSTRAP: MAX_BOOTSTRAP_CONTRACT_VERSION,
+            ProjectCellCommandRole.FULL_BUILD: MAX_FULL_BUILD_CONTRACT_VERSION,
+        }.get(role, "v1")
         operation_id = uuid5(
             self.generation_run_id,
             "command:"

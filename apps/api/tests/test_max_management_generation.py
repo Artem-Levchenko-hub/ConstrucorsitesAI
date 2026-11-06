@@ -682,6 +682,234 @@ def test_spread_passivity_does_not_prove_missing_destructured_properties(probe):
     assert management_source_gap(connection_files(source, ("leads",)))
 
 
+@pytest.mark.parametrize("statistics", [
+    "const total = orders.reduce((sum, row) => sum + (row.total_kopecks ?? 0), 0);",
+    "const count = orders.filter(row => row.status === 'new').length;",
+    "const statuses = ['new', 'completed'] as const; "
+    "const counts = statuses.map(status => ({status, count: "
+    "orders.filter(row => row.status === status).length}));",
+    "const matches = (row: ManagedRecord) => row.status === 'new'; "
+    "const count = orders.filter(matches).length;",
+])
+def test_read_only_statistics_preserve_original_live_collection_connections(statistics):
+    modules = ("catalog", "orders", "leads")
+    source = connection_example(modules).replace("return <main>", statistics + "\nreturn <main>")
+    files = connection_files(source, modules)
+    assert management_source_gap(files) is None
+    assert management_implemented_capabilities(files) == frozenset({"catalog", "history"})
+
+
+@pytest.mark.parametrize("statistics", [
+    "orders.filter(row => { orders.splice(0); return true; })",
+    "orders.filter(row => opaque(row))",
+    "orders.filter(async row => row.status === 'new')",
+    "orders.filter((row = opaque(orders)) => row.status === 'new')",
+    "orders.filter((...rows) => rows[0].status === 'new')",
+    "orders.filter((row, index, rows) => rows.splice(0))",
+    "orders.filter(row => row.status === unknownObject.status)",
+    "orders.reduce((sum, row) => { opaque(orders); return sum; }, 0)",
+    "orders.reduce((sum, row) => (orders.length = 0, sum), 0)",
+    "orders.reduce((sum, row) => sum + row.total_kopecks, unknownInitial)",
+    "orders.reduce((sum, row) => sum + row.total_kopecks)",
+    "['new'].map(status => ({get count() { orders.splice(0); return 1; }}))",
+    "['new'].map(status => ({[opaque(orders)]: status}))",
+])
+def test_statistics_do_not_silently_skip_opaque_or_mutating_callback_effects(statistics):
+    modules = ("catalog", "orders")
+    source = connection_example(modules).replace(
+        "return <main>", "const statistic = " + statistics + ";\nreturn <main>",
+    )
+    assert management_source_gap(connection_files(source, modules))
+
+
+@pytest.mark.parametrize("expression", [
+    "orders.filter(row => row.status === 'new')",
+    "orders.reduce((sum, row) => sum + row.total_kopecks, 0)",
+])
+def test_read_only_statistics_do_not_become_rendered_record_identity(expression):
+    modules = ("catalog", "orders")
+    source = connection_example(modules)
+    original = (
+        "{orders.map(record => <p key={record.id}>"
+        "{record.customer_name} {record.status}</p>)}"
+    )
+    assert original in source
+    source = source.replace("return <main>", "const statistic = " + expression + ";\nreturn <main>")
+    source = source.replace(original, "<span>{statistic}</span>")
+    gap = management_source_gap(connection_files(source, modules))
+    assert gap is not None and gap.startswith("Connect createManagedOrder")
+
+
+def test_pure_statistics_cannot_restore_a_previously_escaped_collection():
+    modules = ("catalog", "orders")
+    source = connection_example(modules).replace(
+        "return <main>",
+        "const alias = orders; opaque(alias); "
+        "const count = orders.filter(row => row.status === 'new').length;\nreturn <main>",
+    )
+    assert management_source_gap(connection_files(source, modules))
+
+
+def test_active_category_deduplication_preserves_the_live_catalog():
+    source = CATALOG_CATEGORY_PAGE.replace(
+        "candidate.category === item.category",
+        "candidate.active && candidate.category === item.category",
+    )
+    files = connection_files(source, ("catalog",))
+    assert management_source_gap(files) is None
+    assert management_implemented_capabilities(files) == frozenset({"catalog"})
+
+
+@pytest.mark.parametrize("predicate", [
+    "candidate.active && candidate.category === staticItem.category",
+    "opaque(candidate) && candidate.category === item.category",
+    "candidate.active && (candidate.category = item.category)",
+    "candidate.active && candidate.title === item.title",
+])
+def test_active_category_lookup_still_rejects_unproven_shapes(predicate):
+    source = CATALOG_CATEGORY_PAGE.replace("candidate.category === item.category", predicate)
+    gap = management_source_gap(connection_files(source, ("catalog",)))
+    assert gap is not None and gap.startswith("Connect useYleumCatalog items")
+
+
+@pytest.mark.parametrize("comments", [
+    "{/* SDK values remain live; opaque(orders) here is comment text only. */}",
+    "{\n// eslint-disable-next-line example\nprofile?.app_name}",
+])
+def test_jsx_comments_are_not_unproven_executable_effects(comments):
+    source = LEAD_STATUS_PAGE.replace(
+        "<h1>{profile?.app_name}</h1>", "<h1>{profile?.app_name}" + comments + "</h1>",
+    )
+    assert management_source_gap(connection_files(source, ("leads",))) is None
+
+
+def test_unsupported_effect_diagnostic_names_actual_ast_location_without_source_values():
+    source = LEAD_STATUS_PAGE.replace(
+        "  return <main>",
+        "  const label = (() => { switch (status) { case 'DO-NOT-ECHO-THIS-VALUE': "
+        "return false; default: return true; } })();\n  return <main>",
+    )
+    gap = management_source_gap(connection_files(source, ("leads",)))
+    assert gap is not None and "Source location: src/app/page.tsx:" in gap
+    assert "AST switch_statement; reason unsupported_statement" in gap
+    assert "DO-NOT-ECHO-THIS-VALUE" not in gap
+    assert "instead of default, rest" not in gap
+
+
+@pytest.mark.parametrize("initial", ["[]", "[{}]"])
+def test_passive_local_array_loop_can_construct_local_request_rows(initial):
+    modules = ("catalog", "orders", "leads")
+    source = connection_example(modules).replace(
+        "return <main>",
+        "const rows = []; for (const line of " + initial + ") { "
+        "const row = {catalogId: line.id, quantity: line.quantity}; "
+        "if (line.option) { row.option = line.option; } rows.push(row); }\nreturn <main>",
+    )
+    assert management_source_gap(connection_files(source, modules)) is None
+
+
+@pytest.mark.parametrize("statement", [
+    "orders.length = 0;",
+    "const alias = orders; alias.splice(0);",
+    "if (line.flag) { const n = 1; } else { orders.length = 0; }",
+    "if (line.flag) { const n = 1; } else { opaque(orders); }",
+    "if (line.flag) { const n = 1; } else { set_orders([]); }",
+    "set_orders([]);",
+    "set_orders((previous) => { opaque(orders); return previous; });",
+    "const probe = (value = orders.splice(0)) => false; probe();",
+    "const copy = {[opaque(orders)]: 1};",
+    "const copy = {get value() { orders.splice(0); return 1; }};",
+    "createManagedOrder({operationKey: 'not-a-witness'});",
+    "function helper(value) { if (value.flag) {} else { orders.length = 0; } } helper(line);",
+    "const helper = value => { if (value.flag) {} else { opaque(orders); } }; helper(line);",
+    "([1].map(value => { if (value.flag) {} else { orders.length = 0; } })) === ignored;",
+    "var shown = [];",
+    "break;", "continue;", "return;", "throw new Error('unsupported');",
+])
+@pytest.mark.parametrize("initial", ["[]", "[{}]"])
+def test_passive_loop_keeps_captured_effects_and_unproven_control_fail_closed(statement, initial):
+    from yleum_api.services.max_management_generation import _Connections
+
+    modules = ("catalog", "orders")
+    source = connection_example(modules).replace(
+        "return <main>",
+        "for (const line of " + initial + ") { " + statement + " }\nreturn <main>",
+    )
+    files = connection_files(source, modules)
+    assert not _Connections(files).programs["src/app/page.tsx"].has_error
+    assert management_source_gap(files)
+
+
+@pytest.mark.parametrize("loop", [
+    "for (const line of orders) {}",
+    "for (const line of [orders]) {}",
+    "for (const line of [{saved: orders}]) {}",
+    "for (const line of unknownSource()) {}",
+    "for (const {id} of [{}]) {}",
+    "for (var line of []) {}",
+    "for (const line in []) {}",
+])
+def test_loop_admission_requires_a_local_passive_array_and_plain_scoped_binding(loop):
+    source = connection_example(("catalog", "orders")).replace(
+        "return <main>", loop + "\nreturn <main>",
+    )
+    assert management_source_gap(connection_files(source, ("catalog", "orders")))
+
+
+def test_loop_let_shadow_does_not_invalidate_outer_sdk_collection():
+    source = connection_example(("catalog", "orders")).replace(
+        "return <main>",
+        "for (const orders of []) { const row = {id: orders.id}; }\nreturn <main>",
+    )
+    assert management_source_gap(connection_files(source, ("catalog", "orders"))) is None
+
+
+@pytest.mark.parametrize("operation", [
+    "empty.filter(value => opaque(orders))",
+    "empty.filter((value = opaque(orders)) => true)",
+    "empty.reduce((sum, value) => opaque(orders), 0)",
+    "empty.reduce((sum, ...values) => values, 0)",
+    "['new'].map(status => ({status, count: empty.filter(value => opaque(orders)).length}))",
+    "empty.map(value => opaque(orders))",
+    "empty.map(value => set_orders([]))",
+    "empty.map(value => { const object = {[opaque(orders)]: 1}; return object; })",
+    "empty.map(value => { setLocal((previous = opaque(orders)) => previous); })",
+])
+@pytest.mark.parametrize("initializer", [
+    "const empty = []; const [local, setLocal] = useState([]);",
+    "const [empty, setLocal] = useState([]);",
+])
+def test_empty_local_collections_do_not_skip_captured_sdk_effects(operation, initializer):
+    modules = ("catalog", "orders")
+    source = connection_example(modules).replace(
+        "return <main>", initializer + " const computed = " + operation + ";\nreturn <main>",
+    )
+    assert management_source_gap(connection_files(source, modules))
+
+
+@pytest.mark.parametrize("expression", [
+    "orders.filter(row => row.status === 'new')",
+    "orders.reduce((previous, row) => row, 0)",
+    "[1].reduce((previous, row) => orders, 0)",
+])
+def test_statistic_results_retain_sdk_alias_invalidation_without_render_witnesses(expression):
+    modules = ("catalog", "orders")
+    source = connection_example(modules).replace(
+        "return <main>", "const derived = " + expression + "; opaque(derived);\nreturn <main>",
+    )
+    assert management_source_gap(connection_files(source, modules))
+
+
+def test_nested_empty_pure_statistics_remain_supported():
+    modules = ("catalog", "orders")
+    source = connection_example(modules).replace(
+        "return <main>",
+        "const counts = [1].map(key => ({key, count: "
+        "[].filter(row => row.status === 'new').length}));\nreturn <main>",
+    )
+    assert management_source_gap(connection_files(source, modules)) is None
+
+
 @pytest.mark.parametrize("condition", [
     "0 == '0'", "0 != '0'", "1 + 1 === 2", "'x' < 'y'", r"'\u0078' === 'x'",
 ])

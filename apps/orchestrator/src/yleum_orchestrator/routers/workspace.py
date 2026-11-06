@@ -830,9 +830,16 @@ async def _execute_agent_command_locked(
                 compiled_receipt = {**compiled_receipt, "environment_transition": transition}
         migration_receipt = (
             manager.machine_runtime.migration_receipt(state, request.operation_id)
-            if request.task_role in {"full_build", "restore_runtime"}
+            if (request.task_role in {"full_build", "restore_runtime"}
+                or (request.task_role == "bootstrap" and manifest.app_config_protocol == 1))
             and result.exit_code == 0 and not result.timed_out else None
         )
+        if request.task_role == "bootstrap" and isinstance(migration_receipt, dict):
+            core = migration_receipt.get("platform_core_bootstrap")
+            if isinstance(core, dict):
+                migration_receipt = {**migration_receipt, "platform_core_bootstrap": {
+                    **core, "schema_data_digest": after_identity.schema_data_digest,
+                }}
         if (request.task_role == "full_build" and compiled_receipt is not None
                 and migration_receipt is not None and result.exit_code == 0 and not result.timed_out
                 and before_environment is not None and after_environment is not None):

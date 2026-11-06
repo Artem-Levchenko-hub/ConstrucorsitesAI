@@ -227,6 +227,7 @@ def pipeline_turn(monkeypatch):
         if source_deadline is not None:
             runtime.coordinator = SimpleNamespace(
                 source_edit_deadline=AsyncMock(return_value=source_deadline),
+                ensure_bootstrap=AsyncMock(return_value=SimpleNamespace(outcome="green")),
             )
         baseline_files = {"src/page.tsx": "original"}
         tree = {"src/page.tsx": "unsaved source"}
@@ -514,8 +515,11 @@ async def test_actual_agent_turn_forwards_owned_continuation_and_yields(monkeypa
 
 
 @pytest.mark.parametrize("prepared", [False, True])
+@pytest.mark.parametrize(
+    "bootstrap_gate", [None, "green", "red", "missing", "adaptation", "completed", "replayed"],
+)
 async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
-    monkeypatch, prepared
+    monkeypatch, prepared, bootstrap_gate
 ):
     from tests.test_generation_recovery_reconciliation import bootstrap
     from yleum_api.services.generation import recovery_execution as ex
@@ -525,6 +529,8 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
         ContinuationClaim,
         decode_recovery,
     )
+    from yleum_api.services.generation.recovery_pipeline import CompletedAgentTurn
+    from yleum_api.services.project_cell_errors import ProjectCellInfrastructureError
 
     raw = bootstrap()
     ids = GenerationIds(*(uuid4() for _ in range(5)))
@@ -565,6 +571,20 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
         "completed": {"agent_entry": entry} if prepared else {},
         "active_frame": None,
     }
+    if bootstrap_gate == "completed":
+        prepared = True
+        state = state.model_copy(update={"execution": state.execution.model_copy(update={
+            "stage": "finalization", "substep": "checkpoint_ready",
+        })})
+        context["completed"] = {"agent_entry": entry, "agent_turn": CompletedAgentTurn(
+            AgentResult(done=True, summary="saved", files={}, steps=1), None,
+            state.incomplete_response_budget,
+        ).to_json()}
+    elif bootstrap_gate == "replayed" and not prepared:
+        # An old install-only completed starter stage must not grant readiness.
+        context["completed"]["bootstrap_results"] = {
+            "starter_apply": {"files": {"src/core.ts": "trusted"}, "result": None},
+        }
     monkeypatch.setattr(ex, "load_execution_context", AsyncMock(return_value=deepcopy(context)))
     saves = []
 
@@ -596,6 +616,16 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
         control_fencing_epoch=1,
     )
     runtime = GenerationRuntime(handle=handle)
+    check = AsyncMock(return_value=(None if bootstrap_gate == "missing" else
+                                   SimpleNamespace(outcome=bootstrap_gate)))
+    if bootstrap_gate is not None:
+        runtime.coordinator = SimpleNamespace(
+            ensure_bootstrap=check, source_edit_deadline=AsyncMock(return_value=None),
+        )
+        if bootstrap_gate == "adaptation":
+            handle.prove_restoration_adaptation = AsyncMock()
+    monkeypatch.setattr(agent_pipeline, "adjacent_checkpoint", AsyncMock(return_value=None))
+    monkeypatch.setattr(agent_pipeline, "_seed_saved_max_config", AsyncMock())
     bindings = SimpleNamespace(
         execute=AsyncMock(),
         probe_runtime=AsyncMock(),
@@ -624,15 +654,28 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
     class ObservedTurn(BaseException):
         pass
 
+    provider = AsyncMock()
+
     async def turn(**kwargs):
-        assert isinstance(kwargs["operations"].continuation, ex.ExecutionDriver)
+        driver = kwargs["operations"].continuation
+        assert isinstance(driver, ex.ExecutionDriver)
         assert kwargs["plan"] == plan
         assert kwargs["_max_seed_files"] == {"src/core.ts": "trusted"}
         assert kwargs["reference_images"] == []
+        if bootstrap_gate not in {None, "adaptation", "completed"}:
+            check.assert_not_awaited()  # No SQL before ordinary reconciliation.
+            await driver.provider({"version": 1, "kind": "native", "value": {"step": 0}}, provider)
+        else:
+            assert driver.before_fresh_provider is None
         raise ObservedTurn()
 
     monkeypatch.setattr(agent_pipeline, "execute_agent_turn", turn)
-    with pytest.raises(ObservedTurn):
+    if bootstrap_gate == "completed":
+        monkeypatch.setattr(agent_pipeline, "recover_stopped_candidate",
+                            AsyncMock(side_effect=ObservedTurn()))
+    expected_error = (ProjectCellInfrastructureError
+                      if bootstrap_gate in {"red", "missing", "replayed"} else ObservedTurn)
+    with pytest.raises(expected_error):
         await agent_pipeline.run_agent_generation(
             _consume_free_generation=AsyncMock(),
             baseline=SourceBaseline(None, None, {}),
@@ -645,13 +688,22 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
             orchestrate=False,
             progress=SimpleNamespace(emit_agent_event=AsyncMock()),
             project_info=ProjectGenerationFacts(
-                "blank", "synthetic", "Synthetic", None, None, False, "ru", False, "", ""
+                "max_miniapp" if bootstrap_gate else "blank", "synthetic", "Synthetic", None,
+                None, False, "ru", False, "", ""
             ),
             prompt_text="Исходная цель",
             runtime=runtime,
             selected_elements=None,
             _resume_state=state,
         )
+    if bootstrap_gate in {"red", "missing", "replayed"}:
+        check.assert_awaited_once()
+        provider.assert_not_awaited()
+    elif bootstrap_gate == "green":
+        check.assert_awaited_once()
+        provider.assert_awaited_once()
+    else:
+        check.assert_not_awaited()
     for name in (
         "classify_agent_turn",
         "prepare_stack_prompt",
@@ -659,8 +711,13 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
         "stage_max_starter",
         "stage_owner_fonts",
     ):
-        assert getattr(agent_pipeline, name).await_count == int(not prepared)
+        expected = int(not prepared)
+        if bootstrap_gate == "replayed" and name == "stage_max_starter":
+            expected = 0
+        assert getattr(agent_pipeline, name).await_count == expected
     assert agent_pipeline.prepare_agent_runtime.await_count == 1  # Rebind live owned handle.
-    assert agent_pipeline._load_turn_reference_images.await_count == 1
+    assert agent_pipeline._load_turn_reference_images.await_count == int(
+        bootstrap_gate != "completed",
+    )
     if not prepared:
         assert saves[-1]["completed"]["agent_entry"] == entry

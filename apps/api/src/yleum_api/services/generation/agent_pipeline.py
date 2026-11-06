@@ -84,6 +84,7 @@ from yleum_api.services.generation.source_checkpoint import (
     persist_checkpoint,
 )
 from yleum_api.services.generation_runs import record_generation_product_failure
+from yleum_api.services.project_cell_errors import ProjectCellInfrastructureError
 
 _log = logging.getLogger("yleum_api.routers.messages")
 
@@ -633,6 +634,22 @@ async def run_agent_generation(
             "ok": True,
         })
     _operations = replace(_operations, checkpoint=save_source_checkpoint)
+    if (
+        project_info.template == "max_miniapp" and runtime.coordinator is not None
+        and getattr(runtime.handle, "prove_restoration_adaptation", None) is None
+    ):
+        async def require_platform_bootstrap() -> None:
+            assert runtime.coordinator is not None
+            result = await runtime.coordinator.ensure_bootstrap()
+            if result is None or result.outcome != "green":
+                raise ProjectCellInfrastructureError("migration_reconciliation_required")
+
+        if continuation is not None:
+            # This callback is invocation-owned, never serialized as authority.
+            # The driver runs it only after paid response/tool reconciliation.
+            continuation.before_fresh_provider = require_platform_bootstrap
+        elif completed_turn is None and _agent_res is None:
+            await require_platform_bootstrap()
     if completed_turn is not None:
         _agent_res, _provider_failure = completed_turn.result, completed_turn.provider_failure
     else:

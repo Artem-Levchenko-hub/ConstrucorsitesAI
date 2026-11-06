@@ -155,11 +155,17 @@ async def stage_max_starter(
                     files=_starter_patch,
                     project_cell_handle=_require_project_cell(runtime.handle),
                 )
-            _starter_build = (
-                {"ok": True, "detail": "platform core staged"}
-                if runtime.coordinator is not None
-                else await bindings.probe_build()
-            )
+            if runtime.coordinator is not None:
+                # Staging source proves neither dependencies nor the database.
+                # The controller bootstraps only trusted core SQL, then checks
+                # types/tests before the first model request can spend money.
+                proof = await runtime.coordinator.fast_check()
+                _starter_build = {
+                    "ok": proof.outcome == "green",
+                    "detail": proof.redacted_detail,
+                }
+            else:
+                _starter_build = await bindings.probe_build()
             if _starter_build.get("ok"):
                 await _agent_emit(
                     "agent.step",
@@ -169,7 +175,7 @@ async def stage_max_starter(
                         "human": "Основа готова — запускаю генератор",
                         "path": "",
                         "detail": (
-                            "Ядро MAX собирается чисто; теперь генератор "
+                            "Проверки ядра MAX пройдены; теперь генератор "
                             "проектирует продукт без готового UI-шаблона."
                         ),
                         "ok": True,

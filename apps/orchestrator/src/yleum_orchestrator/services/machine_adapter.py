@@ -65,10 +65,13 @@ from yleum_orchestrator.services.project_machine import (
 )
 from yleum_orchestrator.services.project_migrations import (
     LEGACY_PATHS,
+    PLATFORM_BOOTSTRAP_CONTRACT,
+    PLATFORM_CORE_MIGRATION,
     RECEIPT_PREFIX,
     adaptation_database,
     run_project_migrations,
     select_migrations,
+    select_platform_core_migration,
 )
 from yleum_orchestrator.services.react_effect_contract import (
     REACT_EFFECT_CHECK_PHASE,
@@ -668,6 +671,11 @@ class MachineAdapter:
                         if request.task_role in {"full_build", "restore_runtime"}
                         else {}
                     ),
+                    **(
+                        {"platform_bootstrap_contract": PLATFORM_BOOTSTRAP_CONTRACT}
+                        if request.task_role == "bootstrap" and manifest.app_config_protocol == 1
+                        else {}
+                    ),
                 },
                 sort_keys=True,
                 separators=(",", ":"),
@@ -748,6 +756,11 @@ class MachineAdapter:
                 return await finish(exit_code=1, output=str(exc))
             if gap:
                 return await finish(exit_code=1, output=gap)
+        if role == "bootstrap" and manifest.app_config_protocol == 1:
+            try:
+                await self._bootstrap_platform_migrations(state, request)
+            except CellResourceError as exc:
+                return await finish(exit_code=1, output=str(exc))
         if role in {"full_build", "restore_runtime"}:
             try:
                 if role == "restore_runtime":
@@ -942,6 +955,51 @@ class MachineAdapter:
 
                 protected = await machine_effect(protected_sources, backend, migrations)
                 require_protected_sources(protected, migrations)
+        return await self._run_migration_inventory(
+            state, request, migrations, verify_only=verify_only, verify_applied=verify_applied,
+        )
+
+    async def _bootstrap_platform_migrations(self, state: Any, request: Any) -> None:
+        """Prepare trusted core SQL before AI; pending product SQL stays untouched."""
+        from yleum_orchestrator.services.applied_migration_sources import (
+            protected_sources,
+            require_protected_sources,
+        )
+        from yleum_orchestrator.services.cell_draft_support import trusted_template_source
+
+        machine, backend = self.parts(state)
+        if adaptation_database(state, machine.state()):
+            return  # Copied historical databases never acquire new bootstrap migrations.
+        migrations = await self._migration_inventory(backend)
+        if PLATFORM_CORE_MIGRATION not in migrations:
+            return
+        template = trusted_template_source(get_stack("max-miniapp-nextjs").template_dir)
+        core = select_platform_core_migration(
+            migrations, (template / PLATFORM_CORE_MIGRATION).read_text(encoding="utf-8"),
+        )
+        if not core:
+            return
+        # Preserve every actual applied source, including a product migration.
+        # Only the whitelisted platform file can be newly applied by this role.
+        protected = await machine_effect(protected_sources, backend, migrations)
+        require_protected_sources(protected, migrations)
+        receipt = await self._run_migration_inventory(
+            state, request, {**protected, **core}, verify_only=False, verify_applied=False,
+        )
+        receipt["platform_core_bootstrap"] = {
+            "contract": PLATFORM_BOOTSTRAP_CONTRACT,
+            "migration_path": PLATFORM_CORE_MIGRATION,
+            "migration_sha256": hashlib.sha256(core[PLATFORM_CORE_MIGRATION].encode()).hexdigest(),
+            "operation_id": str(request.operation_id),
+        }
+        self._store_migration_receipt(state, request.operation_id, receipt)
+
+    async def _run_migration_inventory(
+        self, state: Any, request: Any, migrations: dict[str, str],
+        *, verify_only: bool, verify_applied: bool,
+    ) -> dict[str, Any]:
+        """Apply/verify a selected inventory through the same fenced SQL journal."""
+        machine, backend = self.parts(state)
         if not (verify_only or verify_applied):
             mutation = LifecycleMutation(request.operation_id, request.fencing_epoch,
                                          self._request_digest(

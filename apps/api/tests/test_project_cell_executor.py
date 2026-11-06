@@ -301,7 +301,7 @@ async def test_identity_invalidation_matrix_is_exact() -> None:
     assert project_cell_executor.invalidated_dimensions(
         initial,
         replace(initial, schema_data_digest="8" * 64),
-    ) == {ProofDimension.RUNTIME, ProofDimension.RELEASE}
+    ) == {ProofDimension.BOOTSTRAP, ProofDimension.RUNTIME, ProofDimension.RELEASE}
     assert project_cell_executor.invalidated_dimensions(
         initial,
         replace(initial, dependency_digest="8" * 64),

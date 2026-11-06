@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4, uuid5
 
@@ -11,7 +12,21 @@ from yleum_orchestrator.services.project_migrations import (
     adaptation_database,
     migration_sql,
     select_migrations,
+    select_platform_core_migration,
 )
+
+
+def test_platform_bootstrap_selects_exact_trusted_core_never_pending_product_sql():
+    path = "drizzle/0003_owner_management.sql"
+    core = (Path(__file__).parents[1] / "templates/max-miniapp-nextjs" / path).read_text(
+        encoding="utf-8",
+    )
+    assert select_platform_core_migration({
+        path: core, "drizzle/0004_product.sql": "DROP TABLE business;",
+    }, core) == {path: core}
+    assert select_platform_core_migration({"drizzle/0004_product.sql": "SELECT 1;"}, core) == {}
+    with pytest.raises(CellResourceError, match="rejected before SQL"):
+        select_platform_core_migration({path: core + "-- changed"}, core)
 
 
 def test_portable_inventory_excludes_only_exact_legacy_content():

@@ -18,6 +18,8 @@ from yleum_orchestrator.services.restoration_database import (
 
 RECEIPT_PREFIX = "[project-migrations:v1]"
 LEGACY_PATHS = ("drizzle/0000_max_core.sql", "drizzle/0001_business_core.sql")
+PLATFORM_CORE_MIGRATION = "drizzle/0003_owner_management.sql"
+PLATFORM_BOOTSTRAP_CONTRACT = "max-platform-bootstrap-v2"
 _JOURNAL = "public.__omnia_project_migrations"
 ADOPTION_PREFLIGHT_SQL = "BEGIN;\n" + """DO $adoption$
 DECLARE item record; populated boolean; visited integer := 0;
@@ -75,6 +77,26 @@ def select_migrations(files: Mapping[str, str], legacy: Mapping[str, str]) -> di
     if len(selected) > 256 or sum(len(value.encode()) for value in selected.values()) > 2 * 1024**2:
         raise CellResourceError("project migration inventory exceeds execution budget")
     return selected
+
+
+def select_platform_core_migration(
+    migrations: Mapping[str, str], trusted_source: str,
+) -> dict[str, str]:
+    """Bootstrap only the exact controller-owned management schema, never user SQL.
+
+    Absence is valid for products without managed resources. A changed file is
+    not a new platform version: applying it requires ordinary source/migration
+    validation, so bootstrap stops before touching the database.
+    """
+    source = migrations.get(PLATFORM_CORE_MIGRATION)
+    if source is None:
+        return {}
+    if source != trusted_source:
+        raise CellResourceError(
+            "managed platform migration differs from the controller template; "
+            "bootstrap rejected before SQL"
+        )
+    return {PLATFORM_CORE_MIGRATION: trusted_source}
 
 
 def adaptation_database(state: Any, metadata: Mapping[str, Any]) -> bool:
