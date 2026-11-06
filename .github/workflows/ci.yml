@@ -408,6 +408,17 @@ jobs:
             echo "QA_PUBLICATION_MIGRATION_PG_IMAGE=$migration_image"
             echo "QA_PUBLICATION_MIGRATION_DOCKER=1"
           } >> "$GITHUB_ENV"
+      - name: Verify binary source archive transfer on disposable Docker
+        working-directory: apps/orchestrator
+        env:
+          YLEUM_TEST_LOCAL_DOCKER: "1"
+          # Same immutable legacy source-reader image observed in production.
+          YLEUM_TEST_SOURCE_ARCHIVE_IMAGE: >-
+            alpine@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
+        run: |
+          docker pull "$YLEUM_TEST_SOURCE_ARCHIVE_IMAGE"
+          uv run --frozen pytest -q -o faulthandler_timeout=120 \
+            tests/test_docker_py_cell_backend.py::test_workspace_source_archive_real_docker_file_metadata
       - name: Verify real isolated publication migration backup and commit recovery
         working-directory: apps/orchestrator
         run: >-

@@ -254,6 +254,22 @@ def _archive(files: dict[str, bytes], *, root: str) -> bytes:
     return buffer.getvalue()
 
 
+def _docker_file_archive(name: str, payload: bytes, *, kind: bytes = tarfile.REGTYPE) -> bytes:
+    """Docker file export wraps one basename, not basename/basename."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        member = tarfile.TarInfo(name)
+        member.type = kind
+        member.mode = 0o644
+        member.size = len(payload) if kind == tarfile.REGTYPE else 0
+        if kind in {tarfile.SYMTYPE, tarfile.LNKTYPE}:
+            member.linkname = "other"
+        archive.addfile(member, io.BytesIO(payload) if kind == tarfile.REGTYPE else None)
+    # Go archive/tar writes two EOF blocks without Python's record padding.
+    end = 512 + ((member.size + 511) // 512) * 512
+    return buffer.getvalue()[:end + 1024]
+
+
 def _extract(data: bytes) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as archive:
@@ -553,7 +569,13 @@ class _FakeContainer:
             payload = _archive(self.manager.client.volumes.items[mounted_name].files, root="volume")
             return [payload], {}
         payload = self.temp_files.get(path, b"")
-        return [_archive({PurePosixPath(path).name: payload}, root=PurePosixPath(path).name)], {}
+        name = PurePosixPath(path).name
+        # The daemon stat uses Go FileMode permission bits for regular files;
+        # adding POSIX S_IFREG here would hide a production compatibility bug.
+        return [_docker_file_archive(name, payload)], {
+            "name": name, "size": len(payload), "mode": 0o644,
+            "mtime": "2026-11-06T00:00:00Z", "linkTarget": "",
+        }
 
     def put_archive(self, *, path: str, data: bytes) -> bool:
         self.put_archive_calls.append((path, data))
@@ -1434,6 +1456,7 @@ async def test_workspace_source_read_excludes_runtime_caches_and_secrets(
     assert "--exclude=./.next" in command
     assert "--exclude=./.pnpm-store" in command
     assert helper["kwargs"]["labels"]["omnia.resource_kind"] == "workspace-source-read"
+    assert len(commands) == 1  # No numeric stat or binary cat over exec stdout.
     assert client.containers.items == {}
 
 
@@ -1452,6 +1475,183 @@ async def test_workspace_source_read_rejects_oversize_archive_and_cleans_helper(
         await backend.read_workspace_source_files("workspace-vol")
 
     assert client.containers.items == {}
+
+
+@pytest.mark.parametrize("fault", [
+    None, "missing_metadata", "wrong_stat_name", "missing_size", "bool_size", "negative_size",
+    "oversize", "directory_stat", "symlink_stat", "posix_type_stat", "link_target", "wrong_member",
+    "symlink_member", "hardlink_member", "directory_member", "multiple_members", "concatenated",
+    "corrupt_transfer", "truncated_data", "missing_eof", "metadata_size_mismatch", "invalid_chunk",
+    "transfer_budget", "corrupt_source_tar",
+])
+async def test_workspace_source_export_requires_exact_bounded_regular_file(
+    monkeypatch: pytest.MonkeyPatch, fault: str | None,
+) -> None:
+    client = _FakeClient()
+    source = {"src/app/page.tsx": b"same source", "src/data.bin": b"\x00\xff\x80binary\n"}
+    client.volumes.items["workspace-vol"] = _FakeVolume("workspace-vol", _labels("workspace"),
+                                                        files=dict(source))
+    backend = _backend(client)
+    backend.archive_limit_bytes = 32 * 1024
+    original = _FakeContainer.get_archive
+    closed: list[bool] = []
+
+    class Stream:
+        def __init__(self, chunks: list[Any]) -> None:
+            self.chunks = chunks
+
+        def __iter__(self):
+            return iter(self.chunks)
+
+        def close(self) -> None:
+            closed.append(True)
+
+    def export(container: _FakeContainer, path: str) -> tuple[Any, Any]:
+        chunks, metadata = original(container, path)
+        inner = container.temp_files[path]
+        name = PurePosixPath(path).name
+        raw = chunks[0]
+        if fault == "missing_metadata":
+            metadata = None
+        elif fault == "wrong_stat_name":
+            metadata["name"] = "other.tar"
+        elif fault == "missing_size":
+            metadata.pop("size")
+        elif fault == "bool_size":
+            metadata["size"] = True
+        elif fault == "negative_size":
+            metadata["size"] = -1
+        elif fault == "oversize":
+            metadata["size"] = backend.archive_limit_bytes + 1
+        elif fault in {"directory_stat", "symlink_stat", "posix_type_stat"}:
+            metadata["mode"] = {"directory_stat": 1 << 31, "symlink_stat": 1 << 27,
+                                "posix_type_stat": 0o100644}[fault]
+        elif fault == "link_target":
+            metadata["linkTarget"] = "other"
+        elif fault == "wrong_member":
+            raw = _docker_file_archive("other.tar", inner)
+        elif fault in {"symlink_member", "hardlink_member", "directory_member"}:
+            raw = _docker_file_archive(name, b"", kind={
+                "symlink_member": tarfile.SYMTYPE, "hardlink_member": tarfile.LNKTYPE,
+                "directory_member": tarfile.DIRTYPE,
+            }[fault])
+        elif fault == "multiple_members":
+            raw = raw[:-1024] + _docker_file_archive("extra", b"not accepted")
+        elif fault == "concatenated":
+            raw += _docker_file_archive("extra", b"hidden after EOF")
+        elif fault == "corrupt_transfer":
+            raw = b"not a tar stream"
+        elif fault == "truncated_data":
+            raw = raw[:512 + len(inner) - 1]
+        elif fault == "missing_eof":
+            raw = raw[:-512]
+        elif fault == "metadata_size_mismatch":
+            metadata["size"] = len(inner) + 1
+        elif fault == "corrupt_source_tar":
+            inner = b"not source tar"
+            raw = _docker_file_archive(name, inner)
+            metadata["size"] = len(inner)
+        if fault == "invalid_chunk":
+            return Stream(["not bytes"]), metadata
+        if fault == "transfer_budget":
+            size = (backend.archive_limit_bytes
+                    + docker_py_cell_backend._WORKSPACE_SOURCE_TRANSFER_OVERHEAD)
+            return Stream([b"x" * (size + 1)]), metadata
+        # Exercise real streamed chunk boundaries, including inside TAR headers.
+        return Stream([raw[:13], raw[13:519], raw[519:]]), metadata
+
+    monkeypatch.setattr(_FakeContainer, "get_archive", export)
+    if fault is None:
+        assert await backend.read_workspace_source_files("workspace-vol") == source
+    else:
+        with pytest.raises(CellResourceError):
+            await backend.read_workspace_source_files("workspace-vol")
+    assert closed == [True]
+    assert client.containers.items == {}
+    assert client.volumes.items["workspace-vol"].files == source
+
+
+@pytest.mark.parametrize("exit_code", [None, False, "0", 127])
+async def test_source_tar_creation_requires_confirmed_zero_before_export(
+    monkeypatch: pytest.MonkeyPatch, exit_code: Any,
+) -> None:
+    client = _FakeClient()
+    client.volumes.items["workspace-vol"] = _FakeVolume("workspace-vol", _labels("workspace"),
+                                                        files={"source": b"retained"})
+    exports = []
+
+    def execute(_container: _FakeContainer, command: list[str], **kwargs: Any) -> Any:
+        assert command[0] == "tar"
+        return SimpleNamespace(exit_code=exit_code, output=b"unconfirmed tar output")
+
+    def export(_container: _FakeContainer, path: str) -> Any:
+        exports.append(path)
+        raise AssertionError("unconfirmed tar cannot become a source snapshot")
+
+    monkeypatch.setattr(_FakeContainer, "exec_run", execute)
+    monkeypatch.setattr(_FakeContainer, "get_archive", export)
+    with pytest.raises(CellResourceError):
+        await _backend(client).read_workspace_source_files("workspace-vol")
+    assert exports == [] and client.containers.items == {}
+    assert client.volumes.items["workspace-vol"].files == {"source": b"retained"}
+
+
+@pytest.mark.skipif(os.environ.get("YLEUM_TEST_LOCAL_DOCKER") != "1",
+                    reason="explicit disposable local Docker fixture only")
+async def test_workspace_source_archive_real_docker_file_metadata() -> None:
+    """Native Docker stat is Go permission mode, and its file TAR has one basename."""
+    image = os.environ.get("YLEUM_TEST_SOURCE_ARCHIVE_IMAGE", "alpine:3.20")
+    client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
+    client.images.get(image)  # Existing fixture image only; never pull/install.
+    name = "source-archive-fixture-" + uuid4().hex
+    labels = {**_labels("workspace"), "test.disposable": name}
+    volume = client.volumes.create(name=name, labels=labels)
+    seed = None
+    observed = []
+
+    class ObservedBackend(DockerPyCellBackend):
+        async def _start_helper_container(self, **kwargs: Any) -> Any:
+            container = await super()._start_helper_container(**kwargs)
+            if kwargs["labels"]["omnia.resource_kind"] == "workspace-source-read":
+                original = container.get_archive
+
+                def export(path: str) -> Any:
+                    chunks, metadata = original(path)
+                    observed.append(metadata)
+                    return chunks, metadata
+
+                container.get_archive = export
+            return container
+
+    backend = ObservedBackend("unix:///var/run/docker.sock", image)
+    try:
+        seed = await backend._start_helper_container(
+            name=name + "-seed", labels=backend._helper_labels(labels, "archive-test-seed"),
+            volumes={name: {"bind": "/volume", "mode": "rw"}},
+        )
+        result = seed.exec_run([
+            "sh", "-eu", "-c",
+            "mkdir -p /volume/src /volume/.next /volume/node_modules; "
+            "printf 'same source' > /volume/src/page.tsx; "
+            "printf '\\000\\377\\200binary\\n' > /volume/src/data.bin; "
+            "printf cache > /volume/.next/cache; printf vendor > /volume/node_modules/pkg; "
+            "printf private > /volume/.env",
+        ])
+        assert result.exit_code == 0
+        await backend._remove_container_object(seed)
+        seed = None
+        assert await backend.read_workspace_source_files(name) == {
+            "src/page.tsx": b"same source", "src/data.bin": b"\x00\xff\x80binary\n",
+        }
+        assert len(observed) == 1
+        assert observed[0]["name"] == "workspace-source.tar"
+        assert type(observed[0]["mode"]) is int and 0 <= observed[0]["mode"] <= 0o777
+        assert observed[0]["size"] > 0 and observed[0]["linkTarget"] == ""
+    finally:
+        if seed is not None:
+            await backend._remove_container_object(seed)
+        volume.remove()
+        client.close()
 
 
 @pytest.mark.asyncio
