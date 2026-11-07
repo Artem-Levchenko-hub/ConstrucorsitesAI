@@ -10,7 +10,6 @@ emits SSE chunks and bills based on what the wire actually delivered.
 from __future__ import annotations
 
 import asyncio
-import math
 from collections.abc import Awaitable, Callable
 from decimal import Decimal
 from typing import Any, Literal
@@ -30,7 +29,7 @@ from yleum_gateway.core.errors import (
     WalletEmptyError,
 )
 from yleum_gateway.providers import llmgw
-from yleum_gateway.providers.native_stream import RECEIPT_RESERVE_SECONDS
+from yleum_gateway.providers.native_stream import RECEIPT_RESERVE_SECONDS, provider_request_deadline
 from yleum_gateway.services import (
     billing,
     cache,
@@ -136,13 +135,10 @@ def _estimate_cost(model: str, messages: list[dict[str, str]]) -> Decimal:
 
 
 def _remaining_provider_budget(request: Request, received_at: float, *, reserve: float) -> float:
-    try:
-        seconds = float(request.headers.get("x-yleum-provider-timeout-seconds", "270"))
-    except ValueError:
-        seconds = 270.0
-    if not math.isfinite(seconds) or seconds <= 0:
-        seconds = 270.0
-    remaining = min(seconds, 1500.0) - (asyncio.get_running_loop().time() - received_at) - reserve
+    deadline = provider_request_deadline(
+        request.headers.get("x-yleum-provider-timeout-seconds"), received_at, reserve=reserve,
+    )
+    remaining = deadline - asyncio.get_running_loop().time()
     if remaining <= 0:
         raise DispatchDeadlineError()
     return remaining
@@ -161,8 +157,17 @@ async def _dispatch_chat_provider(
 ) -> tuple[dict[str, Any], UUID, str]:
     meta = req.metadata or ChatMetadata()
     provider_scope = await text_failover.select_scope(identity, req.model)
+    loop = asyncio.get_running_loop()
     while True:
+        backup_deadline = None
         try:
+            if provider_scope == "aitunnel":
+                backup_deadline = provider_request_deadline(
+                    request.headers.get("x-yleum-provider-timeout-seconds"), received_at,
+                    reserve=RECEIPT_RESERVE_SECONDS,
+                )
+                if loop.time() >= backup_deadline:
+                    raise DispatchDeadlineError()
             call_id = await generation_attempts.dispatch(identity,
                 route="/v1/chat/completions", model=req.model, user_id=req.user,
                 project_id=meta.project_id, run_id=meta.run_id, message_id=meta.message_id,
@@ -190,17 +195,20 @@ async def _dispatch_chat_provider(
             if provider_scope == "aitunnel":
                 completion = llmgw.acompletion
                 completion_options.pop("user", None)
-                completion_options.update(provider_scope="aitunnel", retry_preconnect=False)
-                completion_options["response_budget"] = _remaining_provider_budget(request, received_at, reserve=RECEIPT_RESERVE_SECONDS)
-            with provider_validation_scope(project_id=meta.project_id, run_id=meta.run_id,
-                                           call_id=call_id):
-                response = await completion(
-                    model=req.model,
-                    messages=filtered_messages,
-                    temperature=0.5 if req.temperature is None else req.temperature,
-                    max_tokens=req.max_tokens,
-                    **completion_options,
+                completion_options.update(
+                    provider_scope="aitunnel", retry_preconnect=False,
+                    provider_deadline=backup_deadline, evidence=transport_evidence,
                 )
+            async with asyncio.timeout_at(backup_deadline):
+                with provider_validation_scope(project_id=meta.project_id, run_id=meta.run_id,
+                                               call_id=call_id):
+                    response = await completion(
+                        model=req.model,
+                        messages=filtered_messages,
+                        temperature=0.5 if req.temperature is None else req.temperature,
+                        max_tokens=req.max_tokens,
+                        **completion_options,
+                    )
         except BaseException as exc:
             details = exc.details if isinstance(exc, GatewayError) else {}
             retry_candidate = details.pop("_rate_limit_retry_candidate", None)
@@ -216,10 +224,12 @@ async def _dispatch_chat_provider(
             await await_provider_receipt(_finish_failed_provider(
                 identity, call_id, reason=reason, status=status, error_type=failure_type, **failed_receipt,
             ))
+            if identity is None and provider_scope == "llmgw" and status == "failed" and (
+                isinstance(overload, dict) or (reason == "preconnect" and text_failover.enabled(req.model))
+            ):
+                provider_scope = "aitunnel"
+                continue
             if isinstance(overload, dict) and status == "failed":
-                if identity is None:
-                    provider_scope = "aitunnel"
-                    continue
                 from yleum_gateway.services.generation_response_capture import (
                     confirm_response_accounting,
                 )
@@ -304,6 +314,18 @@ async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -
             if not llmgw.is_llmgw_model(req.model):
                 raise ModelNotFoundError(f"Unknown model: {req.model}")
             provider_scope = await text_failover.select_scope(identity, req.model)
+            provider_deadline = None
+            if text_failover.enabled(req.model):
+                provider_deadline = provider_request_deadline(
+                    request.headers.get("x-yleum-provider-timeout-seconds"), received_at,
+                    reserve=RECEIPT_RESERVE_SECONDS,
+                )
+            elif identity is not None:
+                provider_deadline = received_at + min(
+                    240.0, _remaining_provider_budget(request, received_at, reserve=0),
+                )
+            if provider_deadline is not None and provider_deadline <= asyncio.get_running_loop().time():
+                raise DispatchDeadlineError()
             provider_call_id = await generation_attempts.dispatch(identity,
                 route="/v1/chat/completions", model=req.model, user_id=req.user,
                 project_id=meta.project_id, run_id=meta.run_id, message_id=meta.message_id,
@@ -317,8 +339,7 @@ async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -
                 provider_call_id=provider_call_id,
                 provider_scope=provider_scope,
                 generation_identity=identity,
-                provider_deadline=(received_at + min(240.0, _remaining_provider_budget(request, received_at, reserve=0))
-                                   if identity is not None else None),
+                provider_deadline=provider_deadline,
                 model=req.model,
                 messages=filtered_messages,
                 user_id=req.user,

@@ -30,7 +30,7 @@ import json
 import re
 import threading
 import time
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Iterator, Mapping
 from contextlib import suppress
 from typing import Any
 from uuid import uuid4
@@ -40,6 +40,7 @@ import httpx
 from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.errors import (
     DispatchDeadlineError,
+    GatewayError,
     ProviderResponseDeadlineError,
     UpstreamProviderError,
     ValidationFailedError,
@@ -314,6 +315,7 @@ async def astream(
     receipt: dict[str, Any] | None = None,
     retry_preconnect: bool = True,
     provider_scope: str = "llmgw",
+    deadline: float | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
     """TRUE token streaming from llmgw — the page builds live in the preview.
 
@@ -356,6 +358,7 @@ async def astream(
     }
 
     loop = asyncio.get_running_loop()
+    backup_deadline = deadline if deadline is not None else loop.time() + timeout
     from yleum_gateway.services import generation_response_capture as response_capture
 
     retained = response_capture.retention_active()
@@ -379,6 +382,42 @@ async def astream(
                 continue
         pending.cancel()
 
+    def stream_events(raw: str) -> Iterator[Any]:
+        if not raw.startswith("data:"):
+            return
+        data = raw[5:].strip()
+        if retained:
+            yield ("raw", data)
+        if data == "[DONE]":
+            yield ("receipt", {"complete": True})
+            yield _DONE
+            return
+        try:
+            obj = json.loads(data)
+        except ValueError:
+            return
+        if not isinstance(obj, dict):
+            return
+        if obj.get("error"):
+            raise UpstreamProviderError("llmgw stream returned an error", details=failure_details(
+                {}, receipt_failure=ReceiptFailure.UPSTREAM_ERROR, transport_stage="body",
+            ))
+        yield ("receipt", {
+            key: obj[key] for key in ("usage", "model", "id", "metadata")
+            if obj.get(key) is not None
+        })
+        choices = obj.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            reason = choices[0].get("finish_reason")
+            if reason is not None:
+                yield ("finish", reason)
+        try:
+            delta = obj["choices"][0].get("delta", {}).get("content", "")
+        except (KeyError, IndexError, TypeError):
+            delta = ""
+        if delta:
+            yield ("delta", delta)
+
     def _produce() -> None:
         from yleum_gateway.services.generation_response_capture import dispatch_capacity_guard
 
@@ -389,7 +428,7 @@ async def astream(
             try:
                 with (
                     httpx.Client(
-                        timeout=httpx.Timeout(timeout, connect=30.0),
+                        timeout=httpx.Timeout(timeout, connect=min(30.0, timeout)),
                         trust_env=False,
                         mounts={"all://": httpx.HTTPTransport()},
                     ) as client,
@@ -422,40 +461,10 @@ async def astream(
                         transport_stage = "body"
                         if stopped.is_set():
                             return
-                        if not raw or not raw.startswith("data:"):
-                            continue
-                        data = raw[5:].strip()
-                        if retained:
-                            enqueue(("raw", data))
-                        if data == "[DONE]":
-                            enqueue(("receipt", {"complete": True}))
-                            enqueue(_DONE)
-                            return
-                        try:
-                            obj = json.loads(data)
-                        except ValueError:
-                            continue
-                        if not isinstance(obj, dict):
-                            continue
-                        if obj.get("error"):
-                            raise UpstreamProviderError("llmgw stream returned an error", details=
-                                failure_details({}, receipt_failure=ReceiptFailure.UPSTREAM_ERROR,
-                                    transport_stage=transport_stage))
-                        enqueue(("receipt", {
-                            key: obj[key] for key in ("usage", "model", "id", "metadata")
-                            if obj.get(key) is not None
-                        }))
-                        choices = obj.get("choices")
-                        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
-                            reason = choices[0].get("finish_reason")
-                            if reason is not None:
-                                enqueue(("finish", reason))
-                        try:
-                            delta = obj["choices"][0].get("delta", {}).get("content", "")
-                        except (KeyError, IndexError, TypeError):
-                            delta = ""
-                        if delta:
-                            enqueue(("delta", delta))
+                        for event in stream_events(raw):
+                            enqueue(event)
+                            if event is _DONE:
+                                return
                 raise UpstreamProviderError(
                     "llmgw stream ended without completion",
                     details=failure_details({}, receipt_failure=ReceiptFailure.MISSING_COMPLETION,
@@ -480,9 +489,49 @@ async def astream(
                 enqueue(_DONE)
                 return
 
-    context = contextvars.copy_context()
-    producer = threading.Thread(target=context.run, args=(_produce,), daemon=True)
-    producer.start()
+    async def _produce_backup() -> None:
+        evidence: dict[str, Any] = {}
+        try:
+            async with native_stream.open_aitunnel_response(
+                url, payload, headers, deadline=backup_deadline, evidence=evidence,
+            ) as response:
+                if response.status_code >= 400:
+                    raise UpstreamProviderError("aitunnel stream rejected", details=failure_details(
+                        evidence, response.headers, transport_stage="headers",
+                        upstream_http_status=response.status_code,
+                    ))
+                await queue.put(("begin", None))
+                await queue.put(("receipt", {
+                    "headers": _receipt_headers(response.headers),
+                    "provider_request_id": evidence.get("provider_request_id"),
+                }))
+                async for raw in response.aiter_lines():
+                    evidence["transport_stage"] = "body"
+                    for event in stream_events(raw):
+                        await queue.put(event)
+                        if event is _DONE:
+                            return
+                raise UpstreamProviderError("aitunnel stream ended without completion", details=failure_details(
+                    evidence, receipt_failure=ReceiptFailure.MISSING_COMPLETION,
+                    transport_stage=evidence["transport_stage"],
+                ))
+        except TimeoutError:
+            await queue.put(("err", ProviderResponseDeadlineError(details=failure_details(evidence))))
+        except GatewayError as exc:
+            await queue.put(("err", exc))
+        except Exception as exc:  # noqa: BLE001 — preserve a terminal SSE error on transport loss
+            await queue.put(("err", UpstreamProviderError(
+                f"aitunnel stream failed: {type(exc).__name__}", details=failure_details(evidence),
+            )))
+
+    backup_task = None
+    producer = None
+    if provider_scope == "aitunnel":
+        backup_task = asyncio.create_task(_produce_backup())
+    else:
+        context = contextvars.copy_context()
+        producer = threading.Thread(target=context.run, args=(_produce,), daemon=True)
+        producer.start()
 
     try:
         while True:
@@ -516,13 +565,18 @@ async def astream(
         await response_capture.finish_stream_capture()
     finally:
         stopped.set()
+        if backup_task is not None:
+            backup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await backup_task
         if retained:
             with suppress(Exception):
                 await response_capture.finish_stream_capture()
             # Flush a cancelled bounded handoff before its event loop can close.
             # A provider socket still blocked on I/O keeps the existing timeout;
             # stopped prevents it from scheduling further queue work afterward.
-            await asyncio.to_thread(producer.join, 1.0)
+            if producer is not None:
+                await asyncio.to_thread(producer.join, 1.0)
 
 
 async def acompletion(
@@ -536,6 +590,7 @@ async def acompletion(
     evidence: dict[str, Any] | None = None,
     retry_preconnect: bool = True,
     provider_scope: str = "llmgw",
+    provider_deadline: float | None = None,
 ) -> dict[str, Any]:
     """Call llmgw's chat surface and return an OpenAI-shaped completion dict.
 
@@ -543,6 +598,10 @@ async def acompletion(
         ValidationFailedError on bad input (unknown model / role).
         UpstreamProviderError on transport, 4xx/5xx, or empty response.
     """
+    backup_deadline = (
+        provider_deadline if provider_deadline is not None
+        else asyncio.get_running_loop().time() + (response_budget or timeout)
+    )
     slug = _MODEL_SLUG.get(model)
     if slug is None:
         raise ValidationFailedError(f"unsupported llmgw model: {model}")
@@ -575,6 +634,23 @@ async def acompletion(
     evidence = evidence if evidence is not None else {}
     evidence.pop("upstream_http_status", None)
 
+    def _decode_response(response: httpx.Response) -> dict[str, Any]:
+        provider_headers = _receipt_headers(response.headers)
+        evidence["transport_stage"] = "body"
+        response.raise_for_status()
+        try:
+            result = response.json()
+            if not isinstance(result, dict):
+                raise TypeError("Response must be an object")
+        except (TypeError, ValueError):
+            raise UpstreamProviderError(
+                f"{provider_scope}: malformed response",
+                details=failure_details(evidence, provider_headers,
+                    receipt_failure=ReceiptFailure.INVALID_RESPONSE, transport_stage="body"),
+            ) from None
+        result["_provider_headers"] = provider_headers
+        return result
+
     def _completion_sync() -> dict[str, Any]:
         from yleum_gateway.services.generation_response_capture import verify_dispatch_capacity
 
@@ -598,22 +674,7 @@ async def acompletion(
                             evidence["upstream_http_status"] = r.status_code
                         evidence.update(receipt_evidence({}, _receipt_headers(r.headers), provider_scope=provider_scope))
                         r.read()
-                    provider_headers = _receipt_headers(r.headers)
-                    evidence["transport_stage"] = "body"
-                    r.raise_for_status()
-                    try:
-                        result = r.json()
-                        if not isinstance(result, dict):
-                            raise TypeError("Response must be an object")
-                    except (TypeError, ValueError):
-                        raise UpstreamProviderError(
-                            "llmgw: malformed response",
-                            details=failure_details(evidence, provider_headers,
-                                receipt_failure=ReceiptFailure.INVALID_RESPONSE,
-                                transport_stage=evidence.get("transport_stage")),
-                        ) from None
-                    result["_provider_headers"] = provider_headers
-                    return result
+                    return _decode_response(r)
             except _SAFE_TO_RETRY as exc:
                 last = exc
                 if retry_preconnect and _is_preconnect_failure(exc, evidence.get("transport_stage")) and attempt == 0:
@@ -624,13 +685,22 @@ async def acompletion(
 
     try:
         if uses_provider_output_default(model, max_tokens):
+            stream_options: dict[str, Any] = {}
+            if provider_scope == "aitunnel":
+                stream_options.update(provider_scope=provider_scope, deadline=backup_deadline)
             response = await native_stream.collect_response(
                 url, payload, headers, budget_seconds=response_budget or timeout, evidence=evidence,
-                **({"provider_scope": provider_scope} if provider_scope != "llmgw" else {}),
+                **stream_options,
             )
             response.raise_for_status()
             data = response.json()
             data["_provider_headers"] = _receipt_headers(response.headers)
+        elif provider_scope == "aitunnel":
+            async with native_stream.open_aitunnel_response(
+                url, payload, headers, deadline=backup_deadline, evidence=evidence,
+            ) as response:
+                await response.aread()
+            data = _decode_response(response)
         else:
             data = await asyncio.to_thread(_completion_sync)
     except httpx.HTTPStatusError as exc:

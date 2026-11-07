@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -19,15 +20,20 @@ def client(neutralize_lifespan, neutralize_side_effects, monkeypatch):
         yield client
 
 
-@pytest.mark.parametrize("status", [500,502,503,504])
+@pytest.mark.parametrize("status", [500, 502, 503, 504, None], ids=["500", "502", "503", "504", "preconnect"])
 def test_native_refusal_continues_same_tools_with_separate_expense_and_one_charge(client, monkeypatch,status):
     sent = []
 
     def post(url, payload, headers, **kwargs):
         sent.append((url, dict(payload)))
-        if len(sent) == 1:
-            return httpx.Response(status, json={"error": {500:"Internal Server Error",502:"Bad Gateway",503:"Service Unavailable",504:"Gateway Timeout"}[status]}, request=httpx.Request("POST", url))
-        return httpx.Response(200, request=httpx.Request("POST", url), json={
+        if status is None:
+            raise httpx.ConnectTimeout("synthetic preconnect failure")
+        return httpx.Response(status, json={"error": {500:"Internal Server Error",502:"Bad Gateway",503:"Service Unavailable",504:"Gateway Timeout"}[status]}, request=httpx.Request("POST", url))
+
+    def backup(request):
+        sent.append((str(request.url), json.loads(request.content)))
+        assert provider_calls.finish_call.await_args.kwargs["status"] == "failed"
+        return httpx.Response(200, json={
             "id": "backup-receipt", "model": "claude-sonnet-5.5",
             "usage": {"prompt_tokens": 10, "completion_tokens": 2, "cost_rub": 0.2},
             "choices": [{"finish_reason": "tool_calls", "message": {"content": None, "tool_calls": [
@@ -36,6 +42,7 @@ def test_native_refusal_continues_same_tools_with_separate_expense_and_one_charg
         })
 
     monkeypatch.setattr(messages_native, "_post_llmgw", post)
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(backup))
     response = client.post("/v1/messages", json={
         "model": "claude-sonnet-5.5", "user": str(uuid4()),
         "messages": [{"role": "user", "content": "Read main.py"}],
@@ -56,16 +63,64 @@ def test_native_refusal_continues_same_tools_with_separate_expense_and_one_charg
     assert billing.charge.await_args.kwargs["provider_scope"] == "aitunnel"
 
 
-def test_failed_primary_receipt_commit_stops_backup(client, monkeypatch):
+@pytest.mark.parametrize("preconnect", [False, True])
+def test_failed_primary_receipt_commit_stops_backup(client, monkeypatch, preconnect):
     calls = []
     def post(url, *args, **kwargs):
         calls.append(url)
+        if preconnect:
+            raise httpx.ConnectTimeout("synthetic preconnect failure")
         return httpx.Response(502, json={"error": "Bad gateway"}, request=httpx.Request("POST", url))
     monkeypatch.setattr(messages_native, "_post_llmgw", post)
     monkeypatch.setattr(provider_calls, "finish_call", AsyncMock(side_effect=RuntimeError("unconfirmed commit")))
     response = client.post("/v1/messages", json={"model": "claude-sonnet-5.5", "messages": [{"role": "user", "content": "synthetic"}]})
     assert response.status_code == 503
     assert len(calls) == 1
+    assert billing.charge.await_count == 0
+
+
+def test_legacy_native_connect_error_after_headers_cannot_use_backup(client, monkeypatch):
+    posts = []
+
+    class BrokenBody(httpx.SyncByteStream):
+        def __iter__(self):
+            raise httpx.ConnectError("synthetic response interrupted after headers")
+
+    def reply(request):
+        posts.append(request.url.host)
+        return httpx.Response(200, stream=BrokenBody())
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda **_: httpx.MockTransport(reply))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(reply))
+    response = client.post("/v1/messages", json={
+        "model": "claude-sonnet-5.5",
+        "max_tokens": 128,
+        "messages": [{"role": "user", "content": "synthetic"}],
+    })
+
+    assert response.status_code >= 400
+    assert posts == ["api.llmgw.ru"]
+    assert provider_calls.finish_call.await_args.kwargs["status"] == "ambiguous"
+    assert billing.charge.await_count == 0
+
+
+def test_legacy_native_skips_backup_when_shared_budget_is_exhausted(client, monkeypatch):
+    posts = []
+
+    def post(url, *args, **kwargs):
+        posts.append(url)
+        raise httpx.ConnectTimeout("synthetic preconnect failure")
+
+    monkeypatch.setattr(messages_native, "_post_llmgw", post)
+    response = client.post("/v1/messages", headers={"x-yleum-provider-timeout-seconds": "1"}, json={
+        "model": "claude-sonnet-5.5",
+        "messages": [{"role": "user", "content": "synthetic"}],
+    })
+
+    assert response.status_code == 504
+    assert response.json()["error"]["type"] == "deadline_before_dispatch"
+    assert posts == ["https://api.llmgw.ru/v1/chat/completions"]
+    assert provider_calls.start_call.await_count == 1
     assert billing.charge.await_count == 0
 
 
@@ -129,6 +184,7 @@ def test_native_backup_model_mismatch_is_closed_without_charge(client, monkeypat
             "choices": [{"finish_reason": "stop", "message": {"content": "wrong model"}}],
         })
     monkeypatch.setattr(httpx, "HTTPTransport", lambda **_: httpx.MockTransport(reply))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(reply))
     response = client.post("/v1/messages", json={
         "model": "claude-sonnet-5.5", "max_tokens": 128, "user": str(uuid4()),
         "messages": [{"role": "user", "content": "synthetic"}],

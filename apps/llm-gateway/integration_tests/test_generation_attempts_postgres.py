@@ -451,7 +451,7 @@ async def test_api_intent_and_gateway_dispatch_do_not_wait_on_callers_project_ru
 
 @pytest.mark.parametrize("reason", ["preconnect", "rate_limit_refused", None])
 async def test_new_attempt_requires_affirmative_committed_parent_and_prevents_fanout(
-    pool, api_writer, reason
+    pool, api_writer, monkeypatch, reason
 ):
     prior = await intent(pool)
     body = request_body(prior)
@@ -503,6 +503,18 @@ async def test_new_attempt_requires_affirmative_committed_parent_and_prevents_fa
     assert len(children) == 1
     assert children[0].attempt_id != identity.attempt_id
     assert (await s.reserve_generation_attempt(identity)).action == "pending"
+
+    from yleum_gateway.services import text_failover
+
+    monkeypatch.setattr(text_failover, "get_pool", lambda: pool)
+    monkeypatch.setattr(text_failover, "enabled", lambda model: True)
+    assert await text_failover.select_scope(identity, text_failover.MODEL) == "llmgw"
+    assert await text_failover.select_scope(children[0], text_failover.MODEL) == (
+        "aitunnel" if reason == "preconnect" else "llmgw"
+    )
+    monkeypatch.setattr(text_failover, "enabled", lambda model: False)
+    assert await text_failover.select_scope(children[0], text_failover.MODEL) == "llmgw"
+
     async with pool.acquire() as conn:
         assert (
             await conn.fetchval(

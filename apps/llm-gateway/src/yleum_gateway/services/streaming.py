@@ -14,7 +14,7 @@ import json
 import time
 from collections.abc import AsyncGenerator, AsyncIterator
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 import structlog
@@ -23,11 +23,13 @@ from fastapi import Request
 
 from yleum_gateway.core.errors import (
     BillingReconciliationRequiredError,
+    DispatchDeadlineError,
     GatewayError,
     ModelNotFoundError,
     UpstreamProviderError,
 )
 from yleum_gateway.providers import llmgw
+from yleum_gateway.providers.native_stream import IDLE_TIMEOUT_SECONDS
 from yleum_gateway.services import (
     billing,
     file_logger,
@@ -113,11 +115,13 @@ async def stream_completion(
         source_options["max_tokens"] = max_tokens
     if generation_identity is not None:
         source_options["retry_preconnect"] = False
-    if provider_deadline is not None:
-        source_options["timeout"] = provider_deadline - asyncio.get_running_loop().time()
     def stream_source() -> AsyncGenerator[tuple[str, str], None]:
         if provider_deadline is not None:
-            source_options["timeout"] = provider_deadline - asyncio.get_running_loop().time()
+            source_options["timeout"] = min(
+                IDLE_TIMEOUT_SECONDS, provider_deadline - asyncio.get_running_loop().time(),
+            )
+            if provider_scope == "aitunnel":
+                source_options["deadline"] = provider_deadline
         return llmgw.astream(
             model, messages, temperature=0.5 if temperature is None else temperature,
             receipt=receipt, **source_options, **text_failover.scope_options(provider_scope),
@@ -214,11 +218,22 @@ async def stream_completion(
                     details={"provider_request_id": provider_request_id},
                 ) from exc
 
-    async def settle() -> None:
+    async def settle(
+        *, primary_failure: Literal["preconnect", "upstream_refused"] | None = None,
+    ) -> None:
         nonlocal receipt_finished
         assert provider_call_id is not None
         known_receipt = receipt_evidence(receipt, **text_failover.scope_options(provider_scope))
         try:
+            if primary_failure is not None:
+                assert upstream_error is not None
+                receipt_finished = True
+                await generation_attempts.finish(
+                    generation_identity, provider_call_id, status="failed", reason=primary_failure,
+                    error_type=provider_calls.classify_failure(upstream_error)
+                    if primary_failure == "preconnect" else "HTTPStatusError",
+                )
+                return
             await settle_receipt()
             from yleum_gateway.services.generation_response_capture import (
                 confirm_response_accounting,
@@ -260,15 +275,24 @@ async def stream_completion(
                     details={"provider_charge_ambiguous": True},
                 )
             overload = upstream_error.details.pop("_overload_retry_candidate", None) if upstream_error else None
-            if (provider_scope == "llmgw" and isinstance(overload, dict)
+            preconnect_fallback = (
+                generation_identity is None and upstream_error is not None
+                and upstream_error.details.get("provider_failure_kind") == "preconnect"
+                and upstream_error.details.get("provider_charge_ambiguous") is False
+                and text_failover.enabled(model)
+            )
+            if (provider_scope == "llmgw" and upstream_error is not None
+                    and (isinstance(overload, dict) or preconnect_fallback)
                     and not accumulated and not receipt):
-                receipt_finished = True
-                settlement_task = asyncio.create_task(generation_attempts.finish(
-                    generation_identity, provider_call_id, status="failed", reason="upstream_refused",
-                    error_type="HTTPStatusError",
+                settlement_task = asyncio.create_task(settle(
+                    primary_failure="preconnect" if preconnect_fallback else "upstream_refused",
                 ))
-                await await_provider_receipt(settlement_task)
-                if generation_identity is not None:
+                try:
+                    await await_provider_receipt(settlement_task)
+                except GatewayError as exc:
+                    settlement_error = exc
+                    break
+                if generation_identity is not None and isinstance(overload, dict):
                     from yleum_gateway.services.generation_response_capture import (
                         confirm_response_accounting,
                         remember_provider_refusal,
@@ -279,22 +303,30 @@ async def stream_completion(
                     confirm_response_accounting()
                 else:
                     await source.aclose()
-                    provider_scope = "aitunnel"
-                    provider_call_id = await provider_calls.start_call(
-                        route="/v1/chat/completions", model=model, user_id=user_id,
-                        project_id=project_id, message_id=message_id, run_id=run_id,
-                        stage=stage, free=free, provider_scope=provider_scope,
-                    )
+                    if provider_deadline is not None and asyncio.get_running_loop().time() >= provider_deadline:
+                        upstream_error = DispatchDeadlineError()
+                        break
+                    try:
+                        backup_call_id = await provider_calls.start_call(
+                            route="/v1/chat/completions", model=model, user_id=user_id,
+                            project_id=project_id, message_id=message_id, run_id=run_id,
+                            stage=stage, free=free, provider_scope="aitunnel",
+                        )
+                    except GatewayError as exc:
+                        settlement_error = exc
+                        break
+                    provider_scope, provider_call_id = "aitunnel", backup_call_id
                     source_options["retry_preconnect"] = False
                     source = stream_source()
                     receipt_finished, settlement_task, upstream_error = False, None, None
                     continue
             break
-        settlement_task = asyncio.create_task(settle())
-        try:
-            await asyncio.shield(settlement_task)
-        except GatewayError as exc:
-            settlement_error = exc
+        if settlement_task is None:
+            settlement_task = asyncio.create_task(settle())
+            try:
+                await asyncio.shield(settlement_task)
+            except GatewayError as exc:
+                settlement_error = exc
         output_error = output_stop_error(
             None if receipt.get("finish_reason_conflict") else receipt.get("finish_reason"),
         )

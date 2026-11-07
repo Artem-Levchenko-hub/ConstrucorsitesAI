@@ -60,6 +60,8 @@ def test_native_reference_rejects_unsafe_image_source(source):
 
 @pytest.mark.asyncio
 async def test_native_admitted_fallback_preserves_private_bytes_and_tools(monkeypatch):
+    import asyncio
+    import json
     from unittest.mock import AsyncMock
     from uuid import uuid4
 
@@ -83,12 +85,19 @@ async def test_native_admitted_fallback_preserves_private_bytes_and_tools(monkey
 
     def post(url, body, headers, **kwargs):
         sent.append(body)
-        return httpx.Response(503 if len(sent) == 1 else 200, json={})
+        return httpx.Response(503, json={})
+
+    def backup(request):
+        assert request.url.host == "backup.test"
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={})
 
     monkeypatch.setattr(native, "_post_llmgw", post)
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(backup))
     with capture_logs() as logs:
         result = await native._dispatch_native_provider(identity=None, model="claude-sonnet-5.5",
             payload=payload, primary_route=("synthetic", "https://primary.test/v1"), retry_count=0,
+            provider_deadline=asyncio.get_running_loop().time() + 30,
             dispatch_options={"run_id": None, "project_id": None, "message_id": None, "stage": "build_plan"})
     assert isinstance(result, tuple) and result[2] == "aitunnel"
     assert len(sent) == 2
@@ -138,6 +147,7 @@ async def test_legacy_final_payload_size_rejected_before_provider(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_native_final_payload_size_rejected_before_attempt(monkeypatch):
+    import asyncio
     from unittest.mock import AsyncMock
 
     from yleum_gateway.routers import messages_native as native
@@ -147,6 +157,7 @@ async def test_native_final_payload_size_rejected_before_attempt(monkeypatch):
     result = await native._dispatch_native_provider(identity=None, model="claude-sonnet-5.5",
         payload={"messages": [{"role": "user", "content": "x" * 32_000_001}]},
         primary_route=("synthetic", "https://primary.test"), retry_count=0,
+        provider_deadline=asyncio.get_running_loop().time() + 30,
         dispatch_options={"run_id": None, "project_id": None, "message_id": None, "stage": "build_plan"})
     assert result.status_code == 400
     dispatch.assert_not_awaited()

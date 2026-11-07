@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -84,6 +85,7 @@ def test_nonstream_real_transport_fallback_and_fail_closed(client, monkeypatch, 
             "choices": [{"finish_reason": "stop", "message": {"content": "5"}}],
         })
     monkeypatch.setattr(httpx, "HTTPTransport", lambda **_: httpx.MockTransport(reply))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(reply))
     response = client.post("/v1/chat/completions", json={
         "model": "claude-sonnet-5.5", "max_tokens": 128, "user": str(uuid4()),
         "messages": [{"role": "user", "content": "2+3"}],
@@ -130,8 +132,6 @@ def test_nonstream_failed_primary_receipt_commit_never_sends_backup(client, monk
 
 @pytest.mark.parametrize("status", [500, 502, 503, 504])
 def test_actual_sse_transport_falls_back_once_after_committed_refusal(client, monkeypatch, status):
-    import json
-
     requests = []
 
     def reply(request):
@@ -151,6 +151,7 @@ def test_actual_sse_transport_falls_back_once_after_committed_refusal(client, mo
         )
 
     monkeypatch.setattr(httpx, "HTTPTransport", lambda **kw: httpx.MockTransport(reply))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **kw: httpx.MockTransport(reply))
     response = client.post(
         "/v1/chat/completions",
         json={
@@ -166,3 +167,99 @@ def test_actual_sse_transport_falls_back_once_after_committed_refusal(client, mo
     assert len(requests) == 2 and billing.charge.await_count == 1
     assert provider_calls.finish_call.await_args_list[0].kwargs["status"] == "failed"
     assert provider_calls.start_call.await_args_list[1].kwargs["provider_scope"] == "aitunnel"
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("failure", [httpx.ConnectTimeout, httpx.ReadTimeout])
+def test_chat_reserves_backup_only_for_confirmed_preconnect(client, monkeypatch, stream, failure):
+    hosts = []
+
+    def reply(request):
+        hosts.append(request.url.host)
+        if request.url.host == "api.llmgw.ru":
+            raise failure("synthetic transport failure", request=request)
+        assert request.url.host == "api.aitunnel.ru"
+        assert provider_calls.finish_call.await_args.kwargs["status"] == "failed"
+        event = {
+            "id": "backup-receipt",
+            "model": "claude-sonnet-5.5",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "cost_rub": 0.2},
+            "choices": [{"finish_reason": "stop", "delta" if stream else "message": {"content": "ok"}}],
+        }
+        if stream:
+            return httpx.Response(200, text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n")
+        return httpx.Response(200, json=event)
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda **_: httpx.MockTransport(reply))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(reply))
+    response = client.post("/v1/chat/completions", json={
+        "model": "claude-sonnet-5.5",
+        "max_tokens": 128,
+        "stream": stream,
+        "user": str(uuid4()),
+        "messages": [{"role": "user", "content": "synthetic"}],
+    })
+
+    if failure is httpx.ConnectTimeout:
+        assert response.status_code == 200 and '"content":' in response.text
+        assert hosts[-1] == "api.aitunnel.ru" and hosts.count("api.aitunnel.ru") == 1
+        assert billing.charge.await_count == 1
+        assert billing.charge.await_args.kwargs["provider_scope"] == "aitunnel"
+    else:
+        assert hosts == ["api.llmgw.ru"]
+        assert provider_calls.finish_call.await_args.kwargs["status"] == "ambiguous"
+        assert billing.charge.await_count == 0
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_chat_does_not_dispatch_backup_after_deadline(client, monkeypatch, stream):
+    hosts = []
+
+    def reply(request):
+        hosts.append(request.url.host)
+        raise httpx.ConnectTimeout("synthetic preconnect failure", request=request)
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda **_: httpx.MockTransport(reply))
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"x-yleum-provider-timeout-seconds": "1"},
+        json={
+            "model": "claude-sonnet-5.5",
+            "max_tokens": 128,
+            "stream": stream,
+            "messages": [{"role": "user", "content": "synthetic"}],
+        },
+    )
+    assert "deadline_before_dispatch" in response.text
+    assert "api.aitunnel.ru" not in hosts
+    assert billing.charge.await_count == 0
+
+
+@pytest.mark.parametrize("failed_step", ["primary_receipt", "backup_admission"])
+def test_stream_preconnect_accounting_error_is_returned_without_backup(client, monkeypatch, failed_step):
+    scopes = []
+
+    async def stream(model, messages, *, provider_scope="llmgw", **kwargs):
+        scopes.append(provider_scope)
+        if provider_scope == "llmgw":
+            raise UpstreamProviderError("preconnect", details={
+                "provider_failure_kind": "preconnect", "provider_charge_ambiguous": False,
+            })
+        yield "unexpected", model
+
+    monkeypatch.setattr(llmgw, "astream", stream)
+    error = BillingReconciliationRequiredError("accounting commit unconfirmed")
+    if failed_step == "primary_receipt":
+        monkeypatch.setattr(provider_calls, "finish_call", AsyncMock(side_effect=error))
+    else:
+        monkeypatch.setattr(provider_calls, "start_call", AsyncMock(side_effect=[uuid4(), error]))
+    response = client.post("/v1/chat/completions", json={
+        "model": "claude-sonnet-5.5",
+        "stream": True,
+        "messages": [{"role": "user", "content": "synthetic"}],
+    })
+    assert response.status_code == 200
+    assert "billing_reconciliation_required" in response.text
+    assert "[DONE]" not in response.text
+    assert scopes == ["llmgw"]
+    assert billing.charge.await_count == 0

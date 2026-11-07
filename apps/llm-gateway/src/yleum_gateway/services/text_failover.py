@@ -159,13 +159,16 @@ async def select_scope(identity: GenerationProviderIdentity | None, model: str) 
         raise AttemptConflict("Provider routing could not be confirmed") from None
     if parent is None:
         return "llmgw"
+    reason = parent["terminal_reason"]
     backup_parent = parent["provider_scope"] == "aitunnel"
-    overload = parent["terminal_reason"] == "upstream_refused"
-    if not backup_parent and not overload:
+    backup_enabled = enabled(model)
+    if not backup_parent and reason != "upstream_refused" and not (
+        reason == "preconnect" and backup_enabled
+    ):
         return "llmgw"
     if (parent["phase"] != "closed" or parent["status"] != "failed"
-            or not parent["receipt_hash"] or not enabled(model)
-            or parent["terminal_reason"] not in {"upstream_refused", "preconnect", "rate_limit_refused"}
-            or (overload and parent["provider_scope"] != "llmgw")):
+            or not parent["receipt_hash"] or not backup_enabled
+            or reason not in {"upstream_refused", "preconnect", "rate_limit_refused"}
+            or (reason == "upstream_refused" and parent["provider_scope"] != "llmgw")):
         raise ModelUnavailableError("Backup continuation is unconfirmed")
     return "aitunnel"

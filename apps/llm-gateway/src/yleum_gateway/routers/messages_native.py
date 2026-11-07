@@ -26,6 +26,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 
 from yleum_gateway.core.errors import (
     BillingReconciliationRequiredError,
+    DispatchDeadlineError,
     GatewayError,
     WalletEmptyError,
 )
@@ -40,6 +41,11 @@ from yleum_gateway.core.runner_auth import (
     verify_runner_bearer_header,
 )
 from yleum_gateway.providers import llmgw
+from yleum_gateway.providers.native_stream import (
+    RECEIPT_RESERVE_SECONDS,
+    open_aitunnel_response,
+    provider_request_deadline,
+)
 from yleum_gateway.providers.rate_limit import bounded_error_body, refusal_retry_candidate
 from yleum_gateway.services import billing, file_logger, generation_attempts, text_failover
 from yleum_gateway.services import provider_calls as provider_calls
@@ -575,12 +581,19 @@ async def _settle_native_cost(
 async def _dispatch_native_provider(
     *, identity: GenerationProviderIdentity | None, model: str, payload: dict[str, Any],
     primary_route: tuple[str, str], dispatch_options: dict[str, Any], retry_count: int,
+    provider_deadline: float,
 ) -> tuple[UUID, httpx.Response, str] | Response:
     """Commit each upstream attempt independently before its network dispatch."""
     provider_scope = await text_failover.select_scope(identity, model)
+    backup_enabled = text_failover.enabled(model)
     run_id, project_id = dispatch_options["run_id"], dispatch_options["project_id"]
     message_id, stage = dispatch_options["message_id"], dispatch_options["stage"]
+    loop = asyncio.get_running_loop()
     while True:
+        backup_deadline = provider_deadline if provider_scope == "aitunnel" else None
+        if backup_deadline is not None and loop.time() >= backup_deadline:
+            error = DispatchDeadlineError()
+            return _err(error.http_status, error.code, error.message, details=error.details)
         api_key, api_base = primary_route if provider_scope == "llmgw" else text_failover.credentials(provider_scope)
         payload = {**payload, "model": llmgw.native_slug(model) if provider_scope == "llmgw" else model}
         from yleum_gateway.core.errors import ValidationFailedError
@@ -601,17 +614,18 @@ async def _dispatch_native_provider(
 
         transport_evidence: dict[str, Any] = {}
         post_options: dict[str, Any] = text_failover.scope_options(provider_scope)
-        if identity is not None or provider_scope == "aitunnel":
+        if identity is not None or backup_enabled:
             post_options["evidence"] = transport_evidence
+        url = f"{api_base.rstrip('/')}/chat/completions"
         try:
-            upstream = await asyncio.to_thread(
-                _post_llmgw,
-                f"{api_base.rstrip('/')}/chat/completions",
-                payload,
-                headers,
-                **post_options,
-            )
-        except httpx.HTTPError as exc:
+            if backup_deadline is None:
+                upstream = await asyncio.to_thread(_post_llmgw, url, payload, headers, **post_options)
+            else:
+                async with open_aitunnel_response(
+                    url, payload, headers, deadline=backup_deadline, evidence=transport_evidence,
+                ) as upstream:
+                    await upstream.aread()
+        except (httpx.HTTPError, TimeoutError, DispatchDeadlineError) as exc:
             log.warning(
                 "native_messages.transport_error",
                 error_type=type(exc).__name__,
@@ -623,14 +637,23 @@ async def _dispatch_native_provider(
             )
             safe_to_retry = (provider_scope == "llmgw" and isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))
                              and transport_evidence.get("transport_stage") != "headers")
+            expired_before_dispatch = isinstance(exc, DispatchDeadlineError)
             recorded = await _finish_provider_call(
-                provider_call_id, identity=identity, status="failed" if safe_to_retry else "ambiguous",
+                provider_call_id, identity=identity,
+                status="failed" if safe_to_retry or expired_before_dispatch else "ambiguous",
                 reason="preconnect" if safe_to_retry else None,
-                error_type=type(exc).__name__, **receipt_evidence(transport_evidence),
+                error_type=type(exc).__name__,
+                **receipt_evidence(transport_evidence, **text_failover.scope_options(provider_scope)),
             )
+            if isinstance(exc, DispatchDeadlineError) and recorded:
+                return _err(exc.http_status, exc.code, exc.message, details=exc.details)
             if safe_to_retry and recorded:
                 # These failures occur before the request reaches the provider.
                 # Publish permission only after the failed attempt receipt commits.
+                if identity is None and backup_enabled:
+                    provider_scope = "aitunnel"
+                    continue
+
                 from yleum_gateway.services.generation_response_capture import (
                     confirm_response_accounting,
                 )
@@ -715,6 +738,10 @@ async def _native_messages_execute(
     *,
     runner_claims: RunnerClaims | None = None,
 ) -> Response:
+    provider_deadline = provider_request_deadline(
+        request.headers.get("x-yleum-provider-timeout-seconds"),
+        asyncio.get_running_loop().time(), reserve=RECEIPT_RESERVE_SECONDS,
+    )
     try:
         body: dict[str, Any] = await request.json()
     except Exception:
@@ -813,7 +840,7 @@ async def _native_messages_execute(
 
     provider_result = await _dispatch_native_provider(
         identity=identity, model=model, payload=payload, primary_route=(api_key, api_base),
-        retry_count=retry_count, dispatch_options={
+        retry_count=retry_count, provider_deadline=provider_deadline, dispatch_options={
             "route": "/v1/project-cell/messages" if runner_claims is not None else "/v1/messages",
             "model": model, "user_id": user_id, "project_id": project_id, "run_id": run_id,
             "message_id": message_id, "stage": stage, "free": free,

@@ -1234,6 +1234,9 @@ async def _call_messages(
                 remaining = min(remaining, durable_remaining)
             if remaining <= 0:
                 break
+            request_headers = {
+                **(request_headers or {}), "x-yleum-provider-timeout-seconds": str(remaining),
+            }
             # httpx's timeout is per I/O operation. The outer scope also bounds
             # an active request by total remaining wall time; no retry follows
             # an exhausted request whose upstream accounting may still settle.

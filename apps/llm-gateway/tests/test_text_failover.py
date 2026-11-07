@@ -1,5 +1,8 @@
 """A refused primary call is distinct from an uncertain paid response."""
 
+import asyncio
+import time
+
 import httpx
 import pytest
 
@@ -65,19 +68,22 @@ async def test_interrupted_backup_headers_do_not_claim_llmgw_money(enabled, monk
     from yleum_gateway.providers import llmgw
     from yleum_gateway.routers import messages_native
 
-    class BrokenBody(httpx.SyncByteStream):
-        def __iter__(self):
+    class BrokenBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
             raise httpx.ReadTimeout("body interrupted")
             yield b""
 
     def reply(request):
         return httpx.Response(200, headers={"x-cost-usd": "99", "x-llmgw-cost-rub": "77"}, stream=BrokenBody())
-    monkeypatch.setattr(httpx, "HTTPTransport", lambda **kwargs: httpx.MockTransport(reply))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **kwargs: httpx.MockTransport(reply))
     evidence = {}
     if native:
         with pytest.raises(httpx.ReadTimeout):
-            messages_native._post_llmgw("https://api.aitunnel.ru/v1/chat/completions", {}, {},
-                                        evidence=evidence, provider_scope="aitunnel")
+            async with messages_native.open_aitunnel_response(
+                "https://api.aitunnel.ru/v1/chat/completions", {}, {},
+                deadline=asyncio.get_running_loop().time() + 5, evidence=evidence,
+            ) as response:
+                await response.aread()
         proof = evidence
     else:
         with pytest.raises(UpstreamProviderError) as caught:
@@ -86,6 +92,63 @@ async def test_interrupted_backup_headers_do_not_claim_llmgw_money(enabled, monk
         proof = caught.value.details
     assert proof.get("provider_cost_rub") is None
     assert proof.get("provider_cost_usd") is None
+
+
+async def test_reserve_checks_deadline_after_request_preparation(monkeypatch):
+    from yleum_gateway.core.errors import DispatchDeadlineError
+    from yleum_gateway.providers.native_stream import open_aitunnel_response
+
+    sent = []
+    build_request = httpx.AsyncClient.build_request
+
+    def slow_build(self, *args, **kwargs):
+        time.sleep(0.06)
+        return build_request(self, *args, **kwargs)
+
+    def reply(request):
+        sent.append(request)
+        return httpx.Response(200, json={})
+
+    monkeypatch.setattr(httpx.AsyncClient, "build_request", slow_build)
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(reply))
+    with pytest.raises(DispatchDeadlineError):
+        async with open_aitunnel_response(
+            "https://api.aitunnel.ru/v1/chat/completions", {}, {},
+            deadline=asyncio.get_running_loop().time() + 0.04, evidence={},
+        ):
+            pytest.fail("expired reserve request opened a response")
+    assert sent == []
+
+
+async def test_reserve_closes_a_trickling_body_at_absolute_deadline(monkeypatch):
+    from yleum_gateway.providers.native_stream import open_aitunnel_response
+
+    class Trickle(httpx.AsyncByteStream):
+        closed = False
+        chunks = 0
+
+        async def __aiter__(self):
+            while True:
+                self.chunks += 1
+                yield b"incomplete"
+                await asyncio.sleep(0.01)
+
+        async def aclose(self):
+            self.closed = True
+
+    body = Trickle()
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(
+        lambda request: httpx.Response(200, stream=body),
+    ))
+    with pytest.raises(TimeoutError):
+        async with open_aitunnel_response(
+            "https://api.aitunnel.ru/v1/chat/completions", {}, {},
+            deadline=asyncio.get_running_loop().time() + 0.25, evidence={},
+        ) as response:
+            await response.aread()
+    assert body.chunks > 1
+    assert body.closed
+
 
 @pytest.mark.parametrize("status", [501, 505, 506, 599])
 def test_unconfirmed_status_never_authorizes_backup(enabled, status):

@@ -2449,6 +2449,7 @@ async def test_call_messages_auth_factory_wires_exact_runner_metadata_and_header
 
     assert response["stop_reason"] == "end_turn"
     assert calls[0]["url"] == "http://gateway.internal/v1/project-cell/messages"
+    assert 0 < float(calls[0]["headers"].pop("x-yleum-provider-timeout-seconds")) <= 270
     assert calls[0]["headers"] == {"Authorization": "Bearer runner-0", "X-Trace": "trace-0"}
     assert calls[0]["metadata"] == {
         "user_id": None,
@@ -2541,6 +2542,8 @@ async def test_call_messages_retry_gets_fresh_token_from_auth_factory(
 
     assert response["stop_reason"] == "end_turn"
     assert factory_calls == [0, 1]
+    for call in calls:
+        assert 0 < float(call["headers"].pop("x-yleum-provider-timeout-seconds")) <= 270
     assert [call["headers"] for call in calls] == [
         {"Authorization": "Bearer runner-0"},
         {"Authorization": "Bearer runner-1"},

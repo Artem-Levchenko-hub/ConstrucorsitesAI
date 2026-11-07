@@ -210,13 +210,14 @@ async def test_native_fallback_deferred_until_accepted_then_one_generation_charg
 
     def post(url, payload, headers, **kwargs):
         sent.append((url, payload))
-        assert len(sent) <= 2
-        if len(sent) == 1:
-            assert url == "https://api.llmgw.ru/v1/chat/completions"
-            return httpx.Response(502, json={"error": "Bad gateway"}, request=httpx.Request("POST", url))
-        assert url == "https://api.aitunnel.ru/v1/chat/completions" and kwargs["provider_scope"] == "aitunnel"
-        assert headers["Authorization"] == "Bearer synthetic-backup"
-        return httpx.Response(200, request=httpx.Request("POST", url), json={
+        assert url == "https://api.llmgw.ru/v1/chat/completions"
+        return httpx.Response(502, json={"error": "Bad gateway"}, request=httpx.Request("POST", url))
+
+    def backup(request):
+        sent.append((str(request.url), json.loads(request.content)))
+        assert str(request.url) == "https://api.aitunnel.ru/v1/chat/completions"
+        assert request.headers["Authorization"] == "Bearer synthetic-backup"
+        return httpx.Response(200, json={
             "id": "qa-backup-" + str(run), "model": "claude-sonnet-5.5",
             "usage": {"prompt_tokens": 413, "completion_tokens": 66, "cost_rub": 0.3, "cost": 0.3},
             "choices": [{"finish_reason": "tool_calls", "message": {"content": None, "tool_calls": [
@@ -224,6 +225,7 @@ async def test_native_fallback_deferred_until_accepted_then_one_generation_charg
             ]}}]})
 
     monkeypatch.setattr(messages_native, "_post_llmgw", post)
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(backup))
     monkeypatch.setattr(messages_native.file_logger, "log_request", lambda *args, **kwargs: None)
     app = FastAPI()
     app.include_router(messages_native.router)

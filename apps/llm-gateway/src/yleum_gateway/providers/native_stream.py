@@ -7,12 +7,16 @@ transport errors and cancellation, even when no complete response can be used.
 import asyncio
 import json
 import math
+from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager, aclosing, asynccontextmanager
 from typing import Any
 
 import httpx
 
+from yleum_gateway.core.errors import DispatchDeadlineError
 from yleum_gateway.services.pricing import read_reported_cost
 from yleum_gateway.services.provider_calls import ReceiptFailure
+from yleum_gateway.services.receipt_evidence import receipt_evidence
 
 IDLE_TIMEOUT_SECONDS = 240.0
 CONNECT_TIMEOUT_SECONDS = 30.0
@@ -25,6 +29,46 @@ _FINISH_REASONS = {
     "stop", "tool_calls", "length", "content_filter", "end_turn", "tool_use",
     "max_tokens", "refusal", "pause_turn", "stop_sequence",
 }
+
+
+def provider_request_deadline(value: str | None, started_at: float, *, reserve: float) -> float:
+    """Share one request window across primary and reserve dispatches."""
+    try:
+        seconds = float(value) if value is not None else 270.0
+    except ValueError:
+        seconds = 270.0
+    if not math.isfinite(seconds) or seconds <= 0:
+        seconds = 270.0
+    return started_at + min(seconds, 1500.0) - reserve
+
+
+@asynccontextmanager
+async def open_aitunnel_response(
+    url: str, payload: dict[str, Any], headers: dict[str, str], *,
+    deadline: float, evidence: dict[str, Any],
+) -> AsyncIterator[httpx.Response]:
+    """Keep the reserve socket within the original request's absolute window."""
+    from yleum_gateway.services.generation_response_capture import verify_dispatch_capacity
+
+    loop = asyncio.get_running_loop()
+    timeout = min(IDLE_TIMEOUT_SECONDS, deadline - loop.time())
+    if timeout <= 0:
+        raise DispatchDeadlineError()
+    evidence["transport_stage"] = "connect"
+    async with asyncio.timeout_at(deadline), httpx.AsyncClient(
+        timeout=httpx.Timeout(timeout, connect=min(CONNECT_TIMEOUT_SECONDS, timeout)),
+        trust_env=False, transport=httpx.AsyncHTTPTransport(retries=0),
+    ) as client:
+        request = client.build_request("POST", url, json=payload, headers=headers)
+        verify_dispatch_capacity()
+        if loop.time() >= deadline:
+            raise DispatchDeadlineError()
+        async with aclosing(await client.send(request, stream=True)) as response:
+            evidence["transport_stage"] = "headers"
+            if 400 <= response.status_code <= 599:
+                evidence["upstream_http_status"] = response.status_code
+            evidence.update(receipt_evidence({}, response.headers, provider_scope="aitunnel"))
+            yield response
 
 
 def _record_protocol_facts(evidence: dict[str, Any], event: dict[str, Any]) -> None:
@@ -199,6 +243,7 @@ class _Collector:
 async def collect_response(
     url: str, payload: dict[str, Any], headers: dict[str, str], *,
     budget_seconds: float, evidence: dict[str, Any], provider_scope: str = "llmgw",
+    deadline: float | None = None,
 ) -> httpx.Response:
     """One POST, bounded by wall time and idle time; never retries internally."""
     evidence.pop("upstream_http_status", None)
@@ -216,15 +261,24 @@ async def collect_response(
 
     wire_payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
     require_provider_payload_size(wire_payload)
-    async with asyncio.timeout(budget_seconds), httpx.AsyncClient(
+    budget = asyncio.timeout(budget_seconds) if deadline is None else asyncio.timeout_at(deadline)
+    async with budget, httpx.AsyncClient(
         timeout=httpx.Timeout(IDLE_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS),
         trust_env=False, transport=httpx.AsyncHTTPTransport(retries=0),
     ) as client:
         from yleum_gateway.services.generation_response_capture import verify_dispatch_capacity
 
-        verify_dispatch_capacity()
-        async with client.stream("POST", url, json=wire_payload,
-            headers=request_headers) as response:
+        response_scope: AbstractAsyncContextManager[httpx.Response]
+        if deadline is None:
+            verify_dispatch_capacity()
+            response_scope = client.stream("POST", url, json=wire_payload, headers=request_headers)
+        else:
+            request = client.build_request("POST", url, json=wire_payload, headers=request_headers)
+            verify_dispatch_capacity()
+            if asyncio.get_running_loop().time() >= deadline:
+                raise DispatchDeadlineError()
+            response_scope = aclosing(await client.send(request, stream=True))
+        async with response_scope as response:
             evidence["transport_stage"] = "headers"
             if type(response.status_code) is int and 400 <= response.status_code <= 599:
                 evidence["upstream_http_status"] = response.status_code
