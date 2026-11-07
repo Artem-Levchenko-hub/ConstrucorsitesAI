@@ -158,6 +158,27 @@ def _rejection_fingerprint(node: Node) -> str:
     return hashlib.sha256(b"\0".join(parts)).hexdigest()[:16]
 
 
+_SourceIssue = tuple[str, int, int, str, str, str]
+
+
+def _source_issue(node: Node, path: str, reason: str) -> _SourceIssue:
+    safe_path = path if re.fullmatch(r"src/[A-Za-z0-9_./-]{1,180}\.tsx?", path) else "source"
+    return (
+        safe_path, node.start_point.row + 1, node.start_point.column + 1,
+        node.type, reason, _rejection_fingerprint(node),
+    )
+
+
+def _issue_detail(issue: _SourceIssue | None) -> str:
+    if issue is None:
+        return ""
+    path, row, column, kind, reason, fingerprint = issue
+    return (
+        f" Source location: {path}:{row}:{column}; "
+        f"AST {kind}; reason {reason}; fingerprint {fingerprint}."
+    )
+
+
 @dataclass
 class _Value:
     tags: set[str] = field(default_factory=set)
@@ -171,6 +192,9 @@ class _Value:
     pending: _Value | None = None
     mutation_roots: tuple[_Value, ...] = ()
     passive: bool = False
+    nullable_catalog_lookup: bool = False
+    catalog_lookup_issue: _SourceIssue | None = None
+    catalog_items_lookup_issue: _SourceIssue | None = None
 
 
 def _contract(files: Mapping[str, str]) -> ManagementContract | None:
@@ -205,7 +229,8 @@ class _Connections:
         self.catalog_selection = False
         self.unsupported_constant_control = False
         self.unsupported_effects = False
-        self.first_unsupported: tuple[str, int, int, str, str, str] | None = None
+        self.first_unsupported: _SourceIssue | None = None
+        self.catalog_render_rejection: _SourceIssue | None = None
         self.effects_only_depth = 0
         self.strict_effects_depth = 0
         self.render_suppression = 0
@@ -220,13 +245,7 @@ class _Connections:
         """Identify a rejected source shape without copying source values into feedback."""
         self.unsupported_effects = True
         if self.first_unsupported is None and node is not None:
-            safe_path = (
-                path if re.fullmatch(r"src/[A-Za-z0-9_./-]{1,180}\.tsx?", path) else "source"
-            )
-            self.first_unsupported = (
-                safe_path, node.start_point.row + 1, node.start_point.column + 1,
-                node.type, reason, _rejection_fingerprint(node),
-            )
+            self.first_unsupported = _source_issue(node, path, reason)
 
     @contextmanager
     def effects_only(self, *, strict: bool = False) -> Iterator[None]:
@@ -494,6 +513,7 @@ class _Connections:
         result = _Value(
             tags=tags, elements=elements or None, mutation_roots=value.mutation_roots,
             passive=value.passive or bool(value.tags),
+            catalog_lookup_issue=value.catalog_items_lookup_issue if key == "items" else None,
         )
         if elements:
             # Re-reading a response property must observe mutations to that collection.
@@ -536,6 +556,10 @@ class _Connections:
             if current.pending is not None:
                 pending.append(current.pending)
             current.pending = None
+            if "catalog-hook" in current.tags and (items := current.props.get("items")):
+                # Keep the diagnostic across a fresh `.items` read without
+                # preserving the collection's evidence or its object fields.
+                current.catalog_items_lookup_issue = items.catalog_lookup_issue
             current.tags.clear()
             current.props.clear()
             current.elements = None
@@ -544,6 +568,7 @@ class _Connections:
             current.setter = None
             current.literal = None
             current.passive = False
+            current.nullable_catalog_lookup = False
 
     def projection_is_bounded(self, path: str, node: Node) -> bool:
         key = (path, node.start_byte)
@@ -832,43 +857,100 @@ class _Connections:
                 return False
         return True
 
-    def catalog_id_find_is_read_only(self, call: Node, fn: _Value) -> bool:
+    def catalog_id_find_rejection(self, call: Node, fn: _Value, path: str) -> _SourceIssue | None:
+        """Identify the first unproven lookup shape or use without source values."""
+        reason = "unproven_catalog_id_lookup"
         callback = self.callback_expression(fn, 1)
         if callback is None:
-            return False
-        path, body, _, (parameter,) = callback
-        declaration = call.parent
+            return _source_issue(call, path, reason)
+        predicate_path, body, _, (parameter,) = callback
+        initializer = call
+        wrapper = call.parent
+        if wrapper is not None and wrapper.type == "binary_expression":
+            fallback = wrapper.child_by_field_name("right")
+            if (
+                _text(wrapper.child_by_field_name("operator")) == "??"
+                and wrapper.child_by_field_name("left") == call
+                and fallback is not None and fallback.type == "null"
+            ):
+                initializer = wrapper
+        declaration = initializer.parent
         lexical = declaration.parent if declaration is not None else None
         scope = lexical.parent if lexical is not None else None
         if (
             declaration is None or declaration.type != "variable_declarator"
-            or declaration.child_by_field_name("value") != call
+            or declaration.child_by_field_name("value") != initializer
             or lexical is None or lexical.type != "lexical_declaration"
             or _text(lexical.child_by_field_name("kind")) != "const"
             or scope is None or scope.type != "statement_block"
         ):
-            return False
+            return _source_issue(call, path, reason)
         name = declaration.child_by_field_name("name")
         if name is None or name.type != "identifier" or "\\" in _text(name):
-            return False
-        if body.type != "binary_expression" or _text(body.child_by_field_name("operator")) != "===":
-            return False
-        left = body.child_by_field_name("left")
-        right = body.child_by_field_name("right")
+            return _source_issue(call, path, reason)
+        predicate: Node | None = body
+        if body.type == "binary_expression" and _text(body.child_by_field_name("operator")) == "&&":
+            if not self._catalog_row_field(body.child_by_field_name("right"), parameter, "active"):
+                return _source_issue(body, predicate_path, reason)
+            predicate = body.child_by_field_name("left")
+        if (
+            predicate is None or predicate.type != "binary_expression"
+            or _text(predicate.child_by_field_name("operator")) != "==="
+        ):
+            return _source_issue(body, predicate_path, reason)
+        left = predicate.child_by_field_name("left")
+        right = predicate.child_by_field_name("right")
         inline_predicate = (
             fn.function is not None
             and fn.function[1].parent == call.child_by_field_name("arguments")
         )
         for member, selected_id in ((left, right), (right, left)):
             if (
-                member is not None and member.type == "member_expression"
-                and _text(member.child_by_field_name("object")) == parameter
-                and _text(member.child_by_field_name("property")) == "id"
+                self._catalog_row_field(member, parameter, "id")
                 and selected_id is not None and _text(selected_id) != parameter
                 and (selected_id.type == "string" or inline_predicate)
                 and self._catalog_id_available(selected_id, lexical, scope)
             ):
-                return self._catalog_lookup_reads_only(scope, name, path)
+                use = self._catalog_lookup_unproven_use(scope, name, path)
+                return (
+                    _source_issue(use, path, "unproven_catalog_lookup_use") if use else None
+                )
+        return _source_issue(body, predicate_path, reason)
+
+    @staticmethod
+    def _catalog_row_field(node: Node | None, parameter: str, field: str) -> bool:
+        return (
+            node is not None and node.type == "member_expression"
+            and _text(node.child_by_field_name("object")) == parameter
+            and _text(node.child_by_field_name("property")) == field
+        )
+
+    def _catalog_map_has_direct_row_content(self, fn: _Value) -> bool:
+        """Localize only a simple render that would consume a row field."""
+        callback = self.callback_expression(fn, 1)
+        if callback is None:
+            return False
+        _, body, _, (row,) = callback
+        if body.type == "parenthesized_expression" and len(body.named_children) == 1:
+            body = body.named_children[0]
+        opening = body.child_by_field_name("open_tag") if body.type == "jsx_element" else None
+        name = _text(opening.child_by_field_name("name")) if opening is not None else ""
+        if not name or not name[0].islower() or opening is None:
+            return False
+        if any(
+            node.type == "jsx_attribute" and _text(node.named_children[0]) in {"hidden", "disabled"}
+            for node in opening.named_children
+        ):
+            return False
+        for child in body.named_children:
+            if child.type == "jsx_expression" and len(child.named_children) == 1:
+                expression = child.named_children[0]
+                field = _text(expression.child_by_field_name("property"))
+                if (
+                    field in _CATALOG_SCALAR_FIELDS
+                    and self._catalog_row_field(expression, row, field)
+                ):
+                    return True
         return False
 
     @staticmethod
@@ -894,7 +976,7 @@ class _Connections:
                     return True
         return False
 
-    def _catalog_lookup_reads_only(self, scope: Node, binding: Node, path: str) -> bool:
+    def _catalog_lookup_unproven_use(self, scope: Node, binding: Node, path: str) -> Node | None:
         # A lookup may return an alias to a live SDK row. Prove its local uses
         # before treating the result as a value without authority.
         name = _text(binding)
@@ -903,7 +985,7 @@ class _Connections:
             node = pending.pop()
             self.lookup_scan_steps += 1
             if self.lookup_scan_steps > _LOOKUP_SCAN_LIMIT:
-                return False
+                return binding
             if node.type in {"identifier", "shorthand_property_identifier",
                              "shorthand_property_identifier_pattern"}:
                 identifier = _text(node)
@@ -911,12 +993,16 @@ class _Connections:
                     identifier == name and node != binding
                     and not self._catalog_lookup_read(node, path)
                 ):
-                    return False
+                    return node
             pending.extend(node.named_children)
-        return True
+        return None
 
     def _catalog_lookup_read(self, node: Node, path: str) -> bool:
         parent = node.parent
+        if parent is not None and parent.type == "variable_declarator":
+            # A nested declaration can use the same spelling. The binding is
+            # inert; keep checking every reference, including inside its scope.
+            return node == parent.child_by_field_name("name")
         if parent is not None and parent.type == "member_expression":
             field = _text(parent.child_by_field_name("property"))
             if node != parent.child_by_field_name("object"):
@@ -1277,13 +1363,21 @@ class _Connections:
             if left.literal is _UNSUPPORTED_LITERAL:
                 self.unsupported_constant_control = True
                 return left
+            right_node = node.child_by_field_name("right")
+            if (
+                operator == "??" and left.nullable_catalog_lookup
+                and right_node is not None and right_node.type == "null"
+            ):
+                # A verified lookup may find a row. The literal fallback must
+                # not make guards on that row unconditionally false.
+                return left
             truth = _literal_truth(left.literal)
             if ((operator == "&&" and truth is False)
                     or (operator == "||" and truth is True)
                     or (operator == "??" and left.literal is not None
                         and left.literal is not _NULL_LITERAL)):
                 return left
-            return self.value(node.child_by_field_name("right"), env, path, render)
+            return self.value(right_node, env, path, render)
         # Comparisons render a Boolean, not either operand's SDK data. Both
         # operands still run for effects; neither can leak a render witness.
         left = self.value_for_effects(node.child_by_field_name("left"), env, path)
@@ -1480,6 +1574,13 @@ class _Connections:
         if target is not None and target.type == "member_expression":
             source = self.value(target.child_by_field_name("object"), env, path)
             operation = _text(target.child_by_field_name("property"))
+            if (
+                operation == "map" and render and not self.render_suppression
+                and self.catalog_render_rejection is None
+                and source.catalog_lookup_issue is not None
+                and len(args) == 1 and self._catalog_map_has_direct_row_content(args[0])
+            ):
+                self.catalog_render_rejection = source.catalog_lookup_issue
             local_array_push = operation == "push" and self.passive_local_array(source)
             if self.strict_effects_depth and not local_array_push:
                 self.unsupported(node, path, "unproven_loop_call")
@@ -1525,16 +1626,22 @@ class _Connections:
                     and self.sort_is_read_only(args[0], source.elements)
                 ):
                     return source
-                if (
-                    operation == "find"
-                    and "catalog" in source.tags
-                    and len(args) == 1
-                    and self.catalog_id_find_is_read_only(node, args[0])
-                ):
-                    # Verified scalar reads grant no rendered catalogue witness.
-                    return _Value(props={
-                        "options": _Value(elements=(_Value(passive=True),), passive=True),
-                    }, passive=True)
+                if operation == "find" and "catalog" in source.tags:
+                    issue = (
+                        self.catalog_id_find_rejection(node, args[0], path)
+                        if len(args) == 1
+                        else _source_issue(node, path, "unproven_catalog_id_lookup")
+                    )
+                    if issue is None:
+                        # Verified scalar reads grant no rendered catalogue witness.
+                        return _Value(
+                            props={
+                                "options": _Value(elements=(_Value(passive=True),), passive=True),
+                            },
+                            passive=True,
+                            nullable_catalog_lookup=True,
+                        )
+                    source.catalog_lookup_issue = issue
                 if (
                     operation == "findIndex"
                     and "catalog" in source.tags
@@ -1732,17 +1839,11 @@ def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
     if connections.steps > 4000:
         return "Managed source connection analysis exceeded its bounded AST budget.", frozenset()
     if connections.unsupported_effects:
-        issue = connections.first_unsupported
-        diagnostic = (
-            f" Source location: {issue[0]}:{issue[1]}:{issue[2]}; "
-            f"AST {issue[3]}; reason {issue[4]}; fingerprint {issue[5]}."
-            if issue is not None else ""
-        )
         return (
             "Managed source connection analysis cannot prove call or binding effects. "
             "Simplify the identified source shape to a passive expression or explicit "
             "body statements; do not change unrelated bindings or replace live SDK data "
-            "with static records." + diagnostic,
+            "with static records." + _issue_detail(connections.first_unsupported),
             frozenset(),
         )
     if connections.unsupported_constant_control:
@@ -1763,7 +1864,8 @@ def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
             if "item:catalog" not in connections.rendered:
                 return (
                     "Connect useYleumCatalog items to the rendered catalog "
-                    "(items.map with item fields).",
+                    "(items.map with item fields)."
+                    + _issue_detail(connections.catalog_render_rejection),
                     frozenset(),
                 )
             capabilities.add("catalog")
@@ -1802,7 +1904,7 @@ def management_source_gap(files: Mapping[str, str]) -> ManagedSourceGap | None:
     if gap is not None and gap.startswith("Connect "):
         if gap.startswith("Connect useYleumCatalog items"):
             gap += (
-                " A selected row can be read from a local const lookup by item.id. "
+                " A local const lookup by item.id can check item.active and use ?? null. "
                 "Read its fields and pass {id: selected.id} to getOption."
             )
         gap = (

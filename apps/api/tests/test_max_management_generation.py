@@ -355,6 +355,111 @@ def test_read_only_catalog_id_lookup_keeps_later_live_catalog_rendering():
     assert management_implemented_capabilities(files) == frozenset({"catalog"})
 
 
+@pytest.mark.parametrize("suffix,inner_lookup", [
+    (") ?? null", ""),
+    (" && item.active)", ""),
+    (" && item.active) ?? null", """
+  function readSelectedTitle() {
+    const selected = catalog.items.find(item => item.id === selectedId);
+    return selected?.title;
+  }
+"""),
+])
+def test_read_only_active_catalog_lookup_with_null_fallback_keeps_live_rendering(
+    suffix, inner_lookup,
+):
+    source = CATALOG_ID_LOOKUP_PAGE.replace(
+        "item.id === selectedId);", f"item.id === selectedId{suffix};", 1,
+    ).replace("  const option =", inner_lookup + "  const option =")
+    files = connection_files(source, ("catalog",))
+    assert management_source_gap(files) is None
+    assert management_implemented_capabilities(files) == frozenset({"catalog"})
+
+
+def test_nullable_catalog_lookup_keeps_selected_booking_form_reachable():
+    source = connection_example(("catalog", "bookings")).replace(
+        "const selection = useYleumCatalogSelection(catalog.items);",
+        "const selection = useYleumCatalogSelection(catalog.items);\n"
+        "const selectedId = 'class';\n"
+        "const selected = catalog.items.find(item => item.id === selectedId "
+        "&& item.active) ?? null;",
+    ).replace(
+        "<form onSubmit={submit_bookings}><button>Send bookings</button></form>",
+        "{selected && <form onSubmit={submit_bookings}><button>Send bookings</button></form>}",
+    )
+    files = connection_files(source, ("catalog", "bookings"))
+    assert management_source_gap(files) is None
+    assert {"catalog", "booking"} <= management_implemented_capabilities(files)
+
+
+def test_catalog_lookup_rejection_identifies_the_cause_across_unrelated_edits():
+    source = CATALOG_ID_LOOKUP_PAGE.replace(
+        "item.id === selectedId", "item.id === selectedId && opaque(item)", 1,
+    )
+    files = connection_files(source, ("catalog",))
+    first = management_source_gap(files)
+    assert first is not None and first.rejection_key() is not None
+    assert "unproven_catalog_id_lookup" in first
+
+    reformatted = management_source_gap({
+        **files,
+        "src/app/page.tsx": "\n" + source.replace("opaque(item)", "opaque( item )"),
+        "src/app/globals.css": "main { color: red; }",
+    })
+    different = management_source_gap({
+        **files,
+        "src/app/page.tsx": source.replace("opaque(item)", "opaque(item.options)"),
+    })
+    assert reformatted is not None and reformatted.rejection_key() == first.rejection_key()
+    assert different is not None and different.rejection_key() != first.rejection_key()
+
+
+def test_catalog_lookup_rejection_locates_use_in_caller_of_imported_predicate():
+    source = "import {same} from './same';\n" + CATALOG_ID_LOOKUP_PAGE.replace(
+        "catalog.items.find(item => item.id === selectedId)", "catalog.items.find(same)",
+    ).replace("  return <main>", "  opaque(selected);\n  return <main>")
+    files = {
+        **connection_files(source, ("catalog",)),
+        "src/app/same.ts": "export const same = item => item.id === 'first';",
+    }
+    gap = management_source_gap(files)
+    assert gap is not None and "unproven_catalog_lookup_use" in gap
+    assert "Source location: src/app/page.tsx:" in gap
+
+
+def test_catalog_lookup_rejection_distinguishes_repairs_to_imported_predicate():
+    source = "import {same} from './same';\n" + CATALOG_ID_LOOKUP_PAGE.replace(
+        "catalog.items.find(item => item.id === selectedId)", "catalog.items.find(same)",
+    )
+    files = connection_files(source, ("catalog",))
+    first = management_source_gap({
+        **files,
+        "src/app/same.ts": "export const same = item => item.id === 'first' && !item.active;",
+    })
+    second = management_source_gap({
+        **files,
+        "src/app/same.ts": "export const same = item => item.id === 'first' && opaque(item);",
+    })
+    assert first is not None and "Source location: src/app/same.ts:" in first
+    assert second is not None and second.rejection_key() != first.rejection_key()
+
+
+@pytest.mark.parametrize("decoration", [
+    "", "{separate.items.map(() => <i>Marker</i>)}",
+    "{separate.items.map(item => <i key={item.id}>Marker</i>)}",
+])
+def test_catalog_lookup_rejection_does_not_key_unrelated_catalog_progress(decoration):
+    source = CATALOG_ID_LOOKUP_PAGE.replace(
+        "  const selected =", "  const separate = useYleumCatalog();\n"
+        "  const unused = separate.items.find(item => item.id === selectedId && !item.active);\n"
+        "  const selected =", 1,
+    ).replace("  return <main>", f"  return <main>\n    {decoration}")
+    assert management_source_gap(connection_files(source, ("catalog",))) is None
+    no_fields = source.replace("key={item.id}>{item.title}", "key={item.id}>No fields")
+    gap = management_source_gap(connection_files(no_fields, ("catalog",)))
+    assert gap is not None and gap.rejection_key() is None
+
+
 def test_catalog_id_lookup_alone_is_not_a_rendered_catalog():
     source = CATALOG_ID_LOOKUP_PAGE.replace(
         "{catalog.items.map(item => <article key={item.id}>{item.title}</article>)}", "",
