@@ -6,6 +6,7 @@ import pytest
 
 from yleum_api.services.agent_builder import AgentResult
 from yleum_api.services.generation import agent_recovery, agent_verification
+from yleum_api.services.generation.contracts import GenerationRuntime, SourceBaseline
 from yleum_api.services.orchestrator_client import OrchestratorBadRequest
 
 
@@ -53,6 +54,9 @@ async def test_candidate_probe_never_turns_fatal_infra_into_unknown_green(failed
 async def test_first_max_core_recovery_preserves_fatal_infrastructure_error(monkeypatch):
     calls = []
     core = {"src/lib/db/schema.ts": "safe core", "src/lib/db/empty.ts": ""}
+    manifest = {
+        ".omnia/cell.json": '{"version":1,"services":[],"routes":[],"app_config_protocol":1}',
+    }
 
     async def render():
         return core
@@ -81,16 +85,16 @@ async def test_first_max_core_recovery_preserves_fatal_infrastructure_error(monk
             _max_seed_files={},
             _provider_failure=None,
             _render_current_max_starter_files=render,
-            baseline=SimpleNamespace(sha=None),
+            baseline=SourceBaseline(None, None, {}),
             ids=SimpleNamespace(project_id=uuid4()),
             project_info=SimpleNamespace(template="max_miniapp", slug="synthetic"),
-            runtime=SimpleNamespace(handle=object()),
+            runtime=GenerationRuntime(handle=object(), migration_baseline=manifest),
             operations=SimpleNamespace(probe_build=build),
         )
     assert calls == [
         (
             "apply",
-            {**core, "src/app/api/workouts/route.ts": "", "src/app/page.tsx": ""},
+            {**core, **manifest, "src/app/api/workouts/route.ts": "", "src/app/page.tsx": ""},
             ("src/lib/db/empty.ts",),
         ),
         "build",
