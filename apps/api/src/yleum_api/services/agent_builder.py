@@ -54,7 +54,7 @@ from itertools import count as segment_numbers
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, NonNegativeInt
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt
 
 from yleum_api.services import llm_client
 from yleum_api.services.agent_build_feedback import render_model_observation
@@ -65,6 +65,7 @@ from yleum_api.services.generation.continuation import (
     RecoveryObserver,
     SourceNoveltyTracker,
     shadow_recovery_executor,
+    source_fingerprint,
 )
 from yleum_api.services.generation.recovery_actions import (
     ProgressReader,
@@ -78,6 +79,7 @@ from yleum_api.services.generation.recovery_contract import (
 )
 from yleum_api.services.generation.source_repair_context import MAX_REPAIR_CONTEXT_BYTES
 from yleum_api.services.max_generation_contract import _is_product_source
+from yleum_api.services.max_management_generation import ManagedSourceGap
 from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 from yleum_api.services.secret_safety import max_model_write_rejection
@@ -109,6 +111,7 @@ class _LegacyLoopFrame(BaseModel):
     source_repair_gap: str | None = None
     source_repair_read_used: bool = False
     source_repair_context_path: str | None = None
+    source_repair_rejections: dict[str, NonNegativeInt] = Field(default_factory=dict)
     content_receipts_seen: bool
     last_build_ok: bool | None
     fast_check_fresh: bool
@@ -140,6 +143,7 @@ class _LegacyOuterFrame(BaseModel):
     source_repair_gap: str | None = None
     source_repair_read_used: bool = False
     source_repair_context_path: str | None = None
+    source_repair_rejections: dict[str, NonNegativeInt] = Field(default_factory=dict)
 
 
 # ── Action protocol ────────────────────────────────────────────────────────
@@ -346,6 +350,18 @@ class _SourceRepairState:
     gap: str | None = None
     read_used: bool = False
     context_path: str | None = None
+    rejections: dict[str, int] = field(default_factory=dict)
+
+    def repeated_managed_gap(self, gap: str, inventory: Mapping[str, str] | None) -> bool:
+        if not isinstance(gap, ManagedSourceGap):
+            return False
+        key = gap.rejection_key()
+        if key is None:
+            if inventory is None:
+                return False
+            key = hashlib.sha256(f"{source_fingerprint(inventory)}:{gap}".encode()).hexdigest()
+        self.rejections[key] = self.rejections.get(key, 0) + 1
+        return self.rejections[key] >= _MANAGED_SOURCE_REJECTION_LIMIT
 
 
 def _safe_file_path(path: str) -> str | None:
@@ -469,6 +485,7 @@ async def run_agent_build(
         gap=restored.source_repair_gap if restored is not None else None,
         read_used=restored.source_repair_read_used if restored is not None else False,
         context_path=restored.source_repair_context_path if restored is not None else None,
+        rejections=restored.source_repair_rejections if restored is not None else {},
     )
     novelty = None
     if segment_limit is None and restored is None:
@@ -535,6 +552,7 @@ async def run_agent_build(
                 source_repair_gap=source_repair.gap,
                 source_repair_read_used=source_repair.read_used,
                 source_repair_context_path=source_repair.context_path,
+                source_repair_rejections=source_repair.rejections,
             )
             continuation.context = {
                 **continuation.context, "legacy_outer": outer.model_dump(mode="json"),
@@ -725,6 +743,7 @@ async def _run_agent_segment(
         source_repair.gap = saved_frame.source_repair_gap
         source_repair.read_used = saved_frame.source_repair_read_used
         source_repair.context_path = saved_frame.source_repair_context_path
+        source_repair.rejections = saved_frame.source_repair_rejections
         content_receipts_seen = saved_frame.content_receipts_seen
         last_build_ok, fast_check_fresh = saved_frame.last_build_ok, saved_frame.fast_check_fresh
         pending_source_build, red_build_streak = (
@@ -811,7 +830,8 @@ async def _run_agent_segment(
             return None
         if not isinstance(gap, str) or not gap.strip():
             return "Product acceptance check returned invalid feedback."
-        return bounded_redacted_diagnostic(gap, max_bytes=_MAX_OBS_CHARS)
+        detail = bounded_redacted_diagnostic(gap, max_bytes=_MAX_OBS_CHARS)
+        return ManagedSourceGap(detail) if isinstance(gap, ManagedSourceGap) else detail
 
     def _can_read_repair_source(action: Action) -> bool:
         path = action.path
@@ -1108,7 +1128,8 @@ async def _run_agent_segment(
                     if continuation is None:
                         reply = await invoke()
                     else:
-                        frame = saved_frame if restoring else _LegacyLoopFrame(
+                        # Recovery compares the persisted value exactly. Parsing can add defaults.
+                        frame_value = restored if restoring else _LegacyLoopFrame(
                             contract=contract, step=step, attempt=attempt,
                             retry_started_at=retry_started_at.isoformat(),
                             call_deadline=min(
@@ -1128,6 +1149,7 @@ async def _run_agent_segment(
                             source_repair_gap=source_repair.gap,
                             source_repair_read_used=source_repair.read_used,
                             source_repair_context_path=source_repair.context_path,
+                            source_repair_rejections=source_repair.rejections,
                             content_receipts_seen=content_receipts_seen,
                             last_build_ok=last_build_ok, fast_check_fresh=fast_check_fresh,
                             pending_source_build=pending_source_build,
@@ -1139,10 +1161,10 @@ async def _run_agent_segment(
                             wrote_since_check=wrote_since_check, active_model=active_model,
                             escalated=escalated, pending_truncation=pending_truncation,
                             response_budget=response_recovery.budget, call_messages=call_msgs,
-                        )
-                        assert frame is not None
+                        ).model_dump(mode="json")
+                        assert frame_value is not None
                         reply = await continuation.provider(
-                            {"version": 1, "kind": "legacy", "value": frame.model_dump(mode="json")},
+                            {"version": 1, "kind": "legacy", "value": frame_value},
                             invoke,
                         )
                     if restoring:
@@ -1383,6 +1405,11 @@ async def _run_agent_segment(
                     "NOT DONE YET — " + gap + "."
                 )})
                 if source_feedback:
+                    if source_repair.repeated_managed_gap(gap, completion_inventory):
+                        return AgentResult(
+                            done=False, summary=gap, files=written, steps=step + 1,
+                            transcript=convo, stop_reason="managed_source_contract_unresolved",
+                        )
                     if no_write_streak >= _NO_WRITE_ABORT_AT:
                         # The known semantic rejection cannot be rescued by a green build.
                         return _exploration_failure(step)
@@ -1802,6 +1829,7 @@ _INFRA_DEAD_ABORT_AT = 3
 # read-only streak is always a stall, never legitimate orientation.
 _NO_WRITE_NUDGE_AT = 5
 _NO_WRITE_ABORT_AT = 14
+_MANAGED_SOURCE_REJECTION_LIMIT = 3
 
 # Global (non-consecutive) repeat guard: the SAME exact action issued this many
 # times without confirmed same-file progress is a cycle (identical writes count).

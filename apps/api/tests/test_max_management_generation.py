@@ -326,6 +326,123 @@ def test_read_only_category_find_index_keeps_later_live_catalog_rendering():
     assert management_implemented_capabilities(files) == frozenset({"catalog"})
 
 
+CATALOG_ID_LOOKUP_PAGE = """
+import {useState} from 'react';
+import {useYleumAppProfile} from '@/lib/omnia/app-profile-client';
+import {useYleumCatalog, useYleumCatalogSelection} from '@/lib/omnia/catalog-client';
+declare function opaque(value: unknown): void;
+export default function Page() {
+  const profile = useYleumAppProfile();
+  const catalog = useYleumCatalog();
+  const selection = useYleumCatalogSelection(catalog.items);
+  const [selectedId] = useState('first');
+  const selected = catalog.items.find(item => item.id === selectedId);
+  const option = selected ? selection.getOption({id: selected.id}) : undefined;
+  return <main>
+    <h1>{profile.profile?.app_name}</h1>
+    <p>{selected?.title}</p>
+    {selected && <span>{String(selected.price)} {option}</span>}
+    {selected?.options.length ? selected.options.map(value => <span>{value}</span>) : null}
+    {catalog.items.map(item => <article key={item.id}>{item.title}</article>)}
+  </main>;
+}
+"""
+
+
+def test_read_only_catalog_id_lookup_keeps_later_live_catalog_rendering():
+    files = connection_files(CATALOG_ID_LOOKUP_PAGE, ("catalog",))
+    assert management_source_gap(files) is None
+    assert management_implemented_capabilities(files) == frozenset({"catalog"})
+
+
+def test_catalog_id_lookup_alone_is_not_a_rendered_catalog():
+    source = CATALOG_ID_LOOKUP_PAGE.replace(
+        "{catalog.items.map(item => <article key={item.id}>{item.title}</article>)}", "",
+    )
+    gap = management_source_gap(connection_files(source, ("catalog",)))
+    assert gap is not None and gap.startswith("Connect useYleumCatalog items")
+
+
+@pytest.mark.parametrize("statement", [
+    "selected.title = 'local';",
+    "opaque(selected);",
+    "const [saved] = useState(selected); saved.title = 'local';",
+    "const [saved, setSaved] = useState(null); setSaved(selected); saved.title = 'local';",
+    "const row = selected ?? {title: 'fallback'}; row.title = 'local';",
+    "const row = selected || {title: 'fallback'}; row.title = 'local';",
+    "const [saved] = useState(() => selected); saved.title = 'local';",
+    "let row = null; row = selected; if (row) row.title = 'local';",
+    "const row = {selected}; row.selected.title = 'local';",
+    "const change = () => { selected.title = 'local'; }; setTimeout(change, 0);",
+    "selected.options.push('local');",
+])
+def test_catalog_id_lookup_does_not_hide_mutation_through_the_returned_row(statement):
+    source = CATALOG_ID_LOOKUP_PAGE.replace("  return <main>", f"  {statement}\n  return <main>")
+    assert management_source_gap(connection_files(source, ("catalog",))) is not None
+
+
+@pytest.mark.parametrize("predicate", [
+    "async item => item.id === selectedId",
+    "item => item.id === opaque(selectedId)",
+    "item => (item.id = selectedId) === selectedId",
+    "item => item.id === selectedId, {}",
+    "(item = opaque(catalog.items)) => item.id === selectedId",
+])
+def test_catalog_id_lookup_keeps_unproven_predicates_fail_closed(predicate):
+    source = CATALOG_ID_LOOKUP_PAGE.replace("item => item.id === selectedId", predicate)
+    assert management_source_gap(connection_files(source, ("catalog",))) is not None
+
+
+def test_catalog_id_lookup_requires_id_to_be_initialized_before_lookup():
+    source = CATALOG_ID_LOOKUP_PAGE.replace(
+        "  const [selectedId] = useState('first');\n", "",
+    ).replace(
+        "  const selected = catalog.items.find(item => item.id === selectedId);",
+        "  const selected = catalog.items.find(item => item.id === selectedId);\n"
+        "  const selectedId = 'first';",
+    )
+    assert management_source_gap(connection_files(source, ("catalog",))) is not None
+
+
+def test_catalog_id_lookup_does_not_borrow_a_binding_from_the_callers_scope():
+    source = CATALOG_ID_LOOKUP_PAGE.replace(
+        "  const [selectedId] = useState('first');",
+        "  const compare = item => item.id === selectedId;\n"
+        "  if (true) {\n    const selectedId = 'inner';",
+    ).replace("find(item => item.id === selectedId)", "find(compare)").replace(
+        "  </main>;\n}", "  </main>;\n  }\n  const selectedId = 'outer';\n}",
+    )
+    assert management_source_gap(connection_files(source, ("catalog",))) is not None
+
+
+def test_managed_rejection_key_distinguishes_components_and_ignores_layout():
+    source = """
+declare function loadHeading(): {title: string};
+function Header() { const heading = {...loadHeading()}; return <h1>{heading.title}</h1>; }
+function Footer() { const heading = {...loadHeading()}; return <p>{heading.title}</p>; }
+export default function Page() { return <main><Header/><Footer/></main>; }
+"""
+    initial = management_source_gap(connection_files(source, ("catalog",)))
+    formatted = management_source_gap(connection_files(
+        "\n" + source.replace("heading = ", "heading  = "), ("catalog",),
+    ))
+    first_fixed = management_source_gap(connection_files(source.replace(
+        "const heading = {...loadHeading()};", "const heading = {title: 'fixed'};", 1,
+    ), ("catalog",)))
+    assert initial is not None and formatted is not None and first_fixed is not None
+    assert initial.rejection_key() is not None
+    assert initial.rejection_key() == formatted.rejection_key()
+    assert initial.rejection_key() != first_fixed.rejection_key()
+
+
+def test_catalog_id_lookup_rejects_deferred_mutation_after_catalog_render():
+    source = CATALOG_ID_LOOKUP_PAGE.replace(
+        "  </main>;", "    <button onClick={() => { selected.title = 'local'; }}>Edit</button>\n"
+        "  </main>;",
+    )
+    assert management_source_gap(connection_files(source, ("catalog",))) is not None
+
+
 def test_passive_catalog_selection_destructuring_keeps_locked_category_field():
     source = CATALOG_CATEGORY_PAGE.replace(
         "const selection = useYleumCatalogSelection(items);",

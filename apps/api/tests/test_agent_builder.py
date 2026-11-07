@@ -1146,7 +1146,8 @@ def test_source_repair_context_boundary_does_not_replenish_consumed_read():
     ]
 
 
-def test_source_repair_cold_resume_keeps_consumed_read_and_current_feedback():
+@pytest.mark.parametrize("old_frame", [False, True])
+def test_source_repair_cold_resume_keeps_consumed_read_and_current_feedback(old_frame):
     from copy import deepcopy
     from types import SimpleNamespace
     from uuid import uuid4
@@ -1156,6 +1157,7 @@ def test_source_repair_cold_resume_keeps_consumed_read_and_current_feedback():
     state = {"src/app/page.tsx": "initial", "src/app/other.tsx": "other"}
     executed, saved = [], {}
     cold = False
+    reconciled_frame = None
     prelude = _repair_prelude()
     prelude.insert(1, _repair_action("read_file", path="src/app/page.tsx"))
     actions = [
@@ -1169,12 +1171,16 @@ def test_source_repair_cold_resume_keeps_consumed_read_and_current_feedback():
         return dict(state)
 
     async def provider(frame, invoke):
-        nonlocal saved
+        nonlocal saved, reconciled_frame
         if not cold and sum(name == "read_file" for name, _path in executed) == 2:
             saved = deepcopy(frame["value"])
+            if old_frame:
+                saved.pop("source_repair_rejections")
             raise GenerationYielded(
                 run_id=uuid4(), checkpoint=None, attempt_seq=1, phase="waiting_dependency",
             )
+        if cold and reconciled_frame is None:
+            reconciled_frame = deepcopy(frame)
         return await invoke()
 
     driver = SimpleNamespace(
@@ -1197,6 +1203,7 @@ def test_source_repair_cold_resume_keeps_consumed_read_and_current_feedback():
                if sig.startswith("read_file|src/app/page.tsx|")) == 2
     cold = True
     result = asyncio.run(run())
+    assert reconciled_frame == {"version": 1, "kind": "legacy", "value": saved}
     assert not result.done
     assert [item for item in executed if item[0] == "read_file"] == [
         ("read_file", "src/app/page.tsx"), ("read_file", "src/app/page.tsx"),
@@ -1227,6 +1234,115 @@ def test_source_repair_repeated_semantic_done_consumes_existing_no_progress_limi
         ab._NO_WRITE_ABORT_AT - 5
     )
     assert len(executed) == 6  # Initial write, four discoveries, one build; no hidden tools.
+
+
+@pytest.mark.parametrize("repair_on_third_attempt", [False, True])
+def test_managed_rejection_limit_survives_writes_and_segment_boundaries(repair_on_third_attempt):
+    from yleum_api.services.max_management_contract import build_management_contract
+    from yleum_api.services.max_management_generation import management_source_gap
+
+    path = "src/app/page.tsx"
+    source = """
+import {useYleumAppProfile} from '@/lib/omnia/app-profile-client';
+import {useYleumCatalog, useYleumCatalogSelection} from '@/lib/omnia/catalog-client';
+declare function loadHeading(): {title: string};
+export default function Page() {
+  const profile = useYleumAppProfile();
+  const {items} = useYleumCatalog();
+  useYleumCatalogSelection(items);
+  const heading = {...loadHeading()};
+  return <main>
+    <h1>{profile.profile?.app_name}</h1>
+    {items.map(item => <article key={item.id}>{item.title}</article>)}
+  </main>;
+}
+"""
+    repaired = source.replace("  const heading = {...loadHeading()};\n", "")
+    state = {".omnia/management.json": build_management_contract(["catalog"]).model_dump_json()}
+    attempted_sources = ["\n" * offset + source for offset in range(3)]
+    if repair_on_third_attempt:
+        attempted_sources[-1] = repaired
+    replies = [
+        action
+        for content in [*attempted_sources, repaired]
+        for action in (
+            _repair_action("write_file", path=path, content=content),
+            _repair_action("build"),
+            _repair_action("done", summary="candidate"),
+        )
+    ]
+    scripted = _scripted(replies)
+    calls = []
+
+    async def complete(*args, **kwargs):
+        calls.append(None)
+        return await scripted(*args, **kwargs)
+
+    async def snapshot():
+        return dict(state)
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="catalog", model="fixture",
+        execute=_ok_executor([], state), complete=complete, snapshot_files=snapshot,
+        completion_check=lambda files, _: management_source_gap(files),
+        coordinator_handoff=True, max_steps=3, max_segments=4,
+    ))
+    assert len(calls) == 9 and result.segments == 3
+    assert result.done is repair_on_third_attempt
+    assert result.needs_finalization is repair_on_third_attempt
+    if not repair_on_third_attempt:
+        assert result.stop_reason == "managed_source_contract_unresolved"
+        assert "unproven_object_spread" in result.summary
+
+
+@pytest.mark.parametrize("change_source", [False, True])
+def test_generic_managed_rejection_uses_current_source(change_source):
+    from yleum_api.services.max_management_generation import ManagedSourceGap
+
+    path = "src/app/page.tsx"
+    state = {path: "initial"}
+    replies = [
+        _repair_action("write_file", path=path, content="attempt 1"),
+        _repair_action("build"),
+        _repair_action("done", summary="attempt 1"),
+    ]
+    for attempt in (2, 3):
+        if change_source:
+            replies.extend([
+                _repair_action("write_file", path=path, content=f"attempt {attempt}"),
+                _repair_action("build"),
+            ])
+        replies.append(_repair_action("done", summary=f"attempt {attempt}"))
+    replies.extend([
+        _repair_action("write_file", path=path, content="repaired"),
+        _repair_action("build"),
+        _repair_action("done", summary="repaired"),
+    ])
+    scripted = _scripted(replies)
+    calls = 0
+
+    async def complete(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return await scripted(*args, **kwargs)
+
+    async def snapshot():
+        return dict(state)
+
+    def completion_check(files, _evidence):
+        return None if files[path] == "repaired" else ManagedSourceGap("Connect catalog items.")
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="catalog", model="fixture",
+        execute=_ok_executor([], state), complete=complete, snapshot_files=snapshot,
+        completion_check=completion_check, coordinator_handoff=True,
+        max_steps=len(replies),
+    ))
+    assert result.done is change_source
+    assert result.needs_finalization is change_source
+    assert calls == (len(replies) if change_source else 5)
+    if not change_source:
+        assert result.stop_reason == "managed_source_contract_unresolved"
 
 
 def test_source_repair_targeted_read_keeps_cancellation():

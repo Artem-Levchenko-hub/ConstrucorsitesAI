@@ -10,7 +10,9 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+from yleum_api.services.agent_builder import AgentResult
 from yleum_api.services.generation import agent_recovery
+from yleum_api.services.generation.contracts import GenerationRuntime, SourceBaseline
 
 
 def contract():
@@ -130,18 +132,107 @@ async def test_recovery_never_builds_a_half_restored_dependency_tree(kind, monke
     monkeypatch.setattr(agent_recovery.repo_svc, "read_files", lambda *_: dict(baseline))
     handle = SimpleNamespace(stage_patch=stage, sync_preview=sync)
     kwargs = dict(
-        project_id=uuid4(),
-        project_slug="recovery",
         handle=handle,
         touched_files={schema: tree[schema], product: tree[product]},
         probe_build=build,
     )
     if kind == "snapshot":
-        result = await agent_recovery._restore_touched_tree(**kwargs, baseline_sha="snapshot-sha")
+        result = await agent_recovery._restore_touched_tree(
+            **kwargs, project_id=uuid4(), project_slug="recovery", baseline_sha="snapshot-sha",
+        )
     else:
-        result = await agent_recovery._restore_max_core(**kwargs, render_core=render)
+        result = await agent_recovery._restore_max_core(
+            **kwargs, render_core=render, trusted_files={},
+        )
     assert result == {"ok": True}
     assert observed == [baseline]
+
+
+@pytest.mark.parametrize("failure", ["source_deadline", "verification"])
+@pytest.mark.parametrize("prepared_seed", [True, False])
+async def test_first_portable_max_rollback_restores_trusted_manifest(
+    failure, prepared_seed, monkeypatch,
+):
+    manifest = ".omnia/cell.json"
+    product = "src/app/page.tsx"
+    core = {"src/app/layout.tsx": "safe layout", "empty.ts": ""}
+    accepted_manifest = {
+        "version": 1, "services": [{"name": "web", "argv": ["pnpm", "start"]}], "routes": [],
+    }
+    seeded_manifest = {
+        **accepted_manifest, "app_config_protocol": 1,
+        "services": [{"name": "web", "argv": ["pnpm", "start:seed"]}],
+    }
+    trusted = seeded_manifest if prepared_seed else {**accepted_manifest, "app_config_protocol": 1}
+    candidate = {
+        manifest: json.dumps({
+            **trusted, "services": [{"name": "web", "argv": ["pnpm", "start:rejected"]}],
+        }),
+        "src/app/layout.tsx": "broken layout",
+        product: "unfinished product",
+        "src/app/Product.tsx": "partial component",
+    }
+    tree = dict(candidate)
+    trace = []
+
+    async def stage(writes, deletes):
+        trace.append("stage")
+        desired = {**tree, **writes}
+        for path in deletes:
+            desired.pop(path, None)
+        if manifest not in desired:
+            raise RuntimeError(
+                "409 portable workspace manifest is missing; legacy downgrade is forbidden"
+            )
+        assert json.loads(desired[manifest]) == trusted
+        assert desired == {**core, manifest: desired[manifest]}
+        tree.clear()
+        tree.update(desired)
+
+    async def restore(role, operation_id):
+        assert role.value == "restore_runtime"
+        assert json.loads(tree[manifest]) == trusted
+        trace.append("restore")
+        return SimpleNamespace(ok=True, redacted_detail="")
+
+    async def render():
+        return dict(core)
+
+    async def emit(*args):
+        trace.append("rollback_event")
+
+    common = dict(
+        _agent_res=AgentResult(
+            done=False, summary="source work deadline", files=candidate, steps=5,
+            stop_reason=failure,
+        ),
+        _render_current_max_starter_files=render,
+        baseline=SourceBaseline(None, "config-sha", {manifest: json.dumps(accepted_manifest)}),
+        ids=SimpleNamespace(project_id=uuid4()),
+        project_info=SimpleNamespace(slug="recovery"),
+        runtime=GenerationRuntime(
+            handle=SimpleNamespace(stage_patch=stage, run_role=restore),
+            coordinator=object(),
+            migration_baseline={manifest: json.dumps(seeded_manifest)} if prepared_seed else None,
+        ),
+        operations=SimpleNamespace(probe_build=None, emit=emit),
+    )
+    if failure == "source_deadline":
+        with pytest.raises(RuntimeError, match=r"source_deadline.*; rolled_back$"):
+            await agent_recovery.recover_stopped_candidate(
+                **common, _max_has_generated_snapshot=False, _max_seed_files={},
+                _provider_failure=None,
+            )
+    else:
+        monkeypatch.setattr(
+            agent_recovery, "get_settings", lambda: SimpleNamespace(use_native_agent=True),
+        )
+        result = await agent_recovery.recover_rejected_candidate(
+            **common, _first_max_without_product=True, _rt_error="", _runtime_ok=True,
+            _tc_error="typecheck failed", _typecheck_ok=False, accumulated="", files=candidate,
+        )
+        assert result.agent_result.stop_reason == "verification_rolled_back"
+    assert trace == ["stage", "restore", "rollback_event"]
 
 
 @pytest.mark.parametrize("kind", ["snapshot", "max_core"])
@@ -179,15 +270,18 @@ async def test_recovery_restores_before_building(kind, fault, monkeypatch):
 
     async def restore():
         common = dict(
-            project_id=project_id,
-            project_slug="recovery",
             handle=handle,
             touched_files=touched,
             probe_build=build,
         )
         if kind == "snapshot":
-            return await agent_recovery._restore_touched_tree(**common, baseline_sha="snapshot-sha")
-        return await agent_recovery._restore_max_core(**common, render_core=render)
+            return await agent_recovery._restore_touched_tree(
+                **common, project_id=project_id, project_slug="recovery",
+                baseline_sha="snapshot-sha",
+            )
+        return await agent_recovery._restore_max_core(
+            **common, render_core=render, trusted_files={},
+        )
 
     expected = (
         [

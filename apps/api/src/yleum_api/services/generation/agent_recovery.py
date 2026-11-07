@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -24,6 +24,7 @@ from yleum_api.services.generation.runtime import (
     _apply_project_cell_preview_files,
     _require_project_cell,
 )
+from yleum_api.services.max_project_kit import include_portable_manifest
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 from yleum_api.services.project_cell_executor import (
     ProjectCellCommandRole,
@@ -136,11 +137,10 @@ async def recover_stopped_candidate(
         # and do not publish the core as a successful application.
         try:
             _rollback_build = await _restore_max_core(
-                project_id=ids.project_id,
-                project_slug=project_info.slug,
                 handle=_require_project_cell(runtime.handle),
                 touched_files=_agent_res.files,
                 render_core=_render_current_max_starter_files,
+                trusted_files=runtime.migration_baseline or baseline.files,
                 probe_build=operations.probe_build,
                 source_only=_source_only,
             )
@@ -355,11 +355,10 @@ async def recover_rejected_candidate(
                 # A brand-new MAX project has no product snapshot yet. Its
                 # safe fallback is the versioned core without a product page.
                 _rollback_build = await _restore_max_core(
-                    project_id=ids.project_id,
-                    project_slug=project_info.slug,
                     handle=_require_project_cell(runtime.handle),
                     touched_files=files,
                     render_core=_render_current_max_starter_files,
+                    trusted_files=runtime.migration_baseline or baseline.files,
                     probe_build=operations.probe_build,
                     source_only=runtime.coordinator is not None,
                 )
@@ -456,31 +455,31 @@ async def _restore_touched_tree(
 
 async def _restore_max_core(
     *,
-    project_id: UUID,
-    project_slug: str,
     handle: ProjectCellExecutorHandle,
     touched_files: dict[str, str],
     render_core: Callable[[], Awaitable[dict[str, str]]],
+    trusted_files: Mapping[str, str],
     probe_build: Callable[[], Awaitable[dict[str, Any]]],
     source_only: bool = False,
 ) -> dict[str, Any]:
     """Restore the core and remove product importers in one fenced source patch."""
-    _safe_files = await render_core()
-    _new_paths = sorted(
-        {path for path in touched_files if path not in _safe_files} | {"src/app/page.tsx"}
+    # The starter renderer omits the machine manifest. Reuse the pre-agent
+    # seed/accepted source so rollback cannot keep the rejected draft's commands.
+    core_files = include_portable_manifest(await render_core(), trusted_files)
+    removed_paths = sorted(
+        (touched_files.keys() - core_files.keys()) | {"src/app/page.tsx"}
     )
     await _apply_project_cell_preview_files(
-        files={**_safe_files, **dict.fromkeys(_new_paths, "")},
+        files={**core_files, **dict.fromkeys(removed_paths, "")},
         project_cell_handle=handle,
         empty_files=tuple(
             path
-            for path, content in _safe_files.items()
-            if content == "" and path not in _new_paths
+            for path, content in core_files.items()
+            if content == "" and path not in removed_paths
         ),
         sync_preview=not source_only,
     )
-    _rollback_build = await _verify_restored_runtime(handle, probe_build, source_only=source_only)
-    return _rollback_build
+    return await _verify_restored_runtime(handle, probe_build, source_only=source_only)
 
 
 async def _verify_restored_runtime(

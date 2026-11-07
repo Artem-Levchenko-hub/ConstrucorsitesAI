@@ -26,6 +26,11 @@ from yleum_api.services.max_management_contract import parse_management_contract
 
 _MANIFEST = ".omnia/management.json"
 _MAX_COLLECTION_ITEMS = 16
+_CATALOG_SCALAR_FIELDS = {
+    "id", "title", "category", "description", "price", "availability",
+    "image_url", "action_label", "active",
+}
+_LOOKUP_SCAN_LIMIT = 16000
 _CREATE = {
     "orders": "createManagedOrder",
     "leads": "createManagedLead",
@@ -106,6 +111,36 @@ def _language() -> Language:
     return Language(tree_sitter_typescript.language_tsx())
 
 
+def _rejection_fingerprint(node: Node) -> str:
+    statement = node
+    while statement.parent is not None and statement.type not in {
+        "variable_declarator", "expression_statement", "return_statement",
+        "for_in_statement", "if_statement", "statement_block", "program",
+    }:
+        statement = statement.parent
+
+    parts = [node.type.encode()]
+    owner = statement.parent
+    while owner is not None:
+        if owner.type in {"function_declaration", "function_expression", "method_definition"}:
+            parts.append(_text(owner.child_by_field_name("name")).encode())
+        elif owner.type == "arrow_function" and owner.parent is not None:
+            if owner.parent.type == "variable_declarator":
+                parts.append(_text(owner.parent.child_by_field_name("name")).encode())
+        owner = owner.parent
+
+    pending = [statement]
+    while pending:
+        token = pending.pop()
+        if token.type == "comment":
+            continue
+        if token.child_count:
+            pending.extend(reversed(token.children))
+        else:
+            parts.append(token.text or b"")
+    return hashlib.sha256(b"\0".join(parts)).hexdigest()[:16]
+
+
 @dataclass
 class _Value:
     tags: set[str] = field(default_factory=set)
@@ -162,6 +197,7 @@ class _Connections:
         self.event_depth = 0
         self.projection_depth = 0
         self.projections: dict[tuple[str, int], bool] = {}
+        self.lookup_scan_steps = 0
 
     def unsupported(self, node: Node | None, path: str, reason: str) -> None:
         """Identify a rejected source shape without copying source values into feedback."""
@@ -172,7 +208,7 @@ class _Connections:
             )
             self.first_unsupported = (
                 safe_path, node.start_point.row + 1, node.start_point.column + 1,
-                node.type, reason, hashlib.sha256(node.text or b"").hexdigest()[:16],
+                node.type, reason, _rejection_fingerprint(node),
             )
 
     @contextmanager
@@ -779,6 +815,153 @@ class _Connections:
                 return False
         return True
 
+    def catalog_id_find_is_read_only(self, call: Node, fn: _Value) -> bool:
+        callback = self.callback_expression(fn, 1)
+        if callback is None:
+            return False
+        path, body, _, (parameter,) = callback
+        declaration = call.parent
+        lexical = declaration.parent if declaration is not None else None
+        scope = lexical.parent if lexical is not None else None
+        if (
+            declaration is None or declaration.type != "variable_declarator"
+            or declaration.child_by_field_name("value") != call
+            or lexical is None or lexical.type != "lexical_declaration"
+            or _text(lexical.child_by_field_name("kind")) != "const"
+            or scope is None or scope.type != "statement_block"
+        ):
+            return False
+        name = declaration.child_by_field_name("name")
+        if name is None or name.type != "identifier" or "\\" in _text(name):
+            return False
+        if body.type != "binary_expression" or _text(body.child_by_field_name("operator")) != "===":
+            return False
+        left = body.child_by_field_name("left")
+        right = body.child_by_field_name("right")
+        inline_predicate = (
+            fn.function is not None
+            and fn.function[1].parent == call.child_by_field_name("arguments")
+        )
+        for member, selected_id in ((left, right), (right, left)):
+            if (
+                member is not None and member.type == "member_expression"
+                and _text(member.child_by_field_name("object")) == parameter
+                and _text(member.child_by_field_name("property")) == "id"
+                and selected_id is not None and _text(selected_id) != parameter
+                and (selected_id.type == "string" or inline_predicate)
+                and self._catalog_id_available(selected_id, lexical, scope)
+            ):
+                return self._catalog_lookup_reads_only(scope, name, path)
+        return False
+
+    @staticmethod
+    def _catalog_id_available(selected_id: Node, lexical: Node, scope: Node) -> bool:
+        if selected_id.type == "string":
+            return True
+        if selected_id.type != "identifier":
+            return False
+        selected_name = _text(selected_id)
+        for statement in scope.named_children:
+            if statement == lexical:
+                break
+            if statement.type != "lexical_declaration":
+                continue
+            for declaration in statement.named_children:
+                binding = declaration.child_by_field_name("name")
+                if binding is None or declaration.child_by_field_name("value") is None:
+                    continue
+                names = binding.named_children if binding.type == "array_pattern" else [binding]
+                if any(
+                    name.type == "identifier" and _text(name) == selected_name for name in names
+                ):
+                    return True
+        return False
+
+    def _catalog_lookup_reads_only(self, scope: Node, binding: Node, path: str) -> bool:
+        # A lookup may return an alias to a live SDK row. Prove its local uses
+        # before treating the result as a value without authority.
+        name = _text(binding)
+        pending = [scope]
+        while pending:
+            node = pending.pop()
+            self.lookup_scan_steps += 1
+            if self.lookup_scan_steps > _LOOKUP_SCAN_LIMIT:
+                return False
+            if node.type in {"identifier", "shorthand_property_identifier",
+                             "shorthand_property_identifier_pattern"}:
+                identifier = _text(node)
+                if "\\" in identifier or (
+                    identifier == name and node != binding
+                    and not self._catalog_lookup_read(node, path)
+                ):
+                    return False
+            pending.extend(node.named_children)
+        return True
+
+    def _catalog_lookup_read(self, node: Node, path: str) -> bool:
+        parent = node.parent
+        if parent is not None and parent.type == "member_expression":
+            field = _text(parent.child_by_field_name("property"))
+            if node != parent.child_by_field_name("object"):
+                return False
+            if field in _CATALOG_SCALAR_FIELDS:
+                return self._catalog_member_read(parent)
+            if field != "options":
+                return False
+            method = parent.parent
+            if method is None or method.type != "member_expression":
+                return False
+            operation = _text(method.child_by_field_name("property"))
+            if operation == "length":
+                return self._catalog_member_read(method)
+            call = method.parent
+            if (
+                operation != "map" or call is None or call.type != "call_expression"
+                or call.child_by_field_name("function") != method
+            ):
+                return False
+            args = call.child_by_field_name("arguments")
+            return bool(
+                args is not None and len(args.named_children) == 1
+                and args.named_children[0].type == "arrow_function"
+                and self.callback_expression(_Value(function=(path, args.named_children[0], {})), 1)
+            )
+        while parent is not None:
+            if parent.type in {"if_statement", "ternary_expression"}:
+                return node == parent.child_by_field_name("condition")
+            if parent.type == "unary_expression":
+                return _text(parent.children[0]) in {"!", "typeof"}
+            if parent.type == "binary_expression":
+                operation = _text(parent.child_by_field_name("operator"))
+                if operation in {"===", "!=="}:
+                    return True
+                if operation == "&&" and node == parent.child_by_field_name("left"):
+                    return True
+                if operation not in {"&&", "||", "??"}:
+                    return False
+            elif parent.type != "parenthesized_expression":
+                return False
+            node, parent = parent, parent.parent
+        return False
+
+    def _catalog_member_read(self, member: Node) -> bool:
+        node = member
+        while (parent := node.parent) is not None:
+            self.lookup_scan_steps += 1
+            if self.lookup_scan_steps > _LOOKUP_SCAN_LIMIT:
+                return False
+            if parent.type in {"assignment_expression", "augmented_assignment_expression",
+                               "for_in_statement"} and node == parent.child_by_field_name("left"):
+                return False
+            if parent.type == "update_expression" or (
+                parent.type == "unary_expression" and _text(parent.children[0]) == "delete"
+            ):
+                return False
+            if parent.type == "statement_block":
+                return True
+            node = parent
+        return True
+
     def category_find_index_is_read_only(self, fn: _Value, elements: tuple[_Value, ...]) -> bool:
         callback = self.callback_expression(fn, 1)
         if callback is None:
@@ -1326,6 +1509,16 @@ class _Connections:
                 ):
                     return source
                 if (
+                    operation == "find"
+                    and "catalog" in source.tags
+                    and len(args) == 1
+                    and self.catalog_id_find_is_read_only(node, args[0])
+                ):
+                    # Verified scalar reads grant no rendered catalogue witness.
+                    return _Value(props={
+                        "options": _Value(elements=(_Value(passive=True),), passive=True),
+                    }, passive=True)
+                if (
                     operation == "findIndex"
                     and "catalog" in source.tags
                     and len(args) == 1
@@ -1576,10 +1769,26 @@ def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
     return None, frozenset(capabilities)
 
 
-def management_source_gap(files: Mapping[str, str]) -> str | None:
+class ManagedSourceGap(str):
+    def rejection_key(self) -> str | None:
+        # A line shift is not a repair. Keep the path, AST shape and fingerprint.
+        stable, locations = re.subn(
+            r"( Source location: [A-Za-z0-9_./-]+):\d+:\d+"
+            r"(; AST \w+; reason \w+; fingerprint [a-f0-9]{16}\.)",
+            r"\1\2", self,
+        )
+        return hashlib.sha256(stable.encode()).hexdigest() if locations else None
+
+
+def management_source_gap(files: Mapping[str, str]) -> ManagedSourceGap | None:
     gap = _admission(files)[0]
     if gap is not None and gap.startswith("Connect "):
-        return (
+        if gap.startswith("Connect useYleumCatalog items"):
+            gap += (
+                " A selected row can be read from a local const lookup by item.id. "
+                "Read its fields and pass {id: selected.id} to getOption."
+            )
+        gap = (
             gap + " The bounded source verifier cannot prove this connection. "
             "Use direct JSX from the live SDK hook/result and a real event handler "
             "with an explicit input object. Keep SDK rows out of useMemo, pre-filters "
@@ -1589,7 +1798,7 @@ def management_source_gap(files: Mapping[str, str]) -> str | None:
             "condition: the bounded verifier does not interpret arbitrary JS conditions. "
             "This is a supported source shape, not a request for static or mock data."
         )
-    return gap
+    return ManagedSourceGap(gap) if gap is not None else None
 
 
 def management_implemented_capabilities(files: Mapping[str, str]) -> frozenset[str]:
