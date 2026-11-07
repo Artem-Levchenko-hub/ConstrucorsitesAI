@@ -233,8 +233,7 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
         )
         self.checker._require_reviewed_portable_sources(self.full_build)
 
-    def test_platform_bootstrap_v2_bundle_matches_exact_current_source(self):
-        root = Path(__file__).resolve().parents[2] / "apps/orchestrator/src/yleum_orchestrator"
+    def test_platform_bootstrap_v2_historical_bundle_remains_supported(self):
         self.assertEqual(
             self.checker._PORTABLE_QUIESCENCE_PLATFORM_BOOTSTRAP_V2_SOURCES,
             self.platform_bootstrap,
@@ -253,12 +252,9 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             self.checker._PORTABLE_QUIESCENCE_CONDITIONAL_SOURCE_NAMES,
         )
         self.checker._require_reviewed_portable_sources(self.platform_bootstrap)
-        for name, expected in self.platform_bootstrap.items():
-            source = root.joinpath(*name.split(".")).with_suffix(".py").read_bytes()
-            # Git checkouts on Windows may materialize CRLF; live Linux bytes
-            # and the authority table remain exact LF source, never normalized.
-            actual = hashlib.sha256(source.replace(b"\r\n", b"\n")).hexdigest()
-            self.assertEqual(actual, expected, name)
+        # Exact current Linux source is checked against the complete Next21
+        # successor in test_next_type_quiescence_contract. This older bundle
+        # retains its immutable hashes and historical admission coverage.
 
     def test_platform_bootstrap_mixed_missing_unknown_or_extra_sources_are_denied(self):
         changed = ("routers.workspace", "services.machine_adapter", "services.project_migrations")
@@ -438,20 +434,24 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
                     self.checker._require_reviewed_portable_sources(sources)
         self.assertEqual(len(accepted), len(self.reviewed))
 
-    def test_collection_binds_current_bootstrap_bytes_and_rejects_absence_or_tamper(self):
+    def test_collection_binds_current_next_type_bytes_and_rejects_absence_or_tamper(self):
         root = Path(__file__).resolve().parents[2] / "apps/orchestrator/src/yleum_orchestrator"
+        current = json.loads(
+            (Path(__file__).parent / "fixtures/next-type-preparation-quiescence-sources.json")
+            .read_text()
+        )
         with tempfile.TemporaryDirectory() as temporary:
             origins = {}
-            for name in self.platform_bootstrap:
+            for name in current:
                 source = root.joinpath(*name.split(".")).with_suffix(".py").read_bytes()
                 path = Path(temporary) / (name + ".py")
                 path.write_bytes(source.replace(b"\r\n", b"\n"))
                 origins["yleum_orchestrator." + name] = SimpleNamespace(origin=str(path))
             with patch.object(importlib.util, "find_spec", side_effect=origins.get):
                 self.assertEqual(
-                    self.checker._portable_quiescence_sources(), self.platform_bootstrap,
+                    self.checker._portable_quiescence_sources(), current,
                 )
-                for name in self.platform_bootstrap:
+                for name in current:
                     with self.subTest(helper=name):
                         key = "yleum_orchestrator." + name
                         helper = origins.pop(key)

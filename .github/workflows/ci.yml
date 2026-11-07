@@ -397,6 +397,18 @@ jobs:
           sudo env PYTHONPATH="$PWD/src" "$PWD/.venv/bin/python" -m unittest discover -s ../../infra/release -p 'test_*contract.py' -v
           sudo env PYTHONPATH="$PWD/src" "$PWD/.venv/bin/python" -m unittest discover -s ../../infra/release -p 'test_generation_reader_deploy.py' -v
           sudo env PYTHONPATH="$PWD/src" "$PWD/.venv/bin/python" -m unittest discover -s ../../infra/release -p 'test_generation_reader_inventory.py' -v
+      - name: Verify disposable Next route types with the frozen starter compiler
+        working-directory: apps/orchestrator
+        env:
+          QA_NEXT_TYPEGEN_REQUIRED: "1"
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.0 --activate
+          fixture_root=$(mktemp -d)
+          cp templates/max-miniapp-nextjs/package.json templates/max-miniapp-nextjs/pnpm-lock.yaml "$fixture_root/"
+          pnpm --dir "$fixture_root" install --frozen-lockfile --ignore-scripts
+          QA_NEXT_TYPEGEN_NODE_MODULES="$fixture_root/node_modules" uv run --frozen pytest -q \
+            -o faulthandler_timeout=180 tests/test_next_type_preparation.py
       - name: Provision the immutable isolated migration verifier image
         working-directory: apps/orchestrator
         run: |

@@ -178,6 +178,17 @@ _PORTABLE_QUIESCENCE_PLATFORM_BOOTSTRAP_V2_SOURCES = {
         "3f68b1cd69a260aad7afee8d5069cf43218a896ec993d8ae157e7ec36b0db0eb"
     ),
 }
+# Next route declarations are refreshed inside the existing fenced command
+# child, after install and before unchanged compiler/tests. This helper adds no
+# container/startup/lock authority. Bind it together with its adapter, preserving
+# the complete historical platform-bootstrap bundle without substitutions.
+_PORTABLE_QUIESCENCE_NEXT_TYPE_PREPARATION_SOURCES = {
+    **_PORTABLE_QUIESCENCE_PLATFORM_BOOTSTRAP_V2_SOURCES,
+    "services.machine_adapter": "e1624a7d0944e087b4656f2c96881cf15cdd43346cf35b5164d282b67f3700d1",
+    "services.next_type_preparation": (
+        "df56b577a9739c17b61ec9939d63dfc1c21a5bdaefe26a891089ce786011ac0d"
+    ),
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -192,6 +203,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_NATIVE_STARTUP_SOURCES,
     _PORTABLE_QUIESCENCE_FULL_BUILD_STARTUP_SOURCES,
     _PORTABLE_QUIESCENCE_PLATFORM_BOOTSTRAP_V2_SOURCES,
+    _PORTABLE_QUIESCENCE_NEXT_TYPE_PREPARATION_SOURCES,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.

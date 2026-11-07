@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -21,8 +22,43 @@ from yleum_api.services.generation.runtime import (
     _split_project_cell_preview_patch,
 )
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
+from yleum_api.services.project_cell_proofs import failure_detail_excerpt
 
 _log = logging.getLogger("yleum_api.routers.messages")
+
+
+async def _verify_max_starter(
+    runtime: GenerationRuntime, bindings: AgentRuntimeBindings,
+) -> None:
+    """Require the real core proof and retain the failed check's safe diagnostic."""
+    dimension: object = None
+    operation_id: object = None
+    detail: object
+    if runtime.coordinator is not None:
+        proof = await runtime.coordinator.fast_check()
+        ok = proof.outcome == "green"
+        detail = proof.redacted_detail
+        dimension = getattr(proof, "dimension", None)
+        operation_id = getattr(proof, "operation_id", None)
+    else:
+        result = await bindings.probe_build()
+        ok = bool(result.get("ok"))
+        detail = result.get("detail")
+    if ok:
+        return
+
+    context = ["MAX platform core build failed"]
+    if isinstance(dimension, str) and dimension in {
+        "bootstrap", "fast_check", "full_build", "runtime", "release",
+    }:
+        context.append(f"dimension={dimension}")
+    if isinstance(operation_id, UUID):
+        context.append(f"operation={operation_id}")
+    diagnostic = failure_detail_excerpt(
+        detail if isinstance(detail, str) and detail.strip() else "Check returned no diagnostic.",
+        max_bytes=3072,
+    )
+    raise RuntimeError(" ".join(context) + "\n" + diagnostic)
 
 
 async def stage_owner_fonts(*, factory: async_sessionmaker[AsyncSession], ids: GenerationIds,
@@ -155,37 +191,27 @@ async def stage_max_starter(
                     files=_starter_patch,
                     project_cell_handle=_require_project_cell(runtime.handle),
                 )
-            if runtime.coordinator is not None:
-                # Staging source proves neither dependencies nor the database.
-                # The controller bootstraps only trusted core SQL, then checks
-                # types/tests before the first model request can spend money.
-                proof = await runtime.coordinator.fast_check()
-                _starter_build = {
-                    "ok": proof.outcome == "green",
-                    "detail": proof.redacted_detail,
-                }
-            else:
-                _starter_build = await bindings.probe_build()
-            if _starter_build.get("ok"):
-                await _agent_emit(
-                    "agent.step",
-                    {
-                        "step": 0,
-                        "action": "build",
-                        "human": "Основа готова — запускаю генератор",
-                        "path": "",
-                        "detail": (
-                            "Проверки ядра MAX пройдены; теперь генератор "
-                            "проектирует продукт без готового UI-шаблона."
-                        ),
-                        "ok": True,
-                    },
-                )
-            else:
-                raise RuntimeError("MAX platform core build failed")
+            # Staging source proves neither dependencies nor the database.
+            # This check must finish before any model request can spend money.
+            await _verify_max_starter(runtime, bindings)
+            await _agent_emit(
+                "agent.step",
+                {
+                    "step": 0,
+                    "action": "build",
+                    "human": "Основа готова — запускаю генератор",
+                    "path": "",
+                    "detail": (
+                        "Проверки ядра MAX пройдены; теперь генератор "
+                        "проектирует продукт без готового UI-шаблона."
+                    ),
+                    "ok": True,
+                },
+            )
         except Exception as _starter_exc:
             raise_if_terminal_cell_error(_starter_exc)
-            print(f"[PP] MAX starter preparation skipped: {_starter_exc!r}", flush=True)
+            diagnostic = failure_detail_excerpt(str(_starter_exc), max_bytes=3584)
+            print(f"[PP] MAX starter preparation skipped: {diagnostic!r}", flush=True)
             await _agent_emit(
                 "agent.step",
                 {
@@ -195,7 +221,7 @@ async def stage_max_starter(
                     "path": "",
                     "detail": (
                         "генератор не запущен, чтобы не тратить деньги на "
-                        "генерацию поверх старого шаблона."
+                        "генерацию поверх старого шаблона.\n\n" + diagnostic
                     ),
                     "ok": False,
                 },
@@ -207,7 +233,8 @@ async def stage_max_starter(
                 message=(
                     "MAX_CORE_PREPARATION_FAILED: "
                     "Генерация не запускалась: не удалось подготовить среду MAX. "
-                    "Деньги за вызов модели не списаны. Повторите после восстановления среды."
+                    "Деньги за вызов модели не списаны. Повторите после восстановления среды.\n"
+                    + diagnostic
                 ),
                 status_code=503,
             ) from _starter_exc

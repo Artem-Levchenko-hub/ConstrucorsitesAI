@@ -51,6 +51,12 @@ from yleum_orchestrator.services.machine_startup import (
     require_startup_admission,
     require_startup_history_clear,
 )
+from yleum_orchestrator.services.next_type_preparation import (
+    NEXT_TYPE_PREPARATION_PHASE,
+    NEXT_TYPE_PREPARATION_PY,
+    NEXT_TYPE_PREPARATION_TIMEOUT,
+    prepares_next_types,
+)
 from yleum_orchestrator.services.project_database_credentials import (
     ProjectDatabaseCredentials,
     ProjectDatabaseCredentialStore,
@@ -97,6 +103,29 @@ _CORE_RESERVED_ENV = frozenset({
     "DATABASE_URL", "CORE_RUNTIME_PASSWORD", "POSTGRES_PASSWORD", "PGPASSWORD",
     "PGUSER", "PGHOST", "PGDATABASE", "PGPORT", "PGOPTIONS",
 })
+
+
+def _node_preflight_commands(
+    manifest: MachineManifest,
+) -> list[tuple[str, list[str], str, int]]:
+    if not node_manifest_commands(manifest):
+        return []
+    # Fresh portable volumes have source but no installed dependencies. Every
+    # preflight shares the request's deadline, child fence and replay journal.
+    commands = [
+        (task.name, task.argv, task.cwd, task.timeout_seconds)
+        for task in manifest.tasks if task.role == "bootstrap"
+    ]
+    if prepares_next_types(manifest):
+        commands.append((
+            NEXT_TYPE_PREPARATION_PHASE,
+            ["python3", "-I", "-S", "-c", NEXT_TYPE_PREPARATION_PY],
+            ".", NEXT_TYPE_PREPARATION_TIMEOUT,
+        ))
+    commands.append((
+        REACT_EFFECT_CHECK_PHASE, ["node", "-e", REACT_EFFECT_CONTRACT_JS], ".", 30,
+    ))
+    return commands
 
 
 class MachineAdapter:
@@ -440,8 +469,8 @@ class MachineAdapter:
                         "fast_check",
                         "full_build",
                         "restore_runtime",
-                    } and node_manifest_commands(manifest):
-                        active_names.add(REACT_EFFECT_CHECK_PHASE)
+                    }:
+                        active_names.update(name for name, *_ in _node_preflight_commands(manifest))
                     if status.phase in active_names:
                         operation_id = uuid5(request.operation_id, status.phase)
                         try:
@@ -676,6 +705,17 @@ class MachineAdapter:
                         if request.task_role == "bootstrap" and manifest.app_config_protocol == 1
                         else {}
                     ),
+                    **(
+                        {
+                            "next_type_preparation_contract": NEXT_TYPE_PREPARATION_PHASE,
+                            "next_type_preparation_source_sha256": hashlib.sha256(
+                                NEXT_TYPE_PREPARATION_PY.encode("utf-8")
+                            ).hexdigest(),
+                        }
+                        if request.task_role in {"fast_check", "full_build", "restore_runtime"}
+                        and prepares_next_types(manifest)
+                        else {}
+                    ),
                 },
                 sort_keys=True,
                 separators=(",", ":"),
@@ -778,20 +818,8 @@ class MachineAdapter:
         heartbeat_seconds = int(
             getattr(self.settings, "cell_machine_command_heartbeat_seconds", 15)
         )
-        if role in {"fast_check", "full_build", "restore_runtime"} and node_manifest_commands(
-            manifest
-        ):
-            # Fresh portable volumes have source but no installed dependencies.
-            # Run only the declared bootstrap under this request's existing
-            # deadline/replay journal before loading the workspace AST parser.
-            bootstrap = [
-                (task.name, task.argv, task.cwd, task.timeout_seconds)
-                for task in manifest.tasks if task.role == "bootstrap"
-            ]
-            commands = [*bootstrap, (
-                REACT_EFFECT_CHECK_PHASE,
-                ["node", "-e", REACT_EFFECT_CONTRACT_JS], ".", 30,
-            ), *commands]
+        if role in {"fast_check", "full_build", "restore_runtime"}:
+            commands = [*_node_preflight_commands(manifest), *commands]
         for name, argv, cwd, timeout in commands:
             await machine.request_heartbeat(
                 mutation,

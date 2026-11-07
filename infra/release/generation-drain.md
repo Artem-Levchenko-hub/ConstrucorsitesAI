@@ -368,6 +368,15 @@ process or lock producer. Mixed old/new pairs, partial closures and unknown
 hashes remain unsupported. The API validates this separate FULL_BUILD protocol;
 it does not grant restoration or general environment-change authority.
 
+The platform-bootstrap v2 bundle remains supported unchanged. The Next type
+preparation successor extends that complete 20-module bundle to 21 modules,
+binding the adapter and its fixed guest helper together. The existing command
+fence, child journal, deadline and termination own this work; it adds no new
+container, startup or lock authority. Unknown, partial or mixed source bundles
+remain unsupported. The helper refreshes only generated route types for the
+supported MAX Next contract; source, ready build assets and business data retain
+their existing checks.
+
 Quiescence attestations still bind the actual observed source bundle. After a
 controller source change, a retired workspace needs a fresh content-addressed
 attestation under closed ingress and durable admission, using the documented
