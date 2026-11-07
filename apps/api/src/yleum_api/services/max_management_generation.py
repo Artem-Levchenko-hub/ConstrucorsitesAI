@@ -31,6 +31,8 @@ _CATALOG_SCALAR_FIELDS = {
     "image_url", "action_label", "active",
 }
 _LOOKUP_SCAN_LIMIT = 16000
+_FUNCTION_SCOPES = {"function_declaration", "function_expression", "arrow_function",
+                    "method_definition"}
 _CREATE = {
     "orders": "createManagedOrder",
     "leads": "createManagedLead",
@@ -111,6 +113,20 @@ def _language() -> Language:
     return Language(tree_sitter_typescript.language_tsx())
 
 
+def _anonymous_owner_site(node: Node) -> bytes:
+    path = []
+    while (parent := node.parent) is not None:
+        index = sum(
+            child.start_byte < node.start_byte and child.type not in {"comment", "jsx_text"}
+            for child in parent.named_children
+        )
+        path.append(f"{node.type}:{index}")
+        if parent.type in _FUNCTION_SCOPES:
+            break
+        node = parent
+    return "/".join(reversed(path)).encode()
+
+
 def _rejection_fingerprint(node: Node) -> str:
     statement = node
     while statement.parent is not None and statement.type not in {
@@ -122,11 +138,12 @@ def _rejection_fingerprint(node: Node) -> str:
     parts = [node.type.encode()]
     owner = statement.parent
     while owner is not None:
-        if owner.type in {"function_declaration", "function_expression", "method_definition"}:
-            parts.append(_text(owner.child_by_field_name("name")).encode())
-        elif owner.type == "arrow_function" and owner.parent is not None:
-            if owner.parent.type == "variable_declarator":
-                parts.append(_text(owner.parent.child_by_field_name("name")).encode())
+        if owner.type in _FUNCTION_SCOPES:
+            name = owner.child_by_field_name("name")
+            if name is None and owner.parent is not None:
+                if owner.parent.type == "variable_declarator":
+                    name = owner.parent.child_by_field_name("name")
+            parts.append(_text(name).encode() if name is not None else _anonymous_owner_site(owner))
         owner = owner.parent
 
     pending = [statement]

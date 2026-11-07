@@ -435,6 +435,28 @@ export default function Page() { return <main><Header/><Footer/></main>; }
     assert initial.rejection_key() != first_fixed.rejection_key()
 
 
+def test_managed_rejection_key_distinguishes_inline_event_handlers():
+    source = """
+declare function loadHeading(): {title: string};
+export default function Page() {
+  return <main>
+    <button onClick={() => { const heading = {...loadHeading()}; }}>First</button>
+    <button onClick={() => { const heading = {...loadHeading()}; }}>Second</button>
+    <button onClick={() => { const heading = {...loadHeading()}; }}>Third</button>
+  </main>;
+}
+"""
+    keys = []
+    for _ in range(3):
+        gap = management_source_gap(connection_files(source, ("catalog",)))
+        assert gap is not None and "unproven_object_spread" in gap
+        key = gap.rejection_key()
+        assert key is not None
+        keys.append(key)
+        source = source.replace("{...loadHeading()}", "{title: 'fixed'}", 1)
+    assert len(set(keys)) == 3
+
+
 def test_catalog_id_lookup_rejects_deferred_mutation_after_catalog_render():
     source = CATALOG_ID_LOOKUP_PAGE.replace(
         "  </main>;", "    <button onClick={() => { selected.title = 'local'; }}>Edit</button>\n"
