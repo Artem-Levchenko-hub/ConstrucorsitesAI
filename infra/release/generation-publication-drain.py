@@ -189,6 +189,12 @@ _PORTABLE_QUIESCENCE_NEXT_TYPE_PREPARATION_SOURCES = {
         "df56b577a9739c17b61ec9939d63dfc1c21a5bdaefe26a891089ce786011ac0d"
     ),
 }
+# A repeated BOOTSTRAP verifies journaled platform SQL without stopping the
+# product. Bind the adapter change to the same complete controller closure.
+_PORTABLE_QUIESCENCE_BOOTSTRAP_RECHECK_SOURCES = {
+    **_PORTABLE_QUIESCENCE_NEXT_TYPE_PREPARATION_SOURCES,
+    "services.machine_adapter": "22f53409ddc90d47572ad5bb4e7e26d1d7c37a79023fc30e9cd371ca87b6686a",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -204,6 +210,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_FULL_BUILD_STARTUP_SOURCES,
     _PORTABLE_QUIESCENCE_PLATFORM_BOOTSTRAP_V2_SOURCES,
     _PORTABLE_QUIESCENCE_NEXT_TYPE_PREPARATION_SOURCES,
+    _PORTABLE_QUIESCENCE_BOOTSTRAP_RECHECK_SOURCES,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.

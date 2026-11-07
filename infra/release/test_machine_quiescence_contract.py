@@ -434,10 +434,10 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
                     self.checker._require_reviewed_portable_sources(sources)
         self.assertEqual(len(accepted), len(self.reviewed))
 
-    def test_collection_binds_current_next_type_bytes_and_rejects_absence_or_tamper(self):
+    def test_collection_binds_current_bootstrap_recheck_bytes_and_rejects_absence_or_tamper(self):
         root = Path(__file__).resolve().parents[2] / "apps/orchestrator/src/yleum_orchestrator"
         current = json.loads(
-            (Path(__file__).parent / "fixtures/next-type-preparation-quiescence-sources.json")
+            (Path(__file__).parent / "fixtures/bootstrap-recheck-quiescence-sources.json")
             .read_text()
         )
         with tempfile.TemporaryDirectory() as temporary:

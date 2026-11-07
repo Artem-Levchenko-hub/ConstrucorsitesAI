@@ -377,6 +377,11 @@ remain unsupported. The helper refreshes only generated route types for the
 supported MAX Next contract; source, ready build assets and business data retain
 their existing checks.
 
+The bootstrap recheck successor keeps that complete 21-module bundle and
+updates only the adapter. The fenced bootstrap verifies an already journaled
+platform migration without stopping the product. A first application still
+uses the existing quiesced SQL path and both paths retain their bound receipt.
+
 Quiescence attestations still bind the actual observed source bundle. After a
 controller source change, a retired workspace needs a fresh content-addressed
 attestation under closed ingress and durable admission, using the documented

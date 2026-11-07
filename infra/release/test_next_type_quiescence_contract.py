@@ -19,7 +19,8 @@ class NextTypeSourceClosureTests(unittest.TestCase):
         self.checker = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.checker)
         self.old = self.checker._PORTABLE_QUIESCENCE_PLATFORM_BOOTSTRAP_V2_SOURCES
-        self.current = self.checker._PORTABLE_QUIESCENCE_NEXT_TYPE_PREPARATION_SOURCES
+        self.next_type = self.checker._PORTABLE_QUIESCENCE_NEXT_TYPE_PREPARATION_SOURCES
+        self.current = self.checker._PORTABLE_QUIESCENCE_BOOTSTRAP_RECHECK_SOURCES
 
     def test_historical_complete_bundle_is_preserved_and_still_supported(self):
         old_fixture = json.loads((self.directory / "fixtures/platform-bootstrap-v2-quiescence-sources.json").read_bytes())
@@ -31,15 +32,24 @@ class NextTypeSourceClosureTests(unittest.TestCase):
 
     def test_new_bundle_adds_only_the_reviewed_helper_and_adapter(self):
         fixture = json.loads((self.directory / "fixtures/next-type-preparation-quiescence-sources.json").read_bytes())
-        self.assertEqual(self.current, fixture)
-        self.assertEqual(len(self.current), 21)
-        self.assertEqual(set(self.current), set(self.old) | {"services.next_type_preparation"})
+        self.assertEqual(self.next_type, fixture)
+        self.assertEqual(len(self.next_type), 21)
+        self.assertEqual(set(self.next_type), set(self.old) | {"services.next_type_preparation"})
         self.assertEqual(
-            {key: value for key, value in self.current.items() if key not in {"services.machine_adapter", "services.next_type_preparation"}},
+            {key: value for key, value in self.next_type.items() if key not in {"services.machine_adapter", "services.next_type_preparation"}},
             {key: value for key, value in self.old.items() if key != "services.machine_adapter"},
         )
         self.assertIn("services.next_type_preparation", self.checker._PORTABLE_QUIESCENCE_SOURCE_NAMES)
         self.assertNotIn("services.next_type_preparation", self.checker._PORTABLE_QUIESCENCE_CONDITIONAL_SOURCE_NAMES)
+
+    def test_bootstrap_recheck_changes_only_the_adapter_in_the_complete_bundle(self):
+        fixture = json.loads((self.directory / "fixtures/bootstrap-recheck-quiescence-sources.json").read_bytes())
+        self.assertEqual(self.current, fixture)
+        self.assertEqual(set(self.current), set(self.next_type))
+        self.assertEqual(
+            {key for key in self.current if self.current[key] != self.next_type[key]},
+            {"services.machine_adapter"},
+        )
 
     def test_current_committed_source_closure_matches_linux_git_bytes(self):
         root = self.directory.parents[1] / "apps/orchestrator/src/yleum_orchestrator"

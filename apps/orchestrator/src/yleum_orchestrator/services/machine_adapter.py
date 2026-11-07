@@ -1011,13 +1011,18 @@ class MachineAdapter:
         # Only the whitelisted platform file can be newly applied by this role.
         protected = await machine_effect(protected_sources, backend, migrations)
         require_protected_sources(protected, migrations)
+        core_source = core[PLATFORM_CORE_MIGRATION]
+        already_applied = protected.get(PLATFORM_CORE_MIGRATION) == core_source
+        # A post-build bootstrap must check the journal without quiescing the
+        # process that the full-build proof just bound to its startup identity.
         receipt = await self._run_migration_inventory(
-            state, request, {**protected, **core}, verify_only=False, verify_applied=False,
+            state, request, {**protected, **core},
+            verify_only=False, verify_applied=already_applied,
         )
         receipt["platform_core_bootstrap"] = {
             "contract": PLATFORM_BOOTSTRAP_CONTRACT,
             "migration_path": PLATFORM_CORE_MIGRATION,
-            "migration_sha256": hashlib.sha256(core[PLATFORM_CORE_MIGRATION].encode()).hexdigest(),
+            "migration_sha256": hashlib.sha256(core_source.encode()).hexdigest(),
             "operation_id": str(request.operation_id),
         }
         self._store_migration_receipt(state, request.operation_id, receipt)

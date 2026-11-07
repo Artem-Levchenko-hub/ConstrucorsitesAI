@@ -95,6 +95,51 @@ async def test_platform_bootstrap_preserves_applied_sources_and_ignores_pending_
         }
 
 
+async def test_applied_core_bootstrap_verifies_without_quiescing_built_runtime(monkeypatch):
+    core = core_source()
+    applied = {
+        PLATFORM_CORE_MIGRATION: core,
+        "drizzle/0002_accepted.sql": "CREATE TABLE accepted(id int);",
+    }
+    files = {**applied, "drizzle/0004_pending.sql": "DROP TABLE accepted;"}
+    manifest = MachineManifest.model_validate({**payload(), "app_config_protocol": 1})
+    machine = NS(state=lambda: {"manifest": manifest.model_dump(mode="json")},
+                 assert_ready=AsyncMock())
+    events = []
+    backend = NS(prepare_project_database_migrations=lambda _epoch: events.append("quiesce"))
+    runtime = machine_adapter.MachineAdapter(NS(), NS())
+    runtime.parts = lambda _: (machine, backend)
+    runtime._migration_inventory = AsyncMock(return_value=files)
+    runtime._store_migration_receipt = (
+        lambda _state, _operation, receipt: events.append(receipt.copy())
+    )
+    monkeypatch.setattr(applied_migration_sources, "protected_sources", lambda *_: applied)
+    monkeypatch.setattr(applied_migration_sources, "save_migration_intent",
+                        lambda *_: events.append("intent"))
+
+    def check_database(actual_backend, inventory, *, verify_only, verify_applied):
+        assert actual_backend is backend
+        events.append((inventory, verify_only, verify_applied))
+        return {"contract": "project-migrations-v1"}
+
+    monkeypatch.setattr(machine_adapter, "run_project_migrations", check_database)
+    command = request()
+    state = NS(workspace_id=uuid4(), active_generation_run_id=command.generation_run_id,
+               operations=())
+
+    await runtime._bootstrap_platform_migrations(state, command)
+
+    assert events == [(applied, False, True), {
+        "contract": "project-migrations-v1", "workspace_id": str(state.workspace_id),
+        "generation_run_id": str(command.generation_run_id), "fencing_epoch": command.fencing_epoch,
+        "source_revision": command.expected_revision, "platform_core_bootstrap": {
+            "contract": PLATFORM_BOOTSTRAP_CONTRACT, "migration_path": PLATFORM_CORE_MIGRATION,
+            "migration_sha256": hashlib.sha256(core.encode()).hexdigest(),
+            "operation_id": str(command.operation_id),
+        },
+    }]
+
+
 async def test_adaptation_bootstrap_never_classifies_or_applies_historical_sql():
     command = request()
     runtime = machine_adapter.MachineAdapter(NS(), NS())
