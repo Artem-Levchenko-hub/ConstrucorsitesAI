@@ -37,7 +37,7 @@ _log = logging.getLogger("yleum_api.routers.messages")
 
 _REPAIRABLE_AGENT_STOPS = frozenset({
     "managed_source_contract_unresolved", "max_segments", "max_steps", "max_steps_red",
-    "no_progress", "provider_stopped_red", "source_deadline",
+    "no_progress", "provider_stopped_red",
 })
 
 
@@ -61,6 +61,7 @@ async def recover_stopped_candidate(
     project_info: ProjectGenerationFacts,
     runtime: GenerationRuntime,
     operations: AgentOperations,
+    allow_source_repair: bool = False,
 ) -> tuple[agent_builder.AgentResult, bool, dict[str, str], int]:
     _seg = _agent_res.segments
     # Остановленный прогон никогда не коммитится как наполовину сделанная
@@ -77,7 +78,8 @@ async def recover_stopped_candidate(
     _source_only = getattr(runtime, "coordinator", None) is not None
     _first_max_without_product = not _max_has_generated_snapshot
     if (
-        _must_restore_previous
+        allow_source_repair
+        and _must_restore_previous
         and not _provider_failure
         and _agent_res.files
         and _agent_res.stop_reason in _REPAIRABLE_AGENT_STOPS

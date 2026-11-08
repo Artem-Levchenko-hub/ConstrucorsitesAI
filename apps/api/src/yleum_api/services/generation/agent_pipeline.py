@@ -777,6 +777,7 @@ async def run_agent_generation(
             project_info=project_info,
             runtime=runtime,
             operations=_operations,
+            allow_source_repair=single_max_repair,
         )
 
 

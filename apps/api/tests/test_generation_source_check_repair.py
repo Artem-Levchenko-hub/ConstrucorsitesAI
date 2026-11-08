@@ -348,14 +348,15 @@ async def test_green_source_repair_still_requires_final_coordinator_proof(source
     assert len(calls) == 2
 
 
-async def test_stalled_max_draft_reaches_verification_before_rollback(source_check):
+@pytest.mark.parametrize("reason", ["no_progress", "max_steps", "source_deadline"])
+async def test_stopped_max_draft_hands_off_only_for_repairable_reasons(source_check, reason):
     kwargs, workspace, calls, rollback, _ = source_check
     candidate = AgentResult(
         done=False, summary="no progress", files=dict(workspace), steps=18,
-        stop_reason="no_progress",
+        stop_reason=reason,
     )
 
-    stopped, _, _, _ = await agent_recovery.recover_stopped_candidate(
+    options = dict(
         _agent_res=candidate,
         _max_has_generated_snapshot=True,
         _max_seed_files={},
@@ -366,8 +367,16 @@ async def test_stalled_max_draft_reaches_verification_before_rollback(source_che
         project_info=kwargs["project_info"],
         runtime=kwargs["runtime"],
         operations=kwargs["operations"],
+        allow_source_repair=True,
     )
+    if reason == "source_deadline":
+        with pytest.raises(RuntimeError, match="source_deadline"):
+            await agent_recovery.recover_stopped_candidate(**options)
+        rollback.assert_awaited_once()
+        assert calls == []
+        return
 
+    stopped, _, _, _ = await agent_recovery.recover_stopped_candidate(**options)
     assert stopped.needs_finalization and not stopped.done
     assert stopped.files == workspace
     assert calls == []
