@@ -6,7 +6,7 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from pathlib import PurePosixPath
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple, TypedDict
 
 from yleum_api.core.config import get_settings
 from yleum_api.services import agent_builder
@@ -36,6 +36,9 @@ from yleum_api.services.generation.source_repair_context import with_managed_sou
 from yleum_api.services.max_finalization import ProofBundle
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 
+if TYPE_CHECKING:
+    from yleum_api.services.generation.recovery_execution import ExecutionDriver
+
 _log = logging.getLogger("yleum_api.routers.messages")
 
 _NO_SOURCE_CHANGE_FAILURE = "edit produced no source changes"
@@ -53,6 +56,11 @@ class EditSourceChangeVerdict(NamedTuple):
     files: dict[str, str]
     message: str
     failure: str | None
+
+
+class _FinalizationOptions(TypedDict, total=False):
+    continuation: ExecutionDriver
+    source_preflight: Callable[[], Awaitable[str | None]]
 
 
 def source_change_allows_partial_save(verdict: EditSourceChangeVerdict) -> bool:
@@ -390,16 +398,18 @@ async def finalize_max_candidate(
             )
 
         try:
-            from yleum_api.services.generation.agent_runtime import migration_feedback
+            options: _FinalizationOptions = {}
+            if continuation is not None:
+                options["continuation"] = continuation
+            if source_handoff:
+                from yleum_api.services.generation.agent_runtime import migration_feedback
 
+                options["source_preflight"] = lambda: migration_feedback(runtime, ids)
             _finalization = await runtime.coordinator.finalize_with_repair(
                 prompt=prompt_text,
                 repair=_repair_finalization_source,
                 repair_source=_repair_finalization_source,
-                source_preflight=(
-                    (lambda: migration_feedback(runtime, ids)) if source_handoff else None
-                ),
-                continuation=continuation,
+                **options,
             )
             if _finalization.status is MaxFinalizationStatus.ACTIVATING:
                 raise AdaptationActivationPending(_finalization.redacted_detail)
