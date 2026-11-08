@@ -260,12 +260,22 @@ async def patch_max_url_attached(
         {"project_id": str(project_id)},
     )
     project = await _owned_max_project(session, project_id, current_user.id, lock=True)
+    if payload.expected_bot_id is not None:
+        integration = await session.scalar(
+            select(MaxIntegration).where(MaxIntegration.project_id == project.id)
+        )
+        if (
+            integration is None
+            or integration.bot_id != payload.expected_bot_id
+            or integration.status not in ("verified", "active")
+        ):
+            raise ApiError(
+                "conflict",
+                "Подключение MAX изменилось. Проверьте бота и подтвердите адрес заново.",
+                status.HTTP_409_CONFLICT, details={"reason": "max_bot_binding_changed"},
+            )
     record = await session.get(MaxProjectConfig, project_id)
-    current = (
-        MaxProjectConfigPayload.model_validate(record.config)
-        if record is not None
-        else _default_config(project)
-    )
+    current = _config_payload(project, record)
     if current.max_url_attached == payload.attached:
         return _public(project, record)
 
@@ -793,11 +803,20 @@ async def get_max_readiness(
     project_id: UUID, session: SessionDep, current_user: CurrentUserDep
 ) -> MaxReadinessPublic:
     project = await _owned_max_project(session, project_id, current_user.id)
-    record = await session.get(MaxProjectConfig, project_id)
+    # Read the confirmed flag and its bot identity in one database snapshot.
+    binding = (
+        await session.execute(
+            select(MaxProjectConfig, MaxIntegration.bot_id, MaxIntegration.verified_at)
+            .select_from(Project)
+            .outerjoin(MaxProjectConfig, MaxProjectConfig.project_id == Project.id)
+            .outerjoin(MaxIntegration, MaxIntegration.project_id == Project.id)
+            .where(Project.id == project.id)
+            .execution_options(populate_existing=True)
+        )
+    ).one_or_none()
+    record, bot_id, bot_verified_at = binding if binding is not None else (None, None, None)
     config = MaxProjectConfigPayload.model_validate(record.config) if record else None
-    integration = (
-        await session.execute(select(MaxIntegration).where(MaxIntegration.project_id == project.id))
-    ).scalar_one_or_none()
+    max_url_confirmed = bool(config and config.max_url_attached)
     generated_count = int(
         (
             await session.execute(
@@ -914,7 +933,7 @@ async def get_max_readiness(
         MaxReadinessItem(
             id="bot",
             label="Безопасный доступ MAX подключён",
-            done=bool(integration and integration.verified_at),
+            done=bool(bot_verified_at),
             action="Подключить безопасный вход",
         ),
         MaxReadinessItem(
@@ -926,7 +945,7 @@ async def get_max_readiness(
         MaxReadinessItem(
             id="max_url",
             label="URL приложения привязан в кабинете MAX",
-            done=bool(config and config.max_url_attached),
+            done=max_url_confirmed,
             action="Подтвердить привязку",
         ),
     ]
@@ -935,6 +954,7 @@ async def get_max_readiness(
         ready_to_launch=done == len(items),
         progress=round(done / len(items) * 100),
         items=items,
+        max_url_bot_id=bot_id if max_url_confirmed else None,
         publication_migration=migration,
     )
 

@@ -106,12 +106,27 @@ async def test_max_connection_activation_and_disconnect_never_expose_secrets(
     assert "token" not in body
     assert "secret" not in body
 
+    confirmed = await client.patch(
+        f"/api/projects/{project_id}/max/config/url-attached",
+        json={"attached": True, "expected_bot_id": body["bot_id"]},
+    )
+    assert confirmed.status_code == 200
+    confirmed_config = confirmed.json()
+    assert confirmed_config["config"]["max_url_attached"] is True
+    readiness = await client.get(f"/api/projects/{project_id}/max/readiness")
+    assert readiness.status_code == 200
+    assert readiness.json()["max_url_bot_id"] == body["bot_id"]
+
     rotated = await client.post(
         f"/api/projects/{project_id}/integrations/max/connect",
         json={"token": "rotated-max-bot-secret"},
     )
     assert rotated.status_code == 200
     assert verified_tokens == ["max-bot-secret-value", "rotated-max-bot-secret"]
+    after_rotation = await client.get(f"/api/projects/{project_id}/max/config")
+    assert after_rotation.status_code == 200
+    assert after_rotation.json()["config_version"] == confirmed_config["config_version"]
+    assert after_rotation.json()["config"]["max_url_attached"] is True
 
     activated = await client.post(f"/api/projects/{project_id}/integrations/max/activate")
     assert activated.status_code == 200
@@ -127,6 +142,10 @@ async def test_max_connection_activation_and_disconnect_never_expose_secrets(
     disconnected = await client.delete(f"/api/projects/{project_id}/integrations/max")
     assert disconnected.status_code == 204
     assert unsubscribed == ["https://max-project.example.com/api/max/webhook"]
+    readiness = await client.get(f"/api/projects/{project_id}/max/readiness")
+    assert readiness.status_code == 200
+    assert readiness.json()["max_url_bot_id"] is None
+    assert {item["id"]: item["done"] for item in readiness.json()["items"]}["max_url"] is False
 
 
 async def test_max_connection_rejects_non_max_project(

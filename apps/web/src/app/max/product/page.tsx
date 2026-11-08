@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 
-import { YleumLanding } from "@/components/marketing/YleumLanding";
-import { getPublicBillingPlans } from "@/lib/public-billing-plans";
+import { YleumLandingPage } from "@/components/marketing/YleumLandingPage";
 
 export const metadata: Metadata = {
   title: "Yleum — создайте приложение для бизнеса без кода",
@@ -9,6 +8,4 @@ export const metadata: Metadata = {
   alternates: { canonical: "/max/product" },
 };
 
-export default async function MaxProductPage() {
-  return <YleumLanding plans={await getPublicBillingPlans()} />;
-}
+export default YleumLandingPage;

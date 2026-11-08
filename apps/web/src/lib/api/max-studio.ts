@@ -61,10 +61,11 @@ export function syncMaxManagedKit(
 export function saveMaxUrlAttached(
   projectId: Uuid,
   attached: boolean,
+  expectedBotId?: string,
 ): Promise<MaxProjectConfig> {
   return apiFetch<MaxProjectConfig>(`${path(projectId)}/config/url-attached`, {
     method: "PATCH",
-    json: { attached },
+    json: { attached, expected_bot_id: expectedBotId },
   });
 }
 

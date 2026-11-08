@@ -1,8 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { act } from "react";
-import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -13,7 +11,6 @@ import {
   DashboardVisual,
   GuideScreenshot,
   GoldenPathVisual,
-  IntegrationVisual,
   LaunchVisual,
   PartnerVisual,
   ProjectCreationVisual,
@@ -23,7 +20,7 @@ import { guideScreenshots } from "@/components/max/guide/guide-screenshots";
 vi.mock("@/lib/auth-mock", () => ({ getSession: async () => null }));
 
 const chapterIds = [
-  "start", "account", "project", "builder", "settings", "integrations", "amocrm",
+  "start", "account", "project", "builder", "settings", "integrations",
   "max-bot", "publish", "partner", "acceptance", "operations", "staff", "billing", "errors", "checklists",
 ];
 
@@ -162,7 +159,6 @@ describe("MAX guide screenshots", () => {
     const visuals = [
       [ProjectCreationVisual, "create"],
       [BuilderVisual, "builder"],
-      [IntegrationVisual, "integrations"],
       [LaunchVisual, "publish"],
       [PartnerVisual, "max-settings"],
       [DashboardVisual, "management"],
@@ -176,54 +172,36 @@ describe("MAX guide screenshots", () => {
   });
 });
 
-describe("MAX guide video lessons", () => {
-  it("links every chapter to a compact video player with its dated media and Russian captions", async () => {
+describe("MAX guide navigation", () => {
+  it("offers every written chapter in both tables of contents with a keyboard-accessible desktop list", async () => {
     const page = new DOMParser().parseFromString(renderToStaticMarkup(await MaxGuidePage()), "text/html");
-    expect(page.querySelector('a[href="#video-lessons"]')?.textContent).toBe("Видеоуроки");
-    const lessonLinks = page.querySelectorAll("#video-lessons nav a");
-    expect(Array.from(lessonLinks, link => link.getAttribute("href"))).toEqual(chapterIds.map(id => `#video-${id}`));
-
-    for (const id of chapterIds) {
-      const player = page.querySelector(`#${id} details#video-${id}`);
-      expect(player?.querySelector("summary")?.textContent).toBe("Смотреть видео");
-      expect(player?.hasAttribute("open")).toBe(false);
-      const video = player?.querySelector("video");
-      const mediaPath = `/guide/lessons/2026-11-06/${id}`;
-      expect(video?.getAttribute("preload")).toBe("none");
-      expect(video?.getAttribute("poster")).toBe(`${mediaPath}.jpg`);
-      expect(video?.hasAttribute("controls")).toBe(true);
-      expect(video?.hasAttribute("playsinline")).toBe(true);
-      expect(video?.hasAttribute("autoplay")).toBe(false);
-      expect(video?.querySelector('source[type="video/mp4"]')?.getAttribute("src")).toBe(`${mediaPath}.mp4`);
-      expect(video?.querySelector('track[kind="captions"][srclang="ru"][default]')?.getAttribute("src")).toBe(`${mediaPath}.vtt`);
+    const desktop = page.querySelector('nav[aria-label="Оглавление"] [tabindex="0"]');
+    const mobile = page.querySelector('details nav[aria-label="Главы руководства"]');
+    for (const contents of [desktop, mobile]) {
+      const links = Array.from(contents?.querySelectorAll("a") ?? []);
+      expect(links.map(link => link.getAttribute("href"))).toEqual(chapterIds.map(id => `#${id}`));
+      expect(links.at(-1)?.textContent).toBe("13Списки для запуска");
     }
   });
 
-  it("opens a direct link to the requested lesson and pauses its video when closed", async () => {
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    const previousUrl = location.href;
-    history.replaceState(null, "", "/max/guide#video-builder");
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
-    try {
-      const page = await MaxGuidePage();
-      await act(async () => root.render(page));
-      const lesson = container.querySelector<HTMLDetailsElement>("#video-builder");
-      expect(lesson?.open).toBe(true);
-      expect(container.querySelector<HTMLDetailsElement>("#video-project")?.open).toBe(false);
+  it("directs old CRM chapter links to the current integration instructions", async () => {
+    const page = new DOMParser().parseFromString(renderToStaticMarkup(await MaxGuidePage()), "text/html");
+    expect(page.body.textContent).not.toMatch(/amoCRM|\bCRM\b/i);
+    expect(page.querySelector('[data-guide-screenshot="integrations"]')).toBeNull();
+    expect(page.querySelector('a[href="#amocrm"]')).toBeNull();
+    for (const anchor of ["amocrm", "video-amocrm"]) {
+      expect(page.getElementById(anchor)?.closest("section")?.id).toBe("integrations");
+    }
+  });
 
-      const pause = vi.spyOn(lesson!.querySelector("video")!, "pause").mockImplementation(() => {});
-      await act(async () => {
-        lesson!.open = false;
-        lesson!.dispatchEvent(new Event("toggle"));
-      });
-      expect(pause).toHaveBeenCalled();
-    } finally {
-      await act(async () => root.unmount());
-      container.remove();
-      history.replaceState(null, "", previousUrl);
-      vi.unstubAllGlobals();
+  it("keeps legacy chapter links usable after removing the video lessons", async () => {
+    const page = new DOMParser().parseFromString(renderToStaticMarkup(await MaxGuidePage()), "text/html");
+    expect(page.querySelector("video, a[href^='#video-']")).toBeNull();
+    expect(page.body.textContent).not.toMatch(/Видеоуроки|Смотреть видео/);
+    expect(page.getElementById("video-lessons")?.querySelector('nav[aria-label="Оглавление"]')).toBeTruthy();
+
+    for (const id of chapterIds) {
+      expect(page.getElementById(`video-${id}`)?.closest("section")?.id).toBe(id);
     }
   });
 });

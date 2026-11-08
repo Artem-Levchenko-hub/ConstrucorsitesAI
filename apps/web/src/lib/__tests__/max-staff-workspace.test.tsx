@@ -69,10 +69,10 @@ function error(code: string, status: number) {
   return Response.json({ error: { code, message: "Fixture" } }, { status });
 }
 
-it("links staff to their video lesson in a new tab", async () => {
+it("links staff to their guide chapter in a new tab", async () => {
   await render(<MaxStaffShell project><p>Рабочая очередь</p></MaxStaffShell>);
-  const link = container.querySelector<HTMLAnchorElement>('header a[href="/max/guide#video-staff"]');
-  expect(link?.textContent?.trim()).toMatch(/^Обучение/);
+  const link = container.querySelector<HTMLAnchorElement>('header a[href="/max/guide#staff"]');
+  expect(link?.textContent?.trim()).toBe("Руководство в новой вкладке");
   expect(link?.target).toBe("_blank");
   expect(link?.relList.contains("noopener")).toBe(true);
 });

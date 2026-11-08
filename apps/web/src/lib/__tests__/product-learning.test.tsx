@@ -63,9 +63,10 @@ async function mount(userKey = "test-account-a", { hiddenSearch = false, onCreat
   if (startWelcome && document.querySelector('[data-learning-welcome]')) await click("Начать обучение");
 }
 
-function expectVideoLink(href: string) {
-  const link = document.querySelector<HTMLAnchorElement>('.learning-card a[href^="/max/guide#video-"]');
+function expectGuideLink(href: string) {
+  const link = document.querySelector<HTMLAnchorElement>('.learning-card a[href^="/max/guide#"]');
   expect(link?.getAttribute("href")).toBe(href);
+  expect(link?.textContent).toBe("Читать руководство в новой вкладке");
   expect(link?.target).toBe("_blank");
   expect(link?.relList.contains("noopener")).toBe(true);
 }
@@ -88,7 +89,7 @@ describe("product learning", () => {
     launch.focus(); await click("Обучение");
     await click("Далее");
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Найдите своё приложение");
-    expectVideoLink("/max/guide#video-project");
+    expectGuideLink("/max/guide#project");
     expect(document.querySelector(".learning-card select")).toBeNull();
     expect(document.querySelector(".learning-counter")?.textContent).toBe("Шаг 2 из 3");
     await click("Назад");
@@ -187,7 +188,7 @@ describe("product learning", () => {
     launch.focus(); await click("Обучение");
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(2);
     expect(document.querySelector(".learning-card")?.textContent).toContain("Проверьте готовность к публикации");
-    expectVideoLink("/max/guide#video-publish");
+    expectGuideLink("/max/guide#publish");
     await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
     await settle();
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
@@ -225,7 +226,7 @@ describe("product learning", () => {
     await settle(); await click("Перейти в режим обучения");
     await click("Далее");
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Редактор и проверка");
-    expectVideoLink("/max/guide#video-builder");
+    expectGuideLink("/max/guide#builder");
     expect(vi.mocked(HTMLElement.prototype.scrollIntoView).mock.contexts.at(-1)).toBe(document.querySelector("#builder"));
     expect(HTMLElement.prototype.scrollIntoView).toHaveBeenLastCalledWith({ behavior: "auto", block: "start", inline: "nearest" });
   });
@@ -235,7 +236,7 @@ describe("product learning", () => {
     await mount("welcome-owner", { onCreate: create, startWelcome: false });
     expect(document.querySelector(".learning-card")?.textContent).toContain("Для начала пройдём короткое обучение");
     expect(document.querySelector(".learning-card")?.textContent).toContain("Создание проекта начнётся только после прохождения обучения. Во время обучения кнопки приложения неактивны");
-    expectVideoLink("/max/guide#video-start");
+    expectGuideLink("/max/guide#start");
     expect(document.querySelector(".learning-spotlight")).toBeNull();
     const createButton = host.querySelector<HTMLButtonElement>('[data-learning="create-project"]')!;
     expect(createButton.closest("[inert]")).not.toBeNull();
@@ -326,10 +327,10 @@ describe("product learning", () => {
   });
 
   it.each([
-    ["/billing/plan", "", "/max/guide#video-billing"],
-    ["/max/project/catalog", "", "/max/guide#video-settings"],
-    ["/max/project/integrations", "", "/max/guide#video-max-bot"],
-    ["/max/project/integrations", "tab=services", "/max/guide#video-integrations"],
+    ["/billing/plan", "", "/max/guide#billing"],
+    ["/max/project/catalog", "", "/max/guide#settings"],
+    ["/max/project/integrations", "", "/max/guide#max-bot"],
+    ["/max/project/integrations", "tab=services", "/max/guide#integrations"],
   ])("links the tour at %s with query %j to its lesson", async (path, query, href) => {
     route.path = path; route.query = query;
     await act(async () => root.render(<>
@@ -338,7 +339,7 @@ describe("product learning", () => {
       <ProductLearning userKey="lesson-owner" />
     </>));
     await click("Обучение");
-    expectVideoLink(href);
+    expectGuideLink(href);
   });
 
   it("links to the staff lesson when learning is opened from Team in management", async () => {
@@ -349,7 +350,7 @@ describe("product learning", () => {
       <ProductLearning userKey="lesson-owner" />
     </>));
     await click("Обучение");
-    expectVideoLink("/max/guide#video-staff");
+    expectGuideLink("/max/guide#staff");
   });
 
   it.each(["constructor", "toString", "__proto__"])("ignores unsupported prototype panel %s", value => {

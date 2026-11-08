@@ -15,6 +15,7 @@ from yleum_api.core.crypto import decrypt_strong, encrypt_strong
 from yleum_api.core.deps import CurrentUserDep, SessionDep
 from yleum_api.core.errors import ApiError
 from yleum_api.models.max_integration import MaxIntegration
+from yleum_api.models.max_project_config import MaxProjectConfig
 from yleum_api.models.project import Project
 from yleum_api.schemas.max_integration import MaxConnectRequest, MaxIntegrationPublic
 from yleum_api.services import max_client, orchestrator_client, project_cell_runtime
@@ -46,6 +47,16 @@ async def _integration(session: SessionDep, project_id: UUID) -> MaxIntegration 
     return (
         await session.execute(select(MaxIntegration).where(MaxIntegration.project_id == project_id))
     ).scalar_one_or_none()
+
+
+async def _clear_max_url_confirmation(session: SessionDep, project_id: UUID) -> bool:
+    """Clear only the confirmation under the caller's project row lock."""
+    record = await session.get(MaxProjectConfig, project_id)
+    if record is None or record.config.get("max_url_attached") is not True:
+        return False
+    record.config = {**record.config, "max_url_attached": False}
+    record.config_version += 1
+    return True
 
 
 def _bot_binding_busy() -> ApiError:
@@ -164,7 +175,7 @@ async def connect_max(
     # Preserve the existing public lifecycle's advisory-before-row lock order.
     project = await _owned_project(session, project_id, current_user.id, lock=True)
     integration = await _integration(session, project_id)
-    existing = integration is not None
+    previous_bot_id = integration.bot_id if integration is not None else None
     now = datetime.now(UTC)
     if integration is None:
         integration = MaxIntegration(
@@ -173,7 +184,7 @@ async def connect_max(
             bot_token_enc=encrypt_strong(token),
             webhook_secret_enc=encrypt_strong(secrets.token_urlsafe(32)),
         )
-    if existing:
+    else:
         old_token = decrypt_strong(integration.bot_token_enc)
         token_changed = not secrets.compare_digest(old_token, token)
         if token_changed:
@@ -200,6 +211,8 @@ async def connect_max(
             integration.webhook_url = None
             integration.published_at = None
 
+    if previous_bot_id != bot_id:
+        await _clear_max_url_confirmation(session, project.id)
     integration.bot_id = bot_id
     integration.bot_name = bot.name
     integration.bot_username = bot.username
@@ -237,7 +250,10 @@ async def verify_max(
         integration.last_error = str(exc)[:500]
         await session.commit()
         raise _map_client_error(exc) from exc
-    integration.bot_id = _validated_bot_id(bot)
+    bot_id = _validated_bot_id(bot)
+    if integration.bot_id != bot_id:
+        await _clear_max_url_confirmation(session, project.id)
+    integration.bot_id = bot_id
     integration.bot_name = bot.name
     integration.bot_username = bot.username
     integration.status = "active" if integration.webhook_url else "verified"
@@ -311,13 +327,10 @@ async def disconnect_max(
     await _lock_public_cell_auth(session, project)
     project = await _owned_project(session, project_id, current_user.id, lock=True)
     integration = await _integration(session, project_id)
-    if integration is None:
-        await _sync_public_cell_auth(session, project, None)
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
     # Fail closed if public session invalidation cannot be confirmed. The
     # integration remains persisted so the same disconnect can be retried.
     await _sync_public_cell_auth(session, project, None)
-    if integration.webhook_url:
+    if integration is not None and integration.webhook_url:
         try:
             await max_client.unsubscribe(
                 decrypt_strong(integration.bot_token_enc),
@@ -325,6 +338,9 @@ async def disconnect_max(
             )
         except max_client.MaxClientError as exc:
             raise _map_client_error(exc) from exc
-    await session.delete(integration)
-    await session.commit()
+    if integration is not None:
+        await session.delete(integration)
+    confirmation_cleared = await _clear_max_url_confirmation(session, project.id)
+    if integration is not None or confirmation_cleared:
+        await session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

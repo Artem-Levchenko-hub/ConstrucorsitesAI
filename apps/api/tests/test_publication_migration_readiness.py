@@ -31,6 +31,8 @@ async def readiness(monkeypatch, deployment, operation=None):
             return None
 
         async def execute(self, statement):
+            if statement.column_descriptions[0].get("entity") is MaxProjectConfig:
+                return SimpleNamespace(one_or_none=lambda: (None, None, None))
             if statement.column_descriptions[0].get("entity") is Project:
                 params = statement.compile().params
                 assert params["id_1"] == project.id and params["owner_id_1"] == owner.id

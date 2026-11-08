@@ -5,6 +5,7 @@ import HomePage from "@/app/page";
 import MaxProductPage from "@/app/max/product/page";
 
 vi.mock("@/lib/public-billing-plans", () => ({ getPublicBillingPlans: vi.fn(async () => null) }));
+vi.mock("@/lib/auth-mock", () => ({ getSession: vi.fn(async () => null) }));
 
 function render(page: Awaited<ReturnType<typeof HomePage>>) {
   return renderToStaticMarkup(page);

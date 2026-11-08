@@ -5,7 +5,6 @@ import type { BillingPlan } from "@/lib/api/account";
 import { planAllowanceRows, planPeriodDescription } from "@/lib/billing-allowances";
 
 const PLAN_CODES = ["free", "pro", "business"] as const;
-const ACCOUNT_HREF = "/login?next=/billing/plan";
 const money = new Intl.NumberFormat("ru-RU", {
   style: "currency", currency: "RUB", maximumFractionDigits: 2,
 });
@@ -56,8 +55,9 @@ function orderedCatalog(plans: BillingPlan[] | null): BillingPlan[] | null {
   return catalog.sort((left, right) => PLAN_CODES.indexOf(left.code) - PLAN_CODES.indexOf(right.code));
 }
 
-export function LandingPricing({ plans }: { plans: BillingPlan[] | null }) {
+export function LandingPricing({ plans, signedIn = false }: { plans: BillingPlan[] | null; signedIn?: boolean }) {
   const catalog = orderedCatalog(plans);
+  const accountHref = signedIn ? "/billing/plan" : "/login?next=/billing/plan";
   return (
     <section id="pricing" className="yl-section yl-section--tint" data-marketing-section="pricing" aria-labelledby="landing-pricing-heading">
       <div className="yl-wrap yl-head yl-head--center">
@@ -93,7 +93,7 @@ export function LandingPricing({ plans }: { plans: BillingPlan[] | null }) {
         </div>}
       </div>
       <div className="yl-wrap yl-plan-actions">
-        <Link href={ACCOUNT_HREF} className="yl-cta yl-cta--lg yl-cta--outline">Открыть тарифы в аккаунте<ArrowRight size={18} aria-hidden="true" /></Link>
+        <Link href={accountHref} className="yl-cta yl-cta--lg yl-cta--outline">Открыть тарифы в аккаунте<ArrowRight size={18} aria-hidden="true" /></Link>
       </div>
     </section>
   );

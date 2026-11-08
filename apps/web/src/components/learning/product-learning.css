@@ -25,8 +25,8 @@
 .learning-welcome-close { position: absolute; top: 4px; right: 4px; }
 .learning-welcome-actions { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .learning-welcome-start { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 8px; padding: 11px 18px; border: 0; border-radius: 8px; background: #0062dc; color: #fff; font: inherit; font-size: 14px; font-weight: 550; cursor: pointer; }
-.learning-video-link { display: inline-flex; min-height: 44px; align-items: center; gap: 7px; padding: 8px 10px; border-radius: 8px; background: #eff6ff; color: #0958ba; font-size: 13px; font-weight: 600; }
-.learning-video-link:hover { background: #e0eeff; }
+.learning-guide-link { display: inline-flex; min-height: 44px; align-items: center; gap: 7px; padding: 8px 10px; border-radius: 8px; background: #eff6ff; color: #0958ba; font-size: 13px; font-weight: 600; }
+.learning-guide-link:hover { background: #e0eeff; }
 .learning-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 20px; }
 .learning-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 10px 13px; border: 1px solid #d6dfeb; border-radius: 8px; background: #fff; color: #31435b; font-size: 12px; font-weight: 550; cursor: pointer; }
 .learning-actions button:disabled { opacity: .4; cursor: default; }

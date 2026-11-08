@@ -21,7 +21,7 @@ const disconnected: MaxIntegration = {
   eligible: true, connected: false, status: "disconnected", bot_id: null, bot_name: null, bot_username: null,
   app_url: null, webhook_url: null, deep_link: null, last_error: null, verified_at: null, published_at: null,
 };
-const connected: MaxIntegration = { ...disconnected, connected: true, status: "verified", bot_name: "Мой бот" };
+const connected: MaxIntegration = { ...disconnected, connected: true, status: "verified", bot_id: "current-bot", bot_name: "Мой бот" };
 const config: MaxProjectConfig = {
   project_id: "project-1", config_version: 1, synced_snapshot_id: null, updated_at: null,
   config: {
@@ -195,7 +195,7 @@ describe("MAX connection wizard", () => {
     expect(api.saveAttached).not.toHaveBeenCalled();
     await click("Сохранить подтверждение");
     expect(api.fetch).toHaveBeenLastCalledWith("https://app.example.com", { method: "GET", mode: "no-cors", cache: "no-store" });
-    expect(api.saveAttached).toHaveBeenCalledWith("project-1", true);
+    expect(api.saveAttached).toHaveBeenCalledWith("project-1", true, "current-bot");
     expect(container.textContent).toContain("Подтверждение сохранено");
     expect(container.textContent).not.toContain("Приложение работает");
     expect(container.textContent).not.toContain("MAX проверен");
@@ -224,7 +224,7 @@ describe("MAX connection wizard", () => {
     expectNoWrites();
   });
 
-  it("does not save an old address acknowledgement when publication changes during the network request", async () => {
+  it.each(["publication", "bot"])("discards an old acknowledgement if the %s changes during the network request", async changed => {
     api.integration.mockResolvedValue(connected);
     api.deploy.mockResolvedValue(published);
     let finish!: (response: Response) => void;
@@ -232,7 +232,10 @@ describe("MAX connection wizard", () => {
     await render();
     await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
     await click("Сохранить подтверждение");
-    await act(async () => client.setQueryData(["deploy", "project-1"], { ...published, prod_url: "https://replacement.example.com" }));
+    await act(async () => {
+      if (changed === "publication") client.setQueryData(["deploy", "project-1"], { ...published, prod_url: "https://replacement.example.com" });
+      else client.setQueryData(["max-integration", "project-1"], { ...connected, bot_id: "replacement-bot" });
+    });
     await act(async () => finish(new Response(null, { status: 200 })));
     await settle();
     expect(api.saveAttached).not.toHaveBeenCalled();
@@ -308,6 +311,33 @@ describe("MAX connection wizard", () => {
     expect(button("Перейти к публикации")).toBeUndefined();
     expect(container.querySelector('input[type="password"]')).not.toBeNull();
     expectNoWrites();
+  });
+
+  it("refreshes the persisted connection error after a failed bot check", async () => {
+    api.integration.mockResolvedValue(connected);
+    api.deploy.mockResolvedValue(published);
+    await render();
+    expect(button("Сохранить подтверждение")).toBeDefined();
+    api.verify.mockRejectedValueOnce(new Error("Токен больше не действует"));
+    api.integration.mockResolvedValue({ ...connected, status: "error", last_error: "Токен больше не действует" });
+    await click("Проверить подключение");
+    expect(button("Сохранить подтверждение")).toBeUndefined();
+    expect(container.querySelector('input[type="password"]')).not.toBeNull();
+  });
+
+  it("refreshes the bot and confirmation after a replacement persists but its response fails", async () => {
+    api.integration.mockResolvedValue(connected);
+    api.config.mockResolvedValue({ ...config, config: { ...config.config, max_url_attached: true } });
+    api.deploy.mockResolvedValue(published);
+    await render();
+    expect(container.textContent).toContain("Ранее вы уже подтверждали");
+    await fillToken("replacement-token-12345");
+    api.connect.mockRejectedValueOnce(new Error("Связь с сервером потеряна"));
+    api.integration.mockResolvedValue({ ...connected, bot_id: "replacement-bot", bot_name: "Новый бот" });
+    api.config.mockResolvedValue({ ...config, config_version: 2 });
+    await click("Заменить токен");
+    expect(container.textContent).toContain("Новый бот");
+    expect(container.textContent).not.toContain("Ранее вы уже подтверждали");
   });
 
   it("keeps token submission busy and immutable until its request finishes", async () => {

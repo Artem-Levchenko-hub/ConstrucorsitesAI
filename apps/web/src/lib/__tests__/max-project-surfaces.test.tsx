@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MaxLaunchPanel } from "@/components/max/MaxLaunchPanel";
 import { MaxPostLaunchDashboard } from "@/components/max/MaxPostLaunchDashboard";
-import type { DeployStatus, MaxReadiness, Project } from "@/lib/api/types";
+import type { DeployStatus, MaxIntegration, MaxReadiness, Project } from "@/lib/api/types";
 
 const api = vi.hoisted(() => ({ readiness: vi.fn(), deploy: vi.fn(), history: vi.fn(), runtime: vi.fn(), integration: vi.fn() }));
 vi.mock("@/components/max/MaxOwnerAnalytics", () => ({ MaxOwnerAnalytics: () => <section data-testid="owner-analytics" /> }));
@@ -13,8 +13,9 @@ vi.mock("@/lib/api/runtime", async (original) => ({ ...await original<object>(),
 vi.mock("@/lib/api/max-integration", async (original) => ({ ...await original<object>(), getMaxIntegration: api.integration }));
 const project = { id: "project-surfaces", name: "Проверка", template: "max_miniapp" } as Project;
 const release: DeployStatus = { phase: "done", run_id: "old-release", started_at: null, finished_at: "2026-09-01T10:00:00Z", prod_url: "https://app.example.com", image_tag: "app:v1", error: null, detail: null, target_label: "Yleum", target_id: null, can_cancel: false, logs: [] };
+const connectedBot: MaxIntegration = { eligible: true, connected: true, status: "active", bot_id: "1", bot_name: "Example", bot_username: "Example_bot", app_url: "https://app.example.com", webhook_url: "https://app.example.com/api/max/webhook", deep_link: "https://max.ru/Example_bot", last_error: null, verified_at: "2026-09-01T09:00:00Z", published_at: "2026-09-01T10:00:00Z" };
 function readiness(published = false): MaxReadiness {
-  return { ready_to_launch: published, progress: published ? 100 : 67, items: ["build", "legal", "bot", "publish", "max_url"].map(id => ({ id, label: id, done: published || !["publish", "max_url"].includes(id), blocking: true, action: null })) };
+  return { ready_to_launch: published, progress: published ? 100 : 67, max_url_bot_id: published ? connectedBot.bot_id : null, items: ["build", "legal", "bot", "publish", "max_url"].map(id => ({ id, label: id, done: published || !["publish", "max_url"].includes(id), blocking: true, action: null })) };
 }
 let root: Root;
 let container: HTMLDivElement;
@@ -119,6 +120,7 @@ it("stops showing an in-progress readiness check after the request fails", async
 it("waits for deployment details before announcing the already-ready version as published", async () => {
   let resolve!: (status: DeployStatus) => void;
   client.setQueryData(["max-readiness", project.id], readiness(true));
+  api.readiness.mockResolvedValue(readiness(true));
   api.deploy.mockImplementation(() => new Promise<DeployStatus>(done => { resolve = done; }));
   await mount(<MaxLaunchPanel project={project} />);
   await settle(() => expect(container.textContent).toContain("Проверяем публикацию"));
@@ -128,5 +130,47 @@ it("waits for deployment details before announcing the already-ready version as 
   await act(async () => resolve(release));
   await settle(() => expect(container.textContent).toContain("Приложение опубликовано"));
   expect(container.querySelector('[data-testid="max-launch-app-url"]')?.textContent).toBe("https://app.example.com");
-  expect(container.querySelectorAll('a[href="https://app.example.com"]')).toHaveLength(1);
+  expect(container.querySelector('a[href="https://app.example.com"]')?.textContent).toContain("Открыть сайт");
+});
+
+it.each([
+  ["a confirmed release with a verified bot and no webhook", release, { ...connectedBot, status: "verified", app_url: null, webhook_url: null, published_at: null }],
+  ["a confirmed release with an older webhook address", release, { ...connectedBot, app_url: "https://old.example.com" }],
+  ["a legacy release without a deploy URL", { ...release, prod_url: null }, { ...connectedBot, deep_link: null }],
+] as const)("opens the mini app in MAX for %s and keeps its HTTPS address", async (_name, deploy, integration) => {
+  api.readiness.mockResolvedValue(readiness(true));
+  api.deploy.mockResolvedValue(deploy);
+  api.integration.mockResolvedValue(integration);
+  await mount(<MaxLaunchPanel project={project} standalone />);
+  await settle(() => expect(container.querySelector('a[href="https://max.ru/Example_bot?startapp"]')?.textContent?.trim()).toBe("Открыть в MAX"));
+  expect(container.querySelector('[data-testid="max-launch-app-url"]')?.textContent).toBe("https://app.example.com");
+  expect(container.querySelector('button[aria-label="Скопировать адрес приложения"]')).not.toBeNull();
+});
+
+it("waits for fresh integration and address confirmation before using a cached MAX link", async () => {
+  client.setQueryData(["max-integration", project.id], connectedBot);
+  client.setQueryData(["max-readiness", project.id], readiness(true));
+  api.integration.mockResolvedValue({ ...connectedBot, status: "error" });
+  api.readiness.mockResolvedValue(readiness(true));
+  await mount(<MaxLaunchPanel project={project} standalone />);
+  await settle(() => expect(container.textContent).toContain("Открыть сайт"));
+  expect(container.querySelector('a[href="https://max.ru/Example_bot?startapp"]')).toBeNull();
+  expect(api.integration).toHaveBeenCalledWith(project.id);
+});
+
+it.each([
+  ["the MAX address has not been confirmed", false, connectedBot],
+  ["the confirmed address belongs to the previous bot", true, { ...connectedBot, bot_id: "2", deep_link: "https://max.ru/New_bot" }],
+  ["the bot connection is invalid", true, { ...connectedBot, status: "error" }],
+  ["the bot link points outside MAX", true, { ...connectedBot, deep_link: "https://max.ru@other.example/Example_bot" }],
+  ["the legacy bot name is invalid", true, { ...connectedBot, deep_link: null, bot_username: "Example_bot?redirect=elsewhere" }],
+] as const)("opens the public website if %s", async (_name, addressConfirmed, integration) => {
+  const state = readiness(true);
+  api.readiness.mockResolvedValue({ ...state, items: state.items.map(item => item.id === "max_url" ? { ...item, done: addressConfirmed } : item) });
+  api.integration.mockResolvedValue(integration);
+  await mount(<MaxLaunchPanel project={project} standalone />);
+  await settle(() => expect(client.getQueryData(["max-integration", project.id])).toEqual(integration));
+  await settle(() => expect(container.querySelector('a[href="https://app.example.com"]')?.textContent).toContain("Открыть сайт"));
+  expect(container.textContent).not.toContain("Открыть в MAX");
+  if (!addressConfirmed) expect(container.querySelector('[data-testid="max-open-business-cabinet"]')).not.toBeNull();
 });

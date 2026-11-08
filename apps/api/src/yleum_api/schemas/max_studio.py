@@ -221,6 +221,7 @@ class MaxContentImagePublic(BaseModel):
 
 class MaxUrlAttachedPayload(BaseModel):
     attached: bool
+    expected_bot_id: str | None = Field(default=None, min_length=1)
 
 
 class MaxReadinessItem(BaseModel):
@@ -248,6 +249,7 @@ class MaxReadinessPublic(BaseModel):
     ready_to_launch: bool
     progress: int
     items: list[MaxReadinessItem]
+    max_url_bot_id: str | None = None
     publication_migration: MaxPublicationMigration | None = None
 
 

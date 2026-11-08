@@ -157,10 +157,6 @@ export function BuilderVisual() {
   return <GuideScreenshot id="builder" />;
 }
 
-export function IntegrationVisual() {
-  return <GuideScreenshot id="integrations" />;
-}
-
 export function LaunchVisual() {
   return <GuideScreenshot id="publish" />;
 }

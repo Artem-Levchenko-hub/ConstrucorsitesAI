@@ -2,6 +2,8 @@ import { Children, isValidElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import HomePage from "@/app/page";
+import MaxProductPage from "@/app/max/product/page";
 import PricingPage from "@/app/pricing/page";
 import RegisterPage from "@/app/(auth)/register/page";
 import { OAuthButtons } from "@/components/auth/OAuthButtons";
@@ -12,6 +14,7 @@ const { getSessionMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/auth-mock", () => ({ getSession: getSessionMock }));
+vi.mock("@/lib/public-billing-plans", () => ({ getPublicBillingPlans: async () => null }));
 vi.mock("@/lib/oauth-login-server", () => ({
   listOAuthProviders: async () => [{ provider: "vk", label: "VK ID" }],
 }));
@@ -22,6 +25,27 @@ vi.mock("next-intl/server", () => ({
 
 describe("public MAX routing", () => {
   beforeEach(() => getSessionMock.mockReset());
+
+  const landingPages = [["home", HomePage], ["product", MaxProductPage]] as const;
+
+  it.each(landingPages)("offers a direct return to the studio on the signed-in %s page", async (_, page) => {
+    getSessionMock.mockResolvedValue({ id: "owner", isAnon: false });
+    const html = renderToStaticMarkup(await page());
+
+    expect(html).toMatch(/<a\b[^>]*href="\/max"[^>]*>Мои приложения<\/a>/);
+    expect(html).toContain('href="/billing/plan"');
+    expect(html).not.toContain('href="/login?next=/max"');
+    expect(html).not.toContain('href="/max/register"');
+  });
+
+  it.each(landingPages)("keeps sign-in and registration on the guest %s page", async (_, page) => {
+    getSessionMock.mockResolvedValue(null);
+    const html = renderToStaticMarkup(await page());
+
+    expect(html).toContain('href="/login?next=/max"');
+    expect(html).toContain('href="/max/register"');
+    expect(html).toContain('href="/login?next=/billing/plan"');
+  });
 
   it("sends guest pricing through login with an explicit safe return", async () => {
     getSessionMock.mockResolvedValue(null);

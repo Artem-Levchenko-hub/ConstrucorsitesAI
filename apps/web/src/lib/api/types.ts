@@ -766,6 +766,7 @@ export type MaxProjectConfig = {
 export type MaxReadiness = {
   ready_to_launch: boolean;
   progress: number;
+  max_url_bot_id?: string | null;
   publication_migration?: {
     status: "verification_required" | "identity_unconfirmed";
     snapshot_id: string | null;

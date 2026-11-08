@@ -47,7 +47,7 @@ function Brand() {
   );
 }
 
-export function YleumLanding({ plans = null }: { plans?: BillingPlan[] | null } = {}) {
+export function YleumLanding({ plans = null, signedIn = false }: { plans?: BillingPlan[] | null; signedIn?: boolean } = {}) {
   return (
     <main data-max-studio className="yl">
       <MarketingEvents page="landing" />
@@ -64,7 +64,8 @@ export function YleumLanding({ plans = null }: { plans?: BillingPlan[] | null } 
             <a href="#faq">Вопросы</a>
           </nav>
           <div className="yl-header__actions">
-            <Link className="yl-login" href="/login?next=/max" data-marketing="login_click" data-placement="header">Войти</Link>
+            {signedIn ? <Link className="yl-login" href="/max">Мои приложения</Link>
+              : <Link className="yl-login" href="/login?next=/max" data-marketing="login_click" data-placement="header">Войти</Link>}
           </div>
         </div>
       </header>
@@ -79,12 +80,12 @@ export function YleumLanding({ plans = null }: { plans?: BillingPlan[] | null } 
               <li className="yl-niche" key={niche}>{niche}</li>
             ))}
           </ul>
-          <div className="yl-actions">
+          {!signedIn && <div className="yl-actions">
             <Link href="/max/register" className="yl-cta yl-cta--lg" data-marketing="signup_click" data-placement="hero">
               Начать бесплатно <ArrowRight size={18} aria-hidden="true" />
             </Link>
             <span className="yl-note">Бесплатный тариф</span>
-          </div>
+          </div>}
         </div>
         <div className="yl-wrap"><HeroStage /></div>
       </section>
@@ -189,7 +190,7 @@ export function YleumLanding({ plans = null }: { plans?: BillingPlan[] | null } 
       </section>
 
       {/* 7 — тарифы */}
-      <LandingPricing plans={plans} />
+      <LandingPricing plans={plans} signedIn={signedIn} />
 
       {/* 8 — вопросы */}
       <section id="faq" className="yl-section yl-section--white" data-marketing-section="faq">

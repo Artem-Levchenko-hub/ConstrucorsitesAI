@@ -4,8 +4,7 @@ export const guideChapters = [
   { id: "project", number: "02", title: "Создание приложения", description: "Пройдите от описания идеи до подтверждения данных проекта." },
   { id: "builder", number: "03", title: "Редактор и проверка", description: "Узнайте, как описывать изменения и проверять результат." },
   { id: "settings", number: "04", title: "Документы и каталог", description: "Разберитесь, где сохраняются данные приложения и позиции каталога." },
-  { id: "integrations", number: "05", title: "Подключение сервисов", description: "Изучите подключение оплаты, CRM и аналитики." },
-  { id: "amocrm", number: "05.1", title: "Заявки в amoCRM", description: "Этот пример пригодится, если вашему приложению нужна CRM." },
+  { id: "integrations", number: "05", title: "Подключение сервисов", description: "Узнайте, как подключить сервис и проверить его в приложении." },
   { id: "max-bot", number: "06", title: "Бот и подключение MAX", description: "Подготовьте бота и изучите этапы его подключения." },
   { id: "publish", number: "07", title: "Публикация приложения", description: "Проверьте условия получения постоянного адреса приложения." },
   { id: "partner", number: "08", title: "Адрес приложения в MAX", description: "Узнайте, где указать опубликованный адрес в настройках бота." },
@@ -19,10 +18,6 @@ export const guideChapters = [
 
 export type GuideLessonId = (typeof guideChapters)[number]["id"];
 
-export function guideVideoId(lesson: GuideLessonId) {
-  return `video-${lesson}`;
-}
-
-export function guideVideoHref(lesson: GuideLessonId) {
-  return `/max/guide#${guideVideoId(lesson)}`;
+export function guideChapterHref(id: GuideLessonId) {
+  return `/max/guide#${id}`;
 }

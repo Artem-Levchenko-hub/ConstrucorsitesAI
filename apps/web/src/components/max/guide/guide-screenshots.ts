@@ -344,39 +344,6 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
       }
     ]
   },
-  "integrations": {
-    "src": "/guide/2026-10-30-redacted/integrations.png",
-    "width": 870,
-    "height": 668,
-    "alt": "Текущий список ЮKassa, МойСклад, Яндекс Метрика и amoCRM в Yleum",
-    "title": "Сервисы · Выбор подключения",
-    "sourceLabel": "Yleum",
-    "sourceUrl": "https://yleum.ru/max",
-    "capturedAt": "2026-10-30T11:40:52.866Z",
-    "callouts": [
-      {
-        "x": 61,
-        "y": 43,
-        "targetX": 84,
-        "targetY": 50,
-        "text": "«Подключить» открывает настройки сервиса. Проверяйте, что именно разрешаете при авторизации."
-      },
-      {
-        "x": 57,
-        "y": 66,
-        "targetX": 84,
-        "targetY": 62,
-        "text": "«Использовать» означает, что доступ уже есть у бизнеса. Это отдельное действие для текущего проекта."
-      },
-      {
-        "x": 61,
-        "y": 90,
-        "targetX": 84,
-        "targetY": 87,
-        "text": "В строке amoCRM можно подключить приём заявок. Добавление интеграции в экраны приложения выполняется отдельно."
-      }
-    ]
-  },
   "max-bots": {
     "src": "/guide/2026-10-30-redacted/max-bots.png",
     "width": 1028,
@@ -444,7 +411,7 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
         "y": 31,
         "targetX": 22,
         "targetY": 43,
-        "text": "После успешной публикации нажмите «Открыть приложение», чтобы проверить доступность."
+        "text": "После публикации откройте сайт приложения и проверьте, что страница доступна."
       },
       {
         "x": 72,

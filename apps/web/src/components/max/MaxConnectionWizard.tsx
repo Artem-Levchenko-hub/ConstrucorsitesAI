@@ -18,6 +18,12 @@ import { ApiError } from "@/lib/api/client";
 
 const steps = ["Бот", "Подключение", "Публикация", "Адрес в MAX"];
 
+type AddressBinding = { url: string; botId: string };
+
+function matchesBinding(saved: AddressBinding | null, current: AddressBinding | null) {
+  return Boolean(saved && current && saved.url === current.url && saved.botId === current.botId);
+}
+
 function httpsAddress(value: string | null | undefined) {
   if (!value) return null;
   try {
@@ -36,36 +42,50 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
   const qc = useQueryClient();
   const [botPrepared, setBotPrepared] = useState(false);
   const [token, setToken] = useState("");
-  const [acknowledgedUrl, setAcknowledgedUrl] = useState<string | null>(null);
-  const [confirmedUrl, setConfirmedUrl] = useState<string | null>(null);
+  const [acknowledgedBinding, setAcknowledgedBinding] = useState<AddressBinding | null>(null);
+  const [confirmedBinding, setConfirmedBinding] = useState<AddressBinding | null>(null);
   const [copyNotice, setCopyNotice] = useState("");
   const [disconnectRequested, setDisconnectRequested] = useState(false);
   const [maintenanceNotice, setMaintenanceNotice] = useState("");
   const integrationKey = ["max-integration", projectId];
-  const integration = useQuery({ queryKey: integrationKey, queryFn: () => getMaxIntegration(projectId), retry: false });
-  const config = useQuery({ queryKey: ["max-config", projectId], queryFn: () => getMaxProjectConfig(projectId), retry: false });
+  const configKey = ["max-config", projectId];
+  const integration = useQuery({ queryKey: integrationKey, queryFn: () => getMaxIntegration(projectId), retry: false, refetchOnMount: "always" });
+  const config = useQuery({ queryKey: configKey, queryFn: () => getMaxProjectConfig(projectId), retry: false, refetchOnMount: "always" });
   const deploy = useQuery({
     queryKey: ["deploy", projectId], queryFn: () => getLastDeploy(projectId), retry: false,
     refetchInterval: query => ["queued", "building", "pushing", "swapping", "cancelling"].includes(query.state.data?.phase ?? "") && query.state.data?.run_id ? 1_500 : false,
   });
-  const dataReady = integration.isSuccess && config.isSuccess && deploy.isSuccess;
+  const dataReady = integration.isSuccess && integration.isFetchedAfterMount && config.isSuccess && config.isFetchedAfterMount && deploy.isSuccess;
   const data = integration.data;
   const connected = dataReady && data?.eligible && data.connected && data.status !== "error";
   const productionUrl = dataReady ? httpsAddress(deploy.data.prod_url ?? data?.app_url) : null;
   const step = connected ? productionUrl ? 4 : 3 : botPrepared || data?.connected ? 2 : 1;
-  const acknowledged = Boolean(productionUrl && acknowledgedUrl === productionUrl);
+  const binding = productionUrl && data?.bot_id ? { url: productionUrl, botId: data.bot_id } : null;
+  const acknowledged = matchesBinding(acknowledgedBinding, binding);
+  const confirmed = matchesBinding(confirmedBinding, binding) && config.data?.config.max_url_attached;
 
+  function refreshIntegration() {
+    void qc.invalidateQueries({ queryKey: integrationKey });
+  }
+  function refreshBinding() {
+    refreshIntegration();
+    void qc.invalidateQueries({ queryKey: configKey });
+    void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
+  }
   function saveIntegration(result: MaxIntegration) {
+    if (data?.bot_id !== result.bot_id) void qc.invalidateQueries({ queryKey: configKey });
     qc.setQueryData(integrationKey, result);
     void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
   }
   const connect = useMutation({
     mutationFn: () => connectMaxIntegration(projectId, token.trim()),
     onSuccess: result => { saveIntegration(result); setToken(""); setMaintenanceNotice(""); },
+    onError: refreshBinding,
   });
   const verify = useMutation({
     mutationFn: () => verifyMaxIntegration(projectId),
     onSuccess: result => { saveIntegration(result); setMaintenanceNotice("Данные подключения обновлены"); },
+    onError: refreshIntegration,
   });
   const activate = useMutation({
     mutationFn: () => activateMaxIntegration(projectId),
@@ -74,6 +94,7 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
       void qc.invalidateQueries({ queryKey: ["deploy", projectId] });
       setMaintenanceNotice("Связь с MAX обновлена");
     },
+    onError: refreshIntegration,
   });
   const disconnect = useMutation({
     mutationFn: () => disconnectMaxIntegration(projectId),
@@ -82,27 +103,31 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
         ...previous, connected: false, status: "disconnected", bot_id: null, bot_name: null, bot_username: null,
         app_url: null, webhook_url: null, deep_link: null, last_error: null, verified_at: null, published_at: null,
       }));
-      void qc.invalidateQueries({ queryKey: integrationKey });
-      void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
-      setToken(""); setBotPrepared(false); setAcknowledgedUrl(null); setConfirmedUrl(null);
+      refreshBinding();
+      setToken(""); setBotPrepared(false); setAcknowledgedBinding(null); setConfirmedBinding(null);
       setDisconnectRequested(false); setMaintenanceNotice("");
     },
   });
   const confirmUrl = useMutation({
-    mutationFn: async (url: string) => {
+    mutationFn: async ({ url, botId }: AddressBinding) => {
       await fetch(url, { method: "GET", mode: "no-cors", cache: "no-store" });
       const latestDeploy = qc.getQueryState<DeployStatus>(["deploy", projectId]);
       const latestIntegration = qc.getQueryState<MaxIntegration>(integrationKey);
       const currentUrl = httpsAddress(latestDeploy?.data?.prod_url ?? latestIntegration?.data?.app_url);
-      if (latestDeploy?.status !== "success" || latestIntegration?.status !== "success" || currentUrl !== url) {
-        throw new Error("Адрес изменился. Проверьте новый адрес и подтвердите его заново.");
+      if (latestDeploy?.status !== "success" || latestIntegration?.status !== "success" || currentUrl !== url || latestIntegration.data?.bot_id !== botId) {
+        throw new Error("Адрес или бот изменился. Проверьте подключение и подтвердите адрес заново.");
       }
-      return saveMaxUrlAttached(projectId, true);
+      return saveMaxUrlAttached(projectId, true, botId);
     },
-    onSuccess: (result, url) => {
-      qc.setQueryData(["max-config", projectId], result);
+    onSuccess: (result, savedBinding) => {
+      qc.setQueryData(configKey, result);
       void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
-      if (result.config.max_url_attached) setConfirmedUrl(url);
+      if (result.config.max_url_attached) setConfirmedBinding(savedBinding);
+    },
+    onError: error => {
+      if (error instanceof ApiError && error.details?.reason === "max_bot_binding_changed") {
+        refreshBinding();
+      }
     },
   });
   const busy = connect.isPending || verify.isPending || activate.isPending || disconnect.isPending || confirmUrl.isPending;
@@ -139,7 +164,7 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
   return (
     <div className="max-connect-wizard">
       <ol className="max-connect-progress" aria-label="Шаги подключения MAX">
-        {steps.map((label, index) => <li key={label} aria-current={step === index + 1 ? "step" : undefined} data-complete={step > index + 1 || (index === 3 && confirmedUrl === productionUrl && Boolean(productionUrl))}>
+        {steps.map((label, index) => <li key={label} aria-current={step === index + 1 ? "step" : undefined} data-complete={step > index + 1 || (index === 3 && Boolean(confirmed))}>
           <span>{step > index + 1 ? <Check aria-hidden="true" /> : index + 1}</span><small>{label}</small>
         </li>)}
       </ol>
@@ -183,11 +208,11 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
           <p className="max-connect-instructions">В кабинете MAX откройте бота и пройдите по шагам:</p>
           <p className="max-connect-path">Чат-боты → ⋮ у нужного бота → Настройки → Мини-приложение → Введите ссылку → Сохранить</p>
           {cabinetLink}
-          <label className="max-connect-acknowledgement"><input type="checkbox" checked={acknowledged} disabled={busy} onChange={event => { setAcknowledgedUrl(event.target.checked ? productionUrl : null); confirmUrl.reset(); }} /><span>Я вставил адрес и сохранил настройки в MAX</span></label>
+          <label className="max-connect-acknowledgement"><input type="checkbox" checked={acknowledged} disabled={busy || !binding} onChange={event => { setAcknowledgedBinding(event.target.checked ? binding : null); confirmUrl.reset(); }} /><span>Я вставил адрес и сохранил настройки в MAX</span></label>
           {confirmUrl.isError && <p role="alert" className="max-connect-error">Не удалось сохранить подтверждение. Проверьте адрес и соединение, затем повторите попытку.</p>}
-          {confirmedUrl === productionUrl && config.data.config.max_url_attached ? <p role="status" className="max-connect-success">Подтверждение сохранено</p>
+          {confirmed ? <p role="status" className="max-connect-success">Подтверждение сохранено</p>
             : config.data.config.max_url_attached && <p className="max-connect-hint">Ранее вы уже подтверждали вставку адреса. Если он изменился, обновите его в MAX и подтвердите ещё раз.</p>}
-          <div className="max-connect-primary"><Button disabled={busy || !acknowledged} onClick={() => { if (connected && acknowledged && productionUrl) confirmUrl.mutate(productionUrl); }}>{confirmUrl.isPending && <Loader2 className="animate-spin" aria-hidden="true" />}Сохранить подтверждение</Button></div>
+          <div className="max-connect-primary"><Button disabled={busy || !acknowledged} onClick={() => { if (connected && acknowledged && binding) confirmUrl.mutate(binding); }}>{confirmUrl.isPending && <Loader2 className="animate-spin" aria-hidden="true" />}Сохранить подтверждение</Button></div>
           <details className="max-connect-technical"><summary>Что подтверждает этот шаг</summary><p>Вы подтверждаете вставку адреса вручную. MAX не передаёт эту настройку Yleum. Сетевой запрос к адресу не проверяет работу приложения или его настройки в MAX.</p></details>
         </>}
       </section>

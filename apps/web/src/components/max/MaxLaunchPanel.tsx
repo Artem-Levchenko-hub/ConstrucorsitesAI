@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { getMaxIntegration } from "@/lib/api/max-integration";
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import { getLastDeploy } from "@/lib/api/runtime";
-import type { DeployPhase, Project } from "@/lib/api/types";
+import type { DeployPhase, MaxIntegration, Project } from "@/lib/api/types";
 import { getMaxJourney } from "@/lib/max-journey";
 import { isMaxDeployActive } from "@/lib/max-launch-state";
 import { copyMaxLaunchUrl } from "@/lib/max-launch-steps";
@@ -29,17 +29,29 @@ import "./max-launch-page.css";
 const ACTIVE_PHASES = new Set<DeployPhase>(["queued", "building", "pushing", "swapping", "cancelling"]);
 const TERMINAL_PHASES = new Set<DeployPhase>(["done", "failed", "cancelled"]);
 
+function getMaxMiniAppUrl(integration: MaxIntegration | undefined): string | null {
+  if (!integration?.connected || !integration.eligible) return null;
+  if (integration.status !== "verified" && integration.status !== "active") return null;
+
+  // The API currently returns the bot's profile URL. Older responses may only
+  // have the username verified by MAX. Only link to a plain MAX bot path.
+  const botName = integration.deep_link == null
+    ? /^([a-zA-Z0-9_-]+)$/.exec(integration.bot_username ?? "")?.[1]
+    : /^https:\/\/max\.ru\/([a-zA-Z0-9_-]+)(?:\?startapp)?$/.exec(integration.deep_link)?.[1];
+  return botName ? `https://max.ru/${botName}?startapp` : null;
+}
+
 export function MaxLaunchPanel({ project, onClose, standalone = false }: {
   project: Pick<Project, "id" | "name" | "template">; onClose?: () => void; standalone?: boolean;
 }) {
   const toggleTimeline = useWorkspaceStore(state => state.toggleTimeline);
   const queryClient = useQueryClient();
-  const integration = useQuery({ queryKey: ["max-integration", project.id], queryFn: () => getMaxIntegration(project.id), retry: false });
+  const integration = useQuery({ queryKey: ["max-integration", project.id], queryFn: () => getMaxIntegration(project.id), retry: false, refetchOnMount: "always" });
   const deploy = useQuery({ queryKey: ["deploy", project.id], queryFn: () => getLastDeploy(project.id), retry: false,
     refetchInterval: query => isMaxDeployActive(query.state.data?.phase ?? "idle", query.state.data?.run_id) ? 1_500 : false });
   const busyDeploy = !deploy.isError && isMaxDeployActive(deploy.data?.phase ?? "idle", deploy.data?.run_id);
   // Prerequisites are static while a publication runs; they are re-read when it ends, not every 2 s.
-  const readiness = useQuery({ queryKey: ["max-readiness", project.id], queryFn: () => getMaxReadiness(project.id), retry: false, refetchInterval: 10_000 });
+  const readiness = useQuery({ queryKey: ["max-readiness", project.id], queryFn: () => getMaxReadiness(project.id), retry: false, refetchOnMount: "always", refetchInterval: 10_000 });
   const deployPhase = deploy.data?.phase;
   const previousPhase = useRef<DeployPhase | undefined>(undefined);
   useEffect(() => {
@@ -71,7 +83,14 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
   const failed = !deploy.isError && deploy.data?.phase === "failed";
   const migrationPending = !busyDeploy && !stateError && (guard === "migration_required" || Boolean(effectiveReadiness?.publication_migration));
   const [migrationReviewOpen, setMigrationReviewOpen] = useState(false);
-  const productionUrl = published ? deploy.data?.prod_url ?? (integration.isSuccess ? integration.data?.app_url : null) : null;
+  const maxIntegration = integration.isSuccess ? integration.data : undefined;
+  const productionUrl = published ? deploy.data?.prod_url ?? maxIntegration?.app_url ?? null : null;
+  const maxAddressConfirmed = items.find(item => item.id === "max_url")?.done === true;
+  const confirmedBotId = effectiveReadiness?.max_url_bot_id;
+  const maxLaunchReady = maxAddressConfirmed && productionUrl && integration.isFetchedAfterMount && readiness.isFetchedAfterMount
+    && confirmedBotId && confirmedBotId === maxIntegration?.bot_id;
+  const maxMiniAppUrl = maxLaunchReady ? getMaxMiniAppUrl(maxIntegration) : null;
+  const openUrl = maxMiniAppUrl ?? productionUrl;
   const title = stateError ? MAX_STATUS_COPY.readiness.title
     : busyDeploy ? "Публикация продолжается"
     : migrationPending ? "Нужна проверка изменения данных"
@@ -114,14 +133,14 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
             {stateError ? <Button onClick={() => { void readiness.refetch(); void deploy.refetch(); }}>{MAX_STATUS_COPY.readiness.retry}</Button>
               : deploy.isPending ? <Button disabled><Loader2 className="size-4 animate-spin" />Проверяем публикацию…</Button>
               : migrationPending ? <Button data-testid="max-migration-review-open" onClick={() => setMigrationReviewOpen(true)}>Проверить изменения данных</Button>
-              : published ? productionUrl && <Button asChild><a href={productionUrl} target="_blank" rel="noreferrer">Открыть приложение <ExternalLink className="size-4" /></a></Button>
+              : published ? openUrl && <Button asChild><a href={openUrl} target="_blank" rel="noreferrer">{maxMiniAppUrl ? "Открыть в MAX" : "Открыть сайт"} <ExternalLink className="size-4" /></a></Button>
               : busyDeploy || currentStage?.id === "publish" || !available ? <MaxLaunchButton projectId={project.id} />
               : currentStage && <Button asChild><Link href={currentStage.href} onClick={onClose}>{currentStage.actionLabel}<ChevronRight className="size-4" /></Link></Button>}
             {!standalone && published && <Button asChild variant="outline"><Link href={`/max/${project.id}/manage`}>Управление</Link></Button>}
             {!standalone && <Button asChild variant="outline"><Link href={`/max/${project.id}`} onClick={onClose}>{published ? "Подготовить обновление" : "В редактор"}</Link></Button>}
           </div>
           {productionUrl && <div className="max-launch-address"><span data-testid="max-launch-app-url" title={productionUrl}>{productionUrl}</span><Button variant="ghost" size="icon" aria-label="Скопировать адрес приложения" onClick={() => void copyUrl()}><Copy className="size-4" /></Button></div>}
-          {published && !items.find(item => item.id === "max_url")?.done && <div className="max-launch-notice"><p>Добавьте адрес в кнопку приложения в кабинете MAX, затем подтвердите его в «Подключениях».</p><a href="https://business.max.ru/" target="_blank" rel="noreferrer" onClick={openMaxCabinet} data-testid="max-open-business-cabinet">Открыть кабинет MAX ↗</a><Link href={`/max/${project.id}/integrations`}>Подтвердить адрес</Link></div>}
+          {published && !maxAddressConfirmed && <div className="max-launch-notice"><p>Добавьте адрес в кнопку приложения в кабинете MAX, затем подтвердите его в «Подключениях».</p><a href="https://business.max.ru/" target="_blank" rel="noreferrer" onClick={openMaxCabinet} data-testid="max-open-business-cabinet">Открыть кабинет MAX ↗</a><Link href={`/max/${project.id}/integrations`}>Подтвердить адрес</Link></div>}
         </section>
         <MaxPublicationRequirements projectId={project.id} items={items} status={readiness.isError ? "error" : available ? "ready" : "loading"} promotedId={published || busyDeploy ? null : currentStage?.id ?? null} />
         {!standalone && <section aria-label="Другие разделы проекта" data-testid="max-launch-actions" className="max-launch-options">

@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { ArrowUpRight, BookOpen, ChevronLeft, ChevronRight, CirclePlay, X } from "lucide-react";
+import { ArrowUpRight, BookOpen, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { usePathname, useSearchParams } from "next/navigation";
-import { guideVideoHref, type GuideLessonId } from "@/lib/guide-lessons";
+import { guideChapterHref, type GuideLessonId } from "@/lib/guide-lessons";
 import { learningForRoute, learningForSurface, placeLearningCard, type LearningDefinition, type LearningStep } from "@/lib/product-learning";
 import { LEARNING_OPEN_EVENT, readLearningRecord, rememberLearning, requestLearning, useLearningGate, type LearningStatus } from "./LearningProvider";
 import "./product-learning.css";
@@ -32,10 +32,10 @@ export function LearningButton({ label = "Обучение", className = "" }: {
   return <button type="button" className={`learning-launch ${className}`} onClick={event => requestLearning(gate?.userKey, event.currentTarget)}><BookOpen aria-hidden="true" size={16} /><span>{label}</span></button>;
 }
 
-function LearningVideoLink({ lesson }: { lesson: GuideLessonId }) {
-  return <a className="learning-video-link" href={guideVideoHref(lesson)} target="_blank" rel="noopener noreferrer">
-    <CirclePlay size={17} aria-hidden="true" />
-    <span>Смотреть видео<span className="sr-only"> в новой вкладке</span></span>
+function LearningGuideLink({ lesson }: { lesson: GuideLessonId }) {
+  return <a className="learning-guide-link" href={guideChapterHref(lesson)} target="_blank" rel="noopener noreferrer">
+    <BookOpen size={17} aria-hidden="true" />
+    <span>Читать руководство<span className="sr-only"> в новой вкладке</span></span>
     <ArrowUpRight size={14} aria-hidden="true" />
   </a>;
 }
@@ -137,7 +137,7 @@ function LearningHost({ definition, userKey, auto = false, scope = "product" }: 
         <Dialog.Description className="learning-description">Создание проекта начнётся только после прохождения обучения. Во время обучения кнопки приложения неактивны</Dialog.Description>
         <div className="learning-welcome-actions">
           <button type="button" className="learning-welcome-start" onClick={() => goTo(0)}>Начать обучение<ChevronRight size={17} aria-hidden="true" /></button>
-          <LearningVideoLink lesson={session.definition.lesson} />
+          <LearningGuideLink lesson={session.definition.lesson} />
         </div>
       </Dialog.Content>
     </> : <LearningTour definition={session.definition} steps={session.steps} index={session.index}
@@ -191,7 +191,7 @@ function LearningTour({ definition, steps, index, onIndex, onClose, returnFocus 
       <Dialog.Title className="learning-title">{current.title}</Dialog.Title>
       <Dialog.Description className="learning-description">{current.body}</Dialog.Description>
       {geometry.missing && <p className="learning-missing" role="status">Элемент сейчас недоступен. Можно перейти к следующему шагу или закрыть обучение.</p>}
-      <LearningVideoLink lesson={current.lesson ?? definition.lesson} />
+      <LearningGuideLink lesson={current.lesson ?? definition.lesson} />
       <div className="learning-actions"><button type="button" disabled={index === 0} onClick={() => onIndex(index - 1)}><ChevronLeft size={16} aria-hidden="true" />Назад</button>{index < steps.length - 1 ? <button type="button" className="learning-next" onClick={() => onIndex(index + 1)}>Далее<ChevronRight size={16} aria-hidden="true" /></button> : <button type="button" className="learning-next" onClick={() => onClose("completed")}>Завершить</button>}</div>
     </Dialog.Content>
   </>;
