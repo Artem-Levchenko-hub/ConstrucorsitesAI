@@ -283,9 +283,12 @@ async def stage_max_starter(
             # A retry replays the exact draft after this core check. Exclude
             # its new product tests while the page they exercise is absent.
             draft_tests = checkpoint_product_tests(new_checkpoint_paths, portable=portable)
-            removed = (draft_tests - runtime.migration_baseline.keys()) | {"src/app/page.tsx"}
+            _starter_patch = {**_starter_files, "src/app/page.tsx": ""}
+            _starter_patch.update(
+                dict.fromkeys(draft_tests - runtime.migration_baseline.keys(), ""),
+            )
             await _apply_project_cell_preview_files(
-                files={**_starter_files, **dict.fromkeys(removed, "")},
+                files=_starter_patch,
                 project_cell_handle=_require_project_cell(runtime.handle),
                 sync_preview=runtime.coordinator is None,
             )
