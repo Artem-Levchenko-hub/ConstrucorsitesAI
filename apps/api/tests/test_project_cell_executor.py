@@ -3477,7 +3477,8 @@ async def test_v2_command_ack_loss_reads_terminal_receipt_without_dispatch(
                     async def save(execution, *, context, phase="working"):
                         # Falsifier: no source checkpoint until terminal receipt and
                         # fresh post-state/second incarnation check both completed.
-                        if not starter_undispatched and "pending_role" not in context["completed"]:
+                        if (not starter_undispatched
+                                and "pending_role" not in context.get("completed", {})):
                             assert len(reads) >= 2
                         snapshots.append(dict(await harness.handle.snapshot_files()))
                         driver.state = await commit(
