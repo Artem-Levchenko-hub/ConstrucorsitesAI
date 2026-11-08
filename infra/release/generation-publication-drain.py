@@ -1617,9 +1617,34 @@ def require_migrations_drained(root: Path) -> None:
             raise RuntimeError("migration journals are not quiescent") from exc
 
 
+def _require_configuration_writes_drained(root: Path) -> None:
+    locks = root / "locks"
+    try:
+        if locks.is_symlink():
+            raise ValueError("unsafe publication lock directory")
+        for path in locks.glob("configuration-*.lock"):
+            import fcntl
+
+            project_id = path.stem.removeprefix("configuration-")
+            if str(UUID(project_id)) != project_id:
+                raise ValueError("invalid publication configuration lock")
+            fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+            try:
+                info = os.fstat(fd)
+                if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                        or info.st_uid != root.stat().st_uid or stat.S_IMODE(info.st_mode) != 0o600):
+                    raise ValueError("unsafe publication configuration lock")
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(fd)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("publication configuration writes are not quiescent") from exc
+
+
 def require_publications_drained(root: Path) -> int:
     if not root.parent.is_dir() or root.is_symlink():
         raise RuntimeError("publication storage authority is unavailable")
+    _require_configuration_writes_drained(root)
     require_migrations_drained(root)
     count = 0
     for path in root.glob("*/publication.json"):

@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
 from yleum_api.core.db import dispose_engine, get_engine
@@ -64,6 +64,7 @@ from yleum_api.routers import ws as ws_router
 from yleum_api.services import readiness
 from yleum_api.services.generation.supervisor import resume_capacity_queued_generations
 from yleum_api.services.generation_runs import recover_interrupted_generation_runs
+from yleum_api.services.max_catalog_delivery import reconcile_catalog_deliveries
 from yleum_api.services.max_staff_checkout import run_staff_checkout_reconciliation_loop
 from yleum_api.services.project_cell_capacity import advance_terminal_generation_cleanup
 from yleum_api.services.project_cell_runtime import advance_owner_wake_operations
@@ -130,6 +131,16 @@ async def _monitor_terminal_generation_cleanup() -> None:
 _BACKGROUND_CLEANUP_SECONDS = 5
 
 
+async def _monitor_catalog_delivery(factory: async_sessionmaker[AsyncSession]) -> None:
+    while True:
+        await asyncio.sleep(4)
+        try:
+            await _reader_compatibility_gate()
+            await reconcile_catalog_deliveries(factory)
+        except Exception:
+            logger.exception("MAX catalog delivery scan failed")
+
+
 @asynccontextmanager
 async def _background_services(
     *,
@@ -165,13 +176,13 @@ async def _background_services(
                 "resumed capacity-queued generation runs after API restart",
                 extra={"generation_run_count": resumed},
             )
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
         monitors = [
             asyncio.create_task(_monitor_capacity_queued_generations()),
             asyncio.create_task(_monitor_owner_wake_operations()),
             asyncio.create_task(_monitor_terminal_generation_cleanup()),
-            asyncio.create_task(run_staff_checkout_reconciliation_loop(
-                async_sessionmaker(engine, expire_on_commit=False),
-            )),
+            asyncio.create_task(_monitor_catalog_delivery(session_factory)),
+            asyncio.create_task(run_staff_checkout_reconciliation_loop(session_factory)),
         ]
         yield
     except Exception:

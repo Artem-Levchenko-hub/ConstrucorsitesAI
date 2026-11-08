@@ -1305,12 +1305,22 @@ class CellPublicationService:
         runtime_env: dict[str, str] | None = None,
         business_config: dict[str, Any] | None = None,
         business_config_version: int | None = None,
+        delivery_start_before: datetime | None = None,
     ) -> dict[str, bool]:
         if business_config is not None:
             from yleum_orchestrator.services.app_business_config import app_config_envelope
 
             app_config_envelope(business_config, business_config_version or 0)
-        async with self._submission_lock.hold(project_id):
+        # The release checker observes this OS lock even if the API client times
+        # out while a blocking Docker or Kubernetes configuration write finishes.
+        async with (
+            self._submission_lock.hold_named(f"configuration-{project_id}"),
+            self._submission_lock.hold(project_id),
+        ):
+            if delivery_start_before is not None:
+                await asyncio.to_thread(readers.require_if_configured)
+                if datetime.now(UTC) >= delivery_start_before:
+                    raise CellIdentityConflict("catalog configuration delivery deadline expired")
             self._require_no_migration(project_id)
             applied = self._configure_locked(
                 project_id,

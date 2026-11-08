@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from yleum_api.core.errors import ApiError
 from yleum_api.routers import max_studio
 from yleum_api.schemas.max_studio import MaxContentItem, MaxContentPatch, MaxProjectConfigPayload
+from yleum_api.services.max_catalog_delivery import deliver_catalog_now
 
 
 def item(title="Tea"):
@@ -44,18 +45,17 @@ def test_cas_equal_stale_content_converges_and_different_stale_content_conflicts
 @pytest.mark.asyncio
 async def test_post_commit_public_failure_does_not_prevent_preview_or_saved_response(monkeypatch):
     owner, project_id, workspace_id = uuid4(), uuid4(), uuid4()
-    project = SimpleNamespace(id=project_id, owner_id=owner, current_snapshot_id=uuid4())
     record = SimpleNamespace(
-        config_version=3, config=MaxProjectConfigPayload.default_for("Shop").model_dump()
+        project_id=project_id, owner_id=owner, config_version=3,
+        config=MaxProjectConfigPayload.default_for("Shop").model_dump(),
     )
-    selection = SimpleNamespace(workspace=SimpleNamespace(id=workspace_id))
     public = AsyncMock(side_effect=RuntimeError("private upstream message"))
     preview = AsyncMock(return_value=False)
     monkeypatch.setattr(max_studio.orchestrator_client, "configure_published_cell", public)
     monkeypatch.setattr(
         max_studio.orchestrator_client, "project_cell_apply_business_config", preview,
     )
-    await max_studio._sync_content_environments(project, record, selection)
+    await deliver_catalog_now(record, workspace_id, include_public=True)
     preview.assert_awaited_once()
 
 

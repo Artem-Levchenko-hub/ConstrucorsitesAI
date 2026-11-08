@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Awaitable
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
@@ -45,6 +44,7 @@ from yleum_api.services import max_content_images, orchestrator_client, project_
 from yleum_api.services import repo as repo_svc
 from yleum_api.services.deploy_attestation import ensure_current_release_proof
 from yleum_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
+from yleum_api.services.max_catalog_delivery import deliver_catalog_now, schedule_catalog_delivery
 from yleum_api.services.max_content_delivery import (
     config_digest,
     public_business_config,
@@ -603,30 +603,6 @@ async def _persist_business_config(
     return record
 
 
-async def _sync_content_environments(
-    project: Project, record: MaxProjectConfig,
-    selection: project_cell_runtime.ProjectCellPublicSelection,
-) -> None:
-    # Independent effects after the confirmed commit. An outage cannot undo saved data
-    # or stop the other environment from accepting its own durable configuration.
-    config = public_business_config(MaxProjectConfigPayload.model_validate(record.config))
-    effects: list[Awaitable[object]] = [orchestrator_client.configure_published_cell(project.id, {
-        "owner_id": str(project.owner_id), "business_config": config,
-        "business_config_version": record.config_version,
-    })]
-    if selection.workspace is not None:
-        effects.append(orchestrator_client.project_cell_apply_business_config(
-            selection.workspace.id, project_id=project.id, owner_id=project.owner_id,
-            version=record.config_version, config=config,
-        ))
-    results = await asyncio.gather(
-        *(asyncio.wait_for(effect, timeout=6) for effect in effects), return_exceptions=True,
-    )
-    for result in results:
-        if isinstance(result, BaseException):
-            log.warning("max_content_delivery_pending", error_type=type(result).__name__)
-
-
 async def _content_response(
     project: Project, record: MaxProjectConfig | None,
     selection: project_cell_runtime.ProjectCellPublicSelection,
@@ -762,8 +738,11 @@ async def patch_max_content(
         response.headers["Cache-Control"] = "no-store"
         return await _content_response(project, None, selection, session)
     record = await _persist_business_config(project, desired, session, content_only=True)
+    workspace_id = selection.workspace.id if selection.workspace else None
+    if selection.selected:
+        schedule_catalog_delivery(record)
     await session.commit()
-    await _sync_content_environments(project, record, selection)
+    await deliver_catalog_now(record, workspace_id, include_public=not selection.selected)
     response.headers["Cache-Control"] = "no-store"
     return await _content_response(project, record, selection, session)
 

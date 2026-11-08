@@ -4,7 +4,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Header
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 from yleum_orchestrator.core.cell_resources import (
     CellCapacityUnavailable,
@@ -29,6 +29,7 @@ class PublicCellConfigRequest(BaseModel):
     runtime_env: dict[str, str] | None = Field(default=None, repr=False)
     business_config: dict[str, Any] | None = Field(default=None, repr=False)
     business_config_version: int | None = Field(default=None, ge=0)
+    delivery_start_before: AwareDatetime | None = None
 
     @field_validator("runtime_env")
     @classmethod
@@ -96,6 +97,7 @@ async def configure_cell(
             runtime_env=body.runtime_env,
             business_config=body.business_config,
             business_config_version=body.business_config_version,
+            delivery_start_before=body.delivery_start_before,
         )
     except CellResourceError as exc:
         raise _safe_error(exc) from None

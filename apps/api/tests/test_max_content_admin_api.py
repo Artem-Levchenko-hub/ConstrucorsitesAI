@@ -1,14 +1,17 @@
 """Real owner endpoints and DB CAS; runtime clients remain isolated fake transports."""
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from tests.test_project_cell_runtime_api import _seed
 from yleum_api.core.deps import get_current_user
 from yleum_api.main import app
 from yleum_api.models.max_project_config import MaxProjectConfig
 from yleum_api.models.user import User
+from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.services import orchestrator_client as oc
 
 
@@ -32,6 +35,68 @@ async def seed_catalog(db_session, monkeypatch):
     monkeypatch.setattr(oc, "published_cell_config_status", public_status)
     monkeypatch.setattr(oc, "project_cell_business_config_status", preview_status)
     return owner, project, run, workspace
+
+
+async def test_saved_price_recovers_after_public_delivery_is_interrupted(
+    client, db_session, test_engine, monkeypatch,
+):
+    _owner, project, _, _ = await seed_catalog(db_session, monkeypatch)
+    path = f"/api/projects/{project.id}/max/content"
+    public_catalog = {"price": "190 ₽", "version": 1}
+    network_available = False
+
+    async def configure(_project_id, body):
+        if not network_available:
+            raise TimeoutError("first request lost before reaching the controller")
+        public_catalog.update(
+            price=body["business_config"]["content"][0]["price"],
+            version=body["business_config_version"],
+        )
+        return {"applied": True}
+
+    async def status(_project_id, body):
+        desired = body["desired_config_version"]
+        version = public_catalog["version"]
+        return {"state": "applied" if version == desired else "pending",
+                "desired_config_version": desired, "controller_config_version": version,
+                "confirmed_config_version": version if version == desired else None}
+
+    monkeypatch.setattr(oc, "configure_published_cell", configure)
+    monkeypatch.setattr(oc, "published_cell_config_status", status)
+    config = MaxProjectConfigPayload.default_for(project.name).model_dump(mode="json")
+    config["content"] = [{"id": "tea", "title": "Tea", "price": "190 ₽"}]
+    record = MaxProjectConfig(project_id=project.id, owner_id=project.owner_id, config=config)
+    db_session.add(record)
+    await db_session.commit()
+    saved = await client.patch(path, json={"expected_config_version": 1, "content": [
+        {"id": "tea", "title": "Tea", "price": "220 ₽"},
+    ]})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["saved"]["config_version"] == 2
+    assert saved.json()["public"]["state"] == "pending"
+    assert public_catalog["price"] == "190 ₽"
+
+    await db_session.refresh(record)
+    assert getattr(record, "catalog_delivery_after", None) is not None, (
+        "A lost delivery must leave a durable retry after the owner's PATCH has finished"
+    )
+    from yleum_api.services.max_catalog_delivery import reconcile_catalog_deliveries
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    await reconcile_catalog_deliveries(factory)
+    assert public_catalog == {"price": "190 ₽", "version": 1}
+    await db_session.refresh(record)
+    assert record.catalog_delivery_after is not None
+    network_available = True
+    record.catalog_delivery_after = datetime.now(UTC)
+    await db_session.commit()
+    await reconcile_catalog_deliveries(factory)
+
+    assert public_catalog == {"price": "220 ₽", "version": 2}
+    assert (await client.get(path)).json()["public"]["state"] == "applied"
+    await db_session.refresh(record)
+    assert record.catalog_delivery_after is None
+    assert oc.project_cell_apply_business_config.await_count == 1
 
 
 async def test_two_tabs_keep_ids_and_unrelated_config_with_stale_equal_convergence(

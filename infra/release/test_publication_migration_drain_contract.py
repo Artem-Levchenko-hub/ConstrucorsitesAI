@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -46,6 +47,20 @@ class MigrationDrainTests(unittest.TestCase):
             with self.subTest(state=state):
                 self.journal(state)
                 self.assertEqual(self.checker.require_publications_drained(self.root), 0)
+
+    @unittest.skipUnless(sys.platform == "linux", "uses controller file locks")
+    def test_configuration_write_blocks_drain_even_with_no_active_release_history(self):
+        import fcntl
+
+        locks = self.root / "locks"
+        locks.mkdir()
+        path = locks / f"configuration-{self.project}.lock"
+        path.touch(mode=0o600)
+        with path.open("rb") as guard:
+            fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(RuntimeError, "configuration writes are not quiescent"):
+                self.checker.require_publications_drained(self.root)
+        self.assertEqual(self.checker.require_publications_drained(self.root), 0)
 
     def test_malformed_or_forged_journal_fails_closed(self):
         for changes in ({"project_id": str(uuid4())}, {"operation_id": str(uuid4())},

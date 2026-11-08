@@ -27,6 +27,9 @@ class MaxProjectConfig(Base):
     config_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     managed_kit_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    catalog_delivery_after: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True,
+    )
     synced_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("snapshots.id", ondelete="SET NULL"),
