@@ -18,6 +18,8 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 
+from yleum_api.services.max_stylesheet_contract import disconnected_component_styles_gap
+
 _WIZARD_INFRASTRUCTURE = (
     "Используй готовую обвязку MAX Bridge, серверную проверку initData, "
     "MAX-профиль пользователя и webhook бота из шаблона. "
@@ -563,6 +565,11 @@ def max_source_completion_gap(
     management_gap = management_source_gap(files)
     if management_gap:
         return management_gap
+    stylesheet_gap = disconnected_component_styles_gap(
+        files, (path for path in files if path.endswith(".tsx") and _is_product_source(path)),
+    )
+    if stylesheet_gap:
+        return stylesheet_gap
 
     capabilities = requested_max_capabilities(prompt)
     collection_operations = frozenset(

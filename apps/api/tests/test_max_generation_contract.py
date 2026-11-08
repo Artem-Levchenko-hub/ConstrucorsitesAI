@@ -84,6 +84,238 @@ def test_portable_crm_history_passes_the_actual_finalization_path() -> None:
     ))
 
 
+def _portable_coffee_files() -> dict[str, str]:
+    return {
+        **_portable_crm_files(),
+        "src/app/page.tsx": (
+            'import { CoffeeApp } from "@/components/CoffeeApp";\n'
+            "export default function Page() { return <CoffeeApp />; }"
+        ),
+        "src/components/CoffeeApp.tsx": (
+            'import "./coffee.css";\n'
+            'export function CoffeeApp() { return <main className="cf-main">'
+            '<header className="cf-header"><h1 className={"cf-title"}>Кофейня</h1></header>'
+            '<article className="cf-card"><button className="cf-btn">Заказать</button>'
+            "</article></main>; }"
+        ),
+        "src/components/coffee.css": (
+            ".qa-main { display: grid; }\n"
+            ".qa-header, .qa-card { background: #efebe5; }\n"
+            ".qa-card > .qa-btn:hover { color: brown; }\n"
+            ".qa-banner { font-size: 2rem; }"
+        ),
+    }
+
+
+def test_portable_finalization_reports_disconnected_component_styles() -> None:
+    gap = max_source_completion_gap("Меню кофейни", _portable_coffee_files(), portable=True)
+
+    assert gap is not None
+    assert "src/components/CoffeeApp.tsx" in gap
+    assert "src/components/coffee.css" in gap
+    assert ".cf-title" in gap
+    assert ".qa-*" in gap
+
+
+@pytest.mark.parametrize("stylesheet", [
+    ".cf-main { display: grid; }",
+    "@media (width > 400px) { .layout { & .cf-title { color: brown; } } }",
+    r".\63 f-title { font-size: 2rem; }",
+    '[class~="cf-title"] { font-size: 2rem; }',
+    '[class^="cf-"] { font-size: 2rem; }',
+    '[class*="cf-"] { font-size: 2rem; }',
+    "@utility cf-* { color: brown; }",
+])
+def test_portable_styles_can_be_defined_outside_the_component_stylesheet(stylesheet: str) -> None:
+    files = {
+        **_portable_coffee_files(),
+        "src/app/layout.tsx": (
+            'import "./globals.css"; export default function Layout({children}) '
+            "{ return <html><body>{children}</body></html>; }"
+        ),
+        "src/app/globals.css": stylesheet,
+    }
+
+    assert max_source_completion_gap("Меню кофейни", files, portable=True) is None
+
+
+@pytest.mark.parametrize(("path", "source"), [
+    ("src/components/orphan.css", ".cf-main { display: grid; }"),
+    ("src/app/globals.css", "/* .cf-main { display: grid; } */"),
+    ("src/app/globals.css", 'body::after { content: ".cf-main"; }'),
+    ("src/components/CoffeeApp.tsx", 'function read() { document.querySelector(".cf-main"); }'),
+])
+def test_unloaded_or_non_style_class_references_do_not_hide_disconnected_styles(
+    path: str, source: str,
+) -> None:
+    files = _portable_coffee_files()
+    files["src/app/layout.tsx"] = (
+        'import "./globals.css"; export default function Layout({children}) '
+        "{ return <html><body>{children}</body></html>; }"
+    )
+    files["src/app/globals.css"] = ""
+    files[path] = files.get(path, "") + "\n" + source
+
+    gap = max_source_completion_gap("Меню кофейни", files, portable=True)
+
+    assert gap is not None and ".cf-*" in gap
+
+
+@pytest.mark.parametrize("import_retained", [False, True])
+def test_unrendered_component_styles_do_not_block_the_home_route(import_retained: bool) -> None:
+    files = _portable_coffee_files()
+    files["src/app/page.tsx"] = (
+        ('import { CoffeeApp } from "../components/CoffeeApp";\n' if import_retained else "")
+        + "export default function Page() { return <main>Справка</main>; }"
+    )
+
+    assert max_source_completion_gap("Справка", files, portable=True) is None
+
+
+def test_home_route_can_keep_legacy_class_hooks_on_styled_elements() -> None:
+    files = _portable_coffee_files()
+    path = "src/components/CoffeeApp.tsx"
+    files[path] = re.sub(r'"cf-([a-z-]+)"', r'"cf-\1 qa-\1"', files[path])
+
+    assert max_source_completion_gap("Меню кофейни", files, portable=True) is None
+
+
+@pytest.mark.parametrize(("rule", "expects_gap"), [
+    (".cf-main { color: brown; }", True),
+    (".label :global(.cf-main) { color: brown; }", False),
+])
+def test_only_global_css_module_rules_may_style_raw_class_names(
+    rule: str, expects_gap: bool,
+) -> None:
+    files = _portable_coffee_files()
+    path = "src/components/CoffeeApp.tsx"
+    files[path] = 'import labels from "./labels.module.css";\n' + files[path].replace(
+        "Кофейня</h1>", 'Кофейня<span className={labels.label}>Меню</span></h1>',
+    )
+    files["src/components/labels.module.css"] = ".label { font-size: 1rem; }\n" + rule
+
+    gap = max_source_completion_gap("Меню кофейни", files, portable=True)
+
+    assert (gap is not None) is expects_gap
+
+
+@pytest.mark.parametrize("body", [
+    'function CoffeeApp() { return <main>Меню</main>; } return <CoffeeApp />;',
+    'if (process.env.LOCAL_MENU) return <main>Меню</main>; return <CoffeeApp />;',
+])
+def test_ambiguous_home_render_does_not_reject_imported_styles(body: str) -> None:
+    files = _portable_coffee_files()
+    files["src/app/page.tsx"] = (
+        'import { CoffeeApp } from "@/components/CoffeeApp";'
+        f"export default function Page() {{ {body} }}"
+    )
+
+    assert max_source_completion_gap("Меню кофейни", files, portable=True) is None
+
+
+def test_early_component_return_does_not_reject_unreachable_markup() -> None:
+    files = _portable_coffee_files()
+    path = "src/components/CoffeeApp.tsx"
+    files[path] = files[path].replace(
+        "function CoffeeApp() { return",
+        'function CoffeeApp() { if (true) return <main style={{color: "brown"}}>Меню</main>; '
+        "return",
+    )
+
+    assert max_source_completion_gap("Меню кофейни", files, portable=True) is None
+
+
+@pytest.mark.parametrize(("specifier", "entrypoint"), [
+    ("@/styles", "src/styles/index.ts"),
+    ("../styles", "src/styles/index.js"),
+])
+def test_home_route_can_load_styles_from_directory_import(specifier: str, entrypoint: str) -> None:
+    files = _portable_coffee_files()
+    files["src/app/layout.tsx"] = (
+        f'import "{specifier}"; export default function Layout({{children}}) '
+        "{ return <html><body>{children}</body></html>; }"
+    )
+    files[entrypoint] = 'import "./shared.css";'
+    files["src/styles/shared.css"] = ".cf-main { display: grid; }"
+
+    assert max_source_completion_gap("Меню кофейни", files, portable=True) is None
+
+
+def test_unresolved_local_style_dependency_leaves_coverage_unknown() -> None:
+    files = _portable_coffee_files()
+    path = "src/components/CoffeeApp.tsx"
+    files[path] = 'import "@/additional-styles";\n' + files[path]
+
+    assert max_source_completion_gap("Меню кофейни", files, portable=True) is None
+
+
+def test_home_route_can_style_elements_through_type_selectors() -> None:
+    files = _portable_coffee_files()
+    files["src/components/coffee.css"] += (
+        "\nmain, article { display: grid; }"
+        "\nheader, h1, button { font-weight: 700; color: brown; }"
+    )
+
+    assert max_source_completion_gap("Меню кофейни", files, portable=True) is None
+
+
+def test_large_transitive_script_does_not_enter_the_stylesheet_analysis() -> None:
+    files = _portable_coffee_files()
+    path = "src/components/CoffeeApp.tsx"
+    files[path] = 'import "./menu";\n' + files[path]
+    files["src/components/menu.ts"] = "export {};\n" + "void 0;\n" * 10_000
+
+    assert max_source_completion_gap("Меню кофейни", files, portable=True) is None
+
+
+def test_many_loaded_attribute_rules_leave_style_coverage_undetermined() -> None:
+    files = _portable_coffee_files()
+    path = "src/components/CoffeeApp.tsx"
+    files[path] = files[path].replace(
+        "</main>", '<p className="cf-main">Меню</p>' * 512 + "</main>",
+    )
+    files["src/components/coffee.css"] += "\n".join(
+        f'[class*="variant-{index}"] {{ color: brown; }}' for index in range(2_000)
+    )
+
+    assert max_source_completion_gap("Меню кофейни", files, portable=True) is None
+
+
+@pytest.mark.parametrize(("tsx", "more_files"), [
+    (
+        'import "./coffee.css"; import styles from "./coffee.module.css"; '
+        'export function CoffeeApp() { return <main className={styles["cf-main"]}>'
+        '<header className={styles["cf-header"]}>Кофейня</header>'
+        '<article className={styles["cf-card"]}>Меню</article></main>; }',
+        {"src/components/coffee.module.css": ".cf-main { display: grid; }"},
+    ),
+    (
+        'import "./coffee.css"; export function CoffeeApp() {'
+        'return <main className="flex bg-stone-100 p-4">'
+        '<h1 className="text-xl font-bold">Кофейня</h1></main>; }',
+        {"src/app/globals.css": '@import "tailwindcss";'},
+    ),
+    (
+        'import "./coffee.css"; export function CoffeeApp() {'
+        'return <main className="cf-main" style={{display: "grid"}}>'
+        '<header className="cf-header" style={{padding: 16}}>Кофейня</header>'
+        '<article className="cf-card" style={{color: "brown"}}>Меню</article>'
+        '<button className="cf-btn" style={{color: "brown"}}>Заказать</button></main>; }',
+        {},
+    ),
+])
+def test_portable_source_accepts_other_component_styling(
+    tsx: str, more_files: dict[str, str],
+) -> None:
+    files = {
+        **_portable_coffee_files(),
+        **more_files,
+        "src/components/CoffeeApp.tsx": tsx,
+    }
+
+    assert max_source_completion_gap("Меню кофейни", files, portable=True) is None
+
+
 def test_portable_crm_history_keeps_manifest_and_runtime_checks() -> None:
     files = _portable_crm_files()
     files.pop(".omnia/cell.json")
