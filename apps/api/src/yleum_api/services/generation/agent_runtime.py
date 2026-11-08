@@ -144,6 +144,8 @@ async def guard_native_source_contract(
     ids: GenerationIds,
     execute: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]],
     completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None,
+    *,
+    report_managed_build_gap: bool = False,
 ) -> tuple[
     Callable[[agent_builder.Action], Awaitable[dict[str, Any]]],
     Callable[[Mapping[str, str], Mapping[str, int]], str | None],
@@ -157,6 +159,19 @@ async def guard_native_source_contract(
         if action.name in {"write_file", "edit_file", "bash", "build"}:
             # snapshot_files copies the executor's in-memory source, no I/O.
             gap = await migration_feedback(runtime, ids)
+        if (
+            report_managed_build_gap
+            and action.name == "build"
+            and result.get("ok") is True
+            and gap is None
+            and runtime.handle is not None
+        ):
+            from yleum_api.services.max_management_generation import management_source_gap
+
+            managed_gap = management_source_gap(await runtime.handle.snapshot_files())
+            if managed_gap is not None and managed_gap.rejection_key() is not None:
+                # A located source defect is separate from a green compiler check.
+                return {**result, "managed_source_gap": managed_gap}
         return result
 
     def checked_completion(written: Mapping[str, str], evidence: Mapping[str, int]) -> str | None:

@@ -646,6 +646,16 @@ class _Connections:
         if callback is None:
             return False
         path, body, closure, names = callback
+        if body.type == "statement_block":
+            statements = [child for child in body.named_children if child.type != "comment"]
+            if len(statements) != 1 or statements[0].type != "return_statement":
+                return False
+            returned = [
+                child for child in statements[0].named_children if child.type != "comment"
+            ]
+            if len(returned) != 1:
+                return False
+            body = returned[0]
         scope = {**closure, **dict(zip(names, args, strict=True))}
         return self.read_only_value(body, scope, path, depth + 1) is not None
 

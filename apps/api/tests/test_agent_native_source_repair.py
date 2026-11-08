@@ -8,6 +8,7 @@ import pytest
 
 from yleum_api.core.config import get_settings
 from yleum_api.services import agent_native
+from yleum_api.services.max_management_generation import ManagedSourceGap
 from yleum_api.services.project_cell_executor import _normalize_path
 
 from .test_agent_native_truncation import turn
@@ -25,6 +26,81 @@ BASELINE = {
     "src/app/page.tsx": "existing product",
     "drizzle/0002_product.sql": "CREATE TABLE product(id int REFERENCES missing(id));",
 }
+
+
+@pytest.mark.parametrize("scenario", [
+    "repeat", "checkpoint", "end_turn", "stale_done", "next_segment",
+    "fix_explicit", "fix_checkpoint",
+])
+async def test_managed_rejection_hands_off_only_for_current_checked_source(
+    monkeypatch, coordinated, scenario,
+):
+    calls = []
+    source_fixed = False
+    fix_in_second_batch = scenario.startswith("fix_")
+    gap = ManagedSourceGap(
+        "Cannot prove SDK callback effects."
+        " Source location: src/app/page.tsx:10:2; AST call_expression;"
+        " reason unproven_statistic_callback; fingerprint aaaaaaaaaaaaaaaa."
+    )
+
+    async def provider(*args, **kwargs):
+        calls.append(deepcopy(args[2]))
+        if len(calls) == 1:
+            write = ("write_file", {"path": "src/app/page.tsx", "content": "updated product"})
+            if scenario == "checkpoint":
+                return turn(write)
+            return turn(
+                write, ("build", {}), ("build", {}),
+            )
+        if len(calls) == 2:
+            if fix_in_second_batch:
+                return turn(
+                    ("build", {}),
+                    ("write_file", {"path": "src/app/page.tsx", "content": "fixed product"}),
+                )
+            if scenario == "end_turn":
+                return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "Done"}]}
+            if scenario == "stale_done":
+                return turn(
+                    ("write_file", {"path": "src/lib/helper.ts", "content": "export {};"}),
+                    ("done", {"summary": "try to finish without a fresh build"}),
+                )
+            return turn(("build", {}))
+        if fix_in_second_batch:
+            if scenario == "fix_checkpoint":
+                return turn(("done", {"summary": "fixed product"}))
+            return turn(("build", {}), ("done", {"summary": "fixed product"}))
+        if scenario == "stale_done":
+            return turn(("build", {}))
+        return turn(("done", {"summary": "no further source changes"}))
+
+    async def execute(action):
+        nonlocal source_fixed
+        if action.name == "build":
+            return {"ok": True} if source_fixed else {"ok": True, "managed_source_gap": gap}
+        assert action.name == "write_file"
+        source_fixed = action.args["content"] == "fixed product"
+        return {"ok": True}
+
+    monkeypatch.setattr(agent_native, "_call_messages", provider)
+    result = await agent_native.run_native_build(
+        system="MAX VERIFICATION OVERRIDE", task="Build a catalog",
+        execute=execute, portable_cell=True, initial_files=BASELINE,
+        completion_check=lambda files, evidence: None if source_fixed else gap,
+        max_steps=1 if scenario == "next_segment" else 4, max_segments=2,
+    )
+    assert "Cannot prove SDK callback effects" in str(calls[1])
+    if fix_in_second_batch:
+        assert len(calls) == 3
+        assert result.done
+        assert result.files["src/app/page.tsx"] == "fixed product"
+        return
+    assert len(calls) == 2
+    assert not result.done and not result.needs_finalization
+    assert result.stop_reason == "managed_source_contract_unresolved"
+    assert result.files["src/app/page.tsx"] == "updated product"
+    assert result.segments == (2 if scenario == "next_segment" else 1)
 
 
 async def test_green_fast_check_does_not_complete_unchanged_repair(monkeypatch, coordinated):

@@ -504,6 +504,10 @@ async def execute_agent_turn(
 
         _native_execute, _completion_check = await guard_native_source_contract(
             runtime, ids, _native_execute, _completion_check,
+            report_managed_build_gap=(
+                uses_single_max_source_repair(runtime)
+                and getattr(operations, "continuation", None) is None
+            ),
         )
         snapshot_reader = getattr(operations, "snapshot_files", None) or getattr(
             runtime.handle, "snapshot_files", None,

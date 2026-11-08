@@ -57,6 +57,7 @@ from yleum_api.services.generation.recovery_contract import (
 from yleum_api.services.generation_failure import failure_for_error
 from yleum_api.services.integration_providers import PROVIDER_MAP
 from yleum_api.services.llm_client import _overload_refusal_details, rate_limit_retry_delay
+from yleum_api.services.max_management_generation import ManagedSourceGap
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 
 if TYPE_CHECKING:
@@ -1414,6 +1415,8 @@ async def _run_native_segment(
     take_verified_progress: ProgressReader | None = None,
     pure_check: PureCheckReader | None = None,
     continuation: ExecutionDriver | None = None,
+    prior_source_writes: bool = False,
+    prior_managed_rejection: str | None = None,
 ) -> AgentResult:
     """Drive the native tool-use loop until the model calls ``done`` (with a clean
     build) or the step budget is hit. Returns the written files + transcript.
@@ -1461,6 +1464,8 @@ async def _run_native_segment(
     coordinated_max = max_runtime and portable_cell and settings.use_max_finalization_coordinator
     if coordinated_max:
         system += "\n\n" + _MAX_COORDINATOR_HANDOFF
+    managed_build_gap: ManagedSourceGap | None = None
+    reported_managed_rejection = prior_managed_rejection
 
     contract = hashlib.sha256(json.dumps({
         "model": model, "system": system, "task": task, "max_steps": effective_max_steps,
@@ -1530,11 +1535,48 @@ async def _run_native_segment(
         else:
             no_write_turns += 1
 
+    def _remember_build_check(observation: dict[str, Any]) -> None:
+        nonlocal last_build_ok, wrote_since_build, managed_build_gap, unverified_response_problem
+        last_build_ok = bool(observation.get("ok"))
+        wrote_since_build = False
+        build_gap = observation.get("managed_source_gap")
+        managed_build_gap = (
+            build_gap
+            if coordinated_max and continuation is None and not source_repair
+            and last_build_ok and isinstance(build_gap, ManagedSourceGap)
+            else None
+        )
+        if last_build_ok:
+            unverified_response_problem = None
+
+    def _current_managed_gap() -> ManagedSourceGap | None:
+        if (
+            last_build_ok is True and not wrote_since_build
+            and (edit_source_changed is None or edit_source_changed())
+        ):
+            return managed_build_gap
+        return None
+
+    def _managed_repair_after_feedback(gap: ManagedSourceGap | None) -> ManagedSourceGap | None:
+        nonlocal reported_managed_rejection
+        key = gap.rejection_key() if gap is not None else None
+        repeated = key is not None and key == reported_managed_rejection
+        reported_managed_rejection = key
+        return gap if repeated and (prior_source_writes or written) else None
+
+    def _handoff_managed_repair(gap: ManagedSourceGap, steps: int) -> AgentResult:
+        return AgentResult(
+            done=False, summary=gap, files=written, steps=steps, transcript=convo,
+            stop_reason="managed_source_contract_unresolved", evidence=_evidence(),
+        )
+
     def _completion_gap() -> str | None:
         if edit_source_changed is not None and not edit_source_changed():
             return _EDIT_SOURCE_NUDGE
         if source_repair and not _repair_source_changed():
             return _SOURCE_REPAIR_NUDGE
+        if (managed_gap := _current_managed_gap()) is not None:
+            return managed_gap
         if completion_check is None:
             return None
         try:
@@ -1740,23 +1782,26 @@ async def _run_native_segment(
             ):
                 checked = await execute(Action("build", {}, ""))
                 checkpoint_at = asyncio.get_running_loop().time()
-                last_build_ok = bool(checked.get("ok"))
-                wrote_since_build = False
+                _remember_build_check(checked)
                 _invalidate_proofs("build")
                 if last_build_ok:
-                    unverified_response_problem = None
                     proof_after_write.add("build")
                     successful_tools["build"] = successful_tools.get("build", 0) + 1
                 detail = _step_detail("build", Action("build", {}, ""), checked)
                 model_detail = render_model_observation(
                     checked, max_body_chars=_MAX_TOOL_RESULT_CHARS, prefer_content=True,
                 )
+                managed_gap = _current_managed_gap()
+                if managed_gap is not None:
+                    model_detail += "\n" + managed_gap
                 convo.append({"role": "user", "content": "EARLY SOURCE CHECK:\n" + model_detail})
                 if emit:
                     await emit("agent.step", {
                         "step": step, "action": "build", "path": "",
                         "detail": detail, "ok": last_build_ok,
                     })
+                if (repair_gap := _managed_repair_after_feedback(managed_gap)) is not None:
+                    return _handoff_managed_repair(repair_gap, step)
                 if edit_deadline is not None:
                     remaining = (edit_deadline - datetime.now(UTC)).total_seconds()
                     if remaining <= 0:
@@ -2088,6 +2133,9 @@ async def _run_native_segment(
                         ),
                     }
                 )
+                if _done and (managed_gap := _current_managed_gap()) is not None:
+                    if (repair_gap := _managed_repair_after_feedback(managed_gap)) is not None:
+                        return _handoff_managed_repair(repair_gap, step + 1)
                 if edit_source_changed is not None and not edit_source_changed():
                     if no_write_turns >= _EDIT_NO_PROGRESS_TURNS:
                         return await _finish_without_provider(
@@ -2107,6 +2155,7 @@ async def _run_native_segment(
             done_summary: str | None = None
             pending_done: list[tuple[str, dict[str, Any]]] = []
             product_progress_this_turn = False
+            checked_build_this_turn = False
             ops_this_turn = 0  # executed (non-done) tool ops this turn
             infra_this_turn = 0  # of those, how many died on infra
             for tu in tool_uses:
@@ -2290,10 +2339,8 @@ async def _run_native_segment(
                     ):
                         product_progress_this_turn = True
                 elif name == "build":
-                    last_build_ok = bool(obs.get("ok"))
-                    wrote_since_build = False
-                    if last_build_ok:
-                        unverified_response_problem = None
+                    _remember_build_check(obs)
+                    checked_build_this_turn = True
                 if obs.get("ok"):
                     successful_tools[name] = successful_tools.get(name, 0) + 1
                     if name in {"build", "runtime_check", "probe", "verify_isolation"}:
@@ -2305,6 +2352,7 @@ async def _run_native_segment(
                         _tr["content"] = str(_tr["content"]) + _hint
                 results.append(_tr)
 
+            current_managed_gap = _current_managed_gap()
             if pending_done:
                 if edit_source_changed is not None and not edit_source_changed():
                     done_gap = _EDIT_SOURCE_NUDGE
@@ -2320,6 +2368,18 @@ async def _run_native_segment(
                         done_result.update(is_error=True, content="Not done yet: " + done_gap)
                     else:
                         done_summary = summary
+
+            # Count once per provider turn, and keep the last reported rejection
+            # until a check of the current source can confirm or replace it.
+            if not wrote_since_build and (
+                checked_build_this_turn or (pending_done and current_managed_gap is not None)
+            ):
+                if current_managed_gap is not None and not pending_done:
+                    results.append({"type": "text", "text": str(current_managed_gap)})
+                repair_gap = _managed_repair_after_feedback(current_managed_gap)
+                if repair_gap is not None:
+                    convo.append({"role": "user", "content": results})
+                    return _handoff_managed_repair(repair_gap, step + 1)
 
             if (
                 max_runtime
@@ -2463,7 +2523,7 @@ NativeSegmentRunner = Callable[
 
 _CONTINUATION_TERMINAL_REASONS = frozenset(
     {"error", "infra_error", "provider_error", "provider_stopped_red", "finalization_reserve",
-     "output_limit"}
+     "managed_source_contract_unresolved", "output_limit"}
 )
 
 
@@ -2737,13 +2797,16 @@ async def run_native_build(
     execute = shadow_recovery_executor(
         execute, recovery=recovery, recovery_binding=recovery_binding,
     )
+    prior_source_writes = False
+    prior_managed_rejection: str | None = None
 
     async def run_segment(
         segment_task: str,
         segment_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None,
         initial_files: Mapping[str, str],
     ) -> AgentResult:
-        return await _run_native_segment(
+        nonlocal prior_source_writes, prior_managed_rejection
+        result = await _run_native_segment(
             model=model,
             system=system,
             task=segment_task,
@@ -2768,7 +2831,16 @@ async def run_native_build(
             edit_source_changed=edit_source_changed,
             response_recovery=response_recovery, take_verified_progress=take_verified_progress,
             pure_check=pure_check, continuation=continuation,
+            prior_source_writes=prior_source_writes,
+            prior_managed_rejection=prior_managed_rejection,
         )
+        prior_source_writes = prior_source_writes or bool(result.files)
+        # The next segment is prompted with this exact summary. The rejection
+        # is actionable only if a fresh check in that segment confirms it.
+        prior_managed_rejection = (
+            result.summary.rejection_key() if isinstance(result.summary, ManagedSourceGap) else None
+        )
+        return result
 
     result = await _run_native_segments(
         task=task,

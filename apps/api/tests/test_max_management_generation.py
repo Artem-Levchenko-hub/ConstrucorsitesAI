@@ -928,6 +928,7 @@ def test_spread_passivity_does_not_prove_missing_destructured_properties(probe):
 
 @pytest.mark.parametrize("statistics", [
     "const total = orders.reduce((sum, row) => sum + (row.total_kopecks ?? 0), 0);",
+    "const total = orders.reduce((sum, row) => { return sum + (row.total_kopecks ?? 0); }, 0);",
     "const count = orders.filter(row => row.status === 'new').length;",
     "const statuses = ['new', 'completed'] as const; "
     "const counts = statuses.map(status => ({status, count: "
@@ -943,8 +944,28 @@ def test_read_only_statistics_preserve_original_live_collection_connections(stat
     assert management_implemented_capabilities(files) == frozenset({"catalog", "history"})
 
 
+def test_catalog_status_helper_with_a_single_return_preserves_live_records():
+    modules = ("catalog", "orders", "leads")
+    source = """
+function countByStatus(records: ManagedRecord[], status: string): number {
+    const matching = records.filter((record) => {
+        // The callback only reads the record and the captured status.
+        return record.status === status;
+    });
+    return matching.length;
+}
+""" + connection_example(modules).replace(
+        "return <main>", "const count = countByStatus(orders, 'completed');\nreturn <main>",
+    )
+    files = connection_files(source, modules)
+    assert management_source_gap(files) is None
+    assert management_implemented_capabilities(files) == frozenset({"catalog", "history"})
+
+
 @pytest.mark.parametrize("statistics", [
     "orders.filter(row => { orders.splice(0); return true; })",
+    "orders.filter(row => { return opaque(row); })",
+    "orders.filter(row => { return (row.status = 'new'); })",
     "orders.filter(row => opaque(row))",
     "orders.filter(async row => row.status === 'new')",
     "orders.filter((row = opaque(orders)) => row.status === 'new')",

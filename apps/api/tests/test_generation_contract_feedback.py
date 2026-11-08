@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from yleum_api.services import agent_native
+from yleum_api.services.agent_builder import Action
 from yleum_api.services.generation.contracts import GenerationIds, GenerationRuntime
 from yleum_api.services.integration_generation import generation_context
 from yleum_api.services.max_data_evolution import build_max_agent_guide
@@ -168,6 +169,43 @@ async def test_coordinator_fast_check_uses_fixed_accepted_schema_baseline():
     candidate["drizzle/0000_core.sql"] = "CREATE TABLE different(id int);"
     assert "immutable" in (await checked_fast_check(runtime, ids))["detail"]
     assert coordinator.fast_check.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_green_native_build_reports_only_located_managed_source_rejections():
+    from yleum_api.services.generation.agent_runtime import guard_native_source_contract
+    from yleum_api.services.max_management_generation import ManagedSourceGap
+
+    from .test_max_management_generation import connection_example, connection_files
+
+    modules = ("catalog", "orders")
+    source = connection_example(modules)
+    broken = source.replace(
+        "return <main>",
+        "const count = orders.filter(row => opaque(row)).length;\nreturn <main>",
+    )
+    candidate = connection_files(broken, modules)
+    handle = SimpleNamespace(snapshot_files=AsyncMock(side_effect=lambda: dict(candidate)))
+    runtime = GenerationRuntime(handle=handle)
+    ids = GenerationIds(*(uuid4() for _ in range(5)))
+    action = Action("build", {}, "")
+    execute = AsyncMock(return_value={"ok": True})
+
+    default_execute, _ = await guard_native_source_contract(runtime, ids, execute, None)
+    assert await default_execute(action) == {"ok": True}
+    guarded, _ = await guard_native_source_contract(
+        runtime, ids, execute, None, report_managed_build_gap=True,
+    )
+    verdict = await guarded(action)
+    assert verdict["ok"] is True
+    gap = verdict["managed_source_gap"]
+    assert isinstance(gap, ManagedSourceGap) and gap.rejection_key()
+    assert "unproven_statistic_callback" in gap
+    execute.return_value = {"ok": False}
+    assert await guarded(action) == {"ok": False}
+    execute.return_value = {"ok": True}
+    candidate.update(connection_files(source, modules))
+    assert await guarded(action) == {"ok": True}
 
 
 @pytest.mark.asyncio
