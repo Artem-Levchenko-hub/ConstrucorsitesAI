@@ -39,19 +39,37 @@
 .max-connect-address { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; background: var(--color-accent-subtle); border: 1px solid var(--color-border-default); border-radius: 10px; padding: 16px; margin: 24px 0 16px; text-align: left; }
 .max-connect-address code { flex: 1; min-width: 180px; overflow-wrap: anywhere; font-family: inherit; color: #234b9b; font-size: 15px; }
 .max-connect-path { margin-block: 12px; padding: 16px; border: 1px dashed #c4d0e5; border-radius: 6px; }
-.max-connect-acknowledgement { display: flex; align-items: flex-start; gap: 12px; width: 100%; max-width: 570px; min-height: 44px; margin: 20px auto; font-size: 13px; line-height: 1.6; color: #253b58; cursor: pointer; text-align: left; }
-.max-connect-acknowledgement input { width: 19px; height: 19px; flex: none; margin-top: 2px; accent-color: var(--color-accent); }
 .max-connect-step p.max-connect-success { color: var(--color-success-fg); border: 1px solid color-mix(in srgb, var(--color-success) 20%, var(--color-border-default)); border-radius: 10px; background: #eef9f2; padding: 12px 16px; }
 .max-connect-step p.max-connect-error, .max-connect-error { color: #ae303a; background: #fff2f2; padding: 12px; border-radius: 6px; }
-.max-connect-advanced { max-width: 640px; margin: 24px auto 0; border-top: 1px solid var(--color-border-default); padding-top: 16px; }
-.max-connect-advanced > summary { text-align: center; list-style-position: inside; }
-.max-connect-advanced summary, .max-connect-technical summary { cursor: pointer; color: #526785; font-size: 13px; min-height: 44px; padding-block: 10px; }
+.max-connect-advanced { max-width: 640px; margin: 0 auto 16px; border-bottom: 1px solid var(--color-border-default); padding-bottom: 8px; }
+.max-connect-wizard[data-configured] .max-connect-advanced { margin-bottom: 0; border-bottom: 0; padding-bottom: 0; }
+.max-connect-disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding-block: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  list-style: none;
+}
+.max-connect-disclosure > summary::-webkit-details-marker { display: none; }
+.max-connect-disclosure > summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 4px; }
+.max-connect-bot-name { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--color-fg-primary); font-size: 15px; font-weight: 600; }
+.max-connect-bot-status { display: inline-flex; flex: none; align-items: center; gap: 6px; color: var(--color-success-fg); font-size: 12px; font-weight: 500; }
+.max-connect-bot-status[data-tone=warning] { color: var(--color-warning); }
+.max-connect-bot-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: currentColor; }
+.max-connect-chevron { width: 16px; height: 16px; flex: none; margin-inline-start: auto; color: var(--color-fg-secondary); }
+.max-connect-disclosure[open] > summary .max-connect-chevron { transform: rotate(180deg); }
+.max-connect-address-settings { border-top: 1px solid var(--color-border-default); margin-top: 8px; }
+.max-connect-address-settings > summary { color: var(--color-fg-secondary); font-size: 13px; font-weight: 500; }
+.max-connect-address-settings > .max-connect-address { margin-top: 8px; }
 .max-connect-advanced-body { padding-top: 12px; }
 .max-connect-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-block: 16px; }
 .max-connect-actions > button { min-height: 44px; }
-.max-connect-technical { margin-top: 12px; font-size: 12px; }
-.max-connect-step > .max-connect-technical > summary { text-align: center; list-style-position: inside; }
-.max-connect-technical p { font-size: 12px; }
+.max-connect-actions > button[aria-disabled=true] { opacity: .45; pointer-events: none; }
+.max-connect-technical { margin-top: 12px; }
+.max-connect-technical summary { cursor: pointer; color: var(--color-fg-secondary); font-size: 13px; min-height: 44px; padding-block: 10px; }
 .max-connect-technical > button { display: flex; width: fit-content; max-width: 100%; min-height: 44px; margin-inline: auto; }
 .max-connect-disconnect { background: #fff5f5; border: 1px solid #f0cbcd; border-radius: 6px; padding: 16px; margin-top: 16px; font-size: 13px; }
 .max-connect-disconnect-button { display: flex; width: fit-content; max-width: 100%; min-height: 44px; margin-inline: auto; color: #ae303a; }

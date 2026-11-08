@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, Bot, Check, Copy, ExternalLink, KeyRound, Loader2, Rocket, Smartphone } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, Check, ChevronDown, Copy, ExternalLink, KeyRound, Loader2, Rocket, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,6 +19,7 @@ import { ApiError } from "@/lib/api/client";
 const steps = ["Бот", "Подключение", "Публикация", "Адрес в MAX"];
 
 type AddressBinding = { url: string; botId: string };
+type AddressState = AddressBinding & { proof: "historical" | "pending" | "confirmed" };
 
 function matchesBinding(saved: AddressBinding | null, current: AddressBinding | null) {
   return Boolean(saved && current && saved.url === current.url && saved.botId === current.botId);
@@ -42,8 +43,8 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
   const qc = useQueryClient();
   const [botPrepared, setBotPrepared] = useState(false);
   const [token, setToken] = useState("");
-  const [acknowledgedBinding, setAcknowledgedBinding] = useState<AddressBinding | null>(null);
-  const [confirmedBinding, setConfirmedBinding] = useState<AddressBinding | null>(null);
+  const [addressState, setAddressState] = useState<AddressState | null>(null);
+  const addressSummary = useRef<HTMLElement>(null);
   const [copyNotice, setCopyNotice] = useState("");
   const [disconnectRequested, setDisconnectRequested] = useState(false);
   const [maintenanceNotice, setMaintenanceNotice] = useState("");
@@ -57,12 +58,15 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
   });
   const dataReady = integration.isSuccess && integration.isFetchedAfterMount && config.isSuccess && config.isFetchedAfterMount && deploy.isSuccess;
   const data = integration.data;
-  const connected = dataReady && data?.eligible && data.connected && data.status !== "error";
+  const connected = dataReady && data?.eligible && data.connected && (data.status === "verified" || data.status === "active");
   const productionUrl = dataReady ? httpsAddress(deploy.data.prod_url ?? data?.app_url) : null;
   const step = connected ? productionUrl ? 4 : 3 : botPrepared || data?.connected ? 2 : 1;
   const binding = productionUrl && data?.bot_id ? { url: productionUrl, botId: data.bot_id } : null;
-  const acknowledged = matchesBinding(acknowledgedBinding, binding);
-  const confirmed = matchesBinding(confirmedBinding, binding) && config.data?.config.max_url_attached;
+  const currentBinding = matchesBinding(addressState, binding);
+  if (binding && !currentBinding) {
+    setAddressState({ ...binding, proof: addressState ? "pending" : "historical" });
+  }
+  const confirmed = currentBinding && addressState?.proof === "confirmed" && config.data?.config.max_url_attached;
 
   function refreshIntegration() {
     void qc.invalidateQueries({ queryKey: integrationKey });
@@ -104,7 +108,8 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
         app_url: null, webhook_url: null, deep_link: null, last_error: null, verified_at: null, published_at: null,
       }));
       refreshBinding();
-      setToken(""); setBotPrepared(false); setAcknowledgedBinding(null); setConfirmedBinding(null);
+      setToken(""); setBotPrepared(false);
+      setAddressState(current => current && { ...current, proof: "pending" });
       setDisconnectRequested(false); setMaintenanceNotice("");
     },
   });
@@ -122,7 +127,11 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
     onSuccess: (result, savedBinding) => {
       qc.setQueryData(configKey, result);
       void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
-      if (result.config.max_url_attached) setConfirmedBinding(savedBinding);
+      if (result.config.max_url_attached) {
+        setAddressState(current => matchesBinding(current, savedBinding)
+          ? { ...savedBinding, proof: "confirmed" }
+          : current);
+      }
     },
     onError: error => {
       if (error instanceof ApiError && error.details?.reason === "max_bot_binding_changed") {
@@ -133,6 +142,10 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
   const busy = connect.isPending || verify.isPending || activate.isPending || disconnect.isPending || confirmUrl.isPending;
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   useEffect(() => () => { onBusyChange?.(false); }, [onBusyChange]);
+  useEffect(() => {
+    const summary = addressSummary.current;
+    if (confirmed && summary && !summary.closest("details")?.open) summary.focus();
+  }, [confirmed]);
   const activationReady = connected && Boolean(httpsAddress(data?.app_url)) && canActivateMaxWebhook(data);
 
   function resetMaintenance() {
@@ -161,14 +174,65 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
   if (!dataReady || !data) return <div className="max-connect-state" role="status"><Loader2 className="animate-spin" aria-hidden="true" />Загружаем настройки MAX…</div>;
   if (!data.eligible) return <div className="max-connect-state"><h2>Подключение MAX недоступно для этого проекта</h2><p>Откройте проект мини-приложения MAX.</p></div>;
 
+  const configured = step === 4 && config.data.config.max_url_attached && currentBinding && addressState?.proof !== "pending";
+  const addressForm = productionUrl && <>
+    {configured && !confirmed && <p className="max-connect-hint">Адрес подтверждали ранее. Если он изменился, сохраните новый адрес в MAX и подтвердите здесь.</p>}
+    <div className="max-connect-address"><code>{productionUrl}</code><Button variant="outline" onClick={async () => {
+      const copied = await copyMaxLaunchUrl(productionUrl);
+      setCopyNotice(copied ? "Адрес скопирован" : "Не удалось скопировать. Выделите адрес и скопируйте его вручную.");
+    }}><Copy aria-hidden="true" />Скопировать адрес</Button></div>
+    {copyNotice && <p className="max-connect-hint" role="status">{copyNotice}</p>}
+    <p className="max-connect-instructions">Сохраните адрес в настройках нужного бота.</p>
+    <p className="max-connect-path">Чат-боты → ⋮ у нужного бота → Настройки → Мини-приложение → Введите ссылку → Сохранить</p>
+    {cabinetLink}
+    {confirmUrl.isError && <p role="alert" className="max-connect-error">Не удалось сохранить подтверждение. Проверьте адрес и соединение, затем повторите попытку.</p>}
+    <div className="max-connect-primary">
+      <Button disabled={busy || !binding} onClick={() => { if (connected && binding) confirmUrl.mutate(binding); }}>
+        {confirmUrl.isPending && <Loader2 className="animate-spin" aria-hidden="true" />}Я сохранил адрес в MAX
+      </Button>
+    </div>
+  </>;
+  const botSettings = data.connected && <details className="max-connect-advanced max-connect-disclosure">
+    <summary>
+      <span className="max-connect-bot-name">{data.bot_name || data.bot_username || "Бот MAX"}</span>
+      <span className="max-connect-bot-status" data-tone={connected ? "success" : "warning"}>
+        <span className="max-connect-bot-dot" aria-hidden="true" />
+        {connected ? "Бот подключён" : "Нужна проверка"}
+      </span>
+      <ChevronDown className="max-connect-chevron" aria-hidden="true" />
+    </summary>
+    <div className="max-connect-advanced-body">
+      <div className="max-connect-actions">
+        <Button variant="outline" aria-disabled={busy || undefined} onClick={() => {
+          if (busy) return;
+          resetMaintenance(); verify.mutate();
+        }}>Проверить подключение</Button>
+        <Button variant="outline" disabled={busy || !activationReady} onClick={() => { resetMaintenance(); activate.mutate(); }}>Обновить связь</Button>
+      </div>
+      {!activationReady && <p className="max-connect-hint">Для обновления связи сначала нужен опубликованный HTTPS-адрес и действующее подключение.</p>}
+      {(verify.isError || activate.isError || disconnect.isError) && <p role="alert" className="max-connect-error">Не удалось выполнить действие. Повторите попытку.</p>}
+      {maintenanceNotice && <p role="status" className="max-connect-hint">{maintenanceNotice}</p>}
+      {step !== 2 && <details className="max-connect-technical"><summary>Заменить токен бота</summary>{tokenField}<Button variant="outline" disabled={busy || token.trim().length < 10} onClick={() => { resetMaintenance(); connect.mutate(); }}>Заменить токен</Button></details>}
+      {disconnectRequested ? <div className="max-connect-disconnect"><p>Отключить бота? Безопасный вход пользователей MAX перестанет работать до повторного подключения.</p><div className="max-connect-actions"><Button variant="destructive" disabled={busy} onClick={() => disconnect.mutate()}>Да, отключить</Button><Button variant="outline" disabled={busy} onClick={() => setDisconnectRequested(false)}>Отмена</Button></div></div>
+        : <Button variant="ghost" className="max-connect-disconnect-button" disabled={busy} onClick={() => { resetMaintenance(); setDisconnectRequested(true); }}>Отключить MAX</Button>}
+    </div>
+  </details>;
+
   return (
-    <div className="max-connect-wizard">
-      <ol className="max-connect-progress" aria-label="Шаги подключения MAX">
-        {steps.map((label, index) => <li key={label} aria-current={step === index + 1 ? "step" : undefined} data-complete={step > index + 1 || (index === 3 && Boolean(confirmed))}>
+    <div className="max-connect-wizard" data-configured={configured || undefined}>
+      {botSettings}
+      {!configured && <ol className="max-connect-progress" aria-label="Шаги подключения MAX">
+        {steps.map((label, index) => <li key={label} aria-current={step === index + 1 ? "step" : undefined} data-complete={step > index + 1}>
           <span>{step > index + 1 ? <Check aria-hidden="true" /> : index + 1}</span><small>{label}</small>
         </li>)}
-      </ol>
-      <section className="max-connect-step" aria-labelledby="max-connect-step-title">
+      </ol>}
+      {configured ? <div className="max-connect-step">
+        <details className="max-connect-address-settings max-connect-disclosure">
+          <summary ref={addressSummary}><span>Адрес приложения в MAX</span><ChevronDown className="max-connect-chevron" aria-hidden="true" /></summary>
+          {addressForm}
+        </details>
+        {confirmed && <p role="status" className="max-connect-success">Подтверждение сохранено</p>}
+      </div> : <section className="max-connect-step" aria-labelledby="max-connect-step-title">
         {step === 1 && <>
           <h2 id="max-connect-step-title">Создайте бота в MAX</h2>
           <p className="max-connect-lead">Бот — страница вашего бизнеса в MAX. Через неё пользователи смогут открыть приложение.</p>
@@ -199,37 +263,12 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
         </>}
         {step === 4 && productionUrl && <>
           <h2 id="max-connect-step-title">Добавьте адрес в MAX</h2>
-          <p className="max-connect-lead">Осталось указать в настройках бота, какое приложение открывать.</p>
-          <div className="max-connect-address"><code>{productionUrl}</code><Button variant="outline" onClick={async () => {
-            const copied = await copyMaxLaunchUrl(productionUrl);
-            setCopyNotice(copied ? "Адрес скопирован" : "Не удалось скопировать. Выделите адрес и скопируйте его вручную.");
-          }}><Copy aria-hidden="true" />Скопировать адрес</Button></div>
-          {copyNotice && <p className="max-connect-hint" role="status">{copyNotice}</p>}
-          <p className="max-connect-instructions">В кабинете MAX откройте бота и пройдите по шагам:</p>
-          <p className="max-connect-path">Чат-боты → ⋮ у нужного бота → Настройки → Мини-приложение → Введите ссылку → Сохранить</p>
-          {cabinetLink}
-          <label className="max-connect-acknowledgement"><input type="checkbox" checked={acknowledged} disabled={busy || !binding} onChange={event => { setAcknowledgedBinding(event.target.checked ? binding : null); confirmUrl.reset(); }} /><span>Я вставил адрес и сохранил настройки в MAX</span></label>
-          {confirmUrl.isError && <p role="alert" className="max-connect-error">Не удалось сохранить подтверждение. Проверьте адрес и соединение, затем повторите попытку.</p>}
-          {confirmed ? <p role="status" className="max-connect-success">Подтверждение сохранено</p>
-            : config.data.config.max_url_attached && <p className="max-connect-hint">Ранее вы уже подтверждали вставку адреса. Если он изменился, обновите его в MAX и подтвердите ещё раз.</p>}
-          <div className="max-connect-primary"><Button disabled={busy || !acknowledged} onClick={() => { if (connected && acknowledged && binding) confirmUrl.mutate(binding); }}>{confirmUrl.isPending && <Loader2 className="animate-spin" aria-hidden="true" />}Сохранить подтверждение</Button></div>
-          <details className="max-connect-technical"><summary>Что подтверждает этот шаг</summary><p>Вы подтверждаете вставку адреса вручную. MAX не передаёт эту настройку Yleum. Сетевой запрос к адресу не проверяет работу приложения или его настройки в MAX.</p></details>
+          <p className="max-connect-lead">{addressState?.proof === "pending"
+            ? "Проверьте адрес в настройках бота и подтвердите его заново."
+            : "Осталось указать в настройках бота, какое приложение открывать."}</p>
+          {addressForm}
         </>}
-      </section>
-      {data.connected && <details className="max-connect-advanced">
-        <summary>Дополнительные настройки подключения</summary>
-        <div className="max-connect-advanced-body">
-          <p>{data.bot_name || data.bot_username || "Ваш бот MAX"}</p>
-          <p className="max-connect-hint">Yleum обновляет серверную связь при публикации. Эти действия нужны для повторной проверки и смены токена.</p>
-          <div className="max-connect-actions"><Button variant="outline" disabled={busy} onClick={() => { resetMaintenance(); verify.mutate(); }}>Проверить подключение</Button><Button variant="outline" disabled={busy || !activationReady} onClick={() => { resetMaintenance(); activate.mutate(); }}>Обновить связь</Button></div>
-          {!activationReady && <p className="max-connect-hint">Для обновления связи сначала нужен опубликованный HTTPS-адрес и действующее подключение.</p>}
-          {(verify.isError || activate.isError || disconnect.isError) && <p role="alert" className="max-connect-error">Не удалось выполнить действие. Повторите попытку.</p>}
-          {maintenanceNotice && <p role="status" className="max-connect-hint">{maintenanceNotice}</p>}
-          {step !== 2 && <details className="max-connect-technical"><summary>Заменить токен бота</summary>{tokenField}<Button variant="outline" disabled={busy || token.trim().length < 10} onClick={() => { resetMaintenance(); connect.mutate(); }}>Заменить токен</Button></details>}
-          {disconnectRequested ? <div className="max-connect-disconnect"><p>Отключить бота? Безопасный вход пользователей MAX перестанет работать до повторного подключения.</p><div className="max-connect-actions"><Button variant="destructive" disabled={busy} onClick={() => disconnect.mutate()}>Да, отключить</Button><Button variant="outline" disabled={busy} onClick={() => setDisconnectRequested(false)}>Отмена</Button></div></div>
-            : <Button variant="ghost" className="max-connect-disconnect-button" disabled={busy} onClick={() => { resetMaintenance(); setDisconnectRequested(true); }}>Отключить MAX</Button>}
-        </div>
-      </details>}
+      </section>}
     </div>
   );
 }

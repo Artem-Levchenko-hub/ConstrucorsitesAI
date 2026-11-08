@@ -429,32 +429,6 @@ export const guideScreenshots: Record<string, GuideScreenshotData> = {
       }
     ]
   },
-  "max-address": {
-    "src": "/guide/2026-10-30-redacted/max-address.png",
-    "width": 710,
-    "height": 180,
-    "alt": "Фрагмент реального мастера: галочка сохранения адреса и кнопка подтверждения",
-    "title": "Yleum · Подтверждение сохранения в MAX",
-    "sourceLabel": "Yleum",
-    "sourceUrl": "https://yleum.ru/max",
-    "capturedAt": "2026-10-30T11:38:47.769Z",
-    "callouts": [
-      {
-        "x": 26,
-        "y": 49,
-        "targetX": 2,
-        "targetY": 16,
-        "text": "Поставьте галочку только после того, как действительно сохранили адрес в кабинете MAX."
-      },
-      {
-        "x": 62,
-        "y": 88,
-        "targetX": 84,
-        "targetY": 54,
-        "text": "Нажмите «Сохранить подтверждение». Это ваше подтверждение, а не автоматическая проверка настроек MAX."
-      }
-    ]
-  },
   "max-settings": {
     "src": "/guide/2026-10-30-redacted/max-settings.png",
     "width": 1158,
