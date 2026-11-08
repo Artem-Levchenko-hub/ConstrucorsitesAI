@@ -17,6 +17,7 @@ from yleum_api.services.generation.contracts import (
     GenerationRuntime,
     ProjectGenerationFacts,
     SourceBaseline,
+    uses_single_max_source_repair,
 )
 from yleum_api.services.generation.file_transforms import _merge_seeded_agent_files
 from yleum_api.services.generation.source_intent import (
@@ -720,6 +721,7 @@ async def complete_empty_legacy_build(
         and not files
         and get_settings().use_agentic_builder
         and not get_settings().use_native_agent
+        and not uses_single_max_source_repair(runtime)
         and _agent_res.stop_reason
         not in {
             "max_steps_green",

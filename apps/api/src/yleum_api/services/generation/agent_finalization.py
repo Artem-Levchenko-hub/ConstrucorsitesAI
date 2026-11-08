@@ -20,6 +20,7 @@ from yleum_api.services.generation.contracts import (
     GenerationIds,
     GenerationRuntime,
     SourceBaseline,
+    uses_single_max_source_repair,
 )
 from yleum_api.services.generation.runtime import _restore_project_cell_source
 from yleum_api.services.generation.source_error_classification import SourceFailure
@@ -61,6 +62,8 @@ class EditSourceChangeVerdict(NamedTuple):
 class _FinalizationOptions(TypedDict, total=False):
     continuation: ExecutionDriver
     source_preflight: Callable[[], Awaitable[str | None]]
+    max_source_repairs: int
+    interrupted_source_reason: str
 
 
 def source_change_allows_partial_save(verdict: EditSourceChangeVerdict) -> bool:
@@ -188,6 +191,7 @@ async def run_native_source_repair(
     operations: AgentOperations, is_free: bool, shell_enabled: bool,
     edit_deadline: datetime | None,
     source_failure: SourceFailure | None = None,
+    feedback: str = "",
 ) -> agent_builder.AgentResult:
     """Reuse the guarded editor's progress windows without accepting proof."""
     from yleum_api.services import agent_native
@@ -201,6 +205,7 @@ async def run_native_source_repair(
     continuation = getattr(operations, "continuation", None)
     accounting = getattr(operations, "response_recovery", None)
     model_baseline = baseline
+    single_repair = continuation is None and uses_single_max_source_repair(runtime)
     if continuation is not None:
         from yleum_api.services.generation.recovery_contract import IncompleteResponseBudget
         from yleum_api.services.generation.recovery_pipeline import (
@@ -228,7 +233,24 @@ async def run_native_source_repair(
             # A historical path list is not current source-repair authority.
             source_failure = SourceFailure()
     else:
+        if single_repair and getattr(runtime, "source_repair_started", False):
+            raise RuntimeError("MAX source repair already used")
         task = with_managed_source_context(task, baseline)
+    if single_repair:
+        runtime.source_repair_started = True
+        _log.info("max_automatic_source_repair_started", extra={"run_id": str(ids.run_id)})
+        await operations.emit("agent.step", {"action": "build", "human": "Проверяю приложение"})
+    else:
+        await operations.emit(
+            "agent.step",
+            {
+                "action": "source_repair",
+                "human": "Дорабатываю по замечаниям проверки",
+                "detail": feedback,
+                "ok": False,
+                "path": "",
+            },
+        )
     execute = operations.execute
     if source_failure is not None:
         allowed = frozenset(source_failure.allowed_paths)
@@ -270,11 +292,12 @@ async def run_native_source_repair(
             system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
             task=task, execute=repair_execute,
             user_id=str(ids.user_id), project_id=str(ids.project_id), run_id=str(ids.run_id),
-            message_id=str(ids.assistant_message_id), free=is_free, emit=operations.emit,
+            message_id=str(ids.assistant_message_id), free=is_free,
+            emit=None if single_repair else operations.emit,
             max_steps=plan.steps,
             max_segments=(
                 None
-                if runtime.coordinator is not None
+                if not single_repair and runtime.coordinator is not None
                 and getattr(get_settings(), "agent_progressive_continuation", False)
                 else 1
             ),
@@ -291,6 +314,18 @@ async def run_native_source_repair(
         )
     if result.stop_reason in {"provider_error", "infra_error", "error"}:
         raise RuntimeError(result.summary)
+    if single_repair and get_settings().use_sast_gate and get_settings().sast_gate_blocking:
+        from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
+        from yleum_api.services.sast_gate import check_sast
+
+        assert runtime.handle is not None
+        repaired_source = await runtime.handle.snapshot_files()
+        sast = check_sast({
+            path: content for path, content in repaired_source.items()
+            if path not in MAX_SECURITY_LOCKED_FILES
+        })
+        if not sast.safe:
+            raise RuntimeError("MAX_FINALIZATION_FAILED: repaired source failed security checks")
     if continuation is not None:
         from yleum_api.services.generation.recovery_pipeline import finish_source_repair
         await finish_source_repair(
@@ -316,6 +351,7 @@ async def finalize_max_candidate(
     operations: AgentOperations,
     catalog_runtime: bool = False,
     source_handoff: bool = False,
+    interrupted_source_reason: str | None = None,
     render_core_on_rejection: Callable[[], Awaitable[dict[str, str]]] | None = None,
 ) -> FinalizedAgentSource:
     _max_finalization_proof: ProofBundle | None = None
@@ -344,6 +380,7 @@ async def finalize_max_candidate(
 
         _repair_history: list[str] = []
         continuation = getattr(operations, "continuation", None)
+        single_repair = continuation is None and uses_single_max_source_repair(runtime)
 
         async def _repair_finalization_source(
             detail: str, source_failure: SourceFailure | None = None,
@@ -373,17 +410,7 @@ async def finalize_max_candidate(
             )
             if continuation is None:
                 _repair_history.append(detail)
-            await operations.emit(
-                "agent.step",
-                {
-                    "action": "source_repair",
-                    "human": "Дорабатываю по замечаниям проверки",
-                    "detail": detail,
-                    "ok": False,
-                    "path": "",
-                },
-            )
-            await run_native_source_repair(
+            repaired = await run_native_source_repair(
                 task=(
                     f"{plan.user}\n\nFINAL SOURCE CHECK FEEDBACK:\n{detail}{_carry}\n"
                     "Fix the existing product in this same workspace. Preserve working "
@@ -395,16 +422,25 @@ async def finalize_max_candidate(
                 shell_enabled=_max_shell_enabled,
                 edit_deadline=await runtime.coordinator.source_edit_deadline(repair=True),
                 source_failure=source_failure,
+                feedback=detail,
             )
+            if single_repair and not (repaired.done or repaired.needs_finalization):
+                raise RuntimeError("MAX_FINALIZATION_FAILED: source repair did not complete")
 
         try:
             options: _FinalizationOptions = {}
             if continuation is not None:
                 options["continuation"] = continuation
+            if single_repair:
+                options["max_source_repairs"] = int(
+                    not getattr(runtime, "source_repair_started", False)
+                )
             if source_handoff:
                 from yleum_api.services.generation.agent_runtime import migration_feedback
 
                 options["source_preflight"] = lambda: migration_feedback(runtime, ids)
+                if interrupted_source_reason is not None:
+                    options["interrupted_source_reason"] = interrupted_source_reason
             _finalization = await runtime.coordinator.finalize_with_repair(
                 prompt=prompt_text,
                 repair=_repair_finalization_source,
@@ -464,7 +500,7 @@ async def finalize_max_candidate(
                     if restored.get("ok") is not True:
                         raise RuntimeError("MAX core restore did not pass runtime verification")
             except Exception as _repair_rollback_exc:
-                if source_handoff:
+                if source_handoff or single_repair:
                     raise_if_terminal_cell_error(_repair_rollback_exc)
                     cause = bounded_redacted_diagnostic(str(exc), max_bytes=2000)
                     raise RuntimeError(f"{cause}; rollback_unverified") from _repair_rollback_exc

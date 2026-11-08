@@ -3,20 +3,59 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from yleum_api.models.generation_event import GenerationEvent
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.project import Project
 from yleum_api.models.user import User
+from yleum_api.services.generation.progress import GenerationProgress
 from yleum_api.services.generation_events import (
     append_generation_event,
+    generation_event_envelope,
+    generation_event_json,
     persist_and_publish_generation_event,
     replay_generation_events,
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.mark.parametrize("managed", [False, True])
+async def test_internal_failed_check_stays_neutral_on_live_and_replay(monkeypatch, managed):
+    run_id, project_id, message_id, operation_id = (uuid.uuid4() for _ in range(4))
+    progress = GenerationProgress(
+        None, run_id, project_id, message_id, defer_verification_errors=managed,
+    )
+    record = AsyncMock()
+    monkeypatch.setattr(progress, "_record", record)
+    failure = {
+        "operation_id": str(operation_id), "phase": "fast_check",
+        "state": "failed", "detail": "TypeScript failure",
+    }
+    await progress.record_generation_event("tool.finished", failure)
+    event_type, stored = record.await_args.args
+    event = GenerationEvent(
+        id=uuid.uuid4(), generation_run_id=run_id, project_id=project_id,
+        message_id=message_id, seq=7, event_type=event_type, payload=stored,
+    )
+    public = generation_event_envelope(event)
+    assert json.loads(generation_event_json(event)) == public
+    assert public["seq"] == 7 and public["data"]["operation_id"] == str(operation_id)
+    assert public["data"].get("state") == (None if managed else "failed")
+    assert public["data"].get("detail") == (None if managed else "TypeScript failure")
+    assert event.payload["state"] == "failed"
+
+    for action in ("build", "done"):
+        await progress.emit_agent_event(
+            "agent.step", {"action": action, "ok": False, "detail": "Internal check failed"},
+        )
+        row = record.await_args.kwargs["transcript_step"]
+        assert row["ok"] is (None if managed else False)
+        assert row["detail"] == ("" if managed else "Internal check failed")
 
 
 async def _new_user(session: AsyncSession, label: str) -> User:

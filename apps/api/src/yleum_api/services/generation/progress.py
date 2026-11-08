@@ -21,6 +21,7 @@ from yleum_api.services.agent_progress import (
 from yleum_api.services.generation.agent_messages import _humanize_step
 from yleum_api.services.generation.recovery_trace import bind_recovery_payload, safe_recovery_trace
 from yleum_api.services.generation_events import (
+    PROVISIONAL_TOOL_FAILURE,
     append_generation_event,
     generation_event_envelope,
     redact_event_payload,
@@ -64,6 +65,7 @@ class GenerationProgress:
     project_id: UUID
     assistant_message_id: UUID
     steps: list[dict[str, Any]] = field(default_factory=list)
+    defer_verification_errors: bool = False
     _record_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     async def record_agent_step(self, step_row: dict[str, Any]) -> None:
@@ -75,6 +77,12 @@ class GenerationProgress:
 
     async def record_generation_event(self, event_type: str, payload: Mapping[str, object]) -> None:
         payload = bind_recovery_payload(payload, run_id=str(self.run_id), event_type=event_type)
+        if (
+            self.defer_verification_errors
+            and event_type == "tool.finished"
+            and payload.get("state") in ("failed", "timed_out")
+        ):
+            payload = {**payload, PROVISIONAL_TOOL_FAILURE: True}
         await self._record(event_type, payload)
 
     async def _record(
@@ -207,6 +215,13 @@ class GenerationProgress:
         if data.get("skipped") is True:
             step_row["ok"] = None
             step_row["skipped"] = True
+        if (
+            self.defer_verification_errors
+            and raw_tool in {"build", "done"}
+            and (data.get("ok") is False or data.get("skipped") is True)
+        ):
+            step_row.update(action="Проверяю приложение", ok=None, detail="")
+            step_row.pop("skipped", None)
         if kind == "provider_error":
             step_row["ok"] = False
             step_row["detail"] = PROVIDER_ERROR_DETAIL

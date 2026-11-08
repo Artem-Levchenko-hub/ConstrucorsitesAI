@@ -71,6 +71,7 @@ class GenerationRuntime:
     response_recovery: ResponseRecovery = field(default_factory=ResponseRecovery)
     verified_progress: VerifiedProgressCollector | None = None
     continuation: ExecutionDriver | None = None
+    source_repair_started: bool = False
 
     def legacy_coordinator_handoff(self) -> bool:
         """Only this invocation's portable coordinator owns deferred runtime proof."""
@@ -82,6 +83,17 @@ class GenerationRuntime:
             and capabilities.get("portable_machine") is True
             and self.handle.is_portable()
         )
+
+
+def uses_single_max_source_repair(runtime: GenerationRuntime) -> bool:
+    """Use the ordinary MAX path, outside durable replay and restoration."""
+    handle = getattr(runtime, "handle", None)
+    return (
+        getattr(runtime, "coordinator", None) is not None
+        and handle is not None
+        and getattr(runtime, "continuation", None) is None
+        and getattr(handle, "prove_restoration_adaptation", None) is None
+    )
 
 
 @dataclass(frozen=True)

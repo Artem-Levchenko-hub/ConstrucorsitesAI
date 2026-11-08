@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -19,6 +20,7 @@ from yleum_api.services.generation.contracts import (
     ProjectGenerationFacts,
     SourceBaseline,
     VerificationRecovery,
+    uses_single_max_source_repair,
 )
 from yleum_api.services.generation.runtime import (
     _apply_project_cell_preview_files,
@@ -32,6 +34,11 @@ from yleum_api.services.project_cell_executor import (
 )
 
 _log = logging.getLogger("yleum_api.routers.messages")
+
+_REPAIRABLE_AGENT_STOPS = frozenset({
+    "managed_source_contract_unresolved", "max_segments", "max_steps", "max_steps_red",
+    "no_progress", "provider_stopped_red", "source_deadline",
+})
 
 
 def _rollback_failure(detail: object) -> RuntimeError:
@@ -68,13 +75,35 @@ async def recover_stopped_candidate(
     # потому, что ход провайдера закончился.
     _must_restore_previous = not _agent_res.done and not _agent_res.needs_finalization
     _source_only = getattr(runtime, "coordinator", None) is not None
+    _first_max_without_product = not _max_has_generated_snapshot
+    if (
+        _must_restore_previous
+        and not _provider_failure
+        and _agent_res.files
+        and _agent_res.stop_reason in _REPAIRABLE_AGENT_STOPS
+        and getattr(operations, "continuation", None) is None
+        and uses_single_max_source_repair(runtime)
+    ):
+        # Keep the exact draft for the coordinator. A stopped turn still needs
+        # a repair even when the incomplete product happens to compile.
+        return (
+            replace(
+                _agent_res,
+                summary="Проверяю приложение.",
+                stop_reason=agent_builder.SOURCE_REPAIR_HANDOFF,
+                needs_finalization=True,
+                continuation_reason=_agent_res.stop_reason,
+            ),
+            _first_max_without_product,
+            _max_seed_files,
+            _seg,
+        )
     _stopped_cause = bounded_redacted_diagnostic(
         f"generation stopped ({_agent_res.stop_reason or 'incomplete'}): {_agent_res.summary}",
         max_bytes=2000,
     )
     _rollback_error: Exception | None = None
     _rollback_verified = False
-    _first_max_without_product = not _max_has_generated_snapshot
     if _must_restore_previous and baseline.sha and not _first_max_without_product:
         try:
             _unsafe_stop_reason = _agent_res.stop_reason
@@ -230,8 +259,9 @@ async def recover_rejected_candidate(
     _max_shell_enabled: bool = False,
 ) -> VerificationRecovery:
     repair_failure: Exception | None = None
+    single_repair = uses_single_max_source_repair(runtime)
     if (
-        get_settings().use_native_agent
+        (get_settings().use_native_agent or single_repair)
         and runtime.coordinator is not None
         and runtime.handle is not None
         and plan is not None
@@ -239,6 +269,7 @@ async def recover_rejected_candidate(
         and (_agent_res.done or _agent_res.needs_finalization)
         and _runtime_ok
         and not _typecheck_ok
+        and not (single_repair and getattr(runtime, "source_repair_started", False))
     ):
         from yleum_api.services.generation.agent_finalization import (
             run_native_source_repair,
@@ -252,22 +283,14 @@ async def recover_rejected_candidate(
         if receipt_current and source_check_is_repairable(
             proof.dimension, proof.outcome, proof.redacted_detail, source_failure,
         ):
-            deadline = await runtime.coordinator.source_edit_deadline(repair=True)
-            remaining = (deadline - datetime.now(UTC)).total_seconds() if deadline else 0
-            if remaining < 60:
-                raise TimeoutError("generation deadline exceeded before source repair")
             before = await runtime.handle.snapshot_files()
-            await operations.emit(
-                "agent.step",
-                {
-                    "action": "source_repair",
-                    "human": "Дорабатываю по замечаниям проверки",
-                    "detail": proof.redacted_detail,
-                    "ok": False,
-                    "path": "",
-                },
-            )
+            window_open = False
             try:
+                deadline = await runtime.coordinator.source_edit_deadline(repair=True)
+                remaining = (deadline - datetime.now(UTC)).total_seconds() if deadline else 0
+                if remaining < 60:
+                    raise TimeoutError("generation deadline exceeded before source repair")
+                window_open = True
                 async with asyncio.timeout(remaining):
                     repaired = await run_native_source_repair(
                         task=(
@@ -290,6 +313,7 @@ async def recover_rejected_candidate(
                             source_failure
                             if source_failure and source_failure.allowed_paths else None
                         ),
+                        feedback=proof.redacted_detail,
                     )
                     after = await runtime.handle.snapshot_files()
                     files = {
@@ -312,6 +336,8 @@ async def recover_rejected_candidate(
                             _tc_error = ""
             except Exception as exc:
                 raise_if_terminal_cell_error(exc)
+                if not single_repair and not window_open:
+                    raise
                 repair_failure = exc
                 # Retain every actual repair path even when the provider stops
                 # after a partial write. Restore via the ordinary guarded path.
@@ -333,7 +359,7 @@ async def recover_rejected_candidate(
     # budget/provider reason, but Studio must never keep its red tree. The
     # earlier rollback covers a non-done AgentResult; this guard covers a
     # model that said `done` while the independent verification disagreed.
-    if get_settings().use_native_agent and (not _runtime_ok or not _typecheck_ok):
+    if (get_settings().use_native_agent or single_repair) and _agent_verification_failed:
         from yleum_api.services.generation.source_checkpoint import checkpoint_before_rollback
 
         await checkpoint_before_rollback(operations)

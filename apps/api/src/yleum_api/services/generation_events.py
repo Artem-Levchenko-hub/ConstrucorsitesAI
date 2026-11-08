@@ -20,6 +20,7 @@ _MAX_PAYLOAD_BYTES = 16_384
 _MAX_COLLECTION_ITEMS = 64
 _MAX_DEPTH = 8
 _MAX_EVENT_TYPE_BYTES = 128
+PROVISIONAL_TOOL_FAILURE = "_provisional_tool_failure"
 _SENSITIVE_KEY_RE = re.compile(
     r"(?i)(?:authorization|cookie|dsn|password|passphrase|private[_-]?key|"
     r"secret|token|access[_-]?key|api[_-]?key)"
@@ -88,6 +89,13 @@ def _event_envelope(event: GenerationEvent) -> GenerationEventEnvelope:
     )
     if event.event_type in {"generation.trace", "recovery.trace"}:
         payload = redact_event_payload(payload)
+    if event.event_type == "tool.finished" and payload.get(PROVISIONAL_TOOL_FAILURE) is True:
+        # Keep the operation and replay cursor visible without making an
+        # internal check the final user verdict. The stored event stays exact.
+        payload = {
+            key: value for key, value in payload.items()
+            if key not in {PROVISIONAL_TOOL_FAILURE, "state", "detail", "ok"}
+        }
     safe_payload = (
         sanitize_agent_step(cast(dict[str, Any], payload))
         if isinstance(payload, dict) and (

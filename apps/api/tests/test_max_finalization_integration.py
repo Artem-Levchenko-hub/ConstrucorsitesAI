@@ -283,8 +283,9 @@ async def test_unclassified_service_failure_does_not_trigger_model_repair(db_ses
 
 
 @pytest.mark.parametrize("repair_ok", [False, True])
+@pytest.mark.parametrize("compiler_red", [False, True])
 async def test_late_handoff_checks_each_revision_before_sql_or_full_build(
-    db_session, test_engine, monkeypatch, repair_ok,
+    db_session, test_engine, monkeypatch, repair_ok, compiler_red,
 ):
     harness = await _new_harness(db_session, test_engine)
     executor = harness.coordinator.executor
@@ -300,7 +301,7 @@ async def test_late_handoff_checks_each_revision_before_sql_or_full_build(
             assert len(revisions) == 2 and revisions[0] != revisions[1]
             assert harness.roles[-1] is ProjectCellCommandRole.FAST_CHECK
         result = await executor.run_role(role, operation_id)
-        if role is ProjectCellCommandRole.FAST_CHECK and not feedback:
+        if compiler_red and role is ProjectCellCommandRole.FAST_CHECK and not feedback:
             return replace(result, ok=False, redacted_detail=detail)
         return result
 
@@ -313,7 +314,13 @@ async def test_late_handoff_checks_each_revision_before_sql_or_full_build(
         return None
 
     async def generic_repair(reason):
-        pytest.fail("A confirmed compiler path must use the restricted repair")
+        assert not compiler_red, "A confirmed compiler path must use the restricted repair"
+        assert harness.roles[-1] is ProjectCellCommandRole.FAST_CHECK
+        assert ProjectCellCommandRole.FULL_BUILD not in harness.roles
+        assert "no_progress" in reason
+        feedback.append(reason)
+        if repair_ok:
+            harness.files[main_page] += "\n// finish stopped draft"
 
     async def compiler_repair(reason, failure):
         assert ProjectCellCommandRole.FULL_BUILD not in harness.roles
@@ -326,9 +333,12 @@ async def test_late_handoff_checks_each_revision_before_sql_or_full_build(
     harness.coordinator.executor = replace(executor, run_role=run_role)
     outcome = await harness.coordinator.finalize_with_repair(
         prompt="Build tracker", repair=generic_repair, repair_source=compiler_repair,
-        source_preflight=migration_preflight,
+        source_preflight=migration_preflight, max_source_repairs=1,
+        interrupted_source_reason="no_progress",
     )
-    assert feedback == [detail]
+    assert len(feedback) == 1
+    if compiler_red:
+        assert feedback == [detail]
     assert harness.roles.count(ProjectCellCommandRole.FAST_CHECK) == (2 if repair_ok else 1)
     assert harness.roles.count(ProjectCellCommandRole.FULL_BUILD) == int(repair_ok)
     assert outcome.status is (

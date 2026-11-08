@@ -25,6 +25,7 @@ from yleum_api.services.generation.contracts import (
     GenerationRuntime,
     ProjectGenerationFacts,
     SourceBaseline,
+    uses_single_max_source_repair,
 )
 from yleum_api.services.generation.runtime import (
     _abort_unsafe_max_backend,
@@ -132,6 +133,7 @@ async def check_backend_and_normalize_css(
             get_settings().use_agent_gate_feedback
             and not get_settings().use_native_agent
             and not _is_edit
+            and not uses_single_max_source_repair(runtime)
         ):
             _gv = _backend_verdict()
             _outcomes = [
@@ -238,6 +240,16 @@ async def check_backend_and_normalize_css(
                     f"[PP] sast_gate FINDINGS: {_final_sast.summary}",
                     flush=True,
                 )
+                if uses_single_max_source_repair(runtime) and get_settings().sast_gate_blocking:
+                    await _abort_unsafe_max_backend(
+                        project_id=ids.project_id,
+                        project_slug=project_info.slug,
+                        current_files=_migration_baseline,
+                        files=files,
+                        unsafe_paths=[finding.path for finding in _final_sast.findings],
+                        project_cell_handle=_require_project_cell(runtime.handle),
+                        violation_kind="MAX static security checks",
+                    )
     except ApiError:
         raise
     except Exception as _guard_exc:  # never let advisory checks break a build
@@ -301,7 +313,7 @@ async def probe_agent_candidate(
     )
     if (
         runtime.coordinator is not None
-        and _agent_res.stop_reason == agent_builder.SOURCE_FINALIZATION_HANDOFF
+        and _agent_res.stop_reason in agent_builder.SOURCE_HANDOFF_REASONS
         and _agent_res.needs_finalization and not _agent_res.done
     ):
         # A late legacy handoff must reach the full proof and repair path.
@@ -778,7 +790,11 @@ async def check_coverage_gate(
             from yleum_api.services import coverage_gate as _covg
 
             _cov_attempt = 0
-            _cov_max = max(0, int(get_settings().coverage_max_attempts))
+            # Managed MAX has its own source and behavior proof. Keep this
+            # advisory check without reopening the agent or publishing a
+            # partial result ahead of the final verdict.
+            managed_repair = uses_single_max_source_repair(runtime)
+            _cov_max = 0 if managed_repair else max(0, int(get_settings().coverage_max_attempts))
             while True:
                 _known = _covg.api_routes_from_files(files)
                 _cell_preview = (
@@ -815,6 +831,13 @@ async def check_coverage_gate(
                     _hard_left = _cv.hard_missing()
                     _soft_left = _cv.soft_missing()
                     if _hard_left:
+                        print(
+                            f"[PP] coverage_gate FAIL hard={_hard_left} "
+                            f"({_cv.covered}/{_cv.total})",
+                            flush=True,
+                        )
+                        if managed_repair:
+                            break
                         _miss = ", ".join(_hard_left[:8])
                         accumulated += (
                             f"\n\n⚠️ Готово {_cv.covered} из {_cv.total} "
@@ -835,11 +858,6 @@ async def check_coverage_gate(
                                 f"[PP] coverage incomplete card skipped: {_ce_exc!r}",
                                 flush=True,
                             )
-                        print(
-                            f"[PP] coverage_gate FAIL hard={_hard_left} "
-                            f"({_cv.covered}/{_cv.total})",
-                            flush=True,
-                        )
                     elif _soft_left:
                         print(
                             "[PP] coverage_gate soft-only (advisory) "

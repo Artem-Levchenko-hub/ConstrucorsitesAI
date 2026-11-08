@@ -63,6 +63,43 @@ async def test_three_productive_repairs_reach_real_compiler_success(loop):
     assert len(repairs) == 3 and len(builds) == 4
 
 
+@pytest.mark.parametrize("fix_every_error", [True, False])
+async def test_single_repair_checks_again_and_returns_the_actual_verdict(loop, fix_every_error):
+    coordinator, files, builds, _ = loop
+    repairs = []
+
+    async def repair(detail):
+        repairs.append(detail)
+        initial = files["src/app.py"]
+        files["src/app.py"] = initial.replace(" =\n", " = 1\n", -1 if fix_every_error else 1)
+
+    outcome = await coordinator.finalize_with_repair(
+        prompt="Fix syntax", repair=repair, max_source_repairs=1,
+    )
+
+    expected = (
+        MaxFinalizationStatus.COMPLETE if fix_every_error else MaxFinalizationStatus.NEEDS_EDIT
+    )
+    assert outcome.status is expected
+    assert len(repairs) == 1 and len(builds) == 2
+
+
+async def test_single_repair_requires_a_change_even_if_it_adds_a_receipt(loop):
+    coordinator, _, builds, _ = loop
+    receipts = set()
+    coordinator._repair_progress_receipts.side_effect = lambda _files: frozenset(receipts)
+
+    async def repair(_detail):
+        receipts.add("fast_check")
+
+    outcome = await coordinator.finalize_with_repair(
+        prompt="Fix syntax", repair=repair, max_source_repairs=1,
+    )
+
+    assert outcome.status is MaxFinalizationStatus.NEEDS_EDIT
+    assert len(builds) == 1
+
+
 @pytest.mark.parametrize("cycle", [False, True])
 async def test_unchanged_or_aba_source_stops_without_another_build(loop, cycle):
     coordinator, files, builds, _ = loop

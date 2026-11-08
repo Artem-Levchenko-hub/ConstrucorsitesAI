@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypedDict, cast
 from uuid import UUID, uuid5
 
 if TYPE_CHECKING:
@@ -130,6 +130,11 @@ _MIN_REPAIR_SECONDS = 60
 _SEALED_RECHECK_SECONDS = 15.0
 _FULL_BUILD_DETAIL_PREFIX = f"[build-contract:{MAX_FULL_BUILD_CONTRACT_VERSION}]"
 _FULL_BUILD_STARTUP_TRANSITION = "[full-build-startup-transition:v1]"
+
+
+class _SourceCheckOptions(TypedDict, total=False):
+    source_preflight: Callable[[], Awaitable[str | None]]
+    interrupted_source_reason: str
 
 
 async def _discard_event(
@@ -414,6 +419,8 @@ class MaxFinalizationCoordinator:
             return continuation.soft_edit_deadline(None)
         async with self.session_factory() as session:
             run = await self._locked_run(session)
+            if repair and run.status == "cancel_requested":
+                raise asyncio.CancelledError
             deadline = generation_deadline(run).at
         return source_edit_deadline(
             deadline, started_at=run.started_at or run.created_at,
@@ -496,6 +503,7 @@ class MaxFinalizationCoordinator:
         files: Mapping[str, str],
         prompt: str,
         source_preflight: Callable[[], Awaitable[str | None]] | None = None,
+        interrupted_source_reason: str | None = None,
     ) -> MaxFinalizationOutcome:
         await self._raise_persisted_infrastructure_failure()
         try:
@@ -578,6 +586,15 @@ class MaxFinalizationCoordinator:
                 )
             if check.dimension != ProofDimension.FAST_CHECK.value:
                 raise MaxFinalizationConflict("finalization preflight did not verify source")
+            if interrupted_source_reason:
+                return await self._outcome(
+                    MaxFinalizationStatus.NEEDS_EDIT,
+                    self._checkpoint(identity, GenerationPhase.EDIT),
+                    ProofBundle(identity=proof),
+                    f"The previous turn stopped before completing the request "
+                    f"({interrupted_source_reason}). Inspect this draft and finish the "
+                    "requested work. A clean compile alone is not completion.",
+                )
 
         await self._phase_started(GenerationPhase.PREPARE, checkpoint)
         bootstrap = await self._find(proof, ProofDimension.BOOTSTRAP)
@@ -749,14 +766,19 @@ class MaxFinalizationCoordinator:
         repair_source: Callable[[str, SourceFailure], Awaitable[None]] | None = None,
         continuation: ExecutionDriver | None = None,
         source_preflight: Callable[[], Awaitable[str | None]] | None = None,
+        max_source_repairs: int | None = None,
+        interrupted_source_reason: str | None = None,
     ) -> MaxFinalizationOutcome:
         """Continue repairs while actual source or verified gate evidence is novel.
 
         Only NEEDS_EDIT is repairable. Existing deadlines/reserves, fatal errors,
         cancellation and promotion checks remain authoritative. Repeated source
         states cannot buy another pass without a newly verified gate dimension.
+        Ordinary MAX may cap attempts without changing the durable replay protocol.
         """
-        if source_preflight is not None and continuation is not None:
+        if continuation is not None and (
+            source_preflight is not None or max_source_repairs is not None
+        ):
             raise MaxFinalizationConflict("durable execution has its own verification protocol")
         if continuation is not None:
             await continuation.account_work()
@@ -770,6 +792,7 @@ class MaxFinalizationCoordinator:
         files = await self.executor.snapshot_files()
         progress = SourceNoveltyTracker(files)
         durable = None
+        repairs = 0
         if continuation is not None:
             from yleum_api.services.generation.recovery_pipeline import (
                 FinalizationProgress,
@@ -813,14 +836,19 @@ class MaxFinalizationCoordinator:
                 await save_finalization_progress(continuation, durable, consume_repair=True)
                 if not novel:
                     raise MaxFinalizationConflict("source repair made no new progress")
+        options: _SourceCheckOptions = {}
+        if source_preflight is not None:
+            options["source_preflight"] = source_preflight
+            if interrupted_source_reason is not None:
+                options["interrupted_source_reason"] = interrupted_source_reason
         while True:
-            outcome = (
-                await self.finalize(files=files, prompt=prompt, source_preflight=source_preflight)
-                if source_preflight is not None else await self.finalize(files=files, prompt=prompt)
-            )
+            outcome = await self.finalize(files=files, prompt=prompt, **options)
+            options.pop("interrupted_source_reason", None)
             if outcome.status is not MaxFinalizationStatus.NEEDS_EDIT:
                 if continuation is not None:
                     await continuation.account_work()
+                return outcome
+            if max_source_repairs is not None and repairs >= max_source_repairs:
                 return outcome
             # Existing proof hits are baseline evidence, not progress from this repair.
             progress.observe(files, verified_receipts=await self._repair_progress_receipts(files))
@@ -864,11 +892,15 @@ class MaxFinalizationCoordinator:
                 repair_source=repair_source,
                 failure=failure,
             )
+            repairs += 1
             updated = await self.executor.snapshot_files()
-            novel = progress.observe(
-                updated,
-                verified_receipts=await self._repair_progress_receipts(updated),
+            # A one-shot repair must actually change the draft. A new receipt
+            # for identical source cannot turn an incomplete turn into success.
+            verified = (
+                await self._repair_progress_receipts(updated)
+                if max_source_repairs is None else frozenset()
             )
+            novel = progress.observe(updated, verified_receipts=verified)
             if continuation is not None:
                 assert durable is not None
                 durable = durable.model_copy(

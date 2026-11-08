@@ -95,7 +95,8 @@ async def test_first_provider_rejection_exits_before_extra_repair_or_finalizatio
 def pipeline_turn(monkeypatch):
     async def run(*, candidate, done=True, native=True, verification_failed=False,
                   checkpoint_failure_phase=None, source_deadline=None,
-                  multi_path_checkpoint_failure=False, checkpoint_snapshot_failure=False):
+                  multi_path_checkpoint_failure=False, checkpoint_snapshot_failure=False,
+                  ordinary_max=False):
         ids = GenerationIds(*(uuid4() for _ in range(5)))
         original_prompt = "Change title"
         project = Project(id=ids.project_id, owner_id=ids.user_id, template="max_miniapp",
@@ -201,7 +202,7 @@ def pipeline_turn(monkeypatch):
         # the real final source guard, product verdict and database publication.
         phase_results = {
             "require_named_behavior_readiness": None,
-            "classify_agent_turn": ("Change title", False, True, True),
+            "classify_agent_turn": ("Change title", False, not ordinary_max, not ordinary_max),
             "prepare_agent_runtime": (bindings, None),
             "prepare_stack_prompt": SimpleNamespace(orchestrator_template=None),
             "prepare_agent_prompt": (None, None),
@@ -224,13 +225,18 @@ def pipeline_turn(monkeypatch):
             monkeypatch.setattr(agent_pipeline, name, AsyncMock(return_value=value))
 
         runtime = GenerationRuntime()
-        if source_deadline is not None:
+        if source_deadline is not None or ordinary_max:
             runtime.coordinator = SimpleNamespace(
                 source_edit_deadline=AsyncMock(return_value=source_deadline),
                 ensure_bootstrap=AsyncMock(return_value=SimpleNamespace(outcome="green")),
             )
         baseline_files = {"src/page.tsx": "original"}
         tree = {"src/page.tsx": "unsaved source"}
+        if ordinary_max:
+            runtime.handle = SimpleNamespace(
+                snapshot_files=AsyncMock(return_value=dict(tree)),
+                prove_restoration_adaptation=None,
+            )
         if checkpoint_failure_phase is not None:
             snapshot_unavailable = False
 
@@ -460,6 +466,20 @@ async def test_native_failed_outcome_emits_safe_error_without_internal_summary(
     assert saved["outcome"]["product_outcome"]["status"] == "failed"
     assert saved["status"] == "running"
     assert turn.trace[-2:] == ["llm.error", "clear_stream"]
+
+
+async def test_rejected_first_ordinary_max_repair_emits_only_the_final_failure(pipeline_turn):
+    turn = await pipeline_turn(
+        candidate={}, native=False, verification_failed=True, ordinary_max=True,
+    )
+
+    assert [kind for kind, _, _ in turn.events] == ["llm.error"]
+    _, payload, saved = turn.events[0]
+    assert "fixture-secret" not in payload["error"]
+    assert saved["outcome"]["product_outcome"]["status"] == "failed"
+    assert saved["snapshot_id"] is None
+    assert turn.cards == []
+    turn.phases["repair_legacy_edit"].assert_not_awaited()
 
 
 @pytest.mark.parametrize("native,done", [(True, True), (False, False)])

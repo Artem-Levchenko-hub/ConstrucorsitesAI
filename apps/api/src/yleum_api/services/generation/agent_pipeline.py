@@ -72,6 +72,7 @@ from yleum_api.services.generation.contracts import (
     GenerationRuntime,
     ProjectGenerationFacts,
     SourceBaseline,
+    uses_single_max_source_repair,
 )
 from yleum_api.services.generation.progress import GenerationProgress
 from yleum_api.services.generation.recovery_contract import (
@@ -647,6 +648,8 @@ async def run_agent_generation(
                 "control_fencing_epoch": runtime.handle.control_fencing_epoch,
             }), context={**continuation.context, "completed": completed})
     progress_collector = getattr(runtime, "verified_progress", None)
+    single_max_repair = uses_single_max_source_repair(runtime)
+    progress.defer_verification_errors = single_max_repair
     _operations = AgentOperations(
         response_recovery=getattr(runtime, "response_recovery", None),
         take_verified_progress=(
@@ -828,36 +831,30 @@ async def run_agent_generation(
             operations=_operations,
         )
 
-        # ── Edit auto-repair «до талого» ──────────────────────────────────
-        # A point-edit that didn't land cleanly — nothing written, a red
-        # typecheck, or a 5xx render — used to surface «Не удалось завершить
-        # правку — нажми Починить». Owner 2026-06-28: just DO the repair. Re-run
-        # the agent on the STRONG model with a forceful «apply the change NOW +
-        # here is the concrete error» edit prompt, then re-probe green — up to
-        # N times. Bounded + fail-soft (a repair-run exception stops the loop,
-        # never breaks the build).
-        (
-            accumulated,
-            _runtime_ok,
-            _typecheck_ok,
-            _rt_error,
-            _tc_error,
-        ) = await _legacy_source_operation(repair_legacy_edit(
-            coordinator_handoff=runtime.legacy_coordinator_handoff(),
-            _is_edit=_is_edit,
-            _rt_error=_rt_error,
-            _runtime_ok=_runtime_ok,
-            _tc_error=_tc_error,
-            _typecheck_ok=_typecheck_ok,
-            accumulated=accumulated,
-            files=files,
-            ids=ids,
-            project_info=project_info,
-            prompt_text=prompt_text,
-            plan=_prompt_plan,
-            operations=_operations,
-        ))
-        # ──────────────────────────────────────────────────────────────────
+        # Managed MAX checks consume the same repair allowance as finalization.
+        # Keep the older edit fallback only for flows outside that contract.
+        if not single_max_repair:
+            (
+                accumulated,
+                _runtime_ok,
+                _typecheck_ok,
+                _rt_error,
+                _tc_error,
+            ) = await _legacy_source_operation(repair_legacy_edit(
+                coordinator_handoff=runtime.legacy_coordinator_handoff(),
+                _is_edit=_is_edit,
+                _rt_error=_rt_error,
+                _runtime_ok=_runtime_ok,
+                _tc_error=_tc_error,
+                _typecheck_ok=_typecheck_ok,
+                accumulated=accumulated,
+                files=files,
+                ids=ids,
+                project_info=project_info,
+                prompt_text=prompt_text,
+                plan=_prompt_plan,
+                operations=_operations,
+            ))
 
         # Keep the failed candidate's outcome even if restoring the old tree
         # makes the later runtime/typecheck flags green again.
@@ -976,7 +973,8 @@ async def run_agent_generation(
     ))
 
     _catalog_runtime = _stack.orchestrator_template == "max-miniapp-nextjs"
-    _source_handoff = _agent_res.stop_reason == agent_builder.SOURCE_FINALIZATION_HANDOFF
+    _source_handoff = _agent_res.stop_reason in agent_builder.SOURCE_HANDOFF_REASONS
+    _restore_core_on_rejection = _source_handoff or single_max_repair
     (
         _max_finalization_proof,
         files,
@@ -996,7 +994,13 @@ async def run_agent_generation(
         operations=_operations,
         catalog_runtime=_catalog_runtime,
         source_handoff=_source_handoff,
-        render_core_on_rejection=_render_current_max_starter_files if _source_handoff else None,
+        interrupted_source_reason=(
+            _agent_res.continuation_reason
+            if _agent_res.stop_reason == agent_builder.SOURCE_REPAIR_HANDOFF else None
+        ),
+        render_core_on_rejection=(
+            _render_current_max_starter_files if _restore_core_on_rejection else None
+        ),
     )
     from yleum_api.services.restorations import adaptation_activation_consumed
 
@@ -1035,7 +1039,7 @@ async def run_agent_generation(
     )
     _terminal_error: str | None = None
     if _product_failure is not None and (
-        _source_change.failure is not None or get_settings().use_native_agent
+        _source_change.failure is not None or get_settings().use_native_agent or single_max_repair
     ):
         # Persist before the assistant becomes final. The next-submit
         # admission path and tracked-task finalizer must see the same

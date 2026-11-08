@@ -12,7 +12,7 @@ from yleum_api.core.config import get_settings
 from yleum_api.services import agent_native
 from yleum_api.services.agent_builder import AgentResult
 from yleum_api.services.generation import agent_finalization, agent_recovery
-from yleum_api.services.generation.contracts import GenerationIds, SourceBaseline
+from yleum_api.services.generation.contracts import GenerationIds, GenerationRuntime, SourceBaseline
 from yleum_api.services.max_finalization import MaxFinalizationStatus
 from yleum_api.services.project_cell_errors import ProjectCellInfrastructureError
 
@@ -48,6 +48,7 @@ def source_check(monkeypatch):
         "extra": False,
         "provider_error": False,
         "build_error": None,
+        "replacement": "repaired filter",
     }
 
     async def snapshot():
@@ -61,7 +62,7 @@ def source_check(monkeypatch):
         if len(calls) == 1 and mode["write"]:
             name, arguments = (
                 "write_file",
-                {"path": "src/app/page.tsx", "content": "repaired filter"},
+                {"path": "src/app/page.tsx", "content": mode["replacement"]},
             )
         elif mode["write"]:
             name, arguments = "done", {"summary": "repaired"}
@@ -108,8 +109,10 @@ def source_check(monkeypatch):
         ),
         source_edit_deadline=AsyncMock(return_value=datetime.now(UTC) + timedelta(seconds=300)),
     )
-    runtime = SimpleNamespace(
-        handle=SimpleNamespace(snapshot_files=snapshot, export_files=snapshot),
+    runtime = GenerationRuntime(
+        handle=SimpleNamespace(
+            snapshot_files=snapshot, export_files=snapshot, prove_restoration_adaptation=None,
+        ),
         coordinator=coordinator,
     )
     kwargs = dict(
@@ -157,6 +160,22 @@ async def test_last_turn_assertion_reaches_real_native_repair_before_rollback(so
     assert "TasksScreen filtering pipeline not found" in str(calls[0])
     assert len(calls) == 2
     assert not rollback.called
+    kwargs["operations"].emit.assert_awaited_once_with(
+        "agent.step", {"action": "build", "human": "Проверяю приложение"},
+    )
+
+
+async def test_repair_cannot_publish_a_new_blocking_security_finding(source_check, monkeypatch):
+    kwargs, workspace, calls, rollback, mode = source_check
+    mode["replacement"] = "const value = eval(userInput);"
+    settings = get_settings().model_copy(update={"use_sast_gate": True, "sast_gate_blocking": True})
+    monkeypatch.setattr(agent_finalization, "get_settings", lambda: settings)
+
+    with pytest.raises(RuntimeError, match="repaired source failed security checks"):
+        await agent_recovery.recover_rejected_candidate(**kwargs)
+
+    assert calls and workspace["src/app/page.tsx"] == "candidate"
+    rollback.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
@@ -325,7 +344,34 @@ async def test_green_source_repair_still_requires_final_coordinator_proof(source
             operations=kwargs["operations"],
         )
     assert runtime.coordinator.finalize_with_repair.await_count == 1
+    assert runtime.coordinator.finalize_with_repair.await_args.kwargs["max_source_repairs"] == 0
     assert len(calls) == 2
+
+
+async def test_stalled_max_draft_reaches_verification_before_rollback(source_check):
+    kwargs, workspace, calls, rollback, _ = source_check
+    candidate = AgentResult(
+        done=False, summary="no progress", files=dict(workspace), steps=18,
+        stop_reason="no_progress",
+    )
+
+    stopped, _, _, _ = await agent_recovery.recover_stopped_candidate(
+        _agent_res=candidate,
+        _max_has_generated_snapshot=True,
+        _max_seed_files={},
+        _provider_failure=None,
+        _render_current_max_starter_files=kwargs["_render_current_max_starter_files"],
+        baseline=kwargs["baseline"],
+        ids=kwargs["ids"],
+        project_info=kwargs["project_info"],
+        runtime=kwargs["runtime"],
+        operations=kwargs["operations"],
+    )
+
+    assert stopped.needs_finalization and not stopped.done
+    assert stopped.files == workspace
+    assert calls == []
+    rollback.assert_not_awaited()
 
 
 @pytest.mark.parametrize("error", [asyncio.CancelledError, TimeoutError])
@@ -334,12 +380,14 @@ async def test_cancel_and_deadline_propagate_without_provider_retry(source_check
     kwargs["runtime"].coordinator.source_edit_deadline.side_effect = error
     with pytest.raises(error):
         await agent_recovery.recover_rejected_candidate(**kwargs)
-    assert not calls and not rollback.called
+    assert not calls
+    assert rollback.called is (error is TimeoutError)
 
 
-async def test_expired_repair_window_never_calls_provider(source_check):
+async def test_expired_repair_window_rolls_back_without_calling_provider(source_check):
     kwargs, _, calls, rollback, _ = source_check
     kwargs["runtime"].coordinator.source_edit_deadline.return_value = datetime.now(UTC)
     with pytest.raises(TimeoutError):
         await agent_recovery.recover_rejected_candidate(**kwargs)
-    assert not calls and not rollback.called
+    assert not calls
+    rollback.assert_awaited_once()
