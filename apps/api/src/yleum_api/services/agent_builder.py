@@ -355,6 +355,14 @@ class _SourceRepairState:
     read_used: bool = False
     context_path: str | None = None
     rejections: dict[str, int] = field(default_factory=dict)
+    last_checked_rejection: str | None = None
+
+    def observe_checked_gap(self, gap: str | None) -> tuple[ManagedSourceGap | None, bool]:
+        located = gap if isinstance(gap, ManagedSourceGap) else None
+        key = located.rejection_key() if located is not None else None
+        repeated = key is not None and key == self.last_checked_rejection
+        self.last_checked_rejection = key
+        return (located if key is not None else None), repeated
 
     def repeated_managed_gap(self, gap: str, inventory: Mapping[str, str] | None) -> bool:
         if not isinstance(gap, ManagedSourceGap):
@@ -463,6 +471,7 @@ async def run_agent_build(
     response_recovery: ResponseRecovery | None = None,
     take_verified_progress: ProgressReader | None = None,
     continuation: ExecutionDriver | None = None,
+    report_managed_build_gap: bool = False,
 ) -> AgentResult:
     """Continue a progressing candidate without a new run, cell or blind replay."""
     response_recovery = response_recovery or ResponseRecovery()
@@ -583,6 +592,7 @@ async def run_agent_build(
             on_progress=segment_progress,
             edit_deadline=edit_deadline, continuation=continuation,
             source_repair=source_repair,
+            report_managed_build_gap=report_managed_build_gap,
         )
         restored = None
         cumulative_files.update(result.files)
@@ -675,6 +685,7 @@ async def _run_agent_segment(
     edit_deadline: datetime | None = None,
     continuation: ExecutionDriver | None = None,
     source_repair: _SourceRepairState | None = None,
+    report_managed_build_gap: bool = False,
 ) -> AgentResult:
     """Drive the plan→act→observe loop until the model says done or budget hits.
 
@@ -972,6 +983,18 @@ async def _run_agent_segment(
 
     def _has_handoff_inventory() -> bool:
         return bool(completion_inventory) and _source_inventory_error(completion_inventory) is None
+
+    def _can_check_managed_build() -> bool:
+        return (
+            report_managed_build_gap and continuation is None
+            and _can_finalize_source() and _has_handoff_inventory()
+        )
+
+    def _managed_source_stop(gap: str, step_no: int) -> AgentResult:
+        return AgentResult(
+            done=False, summary=gap, files=written, steps=step_no + 1,
+            transcript=convo, stop_reason="managed_source_contract_unresolved",
+        )
 
     def _handoff_source(stopped: AgentResult) -> AgentResult:
         # No proof is minted here. The coordinator rechecks the exact candidate
@@ -1449,11 +1472,10 @@ async def _run_agent_segment(
                     "NOT DONE YET — " + gap + "."
                 )})
                 if source_feedback:
+                    if _can_check_managed_build() and source_repair.observe_checked_gap(gap)[1]:
+                        return _managed_source_stop(gap, step)
                     if source_repair.repeated_managed_gap(gap, completion_inventory):
-                        stopped = AgentResult(
-                            done=False, summary=gap, files=written, steps=step + 1,
-                            transcript=convo, stop_reason="managed_source_contract_unresolved",
-                        )
+                        stopped = _managed_source_stop(gap, step)
                         return (
                             _handoff_source(stopped)
                             if continuation is None and _can_finalize_source()
@@ -1832,7 +1854,15 @@ async def _run_agent_segment(
             or (action.name == "bash" and obs.get("environment_mutated") is not False)
         ):
             fast_check_fresh = False
-        convo.append({"role": "user", "content": _format_observation(action, obs)})
+        observation = _format_observation(action, obs)
+        managed_gap, repeated_managed_gap = None, False
+        if action.name == "build" and _can_check_managed_build():
+            managed_gap, repeated_managed_gap = source_repair.observe_checked_gap(
+                _source_completion_gap() if fast_check_fresh else None,
+            )
+            if managed_gap is not None:
+                observation += "\nSOURCE CHECK: " + managed_gap
+        convo.append({"role": "user", "content": observation})
         if changed_source_paths and on_progress is not None:
             try:
                 await on_progress(AgentResult(
@@ -1848,6 +1878,8 @@ async def _run_agent_segment(
                     files=dict(written), steps=step + 1, transcript=list(convo),
                     stop_reason="checkpoint_error",
                 )
+        if repeated_managed_gap and managed_gap is not None:
+            return _managed_source_stop(managed_gap, step)
         if no_write_streak == (_EDIT_NO_WRITE_NUDGE_AT if edit_mode else _NO_WRITE_NUDGE_AT):
             await _nudge_exploration(step)
 

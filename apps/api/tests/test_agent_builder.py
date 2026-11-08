@@ -1305,6 +1305,54 @@ export default function Page() {
             assert "unproven_object_spread" in result.summary
 
 
+@pytest.mark.parametrize("response", ["build", "done", "fix", "next_segment"])
+def test_legacy_managed_build_feedback_hands_off_only_repeated_current_gap(response):
+    from yleum_api.services.max_management_generation import ManagedSourceGap
+
+    path = "src/app/page.tsx"
+    gap = ManagedSourceGap(
+        "Cannot prove SDK callback effects. Source location: src/app/page.tsx:10:2;"
+        " AST call_expression; reason unproven_statistic_callback; fingerprint aaaaaaaaaaaaaaaa."
+    )
+    state: dict[str, str] = {}
+    replies = [_repair_action("write_file", path=path, content="draft"), _repair_action("build")]
+    if response == "fix":
+        replies.extend([_repair_action("write_file", path=path, content="repaired"),
+                        _repair_action("build"), _repair_action("done", summary="candidate")])
+    elif response == "done":
+        replies.append(_repair_action("done", summary="candidate"))
+    else:
+        replies.append(_repair_action("build"))
+    calls = []
+    scripted = _scripted(replies)
+
+    async def complete(convo, *args, **kwargs):
+        calls.append(str(convo[-1]["content"]))
+        return await scripted(convo, *args, **kwargs)
+
+    async def snapshot():
+        return dict(state)
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="catalog", model="fixture", complete=complete,
+        execute=_ok_executor([], state), snapshot_files=snapshot, coordinator_handoff=True,
+        completion_check=lambda files, _: None if files.get(path) == "repaired" else gap,
+        report_managed_build_gap=True, max_steps=2 if response == "next_segment" else 8,
+        max_segments=2,
+        edit_deadline=datetime.now(UTC) + timedelta(minutes=5),
+    ))
+    assert "unproven_statistic_callback" in calls[2]
+    assert len(calls) == len(replies)
+    assert result.segments == (2 if response == "next_segment" else 1)
+    if response == "fix":
+        assert result.done and result.needs_finalization
+        assert result.files[path] == "repaired"
+    else:
+        assert not result.done and not result.needs_finalization
+        assert result.stop_reason == "managed_source_contract_unresolved"
+        assert result.files[path] == "draft"
+
+
 @pytest.mark.parametrize("change_source", [False, True])
 def test_generic_managed_rejection_uses_current_source(change_source):
     from yleum_api.services.max_management_generation import ManagedSourceGap

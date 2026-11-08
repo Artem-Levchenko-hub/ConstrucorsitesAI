@@ -598,6 +598,7 @@ async def execute_agent_turn(
             ),
             coordinator_handoff=runtime.legacy_coordinator_handoff(),
             completion_check=_completion_check,
+            report_managed_build_gap=uses_single_max_source_repair(runtime),
             ship_green_on_abort=get_settings().agent_ship_green_on_abort,
             edit_mode=_is_edit,
             bare_mode=plan.bare_stack,
