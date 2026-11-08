@@ -257,14 +257,21 @@ def _overload_refusal_details(error: object) -> bool:
                 return False
         except ValueError:
             return False
-    return (details["provider_failure_kind"] == "upstream_refused"
-            and details["provider_charge_ambiguous"] is False and details["retry_safe"] is True
-            and type(details["upstream_http_status"]) is int
-            and isinstance(details["retry_policy"], str)
-            and details["upstream_http_status"] in {
-                "llmgw_overload_v1": {502},  # Retained pre-upgrade responses only.
-                "llmgw_unavailable_v1": {500, 502, 503, 504},
-            }.get(details["retry_policy"], set()))
+    status, policy = details["upstream_http_status"], details["retry_policy"]
+    if (
+        details["provider_failure_kind"] != "upstream_refused"
+        or details["provider_charge_ambiguous"] is not False
+        or details["retry_safe"] is not True
+        or type(status) is not int
+        or not isinstance(policy, str)
+    ):
+        return False
+    if policy == "llmgw_http_refused_v1":
+        return 400 <= status <= 599
+    return status in {
+        "llmgw_overload_v1": {502},  # Retained pre-upgrade responses.
+        "llmgw_unavailable_v1": {500, 502, 503, 504},
+    }.get(policy, set())
 
 
 def _refusal_document(raw: bytes | str) -> object:

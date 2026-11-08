@@ -1,4 +1,5 @@
 import json
+from http import HTTPStatus
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -20,7 +21,14 @@ def client(neutralize_lifespan, neutralize_side_effects, monkeypatch):
         yield client
 
 
-@pytest.mark.parametrize("status", [500, 502, 503, 504, None], ids=["500", "502", "503", "504", "preconnect"])
+def primary_error(status, request=None):
+    error = {"message": HTTPStatus(status).phrase}
+    if status == 402:
+        error.update(type="insufficient_balance", code="insufficient_balance")
+    return httpx.Response(status, json={"error": error}, request=request)
+
+
+@pytest.mark.parametrize("status", [401, 402, 422, 500, 502, 503, 504, None])
 def test_native_refusal_continues_same_tools_with_separate_expense_and_one_charge(client, monkeypatch,status):
     sent = []
 
@@ -28,7 +36,7 @@ def test_native_refusal_continues_same_tools_with_separate_expense_and_one_charg
         sent.append((url, dict(payload)))
         if status is None:
             raise httpx.ConnectTimeout("synthetic preconnect failure")
-        return httpx.Response(status, json={"error": {500:"Internal Server Error",502:"Bad Gateway",503:"Service Unavailable",504:"Gateway Timeout"}[status]}, request=httpx.Request("POST", url))
+        return primary_error(status, request=httpx.Request("POST", url))
 
     def backup(request):
         sent.append((str(request.url), json.loads(request.content)))
@@ -124,7 +132,7 @@ def test_legacy_native_skips_backup_when_shared_budget_is_exhausted(client, monk
     assert billing.charge.await_count == 0
 
 
-@pytest.mark.parametrize("status", [500,502,503,504])
+@pytest.mark.parametrize("status", [401, 402, 422, 500, 502, 503, 504])
 def test_durable_native_refusal_wire_matches_api_strict_contract(client, monkeypatch,status):
     from types import SimpleNamespace
 
@@ -155,7 +163,7 @@ def test_durable_native_refusal_wire_matches_api_strict_contract(client, monkeyp
     posts = []
     def reply(request):
         posts.append(request)
-        return httpx.Response(status, json={"error": {500:"Internal Server Error",502:"Bad Gateway",503:"Service Unavailable",504:"Gateway Timeout"}[status]})
+        return primary_error(status)
     monkeypatch.setattr(httpx, "HTTPTransport", lambda **_: httpx.MockTransport(reply))
     response = client.post("/v1/messages", json=body)
     assert response.status_code == 503, response.text
@@ -165,7 +173,9 @@ def test_durable_native_refusal_wire_matches_api_strict_contract(client, monkeyp
     assert error["type"] == error["code"] == "api_error"
     assert error["details"] == {
         "provider_failure_kind": "upstream_refused", "provider_charge_ambiguous": False,
-        "retry_safe": True, "retry_policy": "llmgw_unavailable_v1", "upstream_http_status": status,
+        "retry_safe": True,
+        "retry_policy": "llmgw_unavailable_v1" if status >= 500 else "llmgw_http_refused_v1",
+        "upstream_http_status": status,
     }
     assert len(posts) == 1 and billing.charge.await_count == 0
     assert provider_calls.finish_call.await_args.kwargs["status"] == "failed"

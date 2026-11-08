@@ -669,7 +669,7 @@ async def _dispatch_native_provider(
 
         known_evidence = _known_response_evidence(upstream, provider_scope)
         if upstream.status_code >= 400:
-            overload = text_failover.overload_candidate(upstream, model) if provider_scope == "llmgw" else None
+            overload = text_failover.primary_refusal_candidate(upstream, model) if provider_scope == "llmgw" else None
             if overload is not None:
                 recorded = await _finish_provider_call(
                     provider_call_id, identity=identity, status="failed", reason="upstream_refused",

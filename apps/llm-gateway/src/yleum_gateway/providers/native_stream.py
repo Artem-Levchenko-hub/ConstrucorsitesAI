@@ -17,6 +17,7 @@ from yleum_gateway.core.errors import DispatchDeadlineError
 from yleum_gateway.services.pricing import read_reported_cost
 from yleum_gateway.services.provider_calls import ReceiptFailure
 from yleum_gateway.services.receipt_evidence import receipt_evidence
+from yleum_gateway.services.text_failover import decoded_body_headers
 
 IDLE_TIMEOUT_SECONDS = 240.0
 CONNECT_TIMEOUT_SECONDS = 30.0
@@ -321,13 +322,13 @@ async def collect_response(
                         if collector.done:
                             result = collector.result()
                             evidence["transport_stage"] = "complete"
-                            return httpx.Response(response.status_code, headers=response.headers,
+                            return httpx.Response(response.status_code, headers=decoded_body_headers(response),
                                                   json=result, request=response.request)
                     elif line.startswith(b"data:"):
                         event_lines.append(bytes(line[5:].lstrip(b" ")))
                 if len(raw) + event_bytes > MAX_EVENT_BYTES:
                     raise StreamReceiptError(ReceiptFailure.SIZE_LIMIT)
             if response.status_code >= 400:
-                return httpx.Response(response.status_code, headers=response.headers,
-                                      content=bytes(raw), request=response.request)
+                return httpx.Response(response.status_code, headers=decoded_body_headers(response),
+                                      content=bytes(raw), request=response.request, history=response.history)
             raise StreamReceiptError(ReceiptFailure.MISSING_COMPLETION)

@@ -438,14 +438,14 @@ async def astream(
                     transport_stage = "headers"
                     if r.status_code >= 400:
                         from yleum_gateway.services.text_failover import (
-                            overload_candidate,
+                            primary_refusal_candidate,
                             read_refusal_body,
                         )
 
                         details = failure_details({}, r.headers, transport_stage=transport_stage,
                                                   upstream_http_status=r.status_code)
                         bounded = read_refusal_body(r)
-                        candidate = overload_candidate(bounded, model) if provider_scope == "llmgw" and bounded is not None else None
+                        candidate = primary_refusal_candidate(bounded, model) if provider_scope == "llmgw" and bounded is not None else None
                         if candidate is not None:
                             details["_overload_retry_candidate"] = candidate
                             details["provider_charge_ambiguous"] = False
@@ -707,7 +707,7 @@ async def acompletion(
         from yleum_gateway.services.provider_validation_diagnostics import (
             capture_validation_failure,
         )
-        from yleum_gateway.services.text_failover import overload_candidate
+        from yleum_gateway.services.text_failover import primary_refusal_candidate
 
         capture_validation_failure(exc, credential=key)
         details = failure_details(bounded_error_body(exc.response) or {},
@@ -719,7 +719,7 @@ async def acompletion(
         if candidate is not None:
             details["provider_charge_ambiguous"] = False
             details["_rate_limit_retry_candidate"] = candidate
-        overload = overload_candidate(exc.response, model) if provider_scope == "llmgw" else None
+        overload = primary_refusal_candidate(exc.response, model) if provider_scope == "llmgw" else None
         if overload is not None:
             details["provider_charge_ambiguous"] = False
             details["_overload_retry_candidate"] = overload

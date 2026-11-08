@@ -380,6 +380,23 @@ def test_new_temporary_refusal_shared_live_and_cold_reader(status, native):
     assert llm_client._stream_overload_refused(json.dumps({"error": error}))
 
 
+@pytest.mark.parametrize("status", [401, 402, 422, 429, 501])
+@pytest.mark.parametrize("native", [False, True])
+def test_confirmed_http_refusal_shared_live_and_cold_reader(status, native):
+    response = refusal(
+        native=native,
+        changes={"retry_policy": "llmgw_http_refused_v1", "upstream_http_status": status},
+    )
+    failure = llm_client._gateway_failure(response)
+    assert failure.code == "upstream_refused" and failure.retry_safe is True
+    assert failure.upstream_http_status == status
+    if native:
+        assert agent_native._gateway_overload_refused(response, URL)
+    document = response.json()
+    error = document.get("detail", document)["error"]
+    assert llm_client._stream_overload_refused(json.dumps({"error": error}))
+
+
 @pytest.mark.parametrize(
     "policy,status",
     [
@@ -389,6 +406,8 @@ def test_new_temporary_refusal_shared_live_and_cold_reader(status, native):
         ("llmgw_unavailable_v1", 501),
         ("llmgw_unavailable_v1", 505),
         ("llmgw_unavailable_v1", 599),
+        ("llmgw_http_refused_v1", 399),
+        ("llmgw_http_refused_v1", 600),
     ],
 )
 def test_policy_status_pairs_fail_closed(policy, status):

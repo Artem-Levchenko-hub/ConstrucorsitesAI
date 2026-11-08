@@ -29,7 +29,7 @@ def test_stream_primary_refusal_has_one_backup_before_any_output(client, monkeyp
         if provider_scope == "llmgw":
             refusal = httpx.Response(status, json={"error": {500:"Internal Server Error",502:"Bad Gateway",503:"Service Unavailable",504:"Gateway Timeout"}[status]}, request=httpx.Request("POST", text_failover.PRIMARY_URL))
             raise UpstreamProviderError("refused", details={"provider_charge_ambiguous": False,
-                "_overload_retry_candidate": text_failover.overload_candidate(refusal, model)})
+                "_overload_retry_candidate": text_failover.primary_refusal_candidate(refusal, model)})
         receipt.update(model=model, id="ai-receipt", usage={"prompt_tokens": 10, "completion_tokens": 1, "cost_rub": 0.2}, complete=True, finish_reason="stop")
         yield "5", model
     monkeypatch.setattr(llmgw, "astream", stream)

@@ -1,6 +1,7 @@
 """A refused primary call is distinct from an uncertain paid response."""
 
 import asyncio
+import gzip
 import time
 
 import httpx
@@ -21,33 +22,60 @@ def refusal(status=502, *, url=text_failover.PRIMARY_URL, **kwargs):
 
 @pytest.mark.parametrize("status", [500,502,503,504])
 def test_explicit_primary_refusal_is_bounded_and_provider_specific(enabled, status):
-    candidate = text_failover.overload_candidate(refusal(status,json={"error": "Bad gateway"}), "claude-sonnet-5.5")
+    candidate = text_failover.primary_refusal_candidate(refusal(status,json={"error": "Bad gateway"}), "claude-sonnet-5.5")
     assert candidate == {
         "provider_failure_kind": "upstream_refused", "provider_charge_ambiguous": False,
         "retry_safe": True, "retry_policy": "llmgw_unavailable_v1", "upstream_http_status": status,
     }
 
 
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [
+        (401, {"error": {"type": "authentication_error"}}),
+        (402, {"error": {"code": "insufficient_balance", "type": "insufficient_balance"}}),
+        (422, {"detail": [{"loc": ["body", "model"], "type": "value_error"}]}),
+        (429, {"error": {"type": "rate_limit_exceeded"}}),
+        (501, {"error": "Provider refused the request"}),
+    ],
+)
+def test_any_explicit_primary_http_refusal_can_route_to_backup(enabled, status, body):
+    assert text_failover.primary_refusal_candidate(refusal(status, json=body), text_failover.MODEL) == {
+        "provider_failure_kind": "upstream_refused", "provider_charge_ambiguous": False,
+        "retry_safe": True, "retry_policy": "llmgw_http_refused_v1", "upstream_http_status": status,
+    }
+
+
 @pytest.mark.parametrize("kwargs", [
-    {"status": 501}, {"url": "https://api.aitunnel.ru/v1/chat/completions"},
+    {"status": 399}, {"url": "https://api.aitunnel.ru/v1/chat/completions"},
     {"json": {"error": "failed", "usage": {"cost_rub": 0}}},
     {"json": {"choices": [{"message": {"content": "partial"}}]}},
     {"headers": {"x-cost-rub": "0"}}, {"content": b"x" * 16385},
     {"json": {"error": {"usage": {"completion_tokens": 1}}}},
     {"content": b'{"error":{"usage":{"cost_rub":1}},"error":"Bad gateway"}'},
     {"content": b'data: {"choices":[{"delta":{"content":"accepted"}}]}\nBad gateway'},
+    {"status": 402, "json": {"detail": "No funds", "usage": {}}},
+    {"status": 402, "headers": {"content-type": "text/event-stream"}},
+    {"status": 422, "json": {"error": {"completion_tokens": 7}}},
+    {"status": 422, "json": {"error": {"provider_cost_rub": "1.20"}}},
+    {"status": 422, "json": {"error": {"delta": {"text": "partial"}}}},
+    {"status": 422, "json": {"error": {"message": "failed", "charged": True}}},
+    {"status": 422, "json": {"error": {"message": "failed", "billed": True}}},
+    {"status": 422, "json": {"error": {"message": "failed", "charge": {"amount": "1.20"}}}},
+    {"status": 422, "json": {"error": {"message": "failed", "provider_charge_ambiguous": True}}},
+    {"status": 422, "content": b'{"error": NaN}'},
 ])
 def test_uncertain_or_other_provider_response_is_not_refusal(enabled, kwargs):
-    assert text_failover.overload_candidate(refusal(**kwargs), "claude-sonnet-5.5") is None
+    assert text_failover.primary_refusal_candidate(refusal(**kwargs), "claude-sonnet-5.5") is None
 
 
 def test_only_explicitly_enabled_same_model_can_use_backup(enabled, monkeypatch):
     response = refusal(json={"error": "Bad gateway"})
-    assert text_failover.overload_candidate(response, "claude-sonnet-5") is None
+    assert text_failover.primary_refusal_candidate(response, "claude-sonnet-5") is None
     monkeypatch.setenv("AITUNNEL_TEXT_FALLBACK_ENABLED", "false")
     from yleum_gateway.core.config import reset_settings_cache
     reset_settings_cache()
-    assert text_failover.overload_candidate(response, "claude-sonnet-5.5") is None
+    assert text_failover.primary_refusal_candidate(response, "claude-sonnet-5.5") is None
 
 
 def test_large_streamed_refusal_is_stopped_before_whole_body_is_read():
@@ -150,10 +178,10 @@ async def test_reserve_closes_a_trickling_body_at_absolute_deadline(monkeypatch)
     assert body.closed
 
 
-@pytest.mark.parametrize("status", [501, 505, 506, 599])
-def test_unconfirmed_status_never_authorizes_backup(enabled, status):
+@pytest.mark.parametrize("status", [200, 302, 399, 600])
+def test_non_error_status_never_authorizes_backup(enabled, status):
     assert (
-        text_failover.overload_candidate(
+        text_failover.primary_refusal_candidate(
             refusal(status, json={"error": "Unavailable"}), text_failover.MODEL
         )
         is None
@@ -172,10 +200,10 @@ def test_unconfirmed_status_never_authorizes_backup(enabled, status):
     ],
 )
 def test_temporary_status_never_discards_uncertain_evidence(enabled, status, kwargs):
-    assert text_failover.overload_candidate(refusal(status, **kwargs), text_failover.MODEL) is None
+    assert text_failover.primary_refusal_candidate(refusal(status, **kwargs), text_failover.MODEL) is None
 
 
-@pytest.mark.parametrize("status", [500, 502, 503, 504])
+@pytest.mark.parametrize("status", [402, 422, 500, 502, 503, 504])
 @pytest.mark.parametrize("mode", ["sync", "collect", "sse"])
 async def test_actual_transport_recognizes_full_refusal_without_retry(
     enabled, monkeypatch, status, mode
@@ -187,6 +215,11 @@ async def test_actual_transport_recognizes_full_refusal_without_retry(
 
     def reply(request):
         calls.append(request)
+        if status == 402:
+            return httpx.Response(
+                status, headers={"content-encoding": "gzip"},
+                content=gzip.compress(b'{"error":{"code":"insufficient_balance"}}'),
+            )
         return httpx.Response(status, json={"error": "temporarily unavailable"})
 
     monkeypatch.setattr(
@@ -225,13 +258,13 @@ def test_canonical_status_specific_refusal_documents(enabled, status, title, doc
         if document == "plain"
         else f"<html><head><title>{status} {title}</title></head><body><center><h1>{status} {title}</h1></center><hr><center>nginx/1.24.0</center></body></html>"
     )
-    assert text_failover.overload_candidate(refusal(status, text=text), text_failover.MODEL)
+    assert text_failover.primary_refusal_candidate(refusal(status, text=text), text_failover.MODEL)
     wrong = refusal(status, text=text.replace(title, "Wrong status text"))
-    assert text_failover.overload_candidate(wrong, text_failover.MODEL) is None
+    assert text_failover.primary_refusal_candidate(wrong, text_failover.MODEL) is None
 
 @pytest.mark.parametrize("status,title", [(503,"Service Temporarily Unavailable"),(504,"Gateway Time-out")])
 def test_actual_nginx_documents_are_exact_and_cannot_hide_output(enabled,status,title):
     document=f"<html><head><title>{status} {title}</title></head><body><center><h1>{status} {title}</h1></center><hr><center>nginx</center></body></html>"
-    assert text_failover.overload_candidate(refusal(status,text=document),text_failover.MODEL)
+    assert text_failover.primary_refusal_candidate(refusal(status,text=document),text_failover.MODEL)
     for bad in (document.replace(f"<h1>{status}","<h1>500"),document.replace(f"<h1>{status} {title}",f"<h1>{status} Wrong title"),'data: {"content":"partial"}\n'+document):
-        assert text_failover.overload_candidate(refusal(status,text=bad),text_failover.MODEL) is None
+        assert text_failover.primary_refusal_candidate(refusal(status,text=bad),text_failover.MODEL) is None
