@@ -47,7 +47,7 @@ import hashlib
 import json
 import re
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from itertools import count as segment_numbers
@@ -186,10 +186,12 @@ _SOURCE_CHANGE_REQUIRED = (
 _MAX_OBS_CHARS = 6_000
 _MAX_READ_CHARS = 16_000
 # Source finishing runway, not a shorter model timeout. Do not begin a new
-# paid response in the final 90s + 15s receipt window; use that time for one
-# deterministic check. Admitted calls keep their existing response budget.
+# paid response in the final 90s + 15s receipt window. The coordinator owns
+# the reserved checks once the current source satisfies the product contract.
 _MIN_PROVIDER_WINDOW_SECONDS = 105.0
-_DEADLINE_CHECK_SECONDS = 60.0
+_SOURCE_HANDOFF_SNAPSHOT_SECONDS = 5.0
+_DURABLE_DEADLINE_CHECK_SECONDS = 60.0
+SOURCE_FINALIZATION_HANDOFF = "source_finalization_handoff"
 
 
 @dataclass
@@ -498,6 +500,10 @@ async def run_agent_build(
     total_steps = 0
     task = user_prompt
     start_segment = 1
+    can_check_handoff = (
+        continuation is None and coordinator_handoff and ship_green_on_abort
+        and completion_check is not None
+    )
     if restored is not None:
         start_segment = restored.segment
         cumulative_files, transcript = restored.cumulative_files, restored.transcript
@@ -538,6 +544,7 @@ async def run_agent_build(
         if (
             restored is None and segment_limit is None and segment > 1 and edit_deadline is not None
             and datetime.now(UTC) >= edit_deadline
+            and not (can_check_handoff and cumulative_files)
         ):
             return AgentResult(
                 done=False, summary="Source deadline reached", files=cumulative_files,
@@ -601,10 +608,12 @@ async def run_agent_build(
             assert snapshot_files is not None and edit_deadline is not None
             remaining = (edit_deadline - datetime.now(UTC)).total_seconds()
             if remaining <= 0:
-                result.stop_reason = "source_deadline"
-                return finish(result)
-            async with asyncio.timeout(remaining):
-                source_progress = novelty.observe(await snapshot_files())
+                if not (can_check_handoff and cumulative_files and source_progress):
+                    result.stop_reason = "source_deadline"
+                    return finish(result)
+            else:
+                async with asyncio.timeout(remaining):
+                    source_progress = novelty.observe(await snapshot_files())
         if not source_progress:
             result.stop_reason = "no_progress"
             result.summary = "Остановлено: сегмент не изменил исходники приложения."
@@ -951,54 +960,83 @@ async def _run_agent_segment(
             if red_build_streak >= _RED_BUILD_ESCALATE_AT:
                 await _escalate(step_no, "red_build")
 
-    async def _finish_source_window(step_no: int, remaining: float) -> AgentResult:
-        """Verify once instead of dispatching a response that cannot finish in time.
+    def _can_finalize_source() -> bool:
+        return (
+            coordinator_handoff and ship_green_on_abort and bool(written)
+            and completion_check is not None and snapshot_files is not None
+            and not pending_truncation and not _source_change_pending()
+            and edit_deadline is not None
+        )
 
-        This is a fresh-dispatch decision, never recovery from an ambiguous paid
-        POST. A current FAST_CHECK and the unchanged completion policy only hand
-        the candidate to the normal coordinator; they do not publish it here.
-        """
+    def _has_handoff_inventory() -> bool:
+        return bool(completion_inventory) and _source_inventory_error(completion_inventory) is None
+
+    def _handoff_source(stopped: AgentResult) -> AgentResult:
+        # No proof is minted here. The coordinator rechecks the exact candidate
+        # and either verifies it, opens its repair turn, or rejects it.
+        return replace(
+            stopped, summary="Черновик передан на финальную проверку.",
+            stop_reason=SOURCE_FINALIZATION_HANDOFF, needs_finalization=True,
+            continuation_reason=stopped.stop_reason,
+        )
+
+    async def _finish_durable_source_window(
+        stopped: AgentResult, step_no: int, remaining: float,
+    ) -> AgentResult:
+        """Keep the pilot recovery protocol's existing tool key and receipt sequence."""
         nonlocal completion_inventory, fast_check_fresh, pending_source_build
+        assert continuation is not None and snapshot_files is not None
+        if fast_check_fresh:
+            return _ship_green_or(stopped, step_no, "deadline")
+        action = Action(name="build", args={})
+        try:
+            async with asyncio.timeout(min(_DURABLE_DEADLINE_CHECK_SECONDS, remaining)):
+                before = dict(await snapshot_files())
+                obs = await continuation.tool("legacy-deadline-build", action, lambda: execute(action))
+                after = dict(await snapshot_files())
+        except TimeoutError:
+            fast_check_fresh = False
+            return stopped
+        completion_inventory = after
+        pending_source_build = False
+        await _step_result(action, step_no, obs)
+        stopped.steps = step_no + 1
+        if before != after or obs.get("files") or obs.get("environment_mutated") is True:
+            fast_check_fresh = False
+            return stopped
+        await _record_build_observation(obs, step_no)
+        convo.append({"role": "user", "content": _format_observation(action, obs)})
+        return _ship_green_or(stopped, step_no, "deadline")
+
+    async def _finish_source_window(step_no: int, remaining: float | None = None) -> AgentResult:
+        """Hand the last observed source to the owner of the reserved checks."""
+        nonlocal completion_inventory
         fallback = AgentResult(
             done=False, summary="Сохраняю время для итоговой проверки исходников.",
             files=written, steps=step_no, transcript=convo, stop_reason="source_deadline",
         )
-        eligible = (
-            coordinator_handoff and ship_green_on_abort and bool(written)
-            and snapshot_files is not None and completion_check is not None
-            and not pending_truncation and not _source_change_pending()
-        )
-        if not eligible:
+        if continuation is not None:
+            if remaining is not None and _can_finalize_source():
+                return await _finish_durable_source_window(fallback, step_no, remaining)
             return fallback
-        if fast_check_fresh or remaining <= 0:
-            return _ship_green_or(fallback, step_no, "deadline")
-        action = Action(name="build", args={})
-        try:
-            async with asyncio.timeout(min(_DEADLINE_CHECK_SECONDS, remaining)):
+        if _can_finalize_source():
+            if completion_inventory is None:
+                # At a segment boundary `written` holds prior writes, not a full tree.
                 assert snapshot_files is not None
-                before = dict(await snapshot_files())
-                tool = getattr(continuation, "tool", None)
-                obs = (
-                    await tool("legacy-deadline-build", action, lambda: execute(action))
-                    if tool is not None else await execute(action)
-                )
-                after = dict(await snapshot_files())
-        except TimeoutError:
-            fast_check_fresh = False
-            return fallback
-        completion_inventory = after
-        pending_source_build = False
-        await _step_result(action, step_no, obs)
-        fallback.steps = step_no + 1
-        # A check that changed source is not a fresh receipt for the candidate
-        # we handed it. Preserve the draft and let ordinary stopped-run recovery
-        # restore accepted source, rather than inventing an edit/proof receipt.
-        if before != after or obs.get("files") or obs.get("environment_mutated") is True:
-            fast_check_fresh = False
-            return fallback
-        await _record_build_observation(obs, step_no)
-        convo.append({"role": "user", "content": _format_observation(action, obs)})
-        return _ship_green_or(fallback, step_no, "deadline")
+                try:
+                    async with asyncio.timeout(_SOURCE_HANDOFF_SNAPSHOT_SECONDS):
+                        completion_inventory = dict(await snapshot_files())
+                except TimeoutError:
+                    return fallback
+            if _has_handoff_inventory():
+                gap = _source_completion_gap()
+                if gap is None or isinstance(gap, ManagedSourceGap):
+                    return _handoff_source(fallback)
+        if written and completion_check is None:
+            # Ordinary edits have no creation contract; preserve a current green
+            # check as the prerequisite for their existing handoff at expiry.
+            return _ship_green_or(fallback, step_no, "deadline")
+        return fallback
 
     def _exploration_failure(step: int) -> AgentResult:
         return AgentResult(
@@ -1009,6 +1047,8 @@ async def _run_agent_segment(
     for step in range(start_step, max_steps):
         restoring = saved_frame is not None and step == start_step
         if not restoring and edit_deadline is not None and datetime.now(UTC) >= edit_deadline:
+            if coordinator_handoff and continuation is None:
+                return await _finish_source_window(step)
             return _ship_green_or(
                 AgentResult(
                     done=False, summary="Завершаю работу с исходниками; сохраняю время для проверок.",
@@ -1093,6 +1133,8 @@ async def _run_agent_segment(
                     and 0 < remaining <= _MIN_PROVIDER_WINDOW_SECONDS):
                 return await _finish_source_window(step, remaining)
             if not restoring and remaining is not None and remaining <= 0:
+                if coordinator_handoff and continuation is None:
+                    return await _finish_source_window(step)
                 return AgentResult(
                     done=False, summary="Время работы с исходниками завершилось.",
                     files=written, steps=step, transcript=convo, stop_reason="source_deadline",
@@ -1406,9 +1448,15 @@ async def _run_agent_segment(
                 )})
                 if source_feedback:
                     if source_repair.repeated_managed_gap(gap, completion_inventory):
-                        return AgentResult(
+                        stopped = AgentResult(
                             done=False, summary=gap, files=written, steps=step + 1,
                             transcript=convo, stop_reason="managed_source_contract_unresolved",
+                        )
+                        return (
+                            _handoff_source(stopped)
+                            if continuation is None and _can_finalize_source()
+                            and _has_handoff_inventory()
+                            else stopped
                         )
                     if no_write_streak >= _NO_WRITE_ABORT_AT:
                         # The known semantic rejection cannot be rescued by a green build.
@@ -1806,6 +1854,11 @@ async def _run_agent_segment(
             done=False, summary="Ответ модели обрезан; завершение ещё не подтверждено.",
             files=written, steps=max_steps, transcript=convo, stop_reason="output_limit",
         )
+    if (
+        continuation is None and edit_deadline is not None
+        and datetime.now(UTC) >= edit_deadline and _can_finalize_source()
+    ):
+        return await _finish_source_window(max_steps)
     return _ship_green_or(
         AgentResult(
             done=False, summary="hit step budget without calling done",

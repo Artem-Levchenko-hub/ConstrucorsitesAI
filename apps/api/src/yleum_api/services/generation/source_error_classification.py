@@ -22,6 +22,25 @@ class SourceFailure:
     allowed_paths: tuple[str, ...] = ()
 
 
+def source_check_is_repairable(
+    dimension: str, outcome: str, detail: str, source_failure: SourceFailure | None = None,
+) -> bool:
+    """Only trusted fast-check compiler/assertion diagnostics permit this repair."""
+    if dimension != "fast_check" or outcome != "red" or (
+        source_failure is not None and source_failure.kind == "infrastructure"
+    ):
+        return False
+    compiler = source_failure is not None and bool(source_failure.allowed_paths)
+    test = (
+        "[targeted-test]" in detail
+        and re.search(r"(?m)^not ok \d+ - ", detail)
+        and "failureType: 'testCodeFailure'" in detail
+        and "code: 'ERR_ASSERTION'" in detail
+        and re.search(r"location: '/workspace/tests/[^'\r\n]+:\d+:\d+'", detail)
+    )
+    return bool(compiler or test)
+
+
 _INFRA = re.compile(
     r"(?i)\b(?:SIGKILL|SIGTERM|ENOSPC|ENOMEM|ECONNRESET|ECONNREFUSED|ETIMEDOUT|"
     r"EAI_AGAIN|ENOTFOUND|EACCES|EPERM|worker_lost)\b|out of memory|heap limit|"

@@ -8,6 +8,7 @@ from tests.test_generation_source_check_repair import source_check  # noqa: F401
 from yleum_api.services.generation import agent_finalization
 from yleum_api.services.generation.contracts import GenerationIds, GenerationRuntime, SourceBaseline
 from yleum_api.services.max_finalization import MaxFinalizationStatus
+from yleum_api.services.project_cell_executor import ProjectCellCommandRole
 
 
 @pytest.mark.parametrize("storage_fails", [False, True])
@@ -60,6 +61,69 @@ async def test_later_finalization_source_is_saved_before_restore(monkeypatch, st
     assert saved == [{"src/app/page.tsx": "candidate after compiler repair"}]
     assert restored == [accepted] and tree == accepted
     assert "private-storage-token" not in str(raised.value)
+
+
+async def test_failed_first_handoff_keeps_private_draft_and_cleans_red_tests(monkeypatch):
+    from yleum_api.services import restorations
+
+    core = {"package.json": "starter scripts"}
+    initial = {"src/app/page.tsx": "first product"}
+    tree = {**core, **initial}
+    saved = []
+
+    async def finalize_with_repair(**kwargs):
+        tree["tests/checkout.test.mjs"] = "red test written in the repair turn"
+        return SimpleNamespace(
+            status=MaxFinalizationStatus.FAILED, redacted_detail="[final-test] assertion failed",
+        )
+
+    async def checkpoint(result):
+        saved.append(dict(tree))
+
+    async def render_core():
+        return core
+
+    async def export_files():
+        return {path: value for path, value in tree.items() if path not in core}
+
+    async def stage_patch(writes, deletes):
+        assert saved and "tests/checkout.test.mjs" in saved[0]
+        for path in deletes:
+            tree.pop(path)
+        tree.update(writes)
+
+    async def run_role(role, operation):
+        assert role is ProjectCellCommandRole.RESTORE_RUNTIME
+        assert tree == core
+        return SimpleNamespace(ok=True, redacted_detail="core verified")
+
+    async def activation_holds(*args):
+        return False
+
+    monkeypatch.setattr(
+        restorations, "adaptation_activation_holds_generation_lease", activation_holds,
+    )
+    runtime = GenerationRuntime(
+        handle=SimpleNamespace(
+            export_files=export_files, stage_patch=stage_patch, run_role=run_role,
+        ),
+        coordinator=SimpleNamespace(
+            finalize_with_repair=finalize_with_repair, session_factory=None,
+        ),
+        migration_baseline=core,
+    )
+    with pytest.raises(RuntimeError, match=r"MAX_FINALIZATION_FAILED: \[final-test\]"):
+        await agent_finalization.finalize_max_candidate(
+            _is_edit=False, _max_has_generated_snapshot=False, _max_shell_enabled=False,
+            accumulated="candidate", baseline=SourceBaseline(uuid4(), "", {}),
+            files=initial, ids=GenerationIds(*(uuid4() for _ in range(5))), is_free=True,
+            prompt_text="make a store", runtime=runtime, plan=SimpleNamespace(),
+            operations=SimpleNamespace(checkpoint=checkpoint, probe_build=None),
+            source_handoff=True,
+            render_core_on_rejection=render_core,
+        )
+    assert len(saved) == 1 and saved[0]["src/app/page.tsx"] == "first product"
+    assert tree == core
 
 
 async def test_native_repair_saves_new_helper_before_provider_failure(source_check):  # noqa: F811

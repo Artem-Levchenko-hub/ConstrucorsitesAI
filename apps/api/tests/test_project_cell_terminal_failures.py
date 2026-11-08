@@ -19,6 +19,33 @@ def fatal():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stop_reason,expect_build", [
+    ("source_finalization_handoff", False),
+    ("finalization_reserve", True),
+])
+async def test_only_the_legacy_source_handoff_defers_its_preview_build(stop_reason, expect_build):
+    files = {"src/app/page.tsx": "product"}
+
+    async def preview_runtime(*args):
+        pytest.fail("The coordinator owns runtime proof")
+
+    preview_build = AsyncMock(return_value={"ok": False, "detail": "targeted assertion failed"})
+    result = await agent_verification.probe_agent_candidate(
+        _agent_res=AgentResult(
+            done=False, summary="pending finalization", files=files, steps=1,
+            needs_finalization=True, stop_reason=stop_reason,
+        ),
+        _is_edit=False, _seg=1, _total_steps=1, files=files,
+        ids=SimpleNamespace(project_id=uuid4()),
+        project_info=SimpleNamespace(template="max_miniapp", slug="synthetic"),
+        runtime=GenerationRuntime(coordinator=object()),
+        operations=SimpleNamespace(probe_runtime=preview_runtime, probe_build=preview_build),
+    )
+    assert preview_build.await_count == int(expect_build)
+    assert result.typecheck_ok is not expect_build
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failed_probe", ["runtime", "build"])
 async def test_candidate_probe_never_turns_fatal_infra_into_unknown_green(failed_probe):
     calls = []

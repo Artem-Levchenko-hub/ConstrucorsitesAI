@@ -17,6 +17,7 @@ from yleum_api.models.project_cell import (
     ProjectCellCandidate,
     ProjectCellProofResult,
 )
+from yleum_api.services.generation.source_error_classification import SourceFailure
 from yleum_api.services.max_finalization import MaxFinalizationStatus
 from yleum_api.services.project_cell_executor import ProjectCellCommandRole
 
@@ -279,6 +280,60 @@ async def test_unclassified_service_failure_does_not_trigger_model_repair(db_ses
     harness.coordinator.executor = replace(harness.coordinator.executor, run_role=run_role)
     outcome = await harness.coordinator.finalize_with_repair(prompt="Build tracker", repair=repair)
     assert outcome.status is MaxFinalizationStatus.FAILED
+
+
+@pytest.mark.parametrize("repair_ok", [False, True])
+async def test_late_handoff_checks_each_revision_before_sql_or_full_build(
+    db_session, test_engine, monkeypatch, repair_ok,
+):
+    harness = await _new_harness(db_session, test_engine)
+    executor = harness.coordinator.executor
+    feedback = []
+    revisions = []
+    main_page = "src/app/page.tsx"
+    detail = f"{main_page}(3,2): error TS2322: Type 'number' is not assignable to type 'string'."
+    harness.files["drizzle/0001_notes.sql"] = "CREATE TABLE notes(subject text NOT NULL);"
+
+    async def run_role(role, operation_id):
+        if role is ProjectCellCommandRole.FULL_BUILD:
+            assert feedback and repair_ok
+            assert len(revisions) == 2 and revisions[0] != revisions[1]
+            assert harness.roles[-1] is ProjectCellCommandRole.FAST_CHECK
+        result = await executor.run_role(role, operation_id)
+        if role is ProjectCellCommandRole.FAST_CHECK and not feedback:
+            return replace(result, ok=False, redacted_detail=detail)
+        return result
+
+    async def source_failure(receipt):
+        assert receipt.dimension == "fast_check" and receipt.outcome == "red"
+        return SourceFailure("type_error", main_page, (main_page,))
+
+    async def migration_preflight():
+        revisions.append(dict(harness.files))
+        return None
+
+    async def generic_repair(reason):
+        pytest.fail("A confirmed compiler path must use the restricted repair")
+
+    async def compiler_repair(reason, failure):
+        assert ProjectCellCommandRole.FULL_BUILD not in harness.roles
+        assert failure.allowed_paths == (main_page,)
+        feedback.append(reason)
+        if repair_ok:
+            harness.files[main_page] += "\n// compiler fix"
+
+    monkeypatch.setattr(harness.coordinator, "source_failure", source_failure)
+    harness.coordinator.executor = replace(executor, run_role=run_role)
+    outcome = await harness.coordinator.finalize_with_repair(
+        prompt="Build tracker", repair=generic_repair, repair_source=compiler_repair,
+        source_preflight=migration_preflight,
+    )
+    assert feedback == [detail]
+    assert harness.roles.count(ProjectCellCommandRole.FAST_CHECK) == (2 if repair_ok else 1)
+    assert harness.roles.count(ProjectCellCommandRole.FULL_BUILD) == int(repair_ok)
+    assert outcome.status is (
+        MaxFinalizationStatus.COMPLETE if repair_ok else MaxFinalizationStatus.NEEDS_EDIT
+    )
 
 
 async def test_three_distinct_repairs_keep_full_finalization_and_promote_only_green(

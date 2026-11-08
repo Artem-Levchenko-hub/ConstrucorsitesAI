@@ -3,8 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from pathlib import PurePosixPath
 from typing import NamedTuple
@@ -12,6 +11,8 @@ from typing import NamedTuple
 from yleum_api.core.config import get_settings
 from yleum_api.services import agent_builder
 from yleum_api.services import repo as repo_svc
+from yleum_api.services.agent_progress import bounded_redacted_diagnostic
+from yleum_api.services.generation.agent_recovery import _restore_max_core
 from yleum_api.services.generation.contracts import (
     AgentOperations,
     AgentPromptPlan,
@@ -22,6 +23,9 @@ from yleum_api.services.generation.contracts import (
 )
 from yleum_api.services.generation.runtime import _restore_project_cell_source
 from yleum_api.services.generation.source_error_classification import SourceFailure
+from yleum_api.services.generation.source_error_classification import (
+    source_check_is_repairable as source_check_is_repairable,
+)
 from yleum_api.services.generation.source_intent import (
     explicitly_readonly_request as explicitly_readonly_request,
 )
@@ -170,25 +174,6 @@ def validate_edit_source_change(
     return EditSourceChangeVerdict({}, _NO_SOURCE_CHANGE_MESSAGE, _NO_SOURCE_CHANGE_FAILURE)
 
 
-def source_check_is_repairable(
-    dimension: str, outcome: str, detail: str, source_failure: SourceFailure | None = None,
-) -> bool:
-    """Only trusted fast-check compiler/assertion diagnostics permit this repair."""
-    if dimension != "fast_check" or outcome != "red" or (
-        source_failure is not None and source_failure.kind == "infrastructure"
-    ):
-        return False
-    compiler = source_failure is not None and bool(source_failure.allowed_paths)
-    test = (
-        "[targeted-test]" in detail
-        and re.search(r"(?m)^not ok \d+ - ", detail)
-        and "failureType: 'testCodeFailure'" in detail
-        and "code: 'ERR_ASSERTION'" in detail
-        and re.search(r"location: '/workspace/tests/[^'\r\n]+:\d+:\d+'", detail)
-    )
-    return bool(compiler or test)
-
-
 async def run_native_source_repair(
     *, task: str, prompt_text: str, baseline: Mapping[str, str],
     runtime: GenerationRuntime, ids: GenerationIds, plan: AgentPromptPlan,
@@ -322,6 +307,8 @@ async def finalize_max_candidate(
     plan: AgentPromptPlan,
     operations: AgentOperations,
     catalog_runtime: bool = False,
+    source_handoff: bool = False,
+    render_core_on_rejection: Callable[[], Awaitable[dict[str, str]]] | None = None,
 ) -> FinalizedAgentSource:
     _max_finalization_proof: ProofBundle | None = None
     if runtime.coordinator is not None and files:
@@ -403,12 +390,16 @@ async def finalize_max_candidate(
             )
 
         try:
-            continuation_kw = {"continuation": continuation} if continuation is not None else {}
+            from yleum_api.services.generation.agent_runtime import migration_feedback
+
             _finalization = await runtime.coordinator.finalize_with_repair(
                 prompt=prompt_text,
                 repair=_repair_finalization_source,
                 repair_source=_repair_finalization_source,
-                **continuation_kw,
+                source_preflight=(
+                    (lambda: migration_feedback(runtime, ids)) if source_handoff else None
+                ),
+                continuation=continuation,
             )
             if _finalization.status is MaxFinalizationStatus.ACTIVATING:
                 raise AdaptationActivationPending(_finalization.redacted_detail)
@@ -429,20 +420,17 @@ async def finalize_max_candidate(
 
             await checkpoint_before_rollback(operations)
             raise_if_terminal_cell_error(exc)
-            if runtime.coordinator is not None:
-                from yleum_api.services.restorations import (
-                    adaptation_activation_holds_generation_lease,
-                )
+            from yleum_api.services.restorations import adaptation_activation_holds_generation_lease
 
-                if await adaptation_activation_holds_generation_lease(
-                    runtime.coordinator.session_factory,
-                    ids.run_id,
-                ):
-                    raise AdaptationActivationPending(
-                        "sealed restoration adaptation activation requires recovery"
-                    ) from exc
-            if baseline.sha and _max_has_generated_snapshot:
-                try:
+            if await adaptation_activation_holds_generation_lease(
+                runtime.coordinator.session_factory,
+                ids.run_id,
+            ):
+                raise AdaptationActivationPending(
+                    "sealed restoration adaptation activation requires recovery"
+                ) from exc
+            try:
+                if baseline.sha and _max_has_generated_snapshot:
                     _published_source = await asyncio.to_thread(
                         repo_svc.read_files,
                         ids.project_id,
@@ -452,11 +440,25 @@ async def finalize_max_candidate(
                         runtime.handle,
                         _published_source,
                     )
-                except Exception as _repair_rollback_exc:
-                    _log.warning(
-                        "MAX repair source restore failed",
-                        exc_info=_repair_rollback_exc,
+                elif not _max_has_generated_snapshot and render_core_on_rejection is not None:
+                    # Keep the checkpoint private and remove the rejected run's
+                    # page and tests from the reusable workspace before a new prompt.
+                    restored = await _restore_max_core(
+                        handle=runtime.handle,
+                        touched_files=await runtime.handle.export_files(),
+                        render_core=render_core_on_rejection,
+                        trusted_files=runtime.migration_baseline or baseline.files,
+                        probe_build=operations.probe_build,
+                        source_only=True,
                     )
+                    if restored.get("ok") is not True:
+                        raise RuntimeError("MAX core restore did not pass runtime verification")
+            except Exception as _repair_rollback_exc:
+                if source_handoff:
+                    raise_if_terminal_cell_error(_repair_rollback_exc)
+                    cause = bounded_redacted_diagnostic(str(exc), max_bytes=2000)
+                    raise RuntimeError(f"{cause}; rollback_unverified") from _repair_rollback_exc
+                _log.warning("MAX repair source restore failed", exc_info=_repair_rollback_exc)
             raise
         if _finalization.status is MaxFinalizationStatus.COMPLETE:
             _max_finalization_proof = _finalization.proof

@@ -299,6 +299,14 @@ async def probe_agent_candidate(
         f"total_steps={_total_steps} files={len(files)} stop={_agent_res.stop_reason}",
         flush=True,
     )
+    if (
+        runtime.coordinator is not None
+        and _agent_res.stop_reason == agent_builder.SOURCE_FINALIZATION_HANDOFF
+        and _agent_res.needs_finalization and not _agent_res.done
+    ):
+        # A late legacy handoff must reach the full proof and repair path.
+        # An interim preview check can roll the candidate back before that path runs.
+        return CandidateProbeResult(accumulated, True, True, "", "")
 
     # Phase 3 — runtime smoke gate: a clean typecheck does NOT prove the
     # app actually serves. Probe the live container for a 5xx render and

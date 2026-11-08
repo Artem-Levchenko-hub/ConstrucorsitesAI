@@ -44,6 +44,7 @@ from yleum_api.services.generation.recovery_requirements import load_compiler_wi
 from yleum_api.services.generation.source_error_classification import (
     SourceFailure,
     classify_source_failure,
+    source_check_is_repairable,
 )
 from yleum_api.services.generation_deadline import (
     generation_deadline,
@@ -494,6 +495,7 @@ class MaxFinalizationCoordinator:
         *,
         files: Mapping[str, str],
         prompt: str,
+        source_preflight: Callable[[], Awaitable[str | None]] | None = None,
     ) -> MaxFinalizationOutcome:
         await self._raise_persisted_infrastructure_failure()
         try:
@@ -535,6 +537,8 @@ class MaxFinalizationCoordinator:
                 )
                 await self._log_terminal(outcome)
                 return outcome
+        if source_gap is None and source_preflight is not None:
+            source_gap = await source_preflight()
         if source_gap is not None:
             return await self._outcome(
                 MaxFinalizationStatus.NEEDS_EDIT,
@@ -542,6 +546,38 @@ class MaxFinalizationCoordinator:
                 ProofBundle(identity=proof),
                 source_gap,
             )
+
+        if source_preflight is not None:
+            # FULL_BUILD may commit SQL before compiling. Require a non-mutating
+            # green compiler/test receipt for the current candidate, after each repair.
+            check = await self.fast_check()
+            identity = await self._identity()
+            if workspace_revision_digest(files) != identity.workspace_revision:
+                raise MaxFinalizationConflict("source changed during finalization preflight")
+            proof = await self._proof(identity)
+            if check.proof_id != proof.id:
+                raise MaxFinalizationConflict("finalization preflight receipt is stale")
+            checkpoint = self._checkpoint(identity, GenerationPhase.PREPARE)
+            if check.outcome != ProofOutcome.GREEN.value:
+                bundle = ProofBundle(identity=proof, fast_check=check)
+                is_source_check = check.dimension == ProofDimension.FAST_CHECK.value
+                failure = await self.source_failure(check) if is_source_check else None
+                if failure is not None and source_check_is_repairable(
+                    check.dimension, check.outcome, check.redacted_detail, failure,
+                ):
+                    return await self._outcome(
+                        MaxFinalizationStatus.NEEDS_EDIT,
+                        self._checkpoint(identity, GenerationPhase.FAST_CHECK, check.operation_id),
+                        bundle, check.redacted_detail,
+                    )
+                return await self._failed(
+                    identity, proof,
+                    GenerationPhase.FAST_CHECK if is_source_check else GenerationPhase.PREPARE,
+                    check, check.redacted_detail,
+                    bundle=bundle,
+                )
+            if check.dimension != ProofDimension.FAST_CHECK.value:
+                raise MaxFinalizationConflict("finalization preflight did not verify source")
 
         await self._phase_started(GenerationPhase.PREPARE, checkpoint)
         bootstrap = await self._find(proof, ProofDimension.BOOTSTRAP)
@@ -712,6 +748,7 @@ class MaxFinalizationCoordinator:
         repair: Callable[[str], Awaitable[None]],
         repair_source: Callable[[str, SourceFailure], Awaitable[None]] | None = None,
         continuation: ExecutionDriver | None = None,
+        source_preflight: Callable[[], Awaitable[str | None]] | None = None,
     ) -> MaxFinalizationOutcome:
         """Continue repairs while actual source or verified gate evidence is novel.
 
@@ -719,6 +756,8 @@ class MaxFinalizationCoordinator:
         cancellation and promotion checks remain authoritative. Repeated source
         states cannot buy another pass without a newly verified gate dimension.
         """
+        if source_preflight is not None and continuation is not None:
+            raise MaxFinalizationConflict("durable execution has its own verification protocol")
         if continuation is not None:
             await continuation.account_work()
         await self._raise_persisted_infrastructure_failure()
@@ -775,7 +814,10 @@ class MaxFinalizationCoordinator:
                 if not novel:
                     raise MaxFinalizationConflict("source repair made no new progress")
         while True:
-            outcome = await self.finalize(files=files, prompt=prompt)
+            outcome = (
+                await self.finalize(files=files, prompt=prompt, source_preflight=source_preflight)
+                if source_preflight is not None else await self.finalize(files=files, prompt=prompt)
+            )
             if outcome.status is not MaxFinalizationStatus.NEEDS_EDIT:
                 if continuation is not None:
                     await continuation.account_work()
@@ -793,6 +835,15 @@ class MaxFinalizationCoordinator:
                 failure = await self.source_failure(receipt)
                 if failure is None or not failure.allowed_paths:
                     return outcome
+            elif source_preflight is not None and (check := outcome.proof.fast_check) is not None:
+                failure = await self.source_failure(check)
+                if failure is None:
+                    return outcome
+                targeted = bool(failure.allowed_paths)
+                if targeted and repair_source is None:
+                    return outcome
+                if not targeted:
+                    failure = None
             if continuation is not None:
                 assert durable is not None
                 durable = durable.model_copy(

@@ -1236,8 +1236,13 @@ def test_source_repair_repeated_semantic_done_consumes_existing_no_progress_limi
     assert len(executed) == 6  # Initial write, four discoveries, one build; no hidden tools.
 
 
-@pytest.mark.parametrize("repair_on_third_attempt", [False, True])
-def test_managed_rejection_limit_survives_writes_and_segment_boundaries(repair_on_third_attempt):
+@pytest.mark.parametrize(
+    ("repair_on_third_attempt", "can_finalize"),
+    [(False, False), (True, False), (False, True)],
+)
+def test_managed_rejection_limit_survives_writes_and_segment_boundaries(
+    repair_on_third_attempt, can_finalize,
+):
     from yleum_api.services.max_management_contract import build_management_contract
     from yleum_api.services.max_management_generation import management_source_gap
 
@@ -1286,13 +1291,18 @@ export default function Page() {
         execute=_ok_executor([], state), complete=complete, snapshot_files=snapshot,
         completion_check=lambda files, _: management_source_gap(files),
         coordinator_handoff=True, max_steps=3, max_segments=4,
+        edit_deadline=datetime.now(UTC) + timedelta(minutes=5) if can_finalize else None,
     ))
     assert len(calls) == 9 and result.segments == 3
     assert result.done is repair_on_third_attempt
-    assert result.needs_finalization is repair_on_third_attempt
+    assert result.needs_finalization is (repair_on_third_attempt or can_finalize)
     if not repair_on_third_attempt:
-        assert result.stop_reason == "managed_source_contract_unresolved"
-        assert "unproven_object_spread" in result.summary
+        if can_finalize:
+            assert result.continuation_reason == "managed_source_contract_unresolved"
+            assert result.files[path] == attempted_sources[-1]
+        else:
+            assert result.stop_reason == "managed_source_contract_unresolved"
+            assert "unproven_object_spread" in result.summary
 
 
 @pytest.mark.parametrize("change_source", [False, True])

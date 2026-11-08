@@ -976,6 +976,7 @@ async def run_agent_generation(
     ))
 
     _catalog_runtime = _stack.orchestrator_template == "max-miniapp-nextjs"
+    _source_handoff = _agent_res.stop_reason == agent_builder.SOURCE_FINALIZATION_HANDOFF
     (
         _max_finalization_proof,
         files,
@@ -994,6 +995,8 @@ async def run_agent_generation(
         plan=_prompt_plan,
         operations=_operations,
         catalog_runtime=_catalog_runtime,
+        source_handoff=_source_handoff,
+        render_core_on_rejection=_render_current_max_starter_files if _source_handoff else None,
     )
     from yleum_api.services.restorations import adaptation_activation_consumed
 
