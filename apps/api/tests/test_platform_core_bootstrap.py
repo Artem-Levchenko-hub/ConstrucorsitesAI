@@ -216,8 +216,8 @@ async def test_coordinator_seed_runs_real_core_check_after_staging(outcome):
     legacy_build.assert_not_awaited()
 
 
-@pytest.mark.parametrize("retry", [False, True])
-async def test_actual_pipeline_checks_core_before_resuming_draft(monkeypatch, retry):
+@pytest.mark.parametrize("scenario", ["red_core", "resume_draft", "fresh_after_failed_draft"])
+async def test_actual_pipeline_checks_clean_core_before_model(monkeypatch, scenario):
     from yleum_api.services.generation import recovery_execution
 
     # This fixture exercises the ordinary pipeline, not durable recovery. Do
@@ -249,11 +249,16 @@ async def test_actual_pipeline_checks_core_before_resuming_draft(monkeypatch, re
         "tests/owner.test.mjs": "accepted owner test",
         platform_test: "shipped catalog test",
     }
+    retry = scenario == "resume_draft"
+    core_ready = scenario != "red_core"
     workspace = {**baseline_files, ".omnia/cell.json": manifest,
-                 "tests/other.test.mjs": "unrelated workspace test",
-                 "tsconfig.json": "typecheck scaffold"}
+                 platform_test: "shipped catalog test", "tsconfig.json": "typecheck scaffold"}
     if retry:
         workspace.update(draft_files)
+        workspace["tests/other.test.mjs"] = "unrelated workspace test"
+    elif core_ready:
+        workspace.update({product_test: draft_files[product_test],
+                          "src/app/page.tsx": draft_files["src/app/page.tsx"]})
 
     async def stage(writes, deletes):
         workspace.update(writes)
@@ -263,7 +268,7 @@ async def test_actual_pipeline_checks_core_before_resuming_draft(monkeypatch, re
     async def check():
         assert "src/app/page.tsx" not in workspace
         assert workspace["package.json"] == "trusted"
-        if not retry:
+        if not core_ready:
             return NS(outcome="red", redacted_detail="migration verification red")
         if product_test in workspace:
             return NS(outcome="red", redacted_detail="[targeted-test] ENOENT src/app/page.tsx")
@@ -273,7 +278,8 @@ async def test_actual_pipeline_checks_core_before_resuming_draft(monkeypatch, re
         assert workspace["tests/owner.test.mjs"] == "accepted owner test"
         assert workspace[".omnia/cell.json"] == manifest
         assert workspace["tsconfig.json"] == "typecheck scaffold"
-        assert workspace["tests/other.test.mjs"] == "unrelated workspace test"
+        if retry:
+            assert workspace["tests/other.test.mjs"] == "unrelated workspace test"
         return NS(outcome="green", redacted_detail="")
 
     core_check = AsyncMock(side_effect=check)
@@ -313,17 +319,20 @@ async def test_actual_pipeline_checks_core_before_resuming_draft(monkeypatch, re
         pass
 
     async def check_agent_input(**kwargs):
-        assert retry
-        expected = {**draft_files, ".omnia/cell.json": manifest,
-                    "tests/other.test.mjs": "unrelated workspace test",
-                    "tsconfig.json": "typecheck scaffold"}
+        common = {".omnia/cell.json": manifest, "tsconfig.json": "typecheck scaffold"}
+        expected = (
+            {**draft_files, **common, "tests/other.test.mjs": "unrelated workspace test"}
+            if retry else
+            {**baseline_files, **common, platform_test: "shipped catalog test",
+             "package.json": "trusted"}
+        )
         assert workspace == expected
-        assert kwargs["workspace_context_files"] == expected
+        assert kwargs["workspace_context_files"] == (expected if retry else None)
         raise AgentReady
 
     provider, consume = AsyncMock(side_effect=check_agent_input), AsyncMock()
     monkeypatch.setattr(agent_pipeline, "execute_agent_turn", provider)
-    with pytest.raises(AgentReady if retry else ApiError) as stopped:
+    with pytest.raises(AgentReady if core_ready else ApiError) as stopped:
         await agent_pipeline.run_agent_generation(
             _consume_free_generation=consume, baseline=SourceBaseline(None, None, baseline_files),
             capacity_dispatch_token=None, factory=factory, force_model=None, ids=ids,
@@ -333,7 +342,7 @@ async def test_actual_pipeline_checks_core_before_resuming_draft(monkeypatch, re
             prompt_text=request, runtime=runtime, selected_elements=None,
         )
     core_check.assert_awaited_once()
-    if retry:
+    if core_ready:
         provider.assert_awaited_once()
     else:
         assert "MAX_CORE_PREPARATION_FAILED" in str(stopped.value)

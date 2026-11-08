@@ -52,7 +52,7 @@ from yleum_api.services.generation.agent_runtime import (
     require_named_behavior_readiness,
 )
 from yleum_api.services.generation.agent_seed import (
-    checkpoint_product_tests,
+    draft_product_test_paths,
     render_current_max_starter,
     stage_max_starter,
     stage_owner_fonts,
@@ -552,6 +552,12 @@ async def run_agent_generation(
             project_info=project_info,
             runtime=runtime,
             new_checkpoint_paths=new_checkpoint_paths if continuation is None else (),
+            clean_baseline_paths=(
+                baseline.files.keys()
+                if continuation is None and saved_source is None
+                and getattr(runtime.handle, "prove_restoration_adaptation", None) is None
+                else None
+            ),
             defer_verification=defer_starter_check,
         ), handle=runtime.handle)
 
@@ -562,7 +568,7 @@ async def run_agent_generation(
         assert runtime.handle is not None
         draft_tests = bootstrap_preparation.isolated_test_paths
         if draft_tests is None:
-            draft_tests = tuple(sorted(checkpoint_product_tests(
+            draft_tests = tuple(sorted(draft_product_test_paths(
                 new_checkpoint_paths - runtime.migration_baseline.keys(),
                 portable=runtime.handle.is_portable(),
             )))

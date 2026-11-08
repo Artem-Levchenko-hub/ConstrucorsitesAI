@@ -121,11 +121,11 @@ async def render_current_max_starter(
     )
 
 
-def checkpoint_product_tests(paths: Collection[str], *, portable: bool) -> set[str]:
+def draft_product_test_paths(paths: Collection[str], *, portable: bool) -> set[str]:
     from yleum_api.services.max_project_kit import _template_candidates
 
-    # The seeded package runs direct tests/*.test.mjs. The full checkpoint
-    # also contains platform tests the core renderer does not rewrite.
+    # The seeded package runs direct tests/*.test.mjs, including platform
+    # tests the core renderer does not rewrite.
     tests = {
         path for path in paths
         if path.startswith("tests/") and path.count("/") == 1 and path.endswith(".test.mjs")
@@ -232,6 +232,7 @@ async def stage_max_starter(
     project_info: ProjectGenerationFacts,
     runtime: GenerationRuntime,
     new_checkpoint_paths: Collection[str] = (),
+    clean_baseline_paths: Collection[str] | None = None,
     defer_verification: bool = False,
 ) -> tuple[dict[str, str], agent_builder.AgentResult | None]:
     _max_seed_files: dict[str, str] = {}
@@ -242,14 +243,16 @@ async def stage_max_starter(
     if orchestrate and not _max_has_generated_snapshot:
         try:
             _starter_files = await _render_current_max_starter_files()
-            portable = runtime.handle is not None and runtime.handle.is_portable()
+            handle = _require_project_cell(runtime.handle)
+            portable = handle.is_portable()
+            draft_paths = new_checkpoint_paths
             if portable:
                 from yleum_api.services.max_project_kit import include_portable_manifest
 
-                assert runtime.handle is not None
-                _starter_files = include_portable_manifest(
-                    _starter_files, await runtime.handle.snapshot_files(),
-                )
+                workspace_files = await handle.snapshot_files()
+                _starter_files = include_portable_manifest(_starter_files, workspace_files)
+                if clean_baseline_paths is not None:
+                    draft_paths = workspace_files.keys() - clean_baseline_paths
             if _design_contract:
                 from yleum_api.services.design_plugin import seed_design_memory
 
@@ -280,16 +283,16 @@ async def stage_max_starter(
             # Kit v12 and older left a real root page in the container.
             # Remove it before seeding v13 so a legacy canvas can neither
             # enter model context nor survive a failed first generation.
-            # A retry replays the exact draft after this core check. Exclude
-            # its new product tests while the page they exercise is absent.
-            draft_tests = checkpoint_product_tests(new_checkpoint_paths, portable=portable)
+            # A fresh build drops draft-only product tests from an earlier
+            # failed run. A retry restores its checkpoint after this proof.
+            draft_tests = draft_product_test_paths(draft_paths, portable=portable)
             _starter_patch = {**_starter_files, "src/app/page.tsx": ""}
             _starter_patch.update(
                 dict.fromkeys(draft_tests - runtime.migration_baseline.keys(), ""),
             )
             await _apply_project_cell_preview_files(
                 files=_starter_patch,
-                project_cell_handle=_require_project_cell(runtime.handle),
+                project_cell_handle=handle,
                 sync_preview=runtime.coordinator is None,
             )
             if not defer_verification:
