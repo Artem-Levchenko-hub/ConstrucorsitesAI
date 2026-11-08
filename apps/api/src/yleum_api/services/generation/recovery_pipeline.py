@@ -44,6 +44,7 @@ class BootstrapPreparation(BaseModel):
     design_contract: DesignContract | None = None
     adjacent_files: dict[str, str] | None = None
     adjacent_deleted_paths: tuple[str, ...] = ()
+    isolated_test_paths: tuple[str, ...] | None = None
 
     @field_validator("version", mode="before")
     @classmethod
@@ -54,8 +55,21 @@ class BootstrapPreparation(BaseModel):
 
 
 _BOOTSTRAP_STAGES = frozenset({
-    "stack_prepare", "prompt_prepare", "starter_apply", "adjacent_apply", "font_apply",
+    "stack_prepare", "prompt_prepare", "starter_apply", "starter_isolate",
+    "adjacent_apply", "font_apply",
 })
+
+
+def can_isolate_bootstrap_starter(driver: ExecutionDriver) -> bool:
+    completed = driver.context["completed"]
+    results = completed.get("bootstrap_results", {})
+    pending = completed.get("bootstrap_pending")
+    # An older execution may already be applying the draft or fonts. Its
+    # starter proof preceded those effects, so keep its existing sequence.
+    return not any(
+        name in results or pending == {"version": 1, "name": name}
+        for name in ("adjacent_apply", "font_apply")
+    )
 
 
 def _bootstrap_output(name: str, value: Any, *, encode: bool) -> Any:
@@ -90,7 +104,7 @@ def _bootstrap_output(name: str, value: Any, *, encode: bool) -> Any:
         return value["files"], (
             _result_from_data(value["result"]) if value["result"] is not None else None
         )
-    if name == "adjacent_apply" and (encode or value is True):
+    if name in {"starter_isolate", "adjacent_apply"} and (encode or value is True):
         return True if encode else None
     raise RecoveryContractError("unknown bootstrap preparation result")
 
@@ -126,7 +140,9 @@ async def run_bootstrap_stage(
         driver.state.execution.logical_step_seq + (0 if cold else 1),
         f"bootstrap:{name}", reconcile_only=cold,
     )
-    substep = "starter_apply" if name in {"adjacent_apply", 'font_apply'} else name
+    substep = (
+        "starter_apply" if name in {"starter_isolate", "adjacent_apply", "font_apply"} else name
+    )
     if cold:
         if (driver.state.execution.substep != substep
             or driver.state.execution.pending_effect_id != cursor.root_effect_id):
@@ -151,6 +167,11 @@ async def run_bootstrap_stage(
                 await reconcile_preparation_receipts(
                     driver.factory, identity=driver.state.identity, handle=handle,
                 )
+                if name == "starter_isolate":
+                    # This stage owns exactly one frozen write. A prior intent
+                    # is replayed from its receipt. With no intent, no POST
+                    # could have been sent before the worker stopped.
+                    cursor.reconcile_only = False
             value = await invoke()
             await require_preparation_receipts(driver.factory, identity=driver.state.identity)
         encoded = _bootstrap_output(name, value, encode=True)
@@ -327,16 +348,30 @@ async def reconcile_pending_role(
             or driver.state.execution.pending_effect_id != cursor.root_effect_id
         ):
             raise RecoveryContractError("pending command logical cursor conflicts")
+        completed = driver.context["completed"]
+        preparation = completed.get("bootstrap_preparation")
+        starter_proof = (
+            driver.state.execution.stage == "bootstrap"
+            and pending.return_substep == "starter_apply"
+            and pending.role in {"bootstrap", "fast_check"}
+            and isinstance(preparation, dict)
+            and isinstance(preparation.get("isolated_test_paths"), list)
+            and "starter_apply" in completed.get("bootstrap_results", {})
+            and completed.get("bootstrap_pending") is None
+        )
         with tool_effect_scope(cursor):
-            await require_command_reconciliation(
+            has_intent = await require_command_reconciliation(
                 driver.factory,
                 run_id=driver.state.identity.run_id,
                 project_id=driver.state.identity.project_id,
                 user_id=driver.state.identity.user_id,
+                undispatched_operation_id=pending.operation_id if starter_proof else None,
             )
-            # Historical observation is discarded. Normal finalization obtains a
-            # new current-fence proof; this read never restores proof authority.
-            await handle.run_role(ProjectCellCommandRole(pending.role), pending.operation_id)
+            if has_intent:
+                # Discard historical observations. The next check needs a current proof.
+                await handle.run_role(ProjectCellCommandRole(pending.role), pending.operation_id)
+        # Without a physical intent the controller could not have received a
+        # POST. Resume starter verification from its saved substep in that case.
         await _finish_role_cursor(driver, pending, cold=True)
     except Exception:
         await driver.wait()

@@ -52,9 +52,11 @@ from yleum_api.services.generation.agent_runtime import (
     require_named_behavior_readiness,
 )
 from yleum_api.services.generation.agent_seed import (
+    checkpoint_product_tests,
     render_current_max_starter,
     stage_max_starter,
     stage_owner_fonts,
+    verify_max_retry_starter,
 )
 from yleum_api.services.generation.agent_verification import (
     apply_legacy_design_and_result_text,
@@ -279,6 +281,7 @@ async def run_agent_generation(
         FinalizationInputs,
         PreparedAgentEntry,
         attach_driver,
+        can_isolate_bootstrap_starter,
         complete_agent_turn,
         rebind_continuation,
         run_bootstrap_stage,
@@ -436,7 +439,9 @@ async def run_agent_generation(
         )
         execution_context = {**execution_context, "completed": {
             **execution_context["completed"],
-            "bootstrap_preparation": bootstrap_preparation.model_dump(mode="json"),
+            "bootstrap_preparation": bootstrap_preparation.model_dump(
+                mode="json", exclude={"isolated_test_paths"},
+            ),
         }}
         _resume_state = await commit_execution_cursor(
             factory, previous=_resume_state, execution=_resume_state.execution,
@@ -521,6 +526,15 @@ async def run_agent_generation(
         runtime=runtime,
     )
 
+    saved_source = resumed[0] if resumed is not None else None
+    new_checkpoint_paths = (
+        saved_source["files"].keys() - baseline.files.keys() if saved_source is not None else set()
+    )
+    defer_starter_check = (
+        continuation is not None and prepared_entry is None and saved_source is not None
+        and orchestrate and not _max_has_generated_snapshot
+        and can_isolate_bootstrap_starter(continuation)
+    )
     if prepared_entry is not None:
         _max_seed_files, _agent_res = prepared_entry.seed_files, prepared_entry.initial_result
     else:
@@ -536,12 +550,37 @@ async def run_agent_generation(
             orchestrate=orchestrate,
             project_info=project_info,
             runtime=runtime,
+            new_checkpoint_paths=new_checkpoint_paths if continuation is None else (),
+            defer_verification=defer_starter_check,
         ), handle=runtime.handle)
 
     _max_seed_files = {**_max_seed_files, **(runtime.migration_baseline or {})}
     runtime.migration_baseline = {**baseline.files, **_max_seed_files}
-    if resumed is not None and runtime.handle is not None:
-        saved_source = resumed[0]
+    if defer_starter_check:
+        assert continuation is not None and bootstrap_preparation is not None
+        assert runtime.handle is not None
+        draft_tests = bootstrap_preparation.isolated_test_paths
+        if draft_tests is None:
+            draft_tests = tuple(sorted(checkpoint_product_tests(
+                new_checkpoint_paths - runtime.migration_baseline.keys(),
+                portable=runtime.handle.is_portable(),
+            )))
+            bootstrap_preparation = bootstrap_preparation.model_copy(update={
+                "isolated_test_paths": draft_tests,
+            })
+            await continuation.save(continuation.state.execution, context={
+                **continuation.context, "completed": {
+                    **continuation.context["completed"],
+                    "bootstrap_preparation": bootstrap_preparation.model_dump(mode="json"),
+                },
+            })
+        if not set(draft_tests).issubset(new_checkpoint_paths):
+            raise RecoveryContractError("starter isolation conflicts with the adjacent checkpoint")
+        await verify_max_retry_starter(
+            runtime=runtime, bindings=bindings, emit=_agent_emit,
+            draft_tests=draft_tests, continuation=continuation,
+        )
+    if saved_source is not None and runtime.handle is not None:
         source_handle = runtime.handle
         await run_bootstrap_stage(
             continuation, "adjacent_apply", lambda: _apply_project_cell_preview_files(
@@ -591,13 +630,22 @@ async def run_agent_generation(
                 (prompt_text, _is_continue, _is_edit, _max_has_generated_snapshot),
                 _design_contract, _stack, _prompt_plan, _max_seed_files, _agent_res, edit_deadline,
             )
+            completed = {
+                **continuation.context["completed"], "agent_entry": prepared_entry.to_json(),
+            }
+            if (
+                bootstrap_preparation is not None
+                and bootstrap_preparation.isolated_test_paths is not None
+            ):
+                # The draft is restored. Keep its preparation readable by older workers.
+                completed["bootstrap_preparation"] = bootstrap_preparation.model_dump(
+                    mode="json", exclude={"isolated_test_paths"},
+                )
             await continuation.save(continuation.state.execution.model_copy(update={
                 "substep": "agent_entry", "physical_state": "active",
                 "control_workspace_id": runtime.handle.control_workspace_id,
                 "control_fencing_epoch": runtime.handle.control_fencing_epoch,
-            }), context={**continuation.context, "completed": {
-                **continuation.context["completed"], "agent_entry": prepared_entry.to_json(),
-            }})
+            }), context={**continuation.context, "completed": completed})
     progress_collector = getattr(runtime, "verified_progress", None)
     _operations = AgentOperations(
         response_recovery=getattr(runtime, "response_recovery", None),

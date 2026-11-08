@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
-from typing import Any
+from collections.abc import Awaitable, Callable, Collection
+from typing import TYPE_CHECKING, Any, NoReturn
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -19,10 +19,12 @@ from yleum_api.services.generation.contracts import (
 from yleum_api.services.generation.runtime import (
     _apply_project_cell_preview_files,
     _require_project_cell,
-    _split_project_cell_preview_patch,
 )
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 from yleum_api.services.project_cell_proofs import failure_detail_excerpt
+
+if TYPE_CHECKING:
+    from yleum_api.services.generation.recovery_execution import ExecutionDriver
 
 _log = logging.getLogger("yleum_api.routers.messages")
 
@@ -119,6 +121,104 @@ async def render_current_max_starter(
     )
 
 
+def checkpoint_product_tests(paths: Collection[str], *, portable: bool) -> set[str]:
+    from yleum_api.services.max_project_kit import _template_candidates
+
+    # The seeded package runs direct tests/*.test.mjs. The full checkpoint
+    # also contains platform tests the core renderer does not rewrite.
+    tests = {
+        path for path in paths
+        if path.startswith("tests/") and path.count("/") == 1 and path.endswith(".test.mjs")
+    }
+    if tests:
+        for directory in _template_candidates("tests"):
+            if directory.is_dir():
+                platform_tests = {f"tests/{path.name}" for path in directory.glob("*.test.mjs")}
+                if portable:
+                    # next_machine_seed excludes this platform image-only test.
+                    platform_tests.discard("tests/dependency-install.test.mjs")
+                return tests - platform_tests
+    return set()
+
+
+async def _complete_max_starter(
+    runtime: GenerationRuntime,
+    bindings: AgentRuntimeBindings,
+    emit: Callable[[str, dict[str, Any]], Awaitable[None]],
+) -> None:
+    # Staging source proves neither dependencies nor the database.
+    # This check must finish before any model request can spend money.
+    await _verify_max_starter(runtime, bindings)
+    await emit("agent.step", {
+        "step": 0,
+        "action": "build",
+        "human": "Основа готова — запускаю генератор",
+        "path": "",
+        "detail": (
+            "Проверки ядра MAX пройдены; теперь генератор "
+            "проектирует продукт без готового UI-шаблона."
+        ),
+        "ok": True,
+    })
+
+
+async def _raise_max_starter_failure(
+    exc: Exception, emit: Callable[[str, dict[str, Any]], Awaitable[None]],
+) -> NoReturn:
+    raise_if_terminal_cell_error(exc)
+    diagnostic = failure_detail_excerpt(str(exc), max_bytes=3584)
+    print(f"[PP] MAX starter preparation skipped: {diagnostic!r}", flush=True)
+    await emit("agent.step", {
+        "step": 0,
+        "action": "platform_core",
+        "human": "Не удалось подготовить чистое ядро MAX",
+        "path": "",
+        "detail": (
+            "генератор не запущен, чтобы не тратить деньги на "
+            "генерацию поверх старого шаблона.\n\n" + diagnostic
+        ),
+        "ok": False,
+    })
+    # Recovering an empty agent result would misclassify a partially staged seed.
+    raise ApiError(
+        code="runtime_unavailable",
+        message=(
+            "MAX_CORE_PREPARATION_FAILED: "
+            "Генерация не запускалась: не удалось подготовить среду MAX. "
+            "Деньги за вызов модели не списаны. Повторите после восстановления среды.\n"
+            + diagnostic
+        ),
+        status_code=503,
+    ) from exc
+
+
+async def verify_max_retry_starter(
+    *,
+    runtime: GenerationRuntime,
+    bindings: AgentRuntimeBindings,
+    emit: Callable[[str, dict[str, Any]], Awaitable[None]],
+    draft_tests: tuple[str, ...],
+    continuation: ExecutionDriver,
+) -> None:
+    from yleum_api.services.generation.recovery_pipeline import run_bootstrap_stage
+
+    handle = _require_project_cell(runtime.handle)
+    if draft_tests:
+        # A separate effect keeps historical starter_apply receipts replayable.
+        await run_bootstrap_stage(
+            continuation, "starter_isolate", lambda: _apply_project_cell_preview_files(
+                files=dict.fromkeys(draft_tests, ""),
+                project_cell_handle=handle, sync_preview=False,
+            ), handle=handle,
+        )
+    try:
+        # Run proof roles separately from the source receipt. A cold source
+        # replay must not reserve a fresh role at an older physical ordinal.
+        await _complete_max_starter(runtime, bindings, emit)
+    except Exception as exc:
+        await _raise_max_starter_failure(exc, emit)
+
+
 async def stage_max_starter(
     *,
     _agent_emit: Callable[[str, dict[str, Any]], Awaitable[None]],
@@ -131,6 +231,8 @@ async def stage_max_starter(
     orchestrate: bool,
     project_info: ProjectGenerationFacts,
     runtime: GenerationRuntime,
+    new_checkpoint_paths: Collection[str] = (),
+    defer_verification: bool = False,
 ) -> tuple[dict[str, str], agent_builder.AgentResult | None]:
     _max_seed_files: dict[str, str] = {}
     # A new MAX project starts from the verified platform CORE with no
@@ -140,9 +242,11 @@ async def stage_max_starter(
     if orchestrate and not _max_has_generated_snapshot:
         try:
             _starter_files = await _render_current_max_starter_files()
-            if runtime.handle is not None and runtime.handle.is_portable():
+            portable = runtime.handle is not None and runtime.handle.is_portable()
+            if portable:
                 from yleum_api.services.max_project_kit import include_portable_manifest
 
+                assert runtime.handle is not None
                 _starter_files = include_portable_manifest(
                     _starter_files, await runtime.handle.snapshot_files(),
                 )
@@ -176,67 +280,18 @@ async def stage_max_starter(
             # Kit v12 and older left a real root page in the container.
             # Remove it before seeding v13 so a legacy canvas can neither
             # enter model context nor survive a failed first generation.
-            _starter_patch = {**_starter_files, "src/app/page.tsx": ""}
-            if runtime.coordinator is not None:
-                assert runtime.handle is not None
-                _starter_writes, _starter_deletes, _ = _split_project_cell_preview_patch(
-                    _starter_patch
-                )
-                await runtime.handle.stage_patch(
-                    _starter_writes,
-                    _starter_deletes,
-                )
-            else:
-                await _apply_project_cell_preview_files(
-                    files=_starter_patch,
-                    project_cell_handle=_require_project_cell(runtime.handle),
-                )
-            # Staging source proves neither dependencies nor the database.
-            # This check must finish before any model request can spend money.
-            await _verify_max_starter(runtime, bindings)
-            await _agent_emit(
-                "agent.step",
-                {
-                    "step": 0,
-                    "action": "build",
-                    "human": "Основа готова — запускаю генератор",
-                    "path": "",
-                    "detail": (
-                        "Проверки ядра MAX пройдены; теперь генератор "
-                        "проектирует продукт без готового UI-шаблона."
-                    ),
-                    "ok": True,
-                },
+            # A retry replays the exact draft after this core check. Exclude
+            # its new product tests while the page they exercise is absent.
+            draft_tests = checkpoint_product_tests(new_checkpoint_paths, portable=portable)
+            removed = (draft_tests - runtime.migration_baseline.keys()) | {"src/app/page.tsx"}
+            await _apply_project_cell_preview_files(
+                files={**_starter_files, **dict.fromkeys(removed, "")},
+                project_cell_handle=_require_project_cell(runtime.handle),
+                sync_preview=runtime.coordinator is None,
             )
-        except Exception as _starter_exc:
-            raise_if_terminal_cell_error(_starter_exc)
-            diagnostic = failure_detail_excerpt(str(_starter_exc), max_bytes=3584)
-            print(f"[PP] MAX starter preparation skipped: {diagnostic!r}", flush=True)
-            await _agent_emit(
-                "agent.step",
-                {
-                    "step": 0,
-                    "action": "platform_core",
-                    "human": "Не удалось подготовить чистое ядро MAX",
-                    "path": "",
-                    "detail": (
-                        "генератор не запущен, чтобы не тратить деньги на "
-                        "генерацию поверх старого шаблона.\n\n" + diagnostic
-                    ),
-                    "ok": False,
-                },
-            )
-            # Stop before generation/final verification: recovering an empty
-            # agent result would misclassify a partially staged platform seed.
-            raise ApiError(
-                code="runtime_unavailable",
-                message=(
-                    "MAX_CORE_PREPARATION_FAILED: "
-                    "Генерация не запускалась: не удалось подготовить среду MAX. "
-                    "Деньги за вызов модели не списаны. Повторите после восстановления среды.\n"
-                    + diagnostic
-                ),
-                status_code=503,
-            ) from _starter_exc
+            if not defer_verification:
+                await _complete_max_starter(runtime, bindings, _agent_emit)
+        except Exception as exc:
+            await _raise_max_starter_failure(exc, _agent_emit)
 
     return _max_seed_files, _agent_res

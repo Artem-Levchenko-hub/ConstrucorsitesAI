@@ -11,7 +11,7 @@ from typing import Any, Literal
 from uuid import UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, NonNegativeInt, PositiveInt, field_validator
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
@@ -482,13 +482,30 @@ def _command_request_hash(
 
 
 async def require_command_reconciliation(
-    factory: async_sessionmaker[AsyncSession], *, run_id: UUID, project_id: UUID, user_id: UUID
-) -> None:
+    factory: async_sessionmaker[AsyncSession], *, run_id: UUID, project_id: UUID, user_id: UUID,
+    undispatched_operation_id: UUID | None = None,
+) -> bool:
+    """Validate the owning intent, or prove it was never reserved for this command."""
     async with factory() as session:
         owned = await _owned(session, run_id=run_id, project_id=project_id, user_id=user_id)
-        if owned is None or owned[2] is None:
+        if owned is None:
             raise RecoveryContractError("cold command has no owning intent")
-        CommandBinding.model_validate_json(json.dumps(owned[2].pre_binding))
+        _, cursor, row = owned
+        if row is not None:
+            CommandBinding.model_validate_json(json.dumps(row.pre_binding))
+            return True
+        if undispatched_operation_id is None:
+            raise RecoveryContractError("cold command has no owning intent")
+        conflict = await session.scalar(select(GenerationRecoveryEffect.effect_id).where(or_(
+            GenerationRecoveryEffect.operation_id == undispatched_operation_id,
+            and_(
+                GenerationRecoveryEffect.run_id == run_id,
+                GenerationRecoveryEffect.logical_step_seq == cursor.logical_step_seq,
+            ),
+        )))
+        if conflict is not None:
+            raise RecoveryContractError("cold command intent conflicts with its cursor")
+        return False
 
 
 async def command_role_target(

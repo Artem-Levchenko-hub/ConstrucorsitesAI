@@ -216,7 +216,8 @@ async def test_coordinator_seed_runs_real_core_check_after_staging(outcome):
     legacy_build.assert_not_awaited()
 
 
-async def test_failed_real_core_check_stops_actual_pipeline_before_paid_agent(monkeypatch):
+@pytest.mark.parametrize("retry", [False, True])
+async def test_actual_pipeline_checks_core_before_resuming_draft(monkeypatch, retry):
     from yleum_api.services.generation import recovery_execution
 
     # This fixture exercises the ordinary pipeline, not durable recovery. Do
@@ -235,23 +236,68 @@ async def test_failed_real_core_check_stops_actual_pipeline_before_paid_agent(mo
     async def factory():
         yield session
 
-    check = AsyncMock(return_value=NS(outcome="red", redacted_detail="migration verification red"))
+    baseline_files = {"tests/owner.test.mjs": "accepted owner test", "obsolete.md": "old"}
+    manifest = '{"version":1,"tasks":[]}'
+    platform_test = "tests/catalog-config.test.mjs"
+    product_test = "tests/ceramics-product.test.mjs"
+    draft_files = {
+        "package.json": "draft package",
+        "src/app/page.tsx": "ceramics product",
+        product_test: "read src/app/page.tsx",
+        "tests/books-page.test.mjs": "",
+        "tests/dependency-install.test.mjs": "draft in a name excluded from portable seed",
+        "tests/owner.test.mjs": "accepted owner test",
+        platform_test: "shipped catalog test",
+    }
+    workspace = {**baseline_files, ".omnia/cell.json": manifest,
+                 "tests/other.test.mjs": "unrelated workspace test",
+                 "tsconfig.json": "typecheck scaffold"}
+    if retry:
+        workspace.update(draft_files)
+
+    async def stage(writes, deletes):
+        workspace.update(writes)
+        for path in deletes:
+            workspace.pop(path, None)
+
+    async def check():
+        assert "src/app/page.tsx" not in workspace
+        assert workspace["package.json"] == "trusted"
+        if not retry:
+            return NS(outcome="red", redacted_detail="migration verification red")
+        if product_test in workspace:
+            return NS(outcome="red", redacted_detail="[targeted-test] ENOENT src/app/page.tsx")
+        assert "tests/books-page.test.mjs" not in workspace
+        assert "tests/dependency-install.test.mjs" not in workspace
+        assert workspace[platform_test] == "shipped catalog test"
+        assert workspace["tests/owner.test.mjs"] == "accepted owner test"
+        assert workspace[".omnia/cell.json"] == manifest
+        assert workspace["tsconfig.json"] == "typecheck scaffold"
+        assert workspace["tests/other.test.mjs"] == "unrelated workspace test"
+        return NS(outcome="green", redacted_detail="")
+
+    core_check = AsyncMock(side_effect=check)
     runtime = GenerationRuntime(
-        handle=NS(is_portable=lambda: True, stage_patch=AsyncMock(),
-                  snapshot_files=AsyncMock(return_value={".omnia/cell.json": '{"version":1}'})),
+        handle=NS(is_portable=lambda: True, stage_patch=stage,
+                  snapshot_files=AsyncMock(side_effect=lambda: dict(workspace))),
         coordinator=NS(session_factory=factory, _locked_run=AsyncMock(return_value=record),
                        project_id=ids.project_id, generation_run_id=ids.run_id,
-                       fast_check=check),
+                       fast_check=core_check, source_edit_deadline=AsyncMock(return_value=None),
+                       ensure_bootstrap=AsyncMock(return_value=NS(outcome="green"))),
     )
     monkeypatch.setattr(agent_pipeline, "get_settings", lambda: NS(
         use_design_intelligence_plugin=False,
     ))
-    monkeypatch.setattr(agent_pipeline, "adjacent_checkpoint", AsyncMock(return_value=None))
+    checkpoint = {"files": draft_files, "deleted_paths": ["obsolete.md"]}
+    monkeypatch.setattr(agent_pipeline, "adjacent_checkpoint", AsyncMock(
+        return_value=(checkpoint, request) if retry else None,
+    ))
     monkeypatch.setattr(agent_pipeline, "classify_agent_turn", AsyncMock(
         return_value=(request, False, False, False),
     ))
     monkeypatch.setattr(agent_pipeline, "prepare_agent_runtime", AsyncMock(
-        return_value=(NS(shell_enabled=False, probe_build=AsyncMock()), None),
+        return_value=(NS(shell_enabled=False, probe_build=AsyncMock(), execute=AsyncMock(),
+                         probe_runtime=AsyncMock(), preview_url=AsyncMock()), None),
     ))
     monkeypatch.setattr(agent_pipeline, "prepare_stack_prompt", AsyncMock(return_value=NS()))
     monkeypatch.setattr(agent_pipeline, "prepare_agent_prompt", AsyncMock(
@@ -260,17 +306,36 @@ async def test_failed_real_core_check_stops_actual_pipeline_before_paid_agent(mo
     monkeypatch.setattr(agent_pipeline, "render_current_max_starter", AsyncMock(
         return_value={"package.json": "trusted"},
     ))
-    provider, consume = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(agent_pipeline, "stage_owner_fonts", AsyncMock(return_value={}))
+    monkeypatch.setattr(agent_pipeline, "_load_turn_reference_images", AsyncMock(return_value=[]))
+
+    class AgentReady(Exception):
+        pass
+
+    async def check_agent_input(**kwargs):
+        assert retry
+        expected = {**draft_files, ".omnia/cell.json": manifest,
+                    "tests/other.test.mjs": "unrelated workspace test",
+                    "tsconfig.json": "typecheck scaffold"}
+        assert workspace == expected
+        assert kwargs["workspace_context_files"] == expected
+        raise AgentReady
+
+    provider, consume = AsyncMock(side_effect=check_agent_input), AsyncMock()
     monkeypatch.setattr(agent_pipeline, "execute_agent_turn", provider)
-    with pytest.raises(ApiError, match="MAX_CORE_PREPARATION_FAILED"):
+    with pytest.raises(AgentReady if retry else ApiError) as stopped:
         await agent_pipeline.run_agent_generation(
-            _consume_free_generation=consume, baseline=SourceBaseline(None, None, {}),
+            _consume_free_generation=consume, baseline=SourceBaseline(None, None, baseline_files),
             capacity_dispatch_token=None, factory=factory, force_model=None, ids=ids,
             is_free=False, model_id="unused", orchestrate=True,
             progress=NS(emit_agent_event=AsyncMock()),
             project_info=NS(template="max_miniapp", name="Test", slug="test"),
             prompt_text=request, runtime=runtime, selected_elements=None,
         )
-    check.assert_awaited_once()
-    provider.assert_not_awaited()
+    core_check.assert_awaited_once()
+    if retry:
+        provider.assert_awaited_once()
+    else:
+        assert "MAX_CORE_PREPARATION_FAILED" in str(stopped.value)
+        provider.assert_not_awaited()
     consume.assert_not_awaited()

@@ -2853,23 +2853,16 @@ async def test_v2_release_records_owned_terminal_operation_before_continuation(
     assert current.execution.control_fencing_epoch == operation.fencing_epoch
 
 
-@pytest.mark.parametrize("action_name", ["write_file", "edit_file", "stage_patch"])
 @pytest.mark.parametrize(
-    "damage",
+    ("damage", "action_name"),
     [
-        None,
-        "pending",
-        "foreign",
-        "request",
-        "post_state",
-        "cancel",
-        "context",
-        "partial",
-        "incarnation_during_read",
-        "noop",
-        "driver",
-        "bootstrap",
-    ],
+        (damage, action_name)
+        for damage in (
+            None, "pending", "foreign", "request", "post_state", "cancel", "context", "partial",
+            "incarnation_during_read", "noop", "driver", "bootstrap",
+        )
+        for action_name in ("write_file", "edit_file", "stage_patch")
+    ] + [("bootstrap_upgrade", "stage_patch")],
 )
 async def test_v2_write_ack_loss_reconciles_receipt_before_checkpoint_without_replay(
     monkeypatch,
@@ -2908,6 +2901,11 @@ async def test_v2_write_ack_loss_reconciles_receipt_before_checkpoint_without_re
     monkeypatch.setattr(source_checkpoint, "store_checkpoint_object", store)
     monkeypatch.setattr(source_checkpoint, "load_checkpoint_object", load)
     before = {"src/app/page.tsx": "old", "src/remove.ts": "obsolete"}
+    upgrade = damage == "bootstrap_upgrade"
+    bootstrap_case = damage == "bootstrap" or upgrade
+    draft_test = "tests/ceramics-product.test.mjs"
+    if upgrade:
+        before[draft_test] = "reads src/app/page.tsx"
     harness = await _prepare_executor(monkeypatch, db_session, test_engine, snapshot_files=before)
     run = await db_session.get(GenerationRun, harness.run_id)
     run.status, run.prompt_hash = "running", "a" * 64
@@ -2972,6 +2970,8 @@ async def test_v2_write_ack_loss_reconciles_receipt_before_checkpoint_without_re
             written=response.written,
             deleted=response.deleted,
         )
+        if upgrade and len(harness.write_calls) > 1:
+            return replace(response, receipt=receipts[operation_id])
         raise OrchestratorUnavailable("synthetic post-terminal acknowledgement lost")
 
     async def status(workspace_id, *, operation_id, generation_run_id):
@@ -3023,7 +3023,7 @@ async def test_v2_write_ack_loss_reconciles_receipt_before_checkpoint_without_re
                     return {"ok": False, "error": str(exc)}
                 return {"ok": True}
 
-            if damage in {"driver", "bootstrap"}:
+            if damage == "driver" or bootstrap_case:
                 from copy import deepcopy
 
                 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -3038,7 +3038,7 @@ async def test_v2_write_ack_loss_reconciles_receipt_before_checkpoint_without_re
                 ref = CheckpointRef(object_key="synthetic/pre-tool", sha256="b" * 64)
                 initial = initial.model_copy(
                     update={
-                        "cursor": "bootstrap" if damage == "bootstrap" else "agent",
+                        "cursor": "bootstrap" if bootstrap_case else "agent",
                         "checkpoint": ref,
                         "context_ref": ref,
                         "binding": RecoveryBinding(
@@ -3050,12 +3050,12 @@ async def test_v2_write_ack_loss_reconciles_receipt_before_checkpoint_without_re
                         ),
                         "execution": initial.execution.model_copy(
                             update={
-                                "stage": "bootstrap" if damage == "bootstrap" else "agent",
+                                "stage": "bootstrap" if bootstrap_case else "agent",
                                 "substep": (
-                                    "runtime_prepare" if damage == "bootstrap"
+                                    "runtime_prepare" if bootstrap_case
                                     else "response_validated"
                                 ),
-                                "provider_effect_id": None if damage == "bootstrap" else uuid4(),
+                                "provider_effect_id": None if bootstrap_case else uuid4(),
                                 "execution_context_ref": ref,
                             }
                         ),
@@ -3089,7 +3089,7 @@ async def test_v2_write_ack_loss_reconciles_receipt_before_checkpoint_without_re
                     async def save(execution, *, context, phase="working"):
                         # Falsifier: no source checkpoint until terminal receipt and
                         # fresh post-state/second incarnation check both completed.
-                        if damage != "bootstrap" or execution.pending_effect_id is None:
+                        if not bootstrap_case or execution.pending_effect_id is None:
                             assert status_calls >= 2
                             snapshots.append(dict(await harness.handle.snapshot_files()))
                         driver.state = await commit(
@@ -3104,13 +3104,21 @@ async def test_v2_write_ack_loss_reconciles_receipt_before_checkpoint_without_re
                     monkeypatch.setattr(driver, "save", save)
                     return driver
 
-                if damage == "bootstrap":
+                if bootstrap_case:
+                    from types import SimpleNamespace
                     from unittest.mock import AsyncMock
 
+                    from yleum_api.services.generation import agent_seed
+                    from yleum_api.services.generation.contracts import GenerationRuntime
                     from yleum_api.services.generation.recovery_pipeline import run_bootstrap_stage
 
                     async def prepare():
                         current_files = await harness.handle.snapshot_files()
+                        if upgrade:
+                            await harness.handle.stage_patch(
+                                {"package.json": "trusted"}, ("src/app/page.tsx",)
+                            )
+                            return {"package.json": "trusted"}, None
                         if current_files.get("src/app/page.tsx") != target_content:
                             await harness.handle.stage_patch(
                                 {"src/app/page.tsx": target_content},
@@ -3132,6 +3140,52 @@ async def test_v2_write_ack_loss_reconciles_receipt_before_checkpoint_without_re
                         current.agent_state = {"recovery_v1": resumed.model_dump(mode="json")}
                         await session.commit()
                     cold = new_driver(resumed, deepcopy(driver.context))
+                    if upgrade:
+                        async def core_check():
+                            files = await harness.handle.snapshot_files()
+                            assert files == {"package.json": "trusted", "src/remove.ts": "obsolete"}
+                            return SimpleNamespace(outcome="green", redacted_detail="")
+
+                        runtime = GenerationRuntime(
+                            handle=replace(harness.handle, is_portable=lambda: False),
+                            coordinator=SimpleNamespace(fast_check=core_check),
+                        )
+                        emit = AsyncMock()
+                        result, agent_result = await run_bootstrap_stage(
+                            cold, "starter_apply", lambda: agent_seed.stage_max_starter(
+                                _agent_emit=emit, _agent_res=None, _design_contract=None,
+                                _max_has_generated_snapshot=False,
+                                _render_current_max_starter_files=AsyncMock(
+                                    return_value={"package.json": "trusted"},
+                                ), bindings=SimpleNamespace(),
+                                ids=SimpleNamespace(project_id=run.project_id),
+                                orchestrate=True, project_info=SimpleNamespace(), runtime=runtime,
+                                defer_verification=True,
+                            ), handle=runtime.handle,
+                        )
+                        assert result == {"package.json": "trusted"} and agent_result is None
+                        assert len(harness.write_calls) == 1
+                        assert status_calls >= 2
+                        await agent_seed.verify_max_retry_starter(
+                            runtime=runtime, bindings=SimpleNamespace(), emit=emit,
+                            draft_tests=(draft_test,), continuation=cold,
+                        )
+                        assert len(harness.write_calls) == 2
+                        assert [call["deletes"] for call in harness.write_calls] == [
+                            ["src/app/page.tsx"], [draft_test],
+                        ]
+                        assert "starter_isolate" in cold.context["completed"]["bootstrap_results"]
+                        await run_bootstrap_stage(
+                            cold, "adjacent_apply", lambda: harness.handle.stage_patch({
+                                "src/app/page.tsx": before["src/app/page.tsx"],
+                                draft_test: before[draft_test],
+                            }), handle=runtime.handle,
+                        )
+                        assert await harness.handle.snapshot_files() == {
+                            **before, "package.json": "trusted",
+                        }
+                        assert cold.state.execution.pending_effect_id is None
+                        return
                     result, agent_result = await run_bootstrap_stage(
                         cold, "starter_apply", prepare, handle=harness.handle,
                     )
@@ -3208,7 +3262,8 @@ async def test_v2_write_ack_loss_reconciles_receipt_before_checkpoint_without_re
 
 @pytest.mark.parametrize("damage", [
     None, "pending", "foreign", "request", "incarnation", "cancel",
-    "driver", "role", "coordinator", "coordinator_tool",
+    "driver", "role", "coordinator", "coordinator_tool", "starter_undispatched",
+    "starter_conflicting_intent",
     "role_foreign", "role_proof", "role_cancel", "role_expired", "role_cold_proof"])
 async def test_v2_command_ack_loss_reads_terminal_receipt_without_dispatch(
     monkeypatch,
@@ -3220,6 +3275,7 @@ async def test_v2_command_ack_loss_reads_terminal_receipt_without_dispatch(
     from datetime import timedelta
 
     from tests.test_generation_recovery_execution import _bootstrap_wait
+    from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
     from yleum_api.services import orchestrator_client as client
     from yleum_api.services.generation import recovery_execution as ex
     from yleum_api.services.generation import source_checkpoint
@@ -3274,6 +3330,7 @@ async def test_v2_command_ack_loss_reads_terminal_receipt_without_dispatch(
     await db_session.commit()
     is_role = isinstance(damage, str) and damage.startswith("role")
     role_operation = uuid4()
+    starter_undispatched = damage in {"starter_undispatched", "starter_conflicting_intent"}
     if is_role:
         from yleum_api.models.project_cell import ProjectCellActivityLease
         physical = await harness.handle.current_identity()
@@ -3289,6 +3346,12 @@ async def test_v2_command_ack_loss_reads_terminal_receipt_without_dispatch(
     saved, sent, reads = {}, [], []
 
     async def lose_ack(workspace, cmd, **kw):
+        if starter_undispatched:
+            async with factory() as session:
+                intent = await session.scalar(select(GenerationRecoveryEffect).where(
+                    GenerationRecoveryEffect.operation_id == kw["operation_id"],
+                ))
+                assert intent is not None and intent.state == "inflight"
         sent.append(dict(kw))
         track = kw.pop("track_receipt", False)
         response = await original(workspace, cmd, **kw)
@@ -3346,7 +3409,7 @@ async def test_v2_command_ack_loss_reads_terminal_receipt_without_dispatch(
         token = ex._SESSION_OWNER.set(ex.SessionOwnership(run.id, owner))
         try:
             action = Action("bash", {"cmd": "synthetic-write"}, "")
-            if damage in {"driver", "coordinator", "coordinator_tool"}:
+            if damage in {"driver", "coordinator", "coordinator_tool"} or starter_undispatched:
                 from copy import deepcopy
 
                 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -3359,9 +3422,14 @@ async def test_v2_command_ack_loss_reads_terminal_receipt_without_dispatch(
                 factory = async_sessionmaker(test_engine, expire_on_commit=False)
                 initial = ex.recovery_state(run)
                 ref = CheckpointRef(object_key="synthetic/pre-tool", sha256="b" * 64)
+                stage, substep = (
+                    ("bootstrap", "starter_apply") if starter_undispatched
+                    else ("finalization", "checkpoint_ready") if damage == "coordinator"
+                    else ("agent", "response_validated")
+                )
                 initial = initial.model_copy(
                     update={
-                        "cursor": "finalization" if damage == "coordinator" else "agent",
+                        "cursor": stage,
                         "checkpoint": ref,
                         "context_ref": ref,
                         "binding": RecoveryBinding(
@@ -3373,10 +3441,9 @@ async def test_v2_command_ack_loss_reads_terminal_receipt_without_dispatch(
                         ),
                         "execution": initial.execution.model_copy(
                             update={
-                                "stage": "finalization" if damage == "coordinator" else "agent",
-                                "substep": ("checkpoint_ready" if damage == "coordinator"
-                                            else "response_validated"),
-                                "provider_effect_id": uuid4(),
+                                "stage": stage,
+                                "substep": substep,
+                                "provider_effect_id": None if starter_undispatched else uuid4(),
                                 "execution_context_ref": ref,
                             }
                         ),
@@ -3410,7 +3477,7 @@ async def test_v2_command_ack_loss_reads_terminal_receipt_without_dispatch(
                     async def save(execution, *, context, phase="working"):
                         # Falsifier: no source checkpoint until terminal receipt and
                         # fresh post-state/second incarnation check both completed.
-                        if "pending_role" not in context.get("completed", {}):
+                        if not starter_undispatched and "pending_role" not in context["completed"]:
                             assert len(reads) >= 2
                         snapshots.append(dict(await harness.handle.snapshot_files()))
                         driver.state = await commit(
@@ -3459,13 +3526,18 @@ async def test_v2_command_ack_loss_reads_terminal_receipt_without_dispatch(
                     assert cold.state.execution.next_tool_index == 1
                     assert snapshots[-1]["src/a.ts"] == "completed command"
                     return
-                if damage == "coordinator":
+                if damage == "coordinator" or starter_undispatched:
                     from yleum_api.models.project_cell import ProjectCellActivityLease
                     from yleum_api.services import max_finalization as final
                     from yleum_api.services.generation.recovery_pipeline import (
+                        pending_role,
                         reconcile_pending_role,
                     )
-                    driver = new_driver(initial, {"completed": {}})
+                    completed = {
+                        "bootstrap_preparation": {"isolated_test_paths": []},
+                        "bootstrap_results": {"starter_apply": {"files": {}, "result": None}},
+                    } if starter_undispatched else {}
+                    driver = new_driver(initial, {"completed": completed})
                     coordinator = final.MaxFinalizationCoordinator(
                         session_factory=factory, generation_run_id=run.id,
                         project_id=run.project_id,
@@ -3475,6 +3547,52 @@ async def test_v2_command_ack_loss_reads_terminal_receipt_without_dispatch(
                     kwargs = dict(identity=identity, dimension=final.ProofDimension.FAST_CHECK,
                                   role=project_cell_executor.ProjectCellCommandRole.FAST_CHECK,
                                   phase=final.GenerationPhase.FAST_CHECK)
+                    if starter_undispatched:
+                        class ProcessLost(BaseException):
+                            pass
+
+                        save = driver.save
+
+                        async def lose_process(*args, **kwargs):
+                            await save(*args, **kwargs)
+                            raise ProcessLost
+
+                        monkeypatch.setattr(driver, "save", lose_process)
+                        with pytest.raises(ProcessLost):
+                            await coordinator._execute_role(**kwargs)
+                        assert sent == reads == []
+                        async with factory() as session:
+                            assert not await session.scalar(select(GenerationRecoveryEffect))
+                            assert not await session.scalar(select(ProjectCellActivityLease))
+                        cold = new_driver(driver.state, deepcopy(driver.context))
+                        if damage == "starter_conflicting_intent":
+                            pending = pending_role(cold)
+                            assert pending is not None
+                            async with factory() as session:
+                                session.add(GenerationRecoveryEffect(
+                                    effect_id=uuid4(), run_id=run.id, project_id=run.project_id,
+                                    user_id=run.user_id, effect_ordinal=0,
+                                    logical_step_seq=cold.state.execution.logical_step_seq,
+                                    kind="tool", state="inflight", input_digest="a" * 64,
+                                    attempt_seq=claim.attempt_seq, claim_token=claim.token,
+                                    operation_id=uuid4(), tool_call_id="foreign-call",
+                                ))
+                                await session.commit()
+                            with pytest.raises(ex.GenerationYielded):
+                                await reconcile_pending_role(cold, harness.handle)
+                            assert pending_role(cold) == pending and sent == reads == []
+                            return
+                        await reconcile_pending_role(cold, harness.handle)
+                        assert sent == reads == []
+                        assert "pending_role" not in cold.context["completed"]
+                        assert cold.state.execution.substep == "starter_apply"
+                        saved["acknowledge"] = True
+                        command_changes.clear()
+                        coordinator.continuation = cold
+                        proof = await coordinator._proof(identity)
+                        result = await coordinator._run_role_result(**kwargs, proof=proof)
+                        assert result.outcome == "green" and len(sent) == 1
+                        return
                     with pytest.raises(ex.GenerationYielded):
                         await coordinator._execute_role(**kwargs)
                     old_op = sent[0]["operation_id"]
