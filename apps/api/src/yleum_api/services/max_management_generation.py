@@ -190,9 +190,18 @@ class _Value:
     setter: _Value | None = None
     state: bool = False
     elements: tuple[_Value, ...] | None = None
+    # Effects-only provenance for filtered SDK aliases. Unlike elements, this
+    # never supplies rows to JSX/map or grants a rendered-connection witness.
+    statistic_elements: tuple[_Value, ...] | None = None
     pending: _Value | None = None
     mutation_roots: tuple[_Value, ...] = ()
     passive: bool = False
+    primitive_string: bool = False
+    nullable_string: bool = False
+    local_scalar_keys: bool = False
+    scalar_key: bool = False
+    # Refusal provenance, retained after invalidation and scheduled state changes.
+    native_namespace: str = ""
     nullable_catalog_lookup: bool = False
     catalog_lookup_issue: _SourceIssue | None = None
     catalog_items_lookup_issue: _SourceIssue | None = None
@@ -220,6 +229,18 @@ class _Connections:
             and not path.startswith(("src/lib/omnia/", "src/app/api/"))
         }
         self.promise = _Value(sdk="Promise")
+        self.boolean = _Value(sdk="Boolean")
+        self.json_parse = _Value(sdk="trusted-json-parse")
+        self.json_stringify = _Value(sdk="trusted-json-stringify")
+        self.json = _Value(props={"parse": self.json_parse, "stringify": self.json_stringify})
+        self.storage_get_item = _Value(sdk="trusted-storage-get-item")
+        self.storage = _Value(props={"getItem": self.storage_get_item})
+        self.window = _Value(props={"localStorage": self.storage}, native_namespace="window")
+        self.object_keys = _Value(sdk="trusted-object-keys")
+        self.object = _Value(props={"keys": self.object_keys})
+        self.array = _Value()
+        self.reflect = _Value()
+        self.global_this = _Value(native_namespace="global")
         self.modules: dict[str, dict[str, _Value]] = {}
         self.created: set[str] = set()
         self.rendered: set[str] = set()
@@ -235,6 +256,7 @@ class _Connections:
         self.effects_only_depth = 0
         self.strict_effects_depth = 0
         self.render_suppression = 0
+        self.state_callback_depth = 0
         self.active: set[tuple[str, int]] = set()
         self.steps = 0
         self.event_depth = 0
@@ -286,7 +308,12 @@ class _Connections:
     def module(self, path: str) -> dict[str, _Value]:
         if path in self.modules:
             return self.modules[path]
-        env: dict[str, _Value] = {"Promise": self.promise}
+        env: dict[str, _Value] = {
+            "Promise": self.promise, "Boolean": self.boolean, "JSON": self.json,
+            "window": self.window, "localStorage": self.storage, "Object": self.object,
+            "Array": self.array,
+            "Reflect": self.reflect, "globalThis": self.global_this,
+        }
         self.modules[path] = env
         program = self.programs[path]
         if program.has_error:
@@ -423,6 +450,31 @@ class _Connections:
             return
         self.bind_supported(pattern, value, env)
 
+    @staticmethod
+    def data_alias(
+        source: _Value, *, state: bool = False, target: _Value | None = None,
+    ) -> _Value:
+        """Copy modeled data while retaining effects through every source alias."""
+        alias = _Value(state=state) if target is None else target
+        previous_roots = alias.mutation_roots
+        alias.tags = set(source.tags)
+        alias.props = dict(source.props)
+        alias.elements = source.elements
+        alias.statistic_elements = source.statistic_elements
+        alias.passive = source.passive
+        alias.primitive_string = source.primitive_string
+        alias.nullable_string = source.nullable_string
+        alias.local_scalar_keys = source.local_scalar_keys
+        alias.scalar_key = source.scalar_key
+        alias.native_namespace = (
+            "global" if "global" in {alias.native_namespace, source.native_namespace}
+            else source.native_namespace or alias.native_namespace
+        )
+        # React setters schedule a future render. Current render aliases can
+        # still reference the previous value after setState([]), so retain it.
+        alias.mutation_roots = (*previous_roots, source)
+        return alias
+
     def bind_supported(self, pattern: Node | None, value: _Value, env: dict[str, _Value]) -> None:
         if pattern is None:
             return
@@ -446,10 +498,7 @@ class _Connections:
                 )
         elif pattern.type == "array_pattern" and value.state:
             children = [child for child in pattern.named_children if child.type != "comment"]
-            state = _Value(
-                tags=set(value.tags), props=dict(value.props), elements=value.elements,
-                passive=value.passive,
-            )
+            state = self.data_alias(value)
             if children:
                 self.bind_supported(children[0], state, env)
             if len(children) > 1:
@@ -485,6 +534,16 @@ class _Connections:
             self.unsupported(node, path, "unsupported_declaration")
 
     def member(self, value: _Value, key: str) -> _Value:
+        if (value.native_namespace == "global"
+                or (value.native_namespace == "window"
+                    and (key != "localStorage" or value.props.get(key) is not self.storage))):
+            self.unsupported(None, "", "unproven_native_namespace_access")
+            return _Value()
+        if key in {"prototype", "__proto__", "constructor", "Reflect"}:
+            # This bounded JSON trust has no prototype interpreter. Refuse
+            # handles that could install inherited toJSON, including aliases.
+            self.unsupported(None, "", "unproven_prototype_access")
+            return _Value()
         if key in value.props:
             return value.props[key]
         if key == "refresh" and value.tags & {"catalog-hook", "profile-hook"}:
@@ -530,6 +589,19 @@ class _Connections:
             if node.type == "identifier":
                 return env.get(_text(node))
             if node.type in {"member_expression", "subscript_expression"}:
+                key_node = node.child_by_field_name(
+                    "property" if node.type == "member_expression" else "index"
+                )
+                key: object = None
+                if node.type == "member_expression":
+                    key = _text(key_node)
+                elif key_node is not None:
+                    key = (
+                        env.get(_text(key_node), _Value()).literal
+                        if key_node.type == "identifier" else _primitive_literal(key_node)
+                    )
+                if key in {"prototype", "__proto__", "constructor", "toJSON"}:
+                    self.unsupported(None, "", "unproven_prototype_mutation")
                 node = node.child_by_field_name("object")
             elif node.type in {"as_expression", "parenthesized_expression", "non_null_expression"}:
                 node = node.named_children[0] if node.named_children else None
@@ -546,10 +618,16 @@ class _Connections:
             if id(current) in seen:
                 continue
             seen.add(id(current))
+            if (current is self.object or current is self.array
+                    or current is self.reflect or current is self.global_this):
+                # Unknown reflection operations and escaped intrinsic handles
+                # cannot preserve the assumption of unchanged JSON prototypes.
+                self.unsupported(None, "", "unproven_native_intrinsic_effect")
             pending.extend(
                 (
                     *current.props.values(),
                     *(current.elements or ()),
+                    *(current.statistic_elements or ()),
                     *current.mutation_roots,
                 )
             )
@@ -564,11 +642,16 @@ class _Connections:
             current.tags.clear()
             current.props.clear()
             current.elements = None
+            current.statistic_elements = None
             current.sdk = ""
             current.function = None
             current.setter = None
             current.literal = None
             current.passive = False
+            current.primitive_string = False
+            current.nullable_string = False
+            current.local_scalar_keys = False
+            current.scalar_key = False
             current.nullable_catalog_lookup = False
 
     def projection_is_bounded(self, path: str, node: Node) -> bool:
@@ -753,7 +836,8 @@ class _Connections:
             )
             operation = _text(target.child_by_field_name("property"))
             arg_nodes = list(arguments.named_children)
-            if source is None or source.elements is None or operation not in {"filter", "reduce"}:
+            elements = self.statistic_source_elements(source) if source is not None else None
+            if source is None or elements is None or operation not in {"filter", "reduce"}:
                 return None
             if len(arg_nodes) != (1 if operation == "filter" else 2):
                 return None
@@ -770,7 +854,7 @@ class _Connections:
             )
             if operation == "reduce" and initial is None:
                 return None
-            for element in source.elements or (_Value(passive=True),):
+            for element in elements or (_Value(passive=True),):
                 args = [element]
                 if operation == "reduce":
                     assert initial is not None
@@ -779,7 +863,7 @@ class _Connections:
                     return None
             # Only this internal effects probe carries the filter collection;
             # call() deliberately discards its result's SDK identity.
-            return _Value(elements=source.elements if operation == "filter" else None, passive=True)
+            return _Value(elements=elements if operation == "filter" else None, passive=True)
         else:
             return None
         if all(
@@ -789,10 +873,26 @@ class _Connections:
             return _Value(passive=True)
         return None
 
+    @staticmethod
+    def statistic_source_elements(source: _Value) -> tuple[_Value, ...] | None:
+        return source.elements if source.elements is not None else source.statistic_elements
+
     def statistic_call_is_read_only(
         self, operation: str, args: list[_Value], source: _Value,
     ) -> bool:
-        elements = source.elements or (_Value(passive=True),)
+        known_elements = self.statistic_source_elements(source)
+        if known_elements is None:
+            return False
+        if (operation == "filter" and len(args) == 1 and args[0] is self.boolean
+                and self.boolean.sdk == "Boolean"):
+            # Only the unshadowed intrinsic applied to proven local primitive
+            # scalars. Unknown objects/getters, SDK rows and callbacks stay red.
+            return not self.contains_authority([source]) and all(
+                type(element.literal) in {bool, str, float}
+                or element.literal is _NULL_LITERAL
+                for element in known_elements
+            )
+        elements = known_elements or (_Value(passive=True),)
         if operation == "filter" and len(args) == 1:
             return all(self.read_only_callback(args[0], [element]) for element in elements)
         if operation == "reduce" and len(args) == 2 and self.passive_value(args[1]):
@@ -802,17 +902,41 @@ class _Connections:
             )
         return False
 
+    def statistic_result(
+        self, operation: str, args: list[_Value], source: _Value,
+        elements: tuple[_Value, ...],
+    ) -> _Value:
+        if operation == "filter":
+            if not self.contains_authority([source]):
+                return _Value(
+                    elements=elements, passive=True, local_scalar_keys=source.local_scalar_keys,
+                )
+            return _Value(
+                props={"length": _Value(passive=True)}, statistic_elements=elements,
+                mutation_roots=(source,), passive=True,
+            )
+        roots = tuple(
+            root for element in elements or (_Value(passive=True),)
+            for root in self.statistic_alias_roots(args[0], [args[1], element])
+        )
+        return _Value(mutation_roots=roots, passive=True)
+
     def statistic_alias_roots(self, fn: _Value, args: list[_Value]) -> tuple[_Value, ...]:
         callback = self.callback_expression(fn, len(args))
         if callback is None:
             return ()
         _, body, closure, names = callback
         scope = {**closure, **dict(zip(names, args, strict=True))}
+        return self.referenced_authority_roots(body, scope)
+
+    def referenced_authority_roots(
+        self, body: Node, scope: dict[str, _Value],
+    ) -> tuple[_Value, ...]:
         pending, referenced = [body], set()
         while pending and self.steps <= 4000:
             node = pending.pop()
             self.steps += 1
-            if node.type == "identifier":
+            if node.type in {"identifier", "shorthand_property_identifier"}:
                 referenced.add(_text(node))
             pending.extend(node.named_children)
         return tuple(
@@ -874,7 +998,7 @@ class _Connections:
         callback = self.callback_expression(fn, 1)
         if callback is None:
             return _source_issue(call, path, reason)
-        predicate_path, body, _, (parameter,) = callback
+        predicate_path, body, closure, (parameter,) = callback
         initializer = call
         wrapper = call.parent
         if wrapper is not None and wrapper.type == "binary_expression":
@@ -916,11 +1040,15 @@ class _Connections:
             and fn.function[1].parent == call.child_by_field_name("arguments")
         )
         for member, selected_id in ((left, right), (right, left)):
+            trusted_key = (
+                selected_id is not None and selected_id.type == "identifier"
+                and closure.get(_text(selected_id), _Value()).scalar_key
+            )
             if (
                 self._catalog_row_field(member, parameter, "id")
                 and selected_id is not None and _text(selected_id) != parameter
                 and (selected_id.type == "string" or inline_predicate)
-                and self._catalog_id_available(selected_id, lexical, scope)
+                and (self._catalog_id_available(selected_id, lexical, scope) or trusted_key)
             ):
                 use = self._catalog_lookup_unproven_use(scope, name, path)
                 return (
@@ -1115,12 +1243,92 @@ class _Connections:
                 return False
         return bool(elements)
 
+    def state_value(self, value: _Value, previous: _Value | None = None) -> _Value:
+        """React executes known initializers/updaters; they are not inert data."""
+        if value.function is None:
+            if value.sdk or value.setter is not None:
+                self.unsupported(None, "", "unproven_state_callback")
+            return value
+        path, node, _ = value.function
+        if self.callback_expression(value, 0) is not None:
+            args: list[_Value] = []
+        elif previous is not None and self.callback_expression(value, 1) is not None:
+            args = [previous]
+        else:
+            self.unsupported(node, path, "unsupported_state_callback_signature")
+            return _Value()
+        self.state_callback_depth += 1
+        try:
+            return self.invoke(value, args)
+        finally:
+            self.state_callback_depth -= 1
+
+    def truthy_string_scope(
+        self, condition: Node | None, env: dict[str, _Value],
+    ) -> dict[str, _Value]:
+        """Narrow only the direct truthy guard on a trusted storage string/null."""
+        while condition is not None and condition.type == "parenthesized_expression":
+            condition = condition.named_children[0] if condition.named_children else None
+        if condition is None or condition.type != "identifier":
+            return env
+        name = _text(condition)
+        value = env.get(name, _Value())
+        if not value.nullable_string:
+            return env
+        narrowed = self.data_alias(value)
+        narrowed.primitive_string, narrowed.nullable_string = True, False
+        return {**env, name: narrowed}
+
+    def plain_json_value(self, value: _Value) -> bool:
+        """JSON.stringify may not invoke source getters, functions or toJSON."""
+        if self.contains_authority([value]):
+            return False
+        pending, seen = [value], set()
+        while pending:
+            current = pending.pop()
+            if id(current) in seen:
+                continue
+            seen.add(id(current))
+            self.steps += 1
+            if (self.steps > 4000 or len(seen) > 512 or current.function is not None
+                    or current.sdk or current.setter is not None or current.pending is not None
+                    or "toJSON" in current.props
+                    or not (current.passive or current.primitive_string or current.nullable_string
+                            or type(current.literal) in {bool, str, float}
+                            or current.literal is _NULL_LITERAL)):
+                return False
+            pending.extend([*current.props.values(), *(current.elements or ())])
+        return True
+
+    def state_callback_effects(self, body: Node, env: dict[str, _Value], path: str) -> None:
+        """Use the existing bounded effects walk, including both unknown if arms."""
+        pending = [body]
+        while pending:
+            node = pending.pop()
+            self.steps += 1
+            if self.steps > 4000 or node.type in {
+                "try_statement", "throw_statement", "switch_statement", "for_statement",
+                "while_statement", "do_statement", "new_expression", "await_expression",
+                "yield_expression",
+            }:
+                self.unsupported(node, path, "unsupported_state_callback_control")
+                return
+            if node is body or node.type not in _FUNCTION_SCOPES:
+                pending.extend(node.named_children)
+        if body.type == "statement_block":
+            self.loop_body_effects(body, env, path)
+        else:
+            self.value_for_effects(body, env, path)
+
     def invoke(self, fn: _Value, args: list[_Value], render: bool = False) -> _Value:
         if fn.setter is not None and args:
-            fn.setter.tags = set(args[0].tags)
-            fn.setter.props = dict(args[0].props)
-            fn.setter.elements = args[0].elements
-            fn.setter.passive = args[0].passive
+            if args[0].function is not None:
+                updated = self.state_value(args[0], fn.setter)
+                # A functional update is scheduled; current-render data stays
+                # unchanged, while future returned aliases retain effects roots.
+                fn.setter.mutation_roots += (updated,)
+            else:
+                self.data_alias(self.state_value(args[0], fn.setter), target=fn.setter)
             return _Value()
         if fn.function is None:
             if not fn.sdk:
@@ -1130,6 +1338,8 @@ class _Connections:
         path, node, closure = fn.function
         key = (path, node.start_byte)
         if key in self.active or self.steps > 4000:
+            if self.state_callback_depth:
+                self.unsupported(node, path, "recursive_state_callback")
             return _Value()
         parameters = node.child_by_field_name("parameters")
         patterns = (
@@ -1152,12 +1362,21 @@ class _Connections:
         for pattern, value in bindings:
             self.bind_supported(pattern, value, env)
         body = node.child_by_field_name("body")
+        if self.state_callback_depth and body is not None:
+            with self.effects_only():
+                self.state_callback_effects(body, dict(env), path)
         result = (
             self.block(body, env, path, render)[1]
             if body is not None and body.type == "statement_block"
             else self.value(body, env, path, render)
         )
         self.active.remove(key)
+        if self.state_callback_depth:
+            if result.function is not None or result.sdk or result.setter is not None:
+                self.unsupported(node, path, "unproven_state_callback_value")
+            alias = self.data_alias(result)
+            alias.mutation_roots += self.referenced_authority_roots(body, env) if body else ()
+            result = alias
         return (
             _Value(pending=result.pending or result)
             if any(child.type == "async" for child in node.children)
@@ -1194,9 +1413,16 @@ class _Connections:
                     alternative = alternative.named_children[-1]
                     if truth is None:
                         self.checkout_legacy_branch(alternative, dict(env), path, render)
+                if (self.state_callback_depth and alternative is not None
+                        and alternative.type == "else_clause" and alternative.named_children):
+                    alternative = alternative.named_children[-1]
                 branch = alternative if truth is False else child.child_by_field_name("consequence")
                 if branch is not None:
-                    returned, value = self.statement(branch, env, path, render)
+                    branch_env = (
+                        self.truthy_string_scope(child.child_by_field_name("condition"), env)
+                        if truth is not False else env
+                    )
+                    returned, value = self.statement(branch, branch_env, path, render)
                     if returned and truth is not None:
                         return True, value
             else:
@@ -1229,7 +1455,9 @@ class _Connections:
             if (self.steps > 4000 or len(seen) > 512 or not self.passive_value(item)
                     or item.tags or item.pending is not None or item.mutation_roots):
                 return False
-            pending.extend([*item.props.values(), *(item.elements or ())])
+            pending.extend([
+                *item.props.values(), *(item.elements or ()), *(item.statistic_elements or ()),
+            ])
         return True
 
     def contains_authority(self, values: list[_Value]) -> bool:
@@ -1242,7 +1470,10 @@ class _Connections:
             self.steps += 1
             if self.steps > 4000 or len(seen) > 512 or value.tags or value.sdk or value.setter:
                 return True
-            pending.extend([*value.props.values(), *(value.elements or ()), *value.mutation_roots])
+            pending.extend([
+                *value.props.values(), *(value.elements or ()),
+                *(value.statistic_elements or ()), *value.mutation_roots,
+            ])
             if value.pending is not None:
                 pending.append(value.pending)
         return False
@@ -1302,7 +1533,11 @@ class _Connections:
             consequence = node.child_by_field_name("consequence")
             alternative = node.child_by_field_name("alternative")
             if truth is not False and consequence is not None:
-                self.loop_body_effects(consequence, dict(env), path)
+                self.loop_body_effects(
+                    consequence,
+                    self.truthy_string_scope(node.child_by_field_name("condition"), dict(env)),
+                    path,
+                )
             if truth is not True and alternative is not None and alternative.named_children:
                 self.loop_body_effects(alternative.named_children[-1], dict(env), path)
         else:
@@ -1393,10 +1628,22 @@ class _Connections:
         # operands still run for effects; neither can leak a render witness.
         left = self.value_for_effects(node.child_by_field_name("left"), env, path)
         right = self.value_for_effects(node.child_by_field_name("right"), env, path)
+        if (self.state_callback_depth and operator in {"<", "<=", ">", ">="}
+                and type(left.literal) is float and type(right.literal) is float
+                and math.isfinite(left.literal) and math.isfinite(right.literal)):
+            if self.effects_only_depth:
+                # Read-only finite numbers need no coercion. The effects probe
+                # visits both arms; it never buys a branch connection witness.
+                return _Value()
+            return _Value(literal={
+                "<": left.literal < right.literal, "<=": left.literal <= right.literal,
+                ">": left.literal > right.literal, ">=": left.literal >= right.literal,
+            }[operator])
         return _Value(literal=_comparison_literal(left.literal, right.literal, operator))
 
     def object_value(self, node: Node, env: dict[str, _Value], path: str) -> _Value:
         props: dict[str, _Value] = {}
+        spread_roots: list[_Value] = []
         passive = True
         for child in node.named_children:
             if child.type == "comment":
@@ -1420,6 +1667,11 @@ class _Connections:
                 )
                 if source.passive or source.tags:
                     props.update(source.props)
+                    if (source.statistic_elements is not None
+                            or (source.mutation_roots and self.contains_authority([source]))):
+                        # A filtered SDK array also spreads numeric row keys
+                        # that this effects-only descriptor does not expose.
+                        spread_roots.append(source)
                 else:
                     self.unsupported(child, path, "unproven_object_spread")
                     passive = False
@@ -1429,7 +1681,7 @@ class _Connections:
                 # during construction or a later spread. Never omit it silently.
                 self.unsupported(child, path, "unsupported_object_member")
                 passive = False
-        return _Value(props=props, passive=passive)
+        return _Value(props=props, passive=passive, mutation_roots=tuple(spread_roots))
 
     def value(
         self, node: Node | None, env: dict[str, _Value], path: str, render: bool = False
@@ -1442,6 +1694,8 @@ class _Connections:
             return _Value()
         if kind == "identifier":
             result = env.get(_text(node), _Value())
+            if result is self.reflect:
+                self.unsupported(node, path, "unproven_reflection_access")
         elif kind in {"arrow_function", "function_expression", "function_declaration"}:
             result = _Value(function=(path, node, env))
         elif kind in {
@@ -1482,7 +1736,11 @@ class _Connections:
             # Unknown indices never grant readable history, but cannot hide aliases
             # from later opaque calls or mutations.
             source = self.value(node.child_by_field_name("object"), env, path)
-            self.value(node.child_by_field_name("index"), env, path)
+            index = self.value(node.child_by_field_name("index"), env, path)
+            if (source is self.object or source is self.array or source is self.reflect
+                    or source.native_namespace
+                    or index.literal in {"prototype", "__proto__", "constructor", "Reflect"}):
+                self.unsupported(node, path, "unproven_prototype_access")
             result = _Value(mutation_roots=(source,))
         elif kind == "array":
             children = [child for child in node.named_children if child.type != "comment"]
@@ -1526,7 +1784,13 @@ class _Connections:
             root = self.mutation_root(assigned, env)
             if root is not None:
                 self.invalidate(root)
-            self.value(node.child_by_field_name("right"), env, path)
+            assigned_value = self.value(node.child_by_field_name("right"), env, path)
+            if (assigned is not None and assigned.type == "subscript_expression"
+                    and (assigned_value.function is not None or assigned_value.sdk
+                         or assigned_value.setter is not None)):
+                # An unproved computed method name can be inherited toJSON.
+                # Ordinary JSON data writes need no callable/prototype model.
+                self.unsupported(node, path, "unproven_computed_method_mutation")
             result = _Value()
         elif kind == "object":
             result = self.object_value(node, env, path)
@@ -1585,6 +1849,19 @@ class _Connections:
         if target is not None and target.type == "member_expression":
             source = self.value(target.child_by_field_name("object"), env, path)
             operation = _text(target.child_by_field_name("property"))
+            receiver = _text(target.child_by_field_name("object"))
+            if receiver == "JSON" and operation in {"parse", "stringify"}:
+                expected = self.json_parse if operation == "parse" else self.json_stringify
+                if source is not self.json or source.props.get(operation) is not expected:
+                    self.unsupported(node, path, "untrusted_json_operation")
+            if (receiver in {"window.localStorage", "localStorage"} and operation == "getItem"
+                    and (source is not self.storage
+                         or source.props.get("getItem") is not self.storage_get_item)):
+                self.unsupported(node, path, "untrusted_storage_operation")
+            if receiver == "Object" and operation == "keys" and (
+                source is not self.object or source.props.get("keys") is not self.object_keys
+            ):
+                self.unsupported(node, path, "untrusted_object_keys")
             if (
                 operation == "map" and render and not self.render_suppression
                 and self.catalog_render_rejection is None
@@ -1608,7 +1885,34 @@ class _Connections:
                         elements=tuple(element.pending or element for element in args[0].elements)
                     )
                 )
+            statistic_elements = self.statistic_source_elements(source)
+            if (operation in {"filter", "reduce"} and statistic_elements is not None
+                    and not render and not self.render_suppression):
+                # Chained statistics retain effects provenance, never SDK row
+                # identity. A failed callback proof invalidates every alias.
+                if self.statistic_call_is_read_only(operation, args, source):
+                    return self.statistic_result(operation, args, source, statistic_elements)
+                self.unsupported(node, path, "unproven_statistic_callback")
+                self.invalidate(source)
+                return _Value()
             if source.elements is not None:
+                if operation == "map" and source.local_scalar_keys:
+                    if len(args) != 1 or self.callback_expression(args[0], 1) is None:
+                        self.unsupported(node, path, "unsupported_key_map_callback")
+                        return _Value()
+                    self.state_callback_depth += 1
+                    try:
+                        with self.effects_only():
+                            mapped = self.invoke(
+                                args[0], [_Value(
+                                    passive=True, primitive_string=True, scalar_key=True,
+                                )],
+                            )
+                    finally:
+                        self.state_callback_depth -= 1
+                    # Unknown cardinality, one effects-only scalar-key probe.
+                    # A returned SDK alias retains invalidation, not JSX proof.
+                    return _Value(elements=(), passive=True, mutation_roots=(mapped,))
                 if operation == "map" and len(args) == 1 and args[0].function is not None:
                     if not source.elements:
                         with self.effects_only():
@@ -1662,31 +1966,37 @@ class _Connections:
                     # A proven read-only lookup preserves the collection, but
                     # its numeric result is never rendered-item evidence.
                     return _Value()
-                if (operation in {"filter", "reduce"} and not render
-                        and not self.render_suppression):
-                    # Statistics can read a collection without corrupting its
-                    # later direct JSX connection. Derived values grant no
-                    # SDK-row identity, even for filter().map(...).
-                    if self.statistic_call_is_read_only(operation, args, source):
-                        if operation == "filter":
-                            if not self.contains_authority([source]):
-                                return _Value(elements=source.elements, passive=True)
-                            return _Value(
-                                props={"length": _Value(passive=True)},
-                                mutation_roots=(source,), passive=True,
-                            )
-                        roots = tuple(
-                            root for element in source.elements or (_Value(passive=True),)
-                            for root in self.statistic_alias_roots(args[0], [args[1], element])
-                        )
-                        return _Value(mutation_roots=roots, passive=True)
-                    self.unsupported(node, path, "unproven_statistic_callback")
                 if operation != "then":
                     self.invalidate(source)
             if operation == "then" and args and source.pending is not None:
                 result = self.invoke(args[0], [source.pending])
                 return _Value(pending=result.pending or result)
         fn = self.value(target, env, path)
+        if fn is self.storage_get_item:
+            if (fn.sdk == "trusted-storage-get-item" and len(args) == 1
+                    and (type(args[0].literal) is str or args[0].primitive_string)):
+                return _Value(passive=True, nullable_string=True)
+            self.unsupported(node, path, "unproven_storage_read")
+            return _Value()
+        if fn is self.json_parse:
+            if (fn.sdk == "trusted-json-parse" and len(args) == 1
+                    and (type(args[0].literal) is str or args[0].primitive_string)):
+                return _Value(passive=True)
+            self.unsupported(node, path, "unproven_json_parse")
+            return _Value()
+        if fn is self.json_stringify:
+            if (fn.sdk == "trusted-json-stringify" and len(args) == 1
+                    and self.plain_json_value(args[0])):
+                return _Value(passive=True, primitive_string=True)
+            self.unsupported(node, path, "unproven_json_stringify")
+            return _Value()
+        if fn is self.object_keys:
+            if (fn.sdk == "trusted-object-keys" and len(args) == 1 and args[0].passive
+                    and not args[0].primitive_string and not args[0].nullable_string
+                    and args[0].literal is None and self.plain_json_value(args[0])):
+                return _Value(elements=(), passive=True, local_scalar_keys=True)
+            self.unsupported(node, path, "unproven_object_keys")
+            return _Value()
         if self.effects_only_depth and fn.setter is not None and args:
             if self.strict_effects_depth or self.contains_authority([fn.setter, *args]):
                 self.unsupported(node, path, "unproven_loop_setter")
@@ -1702,13 +2012,7 @@ class _Connections:
             self.unsupported(node, path, "unproven_loop_call")
         if fn.sdk == "useState":
             initial = args[0] if args else _Value()
-            return _Value(
-                state=True,
-                tags=set(initial.tags),
-                props=dict(initial.props),
-                elements=initial.elements,
-                passive=initial.passive,
-            )
+            return self.data_alias(self.state_value(initial), state=True)
         if fn.sdk == "useEffect":
             return self.invoke(args[0], []) if args else _Value()
         if fn.sdk == "useCallback":

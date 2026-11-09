@@ -11,6 +11,10 @@ Run:  cd apps/api && uv run pytest tests/test_agent_escalation.py -q
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
+from types import SimpleNamespace
+
+import pytest
 
 from yleum_api.services import agent_builder as ab
 
@@ -189,3 +193,106 @@ def test_stall_aborts_after_cap():
     )
     assert res.done is False
     assert res.stop_reason == "stalled"
+
+
+def _trace_stalled_loop(escalate_model, *, misses):
+    requests, events, models = [], [], []
+    reply = _stall_then_act_complete(models, misses)
+
+    async def complete(messages, model, **kwargs):
+        requests.append((deepcopy(messages), model, deepcopy(kwargs)))
+        return await reply(messages, model, **kwargs)
+
+    async def emit(event, data):
+        events.append((event, deepcopy(data)))
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="u", model="claude-sonnet-5.5",
+        escalate_model=escalate_model, execute=_ok_executor, complete=complete,
+        max_steps=8, emit=emit,
+    ))
+    return result, requests, events
+
+
+@pytest.mark.parametrize("misses", [2, 99])
+def test_same_model_consumes_fallback_without_false_upgrade_or_request_changes(misses, capsys):
+    expected, expected_requests, expected_events = _trace_stalled_loop(None, misses=misses)
+    result, requests, events = _trace_stalled_loop("claude-sonnet-5.5", misses=misses)
+
+    assert requests == expected_requests
+    assert events == expected_events
+    assert (result.done, result.stop_reason, result.steps) == (
+        expected.done, expected.stop_reason, expected.steps,
+    )
+    assert len(requests) == (3 if misses == 2 else ab._NO_ACTION_ABORT_AT)
+    assert all(model == "claude-sonnet-5.5" and kwargs["max_tokens"] is None
+               for _, model, kwargs in requests)
+    assert not any(event == "agent.escalate" for event, _ in events)
+    assert "ESCALATE" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("misses", [2, 99])
+def test_different_model_switches_and_reports_exactly_once(misses, capsys):
+    result, requests, events = _trace_stalled_loop("strong", misses=misses)
+    changes = [data for event, data in events if event == "agent.escalate"]
+
+    assert len(changes) == 1
+    assert changes[0]["to"] == "strong" and changes[0]["reason"] == "no_action"
+    assert [model for _, model, _ in requests] == (
+        ["claude-sonnet-5.5"] * 2 + ["strong"] * (1 if misses == 2 else 2)
+    )
+    assert [kwargs["max_tokens"] for _, _, kwargs in requests] == (
+        [None, None] + [16384] * (1 if misses == 2 else 2)
+    )
+    assert result.done is (misses == 2)
+    assert capsys.readouterr().out.count("ESCALATE") == 1
+
+
+@pytest.mark.parametrize("fallback", [None, ""])
+def test_absent_fallback_keeps_identical_requests_events_and_abort(fallback, capsys):
+    expected, expected_requests, expected_events = _trace_stalled_loop(None, misses=99)
+    result, requests, events = _trace_stalled_loop(fallback, misses=99)
+
+    assert requests == expected_requests and events == expected_events
+    assert result.stop_reason == expected.stop_reason == "stalled"
+    assert len(requests) == ab._NO_ACTION_ABORT_AT
+    assert "ESCALATE" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("fallback", ["claude-sonnet-5.5", "strong"])
+def test_consumed_fallback_flag_survives_saved_frame_and_cold_continuation(fallback):
+    frames, events = [], []
+
+    async def provider(frame, invoke):
+        frames.append(deepcopy(frame))
+        return await invoke()
+
+    async def emit(event, data):
+        events.append((event, deepcopy(data)))
+
+    async def segment(driver, complete):
+        return await ab._run_agent_segment(
+            system_prompt="s", user_prompt="u", model="claude-sonnet-5.5",
+            escalate_model=fallback, execute=_ok_executor, complete=complete,
+            continuation=driver, max_steps=8, emit=emit,
+        )
+
+    driver = SimpleNamespace(restore_frame=lambda kind: None, provider=provider)
+    result = asyncio.run(segment(driver, _stall_then_act_complete([], misses=2)))
+    assert result.done
+    assert [frame["value"]["escalated"] for frame in frames] == [False, False, True]
+    assert frames[-1]["value"]["active_model"] == fallback
+    assert sum(event == "agent.escalate" for event, _ in events) == (
+        0 if fallback == "claude-sonnet-5.5" else 1
+    )
+
+    saved = deepcopy(frames[-1]["value"])
+    frames.clear()
+    events.clear()
+    models = []
+    restored = SimpleNamespace(restore_frame=lambda kind: deepcopy(saved), provider=provider)
+    result = asyncio.run(segment(restored, _stall_then_act_complete(models, misses=99)))
+    assert not result.done and result.stop_reason == "stalled"
+    assert models == [fallback, fallback]
+    assert all(frame["value"]["escalated"] is True for frame in frames)
+    assert not any(event == "agent.escalate" for event, _ in events)

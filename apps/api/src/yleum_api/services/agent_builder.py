@@ -920,27 +920,27 @@ async def _run_agent_segment(
         convo.append({"role": "user", "content": nudge})
 
     async def _escalate(step: int, reason: str) -> None:
-        """First stall-nudge of any kind → upgrade to the stronger model, once.
+        """Consume the configured fallback once; report only a changed model ID.
 
-        Cheap model by default; the moment a guard signals the loop is stuck
-        (cycle / repeat / no-write) we switch to a stronger reasoning model for
-        the rest of the run. The existing abort guards still bound the run, so
-        this stays a handful of strong-model steps, not a full strong-model
-        build (which on a char-billed 1-req/sec gateway blew cost + reliability).
+        The same-model case still consumes the one-shot state. Callers keep
+        their existing recovery nudges without announcing a model switch.
         """
         nonlocal active_model, escalated
-        if escalate_model and not escalated:
-            active_model = escalate_model
-            escalated = True
-            print(
-                f"[AGENT] step={step} ESCALATE → {escalate_model} (reason={reason})",
-                flush=True,
+        if not escalate_model or escalated:
+            return
+        escalated = True
+        if active_model == escalate_model:
+            return
+        active_model = escalate_model
+        print(
+            f"[AGENT] step={step} ESCALATE → {escalate_model} (reason={reason})",
+            flush=True,
+        )
+        if emit:
+            await emit(
+                "agent.escalate",
+                {"step": step, "to": escalate_model, "reason": reason},
             )
-            if emit:
-                await emit(
-                    "agent.escalate",
-                    {"step": step, "to": escalate_model, "reason": reason},
-                )
 
     def _ship_green_or(fallback: AgentResult, step_no: int, reason: str) -> AgentResult:
         """Rescue a verified changed candidate without promoting unchanged source.
