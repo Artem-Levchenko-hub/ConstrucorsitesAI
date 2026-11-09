@@ -609,7 +609,9 @@ class _Connections:
                 return None
         return None
 
-    def invalidate(self, value: _Value) -> None:
+    def invalidate(
+        self, value: _Value, *, node: Node | None = None, path: str = "",
+    ) -> None:
         """Unknown mutation cannot retain evidence through another collection alias."""
         pending = [value]
         seen = set()
@@ -622,7 +624,7 @@ class _Connections:
                     or current is self.reflect or current is self.global_this):
                 # Unknown reflection operations and escaped intrinsic handles
                 # cannot preserve the assumption of unchanged JSON prototypes.
-                self.unsupported(None, "", "unproven_native_intrinsic_effect")
+                self.unsupported(node, path, "unproven_native_intrinsic_effect")
             pending.extend(
                 (
                     *current.props.values(),
@@ -1320,7 +1322,10 @@ class _Connections:
         else:
             self.value_for_effects(body, env, path)
 
-    def invoke(self, fn: _Value, args: list[_Value], render: bool = False) -> _Value:
+    def invoke(
+        self, fn: _Value, args: list[_Value], render: bool = False,
+        *, call_node: Node | None = None, call_path: str = "",
+    ) -> _Value:
         if fn.setter is not None and args:
             if args[0].function is not None:
                 updated = self.state_value(args[0], fn.setter)
@@ -1333,7 +1338,7 @@ class _Connections:
         if fn.function is None:
             if not fn.sdk:
                 for arg in args:
-                    self.invalidate(arg)
+                    self.invalidate(arg, node=call_node, path=call_path)
             return _Value()
         path, node, closure = fn.function
         key = (path, node.start_byte)
@@ -1675,7 +1680,7 @@ class _Connections:
                 else:
                     self.unsupported(child, path, "unproven_object_spread")
                     passive = False
-                    self.invalidate(source)
+                    self.invalidate(source, node=child, path=path)
             else:
                 # Getter/method/computed syntax can execute source closures
                 # during construction or a later spread. Never omit it silently.
@@ -1715,8 +1720,8 @@ class _Connections:
             if operator == "delete":
                 root = self.mutation_root(node.child_by_field_name("argument"), env)
                 if root is not None:
-                    self.invalidate(root)
-                self.invalidate(operand)
+                    self.invalidate(root, node=node, path=path)
+                self.invalidate(operand, node=node, path=path)
             truth = _literal_truth(operand.literal)
             if operator == "!" and truth is not None:
                 literal: object = not truth
@@ -1761,19 +1766,19 @@ class _Connections:
                 result = _Value(elements=elements, passive=True)
             else:
                 for element in elements:
-                    self.invalidate(element)
+                    self.invalidate(element, node=node, path=path)
                 result = _Value()
         elif kind == "spread_element":
             # Unsupported arity cannot conceal an authority-bearing argument.
             for child in node.named_children:
-                self.invalidate(self.value(child, env, path))
+                self.invalidate(self.value(child, env, path), node=node, path=path)
             result = _Value()
         elif kind == "new_expression":
             # Constructors are opaque calls, never an interpreted class body.
             self.value(node.child_by_field_name("constructor"), env, path)
             arguments = node.child_by_field_name("arguments")
             for argument in arguments.named_children if arguments is not None else ():
-                self.invalidate(self.value(argument, env, path))
+                self.invalidate(self.value(argument, env, path), node=node, path=path)
             result = _Value()
         elif kind in {
             "assignment_expression",
@@ -1783,7 +1788,7 @@ class _Connections:
             assigned = node.child_by_field_name("left") or node.child_by_field_name("argument")
             root = self.mutation_root(assigned, env)
             if root is not None:
-                self.invalidate(root)
+                self.invalidate(root, node=node, path=path)
             assigned_value = self.value(node.child_by_field_name("right"), env, path)
             if (assigned is not None and assigned.type == "subscript_expression"
                     and (assigned_value.function is not None or assigned_value.sdk
@@ -1893,7 +1898,7 @@ class _Connections:
                 if self.statistic_call_is_read_only(operation, args, source):
                     return self.statistic_result(operation, args, source, statistic_elements)
                 self.unsupported(node, path, "unproven_statistic_callback")
-                self.invalidate(source)
+                self.invalidate(source, node=node, path=path)
                 return _Value()
             if source.elements is not None:
                 if operation == "map" and source.local_scalar_keys:
@@ -1967,7 +1972,7 @@ class _Connections:
                     # its numeric result is never rendered-item evidence.
                     return _Value()
                 if operation != "then":
-                    self.invalidate(source)
+                    self.invalidate(source, node=node, path=path)
             if operation == "then" and args and source.pending is not None:
                 result = self.invoke(args[0], [source.pending])
                 return _Value(pending=result.pending or result)
@@ -2058,9 +2063,9 @@ class _Connections:
         if fn.function is None and not fn.sdk and fn.setter is None:
             root = self.mutation_root(target, env)
             if root is not None:
-                self.invalidate(root)
-            self.invalidate(fn)
-        return self.invoke(fn, args, render)
+                self.invalidate(root, node=node, path=path)
+            self.invalidate(fn, node=node, path=path)
+        return self.invoke(fn, args, render, call_node=node, call_path=path)
 
     def jsx(self, node: Node, env: dict[str, _Value], path: str) -> _Value:
         opening = node.child_by_field_name("open_tag") if node.type == "jsx_element" else node
@@ -2097,6 +2102,7 @@ class _Connections:
                 if not self.render_suppression:
                     return self.invoke(
                         env.get(name, _Value()), [_Value(props=props, passive=True)], True,
+                        call_node=opening, call_path=path,
                     )
             elif not self.render_suppression:
                 for key, value in props.items():
@@ -2319,11 +2325,58 @@ def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
     return None, frozenset(capabilities)
 
 
+_SUPPORTED_CART_REPAIR_EXAMPLE = """const cartRows = Object.keys(cart).map(id => {
+  const selected = catalog.items.find(item => item.id === id) ?? null;
+  return { id, qty: cart[id] ?? 0, title: selected ? selected.title : "" };
+});
+const cartCount = cartRows.reduce((count, row) => count + row.qty, 0);"""
+
+
+def _source_repair_guidance(diagnostic: str) -> str:
+    """Explain a trusted located refusal; this never changes proof or identity."""
+    if not diagnostic.startswith(
+        "Managed source connection analysis cannot prove call or binding effects."
+    ):
+        return ""
+    reason = re.search(
+        r"; reason (unproven_native_intrinsic_effect|unsupported_loop_control|"
+        r"unproven_loop_iterable); fingerprint [a-f0-9]{16}\.", diagnostic,
+    )
+    if reason is None:
+        return ""
+    explanation = {
+        "unproven_native_intrinsic_effect": (
+            "Object.entries/values/fromEntries and reflection are outside the supported "
+            "native proof. Do not mutate or pass native handles to unknown calls."
+        ),
+        "unsupported_loop_control": (
+            "The local-loop proof does not support continue/break/return. Removing "
+            "continue alone does not permit iteration over SDK rows."
+        ),
+        "unproven_loop_iterable": (
+            "for..of requires a source-owned passive JSON array; SDK collections and "
+            "Object.values(cart) are not proven loop sources."
+        ),
+    }[reason.group(1)]
+    return (
+        "\nSupported source repair: " + explanation
+        + " For cart/catalog derivations, use Object.keys on an already proven local JSON "
+        "cart, a read-only SDK id lookup and your own scalar DTO before reduce. Example "
+        "for a Record<string, number> quantity cart (adapt your own DTO fields to the "
+        "existing validated cart schema; do not replace its data):\n"
+        + _SUPPORTED_CART_REPAIR_EXAMPLE
+        + "\nKeep live SDK catalog.items.map directly in JSX. A DTO is not SDK render "
+        "authority. Preserve the manifest-selected create handler and loaded-record "
+        "history. Do not use mock/static SDK rows, weaken checks or add model/repair budget."
+    )
+
+
 def management_source_gap(files: Mapping[str, str]) -> ManagedSourceGap | None:
     gap = _admission(files)[0]
     if gap is None:
         return None
-    diagnostic = str(gap)
+    trusted_gap = gap if isinstance(gap, ManagedSourceGap) else ManagedSourceGap(str(gap))
+    diagnostic = str(trusted_gap)
     if diagnostic.startswith("Connect "):
         if diagnostic.startswith("Connect useYleumCatalog items"):
             diagnostic += (
@@ -2340,10 +2393,9 @@ def management_source_gap(files: Mapping[str, str]) -> ManagedSourceGap | None:
             "condition: the bounded verifier does not interpret arbitrary JS conditions. "
             "This is a supported source shape, not a request for static or mock data."
         )
-    return (
-        gap.with_diagnostic(diagnostic)
-        if isinstance(gap, ManagedSourceGap) else ManagedSourceGap(diagnostic)
-    )
+    else:
+        diagnostic += _source_repair_guidance(diagnostic)
+    return trusted_gap.with_diagnostic(diagnostic)
 
 
 def management_implemented_capabilities(files: Mapping[str, str]) -> frozenset[str]:
