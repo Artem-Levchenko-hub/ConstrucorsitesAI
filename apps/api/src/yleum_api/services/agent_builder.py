@@ -187,7 +187,7 @@ _SOURCE_CHANGE_REQUIRED = (
 _MAX_OBS_CHARS = 6_000
 _MAX_READ_CHARS = 16_000
 # Source finishing runway, not a longer timeout or a new request allowance.
-# Ordinary MAX generation reserves its normal response window plus receipt time;
+# Long ordinary MAX turns reserve the normal response window plus receipt time;
 # other existing paths retain their smaller admission window.
 _AGENT_RESPONSE_TIMEOUT_SECONDS = 300.0
 _PROVIDER_RECEIPT_WINDOW_SECONDS = 15.0
@@ -488,6 +488,14 @@ async def run_agent_build(
         edit_deadline is None or edit_deadline.utcoffset() is None or snapshot_files is None
     ):
         raise ValueError("Progressive continuation requires an aware deadline and source snapshot")
+    # Enroll once for the whole ordinary turn. An explicitly shorter caller
+    # retains its existing window; a later segment must not re-enroll a long
+    # turn as short merely because its original deadline is now approaching.
+    reserve_full_provider_window = (
+        report_managed_build_gap and coordinator_handoff and continuation is None
+        and edit_deadline is not None and edit_deadline.utcoffset() is not None
+        and (edit_deadline - datetime.now(UTC)).total_seconds() > _MIN_MAX_PROVIDER_WINDOW_SECONDS
+    )
     segment_limit = max(1, min(8, int(max_segments))) if max_segments is not None else None
     contract = hashlib.sha256(json.dumps({
         "task": user_prompt, "max_segments": segment_limit,
@@ -599,6 +607,7 @@ async def run_agent_build(
             edit_deadline=edit_deadline, continuation=continuation,
             source_repair=source_repair,
             report_managed_build_gap=report_managed_build_gap,
+            reserve_full_provider_window=reserve_full_provider_window,
         )
         restored = None
         cumulative_files.update(result.files)
@@ -692,6 +701,7 @@ async def _run_agent_segment(
     continuation: ExecutionDriver | None = None,
     source_repair: _SourceRepairState | None = None,
     report_managed_build_gap: bool = False,
+    reserve_full_provider_window: bool = False,
 ) -> AgentResult:
     """Drive the plan→act→observe loop until the model says done or budget hits.
 
@@ -1170,7 +1180,8 @@ async def _run_agent_segment(
             # The finishing runway belongs to the coordinator's source stage.
             # Saved continuations and standalone repairs keep their old window.
             minimum_window = (
-                _MIN_MAX_PROVIDER_WINDOW_SECONDS if _uses_ordinary_max_source_contract()
+                _MIN_MAX_PROVIDER_WINDOW_SECONDS
+                if reserve_full_provider_window and _uses_ordinary_max_source_contract()
                 else _MIN_PROVIDER_WINDOW_SECONDS
             )
             if (uses_gateway and coordinator_handoff and not restoring and remaining is not None

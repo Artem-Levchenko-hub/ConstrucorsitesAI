@@ -234,7 +234,8 @@ def fixed_clock(monkeypatch):
 
 async def run_provider_window(monkeypatch, *, remaining, gap=None, report=True,
                               coordinator=True, driver=None, ship=True, invalid=False,
-                              written=True, source_changed=True, model="claude-sonnet-5"):
+                              written=True, source_changed=True, model="claude-sonnet-5",
+                              reserve=True):
     clock = fixed_clock(monkeypatch)
     calls = []
     state = {"../outside" if invalid else PATH: "candidate"}
@@ -244,6 +245,9 @@ async def run_provider_window(monkeypatch, *, remaining, gap=None, report=True,
         return _repair_action("read_file", path=PATH)
 
     monkeypatch.setattr(ab.llm_client, "complete_chat", complete)
+    # Direct probes can model an already enrolled turn near its deadline.
+    # Public entry enrollment is tested separately below.
+    reserve_options = {} if reserve is None else {"reserve_full_provider_window": reserve}
     result = await ab._run_agent_segment(
         system_prompt="s", user_prompt="create MAX", model=model,
         execute=_ok_executor([]), snapshot_files=lambda: asyncio.sleep(0, result=dict(state)),
@@ -252,6 +256,7 @@ async def run_provider_window(monkeypatch, *, remaining, gap=None, report=True,
         coordinator_handoff=coordinator, ship_green_on_abort=ship, continuation=driver,
         edit_source_changed=lambda: source_changed,
         edit_deadline=clock.current + timedelta(seconds=remaining), max_steps=1,
+        **reserve_options,
     )
     return result, calls
 
@@ -351,3 +356,161 @@ async def test_saved_provider_frame_reconciles_without_new_post_in_reserved_wind
     result = await run()
     assert len(frames) == 2 and posts == []
     assert not result.done and not result.needs_finalization
+
+
+@pytest.mark.parametrize("initial_seconds", [300, 315])
+async def test_explicit_short_turn_keeps_four_hundred_productive_actions(
+    monkeypatch, initial_seconds,
+):
+    clock = fixed_clock(monkeypatch)
+    state, executed, calls = {}, [], []
+
+    async def complete(*_args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) <= 441:
+            path = PATH if len(calls) == 1 else f"src/features/feature-{len(calls)}.tsx"
+            return _repair_action("write_file", path=path,
+                                  content=f"export const Feature = () => <p>{len(calls)}</p>;")
+        if len(calls) == 442:
+            return _repair_action("build")
+        assert len(calls) == 443
+        return _repair_action("done", summary="candidate only")
+
+    monkeypatch.setattr(ab.llm_client, "complete_chat", complete)
+    result = await ab.run_agent_build(
+        system_prompt="s", user_prompt="create MAX", model="claude-sonnet-5",
+        execute=_ok_executor(executed, state),
+        snapshot_files=lambda: asyncio.sleep(0, result=dict(state)),
+        completion_check=lambda *_: None, report_managed_build_gap=True,
+        coordinator_handoff=True, edit_deadline=clock.current + timedelta(seconds=initial_seconds),
+        max_steps=14, max_segments=None,
+    )
+    assert len(calls) == 443 and result.steps >= 400
+    assert sum(name == "write_file" for name, _path in executed) > 400
+    assert "src/features/feature-441.tsx" in state
+    assert result.done and result.needs_finalization and result.proof_checkpoint is None
+    assert all(call["timeout_seconds"] == 300 for call in calls)
+
+
+@pytest.mark.parametrize("segment_boundary", [False, True])
+@pytest.mark.parametrize("gap", [None, managed_gap(), "Untrusted source requirement."])
+async def test_long_turn_keeps_enrollment_when_later_dispatch_has_only_144_seconds(
+    monkeypatch, segment_boundary, gap,
+):
+    clock = fixed_clock(monkeypatch)
+    started, state, calls = clock.current, {}, []
+    ordinary = _ok_executor([], state)
+
+    async def complete(*_args, **kwargs):
+        calls.append(kwargs)
+        assert len(calls) == 1, "The next model POST must not begin with only 144 seconds"
+        return _repair_action("write_file", path=PATH, content="changed candidate")
+
+    async def execute(action):
+        result = await ordinary(action)
+        clock.current = started + timedelta(seconds=456)
+        return result
+
+    monkeypatch.setattr(ab.llm_client, "complete_chat", complete)
+    result = await ab.run_agent_build(
+        system_prompt="s", user_prompt="create MAX", model="claude-sonnet-5",
+        execute=execute, snapshot_files=lambda: asyncio.sleep(0, result=dict(state)),
+        completion_check=lambda *_: gap, report_managed_build_gap=True,
+        coordinator_handoff=True, edit_deadline=started + timedelta(seconds=600),
+        max_steps=1 if segment_boundary else 4, max_segments=2,
+    )
+    assert len(calls) == 1 and calls[0]["timeout_seconds"] == 300
+    assert not result.done and result.needs_finalization is (not isinstance(gap, str)
+                                                            or isinstance(gap, ManagedSourceGap))
+    assert result.proof_checkpoint is None and result.files[PATH] == "changed candidate"
+    assert result.segments == (2 if segment_boundary else 1)
+
+
+@pytest.mark.parametrize("initial_seconds", [315, 316])
+async def test_outer_enrollment_is_strictly_above_315_seconds(monkeypatch, initial_seconds):
+    clock = fixed_clock(monkeypatch)
+    started, state, calls = clock.current, {}, []
+    ordinary = _ok_executor([], state)
+
+    async def complete(*_args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return _repair_action("write_file", path=PATH, content="candidate")
+        assert initial_seconds == 315 and len(calls) == 2
+        return _repair_action("read_file", path=PATH)
+
+    async def execute(action):
+        result = await ordinary(action)
+        clock.current = started + timedelta(seconds=initial_seconds - 144)
+        return result
+
+    monkeypatch.setattr(ab.llm_client, "complete_chat", complete)
+    result = await ab.run_agent_build(
+        system_prompt="s", user_prompt="create MAX", model="claude-sonnet-5",
+        execute=execute, snapshot_files=lambda: asyncio.sleep(0, result=dict(state)),
+        completion_check=lambda *_: None, report_managed_build_gap=True,
+        coordinator_handoff=True, edit_deadline=started + timedelta(seconds=initial_seconds),
+        max_steps=2, max_segments=1,
+    )
+    assert len(calls) == (2 if initial_seconds == 315 else 1)
+    assert result.needs_finalization is (initial_seconds == 316)
+    assert not result.done and result.proof_checkpoint is None
+
+
+async def test_long_turn_cannot_handoff_without_owned_source_when_runway_expires(monkeypatch):
+    clock = fixed_clock(monkeypatch)
+    started, calls = clock.current, []
+
+    async def snapshot():
+        clock.current = started + timedelta(seconds=456)
+        return {PATH: "unchanged old product"}
+
+    async def forbidden(*_args, **_kwargs):
+        calls.append(None)
+        pytest.fail("No new POST or check may manufacture owned changes")
+
+    monkeypatch.setattr(ab.llm_client, "complete_chat", forbidden)
+    result = await ab.run_agent_build(
+        system_prompt="s", user_prompt="create MAX", model="claude-sonnet-5",
+        execute=forbidden, snapshot_files=snapshot, completion_check=lambda *_: None,
+        report_managed_build_gap=True, coordinator_handoff=True,
+        edit_deadline=started + timedelta(seconds=600), max_steps=3, max_segments=None,
+    )
+    assert calls == [] and result.stop_reason == "source_deadline"
+    assert not result.done and not result.needs_finalization and result.files == {}
+
+
+async def test_private_segment_default_does_not_enroll_a_new_long_window(monkeypatch):
+    result, calls = await run_provider_window(monkeypatch, remaining=144, reserve=None)
+    assert len(calls) == 1 and calls[0]["timeout_seconds"] == 144
+    assert not result.done and not result.needs_finalization
+
+
+@pytest.mark.parametrize("deadline_kind", ["naive", "expired"])
+async def test_invalid_or_expired_outer_deadline_never_gains_request_allowance(
+    monkeypatch, deadline_kind,
+):
+    clock = fixed_clock(monkeypatch)
+
+    async def forbidden(*_args, **_kwargs):
+        pytest.fail("No request is permitted for invalid or expired initial deadline")
+
+    monkeypatch.setattr(ab.llm_client, "complete_chat", forbidden)
+
+    async def run():
+        return await ab.run_agent_build(
+            system_prompt="s", user_prompt="create MAX", model="claude-sonnet-5",
+            execute=forbidden, snapshot_files=lambda: asyncio.sleep(0, result={PATH: "old"}),
+            completion_check=lambda *_: None, report_managed_build_gap=True,
+            coordinator_handoff=True, max_steps=2, max_segments=None,
+            edit_deadline=(clock.current.replace(tzinfo=None) if deadline_kind == "naive"
+                           else clock.current - timedelta(seconds=1)),
+        )
+
+    if deadline_kind == "naive":
+        with pytest.raises(ValueError, match="aware deadline"):
+            await run()
+    else:
+        result = await run()
+        assert not result.done and not result.needs_finalization
+        assert result.stop_reason == "source_deadline"
