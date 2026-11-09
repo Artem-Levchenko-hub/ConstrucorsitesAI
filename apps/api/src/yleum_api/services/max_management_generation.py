@@ -1906,6 +1906,35 @@ class ManagedSourceGap(str):
         return hashlib.sha256(stable.encode()).hexdigest() if locations else None
 
 
+def _create_history_diagnostic(name: str, connections: _Connections) -> str | None:
+    """Explain missing UI connections without granting acceptance or repair authority."""
+    create_connected = name in connections.created
+    history_rendered = "record:" + name in connections.rendered
+    if create_connected and history_rendered:
+        return None
+    details = [f"Connect {_CREATE[name]} managed flow."]
+    if not create_connected:
+        details.append(
+            "Missing mounted create event. Attach the submit handler to a visible "
+            "form onSubmit or button onClick; the handler must call the SDK create "
+            "method with the real typed input object. An import or unmounted helper "
+            "does not connect a create event."
+        )
+    if not history_rendered:
+        details.append(
+            f"Missing rendered {name} history. Store getManagedRecords('{name}').records "
+            "in resource-specific state and render that loaded state directly as "
+            "records.map(record => <p key={record.id}>{record.customer_name} "
+            "{record.status}</p>) in visible JSX. Loading records alone does not "
+            "render history."
+        )
+    details.append(
+        "Preserve the real typed inputs, any saved pending intent and its operationKey. "
+        "This feedback grants no extra model or repair budget."
+    )
+    return " ".join(details)
+
+
 def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
     try:
         contract = _contract(files)
@@ -1971,11 +2000,11 @@ def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
                     frozenset(),
                 )
         elif name in _CREATE:
-            if name not in connections.created or "record:" + name not in connections.rendered:
+            diagnostic = _create_history_diagnostic(name, connections)
+            if diagnostic is not None:
                 return (
                     ManagedSourceGap(
-                        f"Connect {_CREATE[name]} to a live form/button and "
-                        f"getManagedRecords('{name}').records to rendered history.",
+                        diagnostic,
                         obligation=_CREATE_OBLIGATIONS[name], contract_hash=contract.contract_hash,
                     ),
                     frozenset(),

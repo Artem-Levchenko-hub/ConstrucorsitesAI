@@ -186,9 +186,14 @@ _SOURCE_CHANGE_REQUIRED = (
 # Caps so one fat observation can't blow the context window.
 _MAX_OBS_CHARS = 6_000
 _MAX_READ_CHARS = 16_000
-# Source finishing runway, not a shorter model timeout. Do not begin a new
-# paid response in the final 90s + 15s receipt window. The coordinator owns
-# the reserved checks once the current source satisfies the product contract.
+# Source finishing runway, not a longer timeout or a new request allowance.
+# Ordinary MAX generation reserves its normal response window plus receipt time;
+# other existing paths retain their smaller admission window.
+_AGENT_RESPONSE_TIMEOUT_SECONDS = 300.0
+_PROVIDER_RECEIPT_WINDOW_SECONDS = 15.0
+_MIN_MAX_PROVIDER_WINDOW_SECONDS = (
+    _AGENT_RESPONSE_TIMEOUT_SECONDS + _PROVIDER_RECEIPT_WINDOW_SECONDS
+)
 _MIN_PROVIDER_WINDOW_SECONDS = 105.0
 _SOURCE_HANDOFF_SNAPSHOT_SECONDS = 5.0
 _DURABLE_DEADLINE_CHECK_SECONDS = 60.0
@@ -700,7 +705,9 @@ async def _run_agent_segment(
     # they arrived. Give only this builder bounded response/accounting headroom;
     # injected completers and other callers retain their existing budgets.
     uses_gateway = complete is None
-    complete = complete or partial(llm_client.complete_chat, timeout_seconds=300.0)
+    complete = complete or partial(
+        llm_client.complete_chat, timeout_seconds=_AGENT_RESPONSE_TIMEOUT_SECONDS,
+    )
     from yleum_api.services.reference_images import user_content
 
     convo: list[dict[str, Any]] = [
@@ -985,10 +992,17 @@ async def _run_agent_segment(
     def _has_handoff_inventory() -> bool:
         return bool(completion_inventory) and _source_inventory_error(completion_inventory) is None
 
-    def _can_check_managed_build() -> bool:
+    def _uses_ordinary_max_source_contract() -> bool:
+        return report_managed_build_gap and continuation is None and coordinator_handoff
+
+    def _can_check_source_completion() -> bool:
+        # Reporting a source gap is not permission to ship or hand off. Even a
+        # candidate inherited from a previous segment needs current feedback.
         return (
-            report_managed_build_gap and continuation is None
-            and _can_finalize_source() and _has_handoff_inventory()
+            _uses_ordinary_max_source_contract()
+            and completion_check is not None and snapshot_files is not None
+            and not pending_truncation and not _source_change_pending()
+            and _has_handoff_inventory()
         )
 
     def _managed_source_stop(gap: str, step_no: int) -> AgentResult:
@@ -1154,9 +1168,13 @@ async def _run_agent_segment(
                 if edit_deadline is not None else None
             )
             # The finishing runway belongs to the coordinator's source stage.
-            # Standalone repairs retain their explicit smaller response windows.
+            # Saved continuations and standalone repairs keep their old window.
+            minimum_window = (
+                _MIN_MAX_PROVIDER_WINDOW_SECONDS if _uses_ordinary_max_source_contract()
+                else _MIN_PROVIDER_WINDOW_SECONDS
+            )
             if (uses_gateway and coordinator_handoff and not restoring and remaining is not None
-                    and 0 < remaining <= _MIN_PROVIDER_WINDOW_SECONDS):
+                    and 0 < remaining <= minimum_window):
                 return await _finish_source_window(step, remaining)
             if not restoring and remaining is not None and remaining <= 0:
                 if coordinator_handoff and continuation is None:
@@ -1168,8 +1186,10 @@ async def _run_agent_segment(
             call_seconds = (
                 remaining if max_tokens is None
                 and agent_output_tokens(active_model, fallback=16384) is None
-                else min(300.0, remaining)
-            ) if uses_gateway and remaining is not None and not restoring else 300.0
+                else min(_AGENT_RESPONSE_TIMEOUT_SECONDS, remaining)
+            ) if uses_gateway and remaining is not None and not restoring else (
+                _AGENT_RESPONSE_TIMEOUT_SECONDS
+            )
             bounded_complete = (
                 partial(llm_client.complete_chat, timeout_seconds=call_seconds)
                 if uses_gateway and remaining is not None and not restoring else complete
@@ -1474,7 +1494,7 @@ async def _run_agent_segment(
                     "NOT DONE YET — " + gap + "."
                 )})
                 if source_feedback:
-                    if _can_check_managed_build() and source_repair.observe_checked_gap(gap)[1]:
+                    if _can_check_source_completion() and source_repair.observe_checked_gap(gap)[1]:
                         return _managed_source_stop(gap, step)
                     if source_repair.repeated_managed_gap(gap, completion_inventory):
                         stopped = _managed_source_stop(gap, step)
@@ -1858,12 +1878,13 @@ async def _run_agent_segment(
             fast_check_fresh = False
         observation = _format_observation(action, obs)
         managed_gap, repeated_managed_gap = None, False
-        if action.name == "build" and _can_check_managed_build():
+        if action.name == "build" and _can_check_source_completion():
+            source_gap = _source_completion_gap() if fast_check_fresh else None
             managed_gap, repeated_managed_gap = source_repair.observe_checked_gap(
-                _source_completion_gap() if fast_check_fresh else None,
+                source_gap,
             )
-            if managed_gap is not None:
-                observation += "\nSOURCE CHECK: " + managed_gap
+            if source_gap is not None:
+                observation += "\nSOURCE CHECK: " + source_gap
         convo.append({"role": "user", "content": observation})
         if changed_source_paths and on_progress is not None:
             try:
