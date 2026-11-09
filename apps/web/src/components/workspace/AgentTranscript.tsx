@@ -137,6 +137,9 @@ export function AgentTranscript({
   // Older failure cards and tool records retain their own durable outcome.
   const boundRun = latest.data?.project_id === projectId && latest.data?.assistant_message_id === messageId
     ? latest.data : undefined;
+  const historicalRequest = latest.data?.project_id === projectId
+    && typeof latest.data?.assistant_message_id === "string"
+    && latest.data.assistant_message_id !== messageId;
   const generationStatus = boundRun?.status ?? messageStatus;
   const startedAt = boundRun?.started_at ?? messageStartedAt;
   const finishedAt = boundRun?.finished_at ?? messageFinishedAt;
@@ -245,6 +248,7 @@ export function AgentTranscript({
             visibleSteps.at(-1)?.ok === false,
             recoveryUnconfirmed ? {} : recovery,
             currentRequestComplete,
+            historicalRequest,
           )}
         </span>
         <span className="ml-auto flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-fg-tertiary">

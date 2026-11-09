@@ -106,15 +106,24 @@ def _err(
     )
 
 
-def _unconfirmed_provider_outcome(upstream_status: int | None = None) -> Response:
+def _unconfirmed_provider_outcome(
+    upstream_status: int | None = None, *, provider_scope: str | None = None,
+    provider_call_id: UUID | None = None, transport_stage: str | None = None,
+) -> Response:
     """Known HTTP status is diagnostic evidence, never replay permission."""
-    details = None
-    if type(upstream_status) is int and 500 <= upstream_status <= 599:
+    details: dict[str, Any] | None = None
+    if type(upstream_status) is int and 400 <= upstream_status <= 599:
         details = {
             "upstream_http_status": upstream_status,
             "provider_charge_ambiguous": True,
             "retry_safe": False,
         }
+        if provider_scope in {"llmgw", "aitunnel"}:
+            details["provider_scope"] = provider_scope
+        if isinstance(provider_call_id, UUID):
+            details["provider_call_id"] = str(provider_call_id)
+        if transport_stage in {"connect", "headers", "body", "complete"}:
+            details["transport_stage"] = transport_stage
     return _err(
         503, "billing_unavailable", "Provider request outcome could not be confirmed",
         details=details,
@@ -512,13 +521,22 @@ def _post_llmgw(
         mounts={"all://": httpx.HTTPTransport()},
     ) as client:
         verify_dispatch_capacity()
-        if evidence is None:
-            return client.post(url, json=payload, headers=headers)
-        with client.stream("POST", url, json=payload, headers=headers) as response:
-            evidence["transport_stage"] = "headers"
-            evidence.update(receipt_evidence({}, response.headers, provider_scope=provider_scope))
-            response.read()
-            return response
+        # Legacy requests need the same header evidence even without a durable
+        # identity or an enabled backup. Carry it on a failed read as well as in
+        # the caller's optional dict; never attach body text or raw headers.
+        observed = evidence if evidence is not None else {}
+        observed["transport_stage"] = "connect"
+        try:
+            with client.stream("POST", url, json=payload, headers=headers) as response:
+                observed["transport_stage"] = "headers"
+                observed["upstream_http_status"] = response.status_code
+                observed.update(receipt_evidence({}, response.headers, provider_scope=provider_scope))
+                observed["transport_stage"] = "body"
+                response.read()
+                return response
+        except httpx.HTTPError as exc:
+            exc._native_transport_evidence = observed  # type: ignore[attr-defined]
+            raise
 
 
 async def _finish_provider_call(
@@ -626,9 +644,26 @@ async def _dispatch_native_provider(
                 ) as upstream:
                     await upstream.aread()
         except (httpx.HTTPError, TimeoutError, DispatchDeadlineError) as exc:
+            partial = getattr(exc, "_native_transport_evidence", None)
+            if isinstance(partial, dict):
+                transport_evidence.update(partial)
+            observed_status = transport_evidence.get("upstream_http_status")
+            observed_status = (
+                observed_status if type(observed_status) is int
+                and 100 <= observed_status <= 599 else None
+            )
+            transport_stage = transport_evidence.get("transport_stage")
+            transport_stage = (
+                transport_stage if isinstance(transport_stage, str)
+                and transport_stage in {"connect", "headers", "body"} else "unknown"
+            )
             log.warning(
                 "native_messages.transport_error",
                 error_type=type(exc).__name__,
+                provider_scope=provider_scope,
+                provider_call_id=str(provider_call_id),
+                upstream_http_status=observed_status,
+                transport_stage=transport_stage,
                 run_id=str(run_id) if run_id else None,
                 project_id=str(project_id) if project_id else None,
                 message_id=str(message_id) if message_id else None,
@@ -636,7 +671,8 @@ async def _dispatch_native_provider(
                 retry_count=retry_count,
             )
             safe_to_retry = (provider_scope == "llmgw" and isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))
-                             and transport_evidence.get("transport_stage") != "headers")
+                             and transport_stage not in {"headers", "body"}
+                             and observed_status is None)
             expired_before_dispatch = isinstance(exc, DispatchDeadlineError)
             recorded = await _finish_provider_call(
                 provider_call_id, identity=identity,
@@ -665,7 +701,10 @@ async def _dispatch_native_provider(
                 })
             # Once a request may have been accepted, replay risks a second paid call.
             # Deployed API callers already stop on this terminal billing error.
-            return _unconfirmed_provider_outcome()
+            return _unconfirmed_provider_outcome(
+                observed_status, provider_scope=provider_scope,
+                provider_call_id=provider_call_id, transport_stage=transport_stage,
+            )
 
         known_evidence = _known_response_evidence(upstream, provider_scope)
         if upstream.status_code >= 400:
@@ -676,7 +715,10 @@ async def _dispatch_native_provider(
                     error_type="HTTPStatusError", **known_evidence,
                 )
                 if not recorded:
-                    return _unconfirmed_provider_outcome(upstream.status_code)
+                    return _unconfirmed_provider_outcome(
+                        upstream.status_code, provider_scope=provider_scope,
+                        provider_call_id=provider_call_id, transport_stage="complete",
+                    )
                 if identity is not None:
                     from yleum_gateway.services.generation_response_capture import (
                         confirm_response_accounting,
@@ -701,7 +743,10 @@ async def _dispatch_native_provider(
             if upstream.status_code >= 500 or not recorded:
                 # A failed journal commit does not erase the locally observed HTTP
                 # status, and cannot turn an ambiguous outcome into a safe retry.
-                return _unconfirmed_provider_outcome(upstream.status_code)
+                return _unconfirmed_provider_outcome(
+                    upstream.status_code, provider_scope=provider_scope,
+                    provider_call_id=provider_call_id, transport_stage="complete",
+                )
             if not ambiguous and retry_candidate is not None:
                 from yleum_gateway.services.generation_response_capture import (
                     confirm_response_accounting,

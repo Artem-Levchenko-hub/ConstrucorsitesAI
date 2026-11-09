@@ -12,6 +12,8 @@ from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.services.max_content_delivery import public_business_config
 from yleum_api.services.max_management_contract import build_management_contract
 from yleum_api.services.max_management_generation import (
+    ManagedSourceGap,
+    ManagedSourceObligation,
     linked_checkout_connected,
     management_implemented_capabilities,
     management_source_gap,
@@ -295,6 +297,77 @@ def connection_files(source, modules):
     }
 
 
+MISSING_SELECTION_PAGE = """
+import {useYleumAppProfile} from '@/lib/omnia/app-profile-client';
+import {useYleumCatalog} from '@/lib/omnia/catalog-client';
+export default function Page() {
+  const {profile} = useYleumAppProfile();
+  const catalog = useYleumCatalog();
+  return <main><h1>{profile?.app_name}</h1>
+    {catalog.items.map(item => <article key={item.id}>{item.title}</article>)}
+  </main>;
+}
+"""
+
+
+def test_structural_managed_gap_is_stable_across_unrelated_changes_and_feedback_redaction():
+    files = connection_files(MISSING_SELECTION_PAGE, ("catalog",))
+    gap = management_source_gap(files)
+    assert gap is not None and gap.startswith("Connect useYleumCatalogSelection")
+    key = gap.rejection_key()
+    assert key is not None
+    changed = management_source_gap({
+        **files, "src/app/globals.css": "main { color: red; }",
+        "src/app/page.tsx": "\n// an unrelated edit\n" + MISSING_SELECTION_PAGE,
+    })
+    assert changed is not None and changed.rejection_key() == key
+    assert gap.with_diagnostic("bounded safe feedback").rejection_key() == key
+    assert management_implemented_capabilities(files) == frozenset()  # Still rejected.
+    fixed = connection_files(connection_example(("catalog",)), ("catalog",))
+    assert management_source_gap(fixed) is None
+
+
+def test_structural_managed_keys_distinguish_obligations_and_contracts():
+    selection = management_source_gap(connection_files(MISSING_SELECTION_PAGE, ("catalog",)))
+    profile = management_source_gap(connection_files(
+        MISSING_SELECTION_PAGE.replace("{profile?.app_name}", "Fixed name"), ("catalog",),
+    ))
+    catalog = management_source_gap(connection_files(
+        MISSING_SELECTION_PAGE.replace("{item.title}", "Fixed row"), ("catalog",),
+    ))
+    other_contract = management_source_gap(connection_files(
+        MISSING_SELECTION_PAGE, ("catalog", "leads"),
+    ))
+    gaps = [selection, profile, catalog, other_contract]
+    assert all(gap is not None for gap in gaps)
+    assert len({gap.rejection_key() for gap in gaps if gap is not None}) == 4
+
+
+def test_missing_create_history_obligations_remain_distinct_under_the_same_contract():
+    modules = ("catalog", "orders", "leads", "bookings")
+    source = connection_example(modules)
+    keys = set()
+    for name in CREATE_METHOD:
+        rejected = source.replace(f"<form onSubmit={{submit_{name}}}", "<form")
+        gap = management_source_gap(connection_files(rejected, modules))
+        assert gap is not None and CREATE_METHOD[name] in gap
+        keys.add(gap.rejection_key())
+    assert None not in keys and len(keys) == 3
+
+
+def test_untrusted_or_unknown_diagnostic_text_cannot_mint_a_structural_identity():
+    assert ManagedSourceGap("Unknown source analysis failure").rejection_key() is None
+    assert ManagedSourceGap("Connect useYleumCatalogSelection(items)").rejection_key() is None
+    with pytest.raises(ValueError, match="canonical contract"):
+        ManagedSourceGap("gap", obligation=ManagedSourceObligation.CATALOG_SELECTION)
+    with pytest.raises(ValueError, match="canonical contract"):
+        ManagedSourceGap("gap", contract_hash="a" * 64)
+    with pytest.raises(ValueError, match="canonical contract"):
+        ManagedSourceGap(
+            "gap", obligation=ManagedSourceObligation.CATALOG_SELECTION, contract_hash="not-a-hash",
+        )
+
+
 CATALOG_CATEGORY_PAGE = """
 import {useYleumAppProfile} from '@/lib/omnia/app-profile-client';
 import {useYleumCatalog, useYleumCatalogSelection} from '@/lib/omnia/catalog-client';
@@ -457,7 +530,7 @@ def test_catalog_lookup_rejection_does_not_key_unrelated_catalog_progress(decora
     assert management_source_gap(connection_files(source, ("catalog",))) is None
     no_fields = source.replace("key={item.id}>{item.title}", "key={item.id}>No fields")
     gap = management_source_gap(connection_files(no_fields, ("catalog",)))
-    assert gap is not None and gap.rejection_key() is None
+    assert gap is not None and gap.rejection_key() is not None
 
 
 def test_catalog_id_lookup_alone_is_not_a_rendered_catalog():

@@ -96,3 +96,35 @@ async def test_provider_cause_keeps_precedence_when_restore_is_red(stopped_recov
     with pytest.raises(RuntimeError) as error:
         await agent_recovery.recover_stopped_candidate(**kwargs)
     assert str(error.value) == "provider_http_401: access rejected"
+
+
+@pytest.mark.parametrize("first", [False, True])
+@pytest.mark.parametrize("raises", [False, True])
+async def test_stopped_and_rollback_causes_share_credential_sanitization(
+    stopped_recovery, capsys, first, raises,
+):
+    kwargs, _, baseline, trace, _ = stopped_recovery
+    first_or_existing(kwargs, baseline, first)
+    kwargs["_agent_res"].summary = (
+        "stopped prefix API_KEY=private-stopped-secret "
+        "https://owner:private-stopped-uri@primary.example/source?x=private-stopped-query"
+    )
+    detail = (
+        "rollback prefix SECRET_KEY=private-rollback-secret "
+        "https://owner:private-rollback-uri@proxy.example/rollback"
+        "?password=private-rollback-query#private-fragment"
+    )
+    async def restore(role, operation_id):
+        if raises:
+            raise RuntimeError(detail)
+        return SimpleNamespace(ok=False, redacted_detail=detail)
+    kwargs["runtime"].handle.run_role = restore
+    with pytest.raises(RuntimeError, match="rollback_unverified") as raised:
+        await agent_recovery.recover_stopped_candidate(**kwargs)
+    output = capsys.readouterr()
+    surfaces = [str(raised.value), str(raised.value.__cause__), output.out, output.err]
+    assert all("private-" not in value for value in surfaces)
+    assert "stopped prefix" in str(raised.value) and "rollback prefix" in str(raised.value)
+    assert "https://primary.example/source" in str(raised.value)
+    assert "https://proxy.example/rollback" in str(raised.value)
+    assert "rollback_event" not in trace

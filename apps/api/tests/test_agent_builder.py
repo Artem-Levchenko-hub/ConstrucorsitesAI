@@ -1305,8 +1305,9 @@ export default function Page() {
             assert "unproven_object_spread" in result.summary
 
 
-@pytest.mark.parametrize("response", ["build", "done", "fix", "next_segment"])
-def test_legacy_managed_build_feedback_hands_off_only_repeated_current_gap(response):
+@pytest.mark.parametrize("kind", ["located", "structural"])
+@pytest.mark.parametrize("response", ["build", "done", "fix", "next_segment", "unrelated_edit"])
+def test_legacy_managed_build_feedback_hands_off_only_repeated_current_gap(response, kind):
     from yleum_api.services.max_management_generation import ManagedSourceGap
 
     path = "src/app/page.tsx"
@@ -1314,6 +1315,13 @@ def test_legacy_managed_build_feedback_hands_off_only_repeated_current_gap(respo
         "Cannot prove SDK callback effects. Source location: src/app/page.tsx:10:2;"
         " AST call_expression; reason unproven_statistic_callback; fingerprint aaaaaaaaaaaaaaaa."
     )
+    if kind == "structural":
+        from yleum_api.services.max_management_generation import management_source_gap
+
+        from .test_max_management_generation import MISSING_SELECTION_PAGE, connection_files
+
+        gap = management_source_gap(connection_files(MISSING_SELECTION_PAGE, ("catalog",)))
+        assert gap is not None
     state: dict[str, str] = {}
     replies = [_repair_action("write_file", path=path, content="draft"), _repair_action("build")]
     if response == "fix":
@@ -1321,6 +1329,9 @@ def test_legacy_managed_build_feedback_hands_off_only_repeated_current_gap(respo
                         _repair_action("build"), _repair_action("done", summary="candidate")])
     elif response == "done":
         replies.append(_repair_action("done", summary="candidate"))
+    elif response == "unrelated_edit":
+        replies.extend([_repair_action("write_file", path=path, content="unrelated change"),
+                        _repair_action("build")])
     else:
         replies.append(_repair_action("build"))
     calls = []
@@ -1341,7 +1352,8 @@ def test_legacy_managed_build_feedback_hands_off_only_repeated_current_gap(respo
         max_segments=2,
         edit_deadline=datetime.now(UTC) + timedelta(minutes=5),
     ))
-    assert "unproven_statistic_callback" in calls[2]
+    expected = "unproven_statistic_callback" if kind == "located" else "useYleumCatalogSelection"
+    assert expected in calls[2]
     assert len(calls) == len(replies)
     assert result.segments == (2 if response == "next_segment" else 1)
     if response == "fix":
@@ -1350,7 +1362,8 @@ def test_legacy_managed_build_feedback_hands_off_only_repeated_current_gap(respo
     else:
         assert not result.done and not result.needs_finalization
         assert result.stop_reason == "managed_source_contract_unresolved"
-        assert result.files[path] == "draft"
+        expected_source = "unrelated change" if response == "unrelated_edit" else "draft"
+        assert result.files[path] == expected_source
 
 
 @pytest.mark.parametrize("change_source", [False, True])

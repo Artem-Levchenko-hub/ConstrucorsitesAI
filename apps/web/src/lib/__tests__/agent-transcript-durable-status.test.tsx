@@ -33,8 +33,34 @@ it("renders the exact completed run and its durable duration despite a failed to
 it("never transfers latest success onto an older failed message", () => {
   expect(render("old-message", completed)).toContain("Сборка не завершена");
 });
+it.each(["running", "completed", "failed"] as const)("keeps an older completed request neutral when a newer request is %s", status => {
+  const client = new QueryClient();
+  client.setQueryData(["generation", "p"], { ...completed, status });
+  const html = renderToStaticMarkup(<QueryClientProvider client={client}>
+    <AgentTranscript projectId="p" messageId="older-completed-message" generationStatus="completed"
+      startedAt={completed.started_at} finishedAt={completed.finished_at} initialSteps={[step]} />
+  </QueryClientProvider>);
+  client.clear();
+  expect(html).toContain("Запрос завершён");
+  expect(html).toContain("7м 26с");
+  expect(html).not.toContain("Проверка результата не подтверждена");
+  expect(html).not.toContain("Изменения готовы");
+});
 it("never transfers a foreign project's lifecycle even when its message id matches", () => {
   expect(render("current-message", { ...completed, project_id: "foreign" })).toContain("Сборка не завершена");
+});
+it("keeps a current completed request without its receipt unconfirmed", () => {
+  const html = render("current-message", { ...completed, acceptance: null });
+  expect(html).toContain("Проверка результата не подтверждена");
+  expect(html).not.toContain("Запрос завершён");
+  expect(html).not.toContain("Изменения готовы");
+});
+it("can omit projectId without reading an absent latest record", () => {
+  const client = new QueryClient();
+  expect(renderToStaticMarkup(<QueryClientProvider client={client}>
+    <AgentTranscript messageId="offline" generationStatus="completed" initialSteps={[step]} />
+  </QueryClientProvider>)).toBe("");
+  client.clear();
 });
 it("keeps a true latest failed run failed even when the chat text describes success", () => {
   expect(render("current-message", { ...completed, status: "failed" })).toContain("Сборка не завершена");

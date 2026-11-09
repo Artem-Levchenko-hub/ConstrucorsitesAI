@@ -93,11 +93,12 @@ export function MaxProjectSetupSections({ section, projectId, current, showCatal
         <p id="max-config-action-hint" className="max-setup-hint">Что должен сделать посетитель. ИИ учтёт это при изменении экранов.</p>
       </div>
       <div className="max-setup-field max-setup-wide">
-        <Label htmlFor="max-config-summary">Описание сервиса</Label>
+        <Label htmlFor="max-config-summary">Публичное описание</Label>
         <Textarea id="max-config-summary" value={current.summary} aria-describedby="max-config-summary-limit"
-          aria-invalid={summaryLength > MAX_BRIEF_LENGTH} placeholder="Для кого приложение и какую задачу оно решает?"
+          aria-invalid={summaryLength > MAX_BRIEF_LENGTH} placeholder="Коротко расскажите посетителям о приложении"
           onChange={event => onChange({ ...current, summary: event.target.value })} />
         <p id="max-config-summary-limit" className="max-setup-hint" data-invalid={summaryLength > MAX_BRIEF_LENGTH}>
+          Этот текст виден посетителям. Задание для ИИ пишите в чате.{' '}
           {summaryLength.toLocaleString("ru-RU")} / {MAX_BRIEF_LENGTH.toLocaleString("ru-RU")} символов
           {summaryLength > MAX_BRIEF_LENGTH && " · Сократите описание перед сохранением — текст не обрезан."}
         </p>

@@ -5,8 +5,13 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from urllib.parse import urlsplit, urlunsplit
+from uuid import UUID
 
-from yleum_api.services.agent_progress import REDACTED, bounded_redacted_text
+from yleum_api.services.agent_progress import (
+    REDACTED,
+    bounded_redacted_diagnostic,
+    bounded_redacted_text,
+)
 
 _IDENTITY_FIELDS = (
     "run_id", "attempt_id", "operation_id", "provider_call_id", "provider_request_id",
@@ -36,6 +41,7 @@ _ENUMS = {
         "deadline_before_dispatch", "response_deadline_exceeded",
     },
     "provider_refusal_category": {"access", "funds", "rate_limit", "unknown"},
+    "provider_scope": {"llmgw", "aitunnel"},
 }
 _INTEGER_RANGES = {
     "requested_max_tokens": (1, 2_000_000), "prompt_tokens": (0, 2_000_000),
@@ -52,10 +58,30 @@ _URL = re.compile(
 _COOKIE_ASSIGNMENT = re.compile(r"(?i)(\b(?:cookies?|set-cookie)[\"']?\s*[=:]\s*)[^\r\n]*")
 _SECRET_ASSIGNMENT = re.compile(
     r"(?i)(\bauthorization\s*:\s*)[^\r\n]+|"
-    r"(\b(?:[\w-]*(?:token|secret|password|api[_-]?key|access[_-]?key)|key|"
+    r"(\b(?:[\w-]*(?:token|secret|password|api[_-]?key|access[_-]?key)[\w-]*|key|"
     r"authorization)[\"']?\s*[=:]\s*)"
     r"(?:\"[^\"\r\n]*\"?|'[^'\r\n]*'?|[^\s,;\"'}]+)"
 )
+
+
+def provider_error_context(value: object) -> dict[str, str]:
+    """Project only known provider routing and a canonical local financial UUID."""
+    def field(name: str) -> object:
+        return value.get(name) if isinstance(value, Mapping) else getattr(value, name, None)
+
+    safe = {}
+    for key in ("provider_scope", "transport_stage"):
+        item = field(key)
+        if isinstance(item, str) and item in _ENUMS[key]:
+            safe[key] = item
+    call = field("provider_call_id")
+    if isinstance(call, str):
+        try:
+            if str(UUID(call)) == call:
+                safe["provider_call_id"] = call
+        except ValueError:
+            pass
+    return safe
 
 
 def _safe_location(value: str) -> str:
@@ -73,17 +99,31 @@ def _safe_location(value: str) -> str:
         return REDACTED
 
 
+def _redact_diagnostic_assignments(value: str) -> str:
+    """Exception text can label credentials anywhere, not just at line starts."""
+    value = _COOKIE_ASSIGNMENT.sub(lambda match: match[1] + REDACTED, value)
+    return _SECRET_ASSIGNMENT.sub(lambda match: (match[1] or match[2]) + REDACTED, value)
+
+
+def _redact_diagnostic_locations(value: str) -> str:
+    return _URL.sub(lambda match: _safe_location(match.group()), value)
+
+
+def bounded_recovery_diagnostic(value: str, *, max_bytes: int) -> str:
+    """Redact complete cause text before retaining its bounded head and tail."""
+    safe = _redact_diagnostic_assignments(_redact_diagnostic_locations(value))
+    return bounded_redacted_diagnostic(safe, max_bytes=max_bytes)
+
+
 def _browser_text(value: str, *, location: bool = False) -> str:
     # Inspect a bounded prefix before cutting so credentials crossing 4 KiB
     # cannot escape redaction. Retain only source location, never URL secrets.
     preview = value.encode("utf-8")[:5120].decode("utf-8", errors="ignore")
     preview = (
         _safe_location(preview)
-        if location else _URL.sub(lambda match: _safe_location(match.group()), preview)
+        if location else _redact_diagnostic_locations(preview)
     )
-    preview = _COOKIE_ASSIGNMENT.sub(lambda match: match[1] + REDACTED, preview)
-    preview = _SECRET_ASSIGNMENT.sub(lambda match: (match[1] or match[2]) + REDACTED, preview)
-    return bounded_redacted_text(preview, max_bytes=4096)
+    return bounded_redacted_text(_redact_diagnostic_assignments(preview), max_bytes=4096)
 
 
 def safe_recovery_trace(payload: Mapping[str, object]) -> dict[str, object]:

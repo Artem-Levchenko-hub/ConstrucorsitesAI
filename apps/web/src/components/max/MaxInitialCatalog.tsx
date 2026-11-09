@@ -41,7 +41,7 @@ export function MaxInitialCatalog({
     <section className="max-initial-catalog" aria-labelledby={`${id}-heading`} aria-busy={pending}>
       <header className="max-initial-catalog__heading">
         <h3 id={`${id}-heading`}>Каталог приложения</h3>
-        <p id={`${id}-description`}>Эти позиции сохраним в админке до первой сборки. Проверьте названия и цены.</p>
+        <p id={`${id}-description`}>Эти позиции сохраним в админке до первой сборки. Проверьте названия и цены. Для распознавания укажите цену каждой позиции: «Латте — 300 ₽; Капучино — 200 ₽».</p>
       </header>
 
       {descriptionChanged && (

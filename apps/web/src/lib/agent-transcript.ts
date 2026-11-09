@@ -13,14 +13,19 @@ export function agentTranscriptTitle(
   lastStepFailed = false,
   recovery?: unknown,
   currentRequestComplete?: boolean,
+  historicalRequest = false,
 ): string {
   if (generationStatus === "queued_for_capacity") {
     return CAPACITY_WAITING_COPY.title;
   }
   if (generationStatus === "failed") return "Сборка не завершена";
   if (generationStatus === "cancelled") return "Сборка отменена";
-  if (generationStatus === "completed") return currentRequestComplete === true
-    ? "Изменения готовы" : "Проверка результата не подтверждена";
+  if (generationStatus === "completed") {
+    if (currentRequestComplete === true) return "Изменения готовы";
+    // A later request replacing `latest` does not revoke this request's durable
+    // completion. History makes no claim about the currently served preview.
+    return historicalRequest ? "Запрос завершён" : "Проверка результата не подтверждена";
+  }
   if (generationStatus === "cancel_requested") return "Останавливаю работу";
   if (recovery !== null && recovery !== undefined) return generationRecoveryLabel(recovery);
   if (streaming || generationStatus === "pending" || generationStatus === "running") return "Собираю приложение";

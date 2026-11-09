@@ -108,11 +108,10 @@ async def render_current_max_starter(
     _max_config = (
         MaxProjectConfigPayload.model_validate(_max_record.config)
         if _max_record is not None
-        else MaxProjectConfigPayload(
-            app_name=project_info.name or "MAX Mini App",
-            app_type="custom",
-            summary=prompt_text[:1000] or "Сервис внутри MAX",
-        )
+        # The generation brief is private instruction, not public app data.
+        # Preserve an explicitly saved owner description; otherwise use the
+        # same neutral defaults as ordinary project configuration.
+        else MaxProjectConfigPayload.default_for(project_info.name or "MAX Mini App")
     )
     return render_max_starter_files(
         _max_config,

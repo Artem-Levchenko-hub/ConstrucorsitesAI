@@ -32,8 +32,9 @@ BASELINE = {
     "repeat", "checkpoint", "end_turn", "stale_done", "next_segment",
     "fix_explicit", "fix_checkpoint",
 ])
+@pytest.mark.parametrize("kind", ["located", "structural"])
 async def test_managed_rejection_hands_off_only_for_current_checked_source(
-    monkeypatch, coordinated, scenario,
+    monkeypatch, coordinated, scenario, kind,
 ):
     calls = []
     source_fixed = False
@@ -43,6 +44,13 @@ async def test_managed_rejection_hands_off_only_for_current_checked_source(
         " Source location: src/app/page.tsx:10:2; AST call_expression;"
         " reason unproven_statistic_callback; fingerprint aaaaaaaaaaaaaaaa."
     )
+    if kind == "structural":
+        from yleum_api.services.max_management_generation import management_source_gap
+
+        from .test_max_management_generation import MISSING_SELECTION_PAGE, connection_files
+
+        gap = management_source_gap(connection_files(MISSING_SELECTION_PAGE, ("catalog",)))
+        assert gap is not None
 
     async def provider(*args, **kwargs):
         calls.append(deepcopy(args[2]))
@@ -90,7 +98,10 @@ async def test_managed_rejection_hands_off_only_for_current_checked_source(
         completion_check=lambda files, evidence: None if source_fixed else gap,
         max_steps=1 if scenario == "next_segment" else 4, max_segments=2,
     )
-    assert "Cannot prove SDK callback effects" in str(calls[1])
+    expected = (
+        "Cannot prove SDK callback effects" if kind == "located" else "useYleumCatalogSelection"
+    )
+    assert expected in str(calls[1])
     if fix_in_second_batch:
         assert len(calls) == 3
         assert result.done

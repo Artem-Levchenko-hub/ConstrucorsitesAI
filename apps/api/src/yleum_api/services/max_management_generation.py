@@ -16,6 +16,7 @@ import re
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from enum import StrEnum
 from functools import lru_cache
 
 import tree_sitter_typescript
@@ -1834,6 +1835,77 @@ def linked_checkout_connected(files: Mapping[str, str]) -> bool:
     )
 
 
+class ManagedSourceObligation(StrEnum):
+    PROFILE_FIELD = "profile_field"
+    CATALOG_RENDER = "catalog_render"
+    CATALOG_SELECTION = "catalog_selection"
+    ORDER_HISTORY = "order_create_history"
+    LEAD_HISTORY = "lead_create_history"
+    BOOKING_HISTORY = "booking_create_history"
+
+
+_CREATE_OBLIGATIONS = {
+    "orders": ManagedSourceObligation.ORDER_HISTORY,
+    "leads": ManagedSourceObligation.LEAD_HISTORY,
+    "bookings": ManagedSourceObligation.BOOKING_HISTORY,
+}
+
+
+class ManagedSourceGap(str):
+    """Diagnostic plus trusted admission identity; never acceptance evidence."""
+
+    _obligation: ManagedSourceObligation | None
+    _contract_hash: str | None
+    _located_key: str | None
+
+    def __new__(
+        cls, diagnostic: str, *, obligation: ManagedSourceObligation | None = None,
+        contract_hash: str | None = None,
+    ) -> ManagedSourceGap:
+        if (obligation is None) != (contract_hash is None) or (
+            obligation is not None and (
+                not isinstance(obligation, ManagedSourceObligation)
+                or not isinstance(contract_hash, str)
+                or re.fullmatch(r"[a-f0-9]{64}", contract_hash) is None
+            )
+        ):
+            raise ValueError("managed source obligation requires a canonical contract identity")
+        gap = super().__new__(cls, diagnostic)
+        gap._obligation = obligation
+        gap._contract_hash = contract_hash
+        gap._located_key = cls._location_key(diagnostic)
+        return gap
+
+    def with_diagnostic(self, diagnostic: str) -> ManagedSourceGap:
+        """Retain trusted identity across bounded, redacted model feedback."""
+        gap = ManagedSourceGap(
+            diagnostic, obligation=self._obligation, contract_hash=self._contract_hash,
+        )
+        gap._located_key = self._located_key
+        return gap
+
+    def rejection_key(self) -> str | None:
+        if self._located_key is not None:
+            return self._located_key
+        if self._obligation is not None:
+            # Irrelevant source edits cannot discharge the same unmet contract
+            # obligation. Distinct modules/contracts never share this identity.
+            payload = ["managed-obligation-v1", self._contract_hash, self._obligation.value]
+            return hashlib.sha256(json.dumps(payload, separators=(",", ":")).encode()).hexdigest()
+        return None
+
+    @staticmethod
+    def _location_key(diagnostic: str) -> str | None:
+        # A line shift is not a repair. Keep the path, AST shape and fingerprint.
+        # Unknown/unlocated messages retain the conservative source-bound fallback.
+        stable, locations = re.subn(
+            r"( Source location: [A-Za-z0-9_./-]+):\d+:\d+"
+            r"(; AST \w+; reason \w+; fingerprint [a-f0-9]{16}\.)",
+            r"\1\2", diagnostic,
+        )
+        return hashlib.sha256(stable.encode()).hexdigest() if locations else None
+
+
 def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
     try:
         contract = _contract(files)
@@ -1863,8 +1935,12 @@ def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
         )
     if "profile-field" not in connections.rendered:
         return (
-            "Connect useYleumAppProfile from app-profile-client "
-            "to a rendered app name/settings field.",
+            ManagedSourceGap(
+                "Connect useYleumAppProfile from app-profile-client "
+                "to a rendered app name/settings field.",
+                obligation=ManagedSourceObligation.PROFILE_FIELD,
+                contract_hash=contract.contract_hash,
+            ),
             frozenset(),
         )
     capabilities: set[str] = set()
@@ -1873,23 +1949,35 @@ def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
         if name == "catalog":
             if "item:catalog" not in connections.rendered:
                 return (
-                    "Connect useYleumCatalog items to the rendered catalog "
-                    "(items.map with item fields)."
-                    + _issue_detail(connections.catalog_render_rejection),
+                    ManagedSourceGap(
+                        "Connect useYleumCatalog items to the rendered catalog "
+                        "(items.map with item fields)."
+                        + _issue_detail(connections.catalog_render_rejection),
+                        obligation=ManagedSourceObligation.CATALOG_RENDER,
+                        contract_hash=contract.contract_hash,
+                    ),
                     frozenset(),
                 )
             capabilities.add("catalog")
             if not connections.catalog_selection:
                 return (
-                    "Connect useYleumCatalogSelection(items) from catalog-client to the live "
-                    "catalog; use its category and getOption(item) instead of stale local choices.",
+                    ManagedSourceGap(
+                        "Connect useYleumCatalogSelection(items) from catalog-client to the live "
+                        "catalog; use its category and getOption(item) "
+                        "instead of stale local choices.",
+                        obligation=ManagedSourceObligation.CATALOG_SELECTION,
+                        contract_hash=contract.contract_hash,
+                    ),
                     frozenset(),
                 )
         elif name in _CREATE:
             if name not in connections.created or "record:" + name not in connections.rendered:
                 return (
-                    f"Connect {_CREATE[name]} to a live form/button and "
-                    f"getManagedRecords('{name}').records to rendered history.",
+                    ManagedSourceGap(
+                        f"Connect {_CREATE[name]} to a live form/button and "
+                        f"getManagedRecords('{name}').records to rendered history.",
+                        obligation=_CREATE_OBLIGATIONS[name], contract_hash=contract.contract_hash,
+                    ),
                     frozenset(),
                 )
             capabilities.add("history")
@@ -1898,27 +1986,19 @@ def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
     return None, frozenset(capabilities)
 
 
-class ManagedSourceGap(str):
-    def rejection_key(self) -> str | None:
-        # A line shift is not a repair. Keep the path, AST shape and fingerprint.
-        stable, locations = re.subn(
-            r"( Source location: [A-Za-z0-9_./-]+):\d+:\d+"
-            r"(; AST \w+; reason \w+; fingerprint [a-f0-9]{16}\.)",
-            r"\1\2", self,
-        )
-        return hashlib.sha256(stable.encode()).hexdigest() if locations else None
-
-
 def management_source_gap(files: Mapping[str, str]) -> ManagedSourceGap | None:
     gap = _admission(files)[0]
-    if gap is not None and gap.startswith("Connect "):
-        if gap.startswith("Connect useYleumCatalog items"):
-            gap += (
+    if gap is None:
+        return None
+    diagnostic = str(gap)
+    if diagnostic.startswith("Connect "):
+        if diagnostic.startswith("Connect useYleumCatalog items"):
+            diagnostic += (
                 " A local const lookup by item.id can check item.active and use ?? null. "
                 "Read its fields and pass {id: selected.id} to getOption."
             )
-        gap = (
-            gap + " The bounded source verifier cannot prove this connection. "
+        diagnostic = (
+            diagnostic + " The bounded source verifier cannot prove this connection. "
             "Use direct JSX from the live SDK hook/result and a real event handler "
             "with an explicit input object. Keep SDK rows out of useMemo, pre-filters "
             "and helper projections; apply category conditions inside the JSX map. "
@@ -1927,7 +2007,10 @@ def management_source_gap(files: Mapping[str, str]) -> ManagedSourceGap | None:
             "condition: the bounded verifier does not interpret arbitrary JS conditions. "
             "This is a supported source shape, not a request for static or mock data."
         )
-    return ManagedSourceGap(gap) if gap is not None else None
+    return (
+        gap.with_diagnostic(diagnostic)
+        if isinstance(gap, ManagedSourceGap) else ManagedSourceGap(diagnostic)
+    )
 
 
 def management_implemented_capabilities(files: Mapping[str, str]) -> frozenset[str]:

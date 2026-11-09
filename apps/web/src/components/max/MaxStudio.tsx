@@ -14,7 +14,7 @@ import { describeApiError } from "@/lib/api/errors";
 import { saveLandingPrompt, takeLandingPrompt } from "@/lib/landing-prompt";
 import { createProject, listProjects } from "@/lib/api/projects";
 import type { ManagementModule, MaxContentItem } from "@/lib/api/types";
-import { buildMaxProjectPrompt, defaultManagementModules, newProjectManagementModules, selectedMaxAppTypes, serializeMaxProjectFeatures, type MaxAppTypeId, type MaxFeature, type MaxProjectBrief, type MaxStyleId } from "@/lib/max-brief";
+import { MAX_DEFAULT_SUMMARY, buildMaxProjectPrompt, defaultManagementModules, newProjectManagementModules, selectedMaxAppTypes, serializeMaxProjectFeatures, type MaxAppTypeId, type MaxFeature, type MaxProjectBrief, type MaxStyleId } from "@/lib/max-brief";
 import { containsChatSecret, resolveChatCredential } from "@/lib/max-chat-credentials";
 import { extractInitialCatalog } from "@/lib/max-catalog-brief";
 import { newMaxContentItem } from "@/lib/max-catalog";
@@ -145,7 +145,7 @@ export function MaxStudio({ email }: { email: string }) {
         max_config: {
           app_name: safeName,
           app_type: appType,
-          summary: safeIdea,
+          summary: MAX_DEFAULT_SUMMARY,
           audience: safeAudience,
           primary_action: safePrimaryAction,
           features: serializeMaxProjectFeatures({ appType, appTypes, features }),

@@ -25,12 +25,34 @@ describe("extractInitialCatalog", () => {
     ]);
   });
 
+  it("recognizes an explicit priced list inside a brief, without copying the instructions into item names", () => {
+    expect(extractInitialCatalog("Сделай кофейню «Два зерна». На одной странице покажи два напитка: латте за 300 ₽ и капучино за 200 ₽. Владелец меняет цены в каталоге.").items).toEqual([
+      { title: "латте", price: "300 ₽" }, { title: "капучино", price: "200 ₽" },
+    ]);
+  });
+
+  it.each(["Латте за 300 ₽; капучино за 200 ₽", "Латте 300 ₽ и капучино 200 ₽"])("allows each explicitly priced member of a list: %s", brief => {
+    expect(extractInitialCatalog(brief).items).toEqual([
+      { title: "Латте", price: "300 ₽" }, { title: "капучино", price: "200 ₽" },
+    ]);
+  });
+
+  it("keeps abbreviated currencies out of the next item's title", () => {
+    expect(extractInitialCatalog("Латте 300 руб. и капучино 200 руб.").items).toEqual([
+      { title: "Латте", price: "300 ₽" }, { title: "капучино", price: "200 ₽" },
+    ]);
+  });
+
+  it.each(["Не добавляй в каталог: латте 300 ₽", "Не включай в меню: латте 300 ₽", "Бюджет на товары: Латте 300 ₽", "Например, покажи два напитка: Латте 300 ₽", "Бюджет: покажи товары: Латте 300 ₽"])("does not strip the intent from a non-catalog heading: %s", brief => {
+    expect(extractInitialCatalog(brief).items).toEqual([]);
+  });
+
   it.each([
     "Бюджет 300 ₽", "бюджет проекта: 300 рублей", "Доставка — 200 ₽", "Стоимость доставки: 200 ₽",
     "Минимальный заказ 500 ₽", "телефон +7 999 123 45 67", "Телефон — 300 ₽",
     "Латте 300 мл", "Кофе 300 мл — 200 ₽", "Количество: 2 шт — 300 ₽", "2 порции — 300 ₽",
     "до 20.12.2026 — 300 ₽", "Скидка 10% — 300 ₽", "Цена от 300 ₽", "Латте от 300 ₽",
-    "Латте 300", "Латте 300 руб за штуку", "Латте 300 ₽ и капучино 200 ₽", "Латте 12 34 ₽",
+    "Латте 300", "Латте 300 руб за штуку", "Латте 12 34 ₽",
     "Латте 300,999 ₽", "Латте -300 ₽", "Латте +300 ₽", "Создай кофейню за 300 ₽",
     "Свяжитесь test@example.com — 300 ₽", "https://example.com — 300 ₽", "«Латте 300 ₽",
     "300 ₽", "Латте300 ₽", "iPhone15 300 ₽", "Латте 300 $",

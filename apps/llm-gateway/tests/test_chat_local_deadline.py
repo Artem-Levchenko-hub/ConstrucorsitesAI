@@ -1,6 +1,7 @@
 """Expired local budgets never become an upstream outage or a paid request."""
 
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -64,10 +65,19 @@ def test_local_deadline_before_dispatch_has_distinct_wire_contract(
     assert response.status_code == 504
     error = response.json()["detail"]["error"]
     assert error["code"] == "deadline_before_dispatch"
-    assert error["details"] == {
+    details = error["details"]
+    assert {key: details[key] for key in (
+        "provider_charge_ambiguous", "provider_failure_kind", "retry_safe",
+    )} == {
         "provider_charge_ambiguous": False,
         "provider_failure_kind": "deadline_before_dispatch", "retry_safe": False,
     }
+    assert set(details) == {
+        "provider_charge_ambiguous", "provider_failure_kind", "retry_safe",
+        "provider_scope", "provider_call_id", "transport_stage",
+    }
+    assert details["provider_scope"] == "llmgw" and details["transport_stage"] == "unknown"
+    assert UUID(details["provider_call_id"]) == provider_calls.finish_call.await_args.args[0]
 
 
 async def test_stream_adapter_expired_budget_never_opens_transport():

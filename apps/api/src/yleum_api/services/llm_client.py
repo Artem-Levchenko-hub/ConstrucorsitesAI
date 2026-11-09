@@ -16,6 +16,7 @@ from yleum_api.services.generation.provider_identity import GenerationProviderId
 from yleum_api.services.generation.recovery_diagnostic import (
     diagnostic_output_budget as diagnostic_output_budget,
 )
+from yleum_api.services.generation.recovery_trace import provider_error_context
 from yleum_api.services.generation.response_auth import record_headers
 
 log = logging.getLogger(__name__)
@@ -179,6 +180,8 @@ class LLMError(Exception):
         retry_after_seconds: int | None = None,
         finish_reason: object = None, requested_max_tokens: object = None,
         completion_tokens: object = None,
+        provider_scope: object = None, transport_stage: object = None,
+        provider_call_id: object = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -188,6 +191,13 @@ class LLMError(Exception):
         self.retry_safe = retry_safe
         self.provider_refusal_category = provider_refusal_category
         self.retry_after_seconds = retry_after_seconds
+        context = provider_error_context({
+            "provider_scope": provider_scope, "transport_stage": transport_stage,
+            "provider_call_id": provider_call_id,
+        })
+        self.provider_scope = context.get("provider_scope")
+        self.transport_stage = context.get("transport_stage")
+        self.provider_call_id = context.get("provider_call_id")
         self.finish_reason = (
             finish_reason if isinstance(finish_reason, str) and finish_reason in {
                 "stop", "tool_calls", "length", "content_filter", "refusal", "pause_turn",
@@ -332,6 +342,7 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
     code = raw_code if isinstance(raw_code, str) and raw_code in _GATEWAY_ERROR_CODES else None
     details = error.get("details")
     details = details if isinstance(details, dict) else {}
+    context = provider_error_context(details)
     if (
         response.status_code == 504 and len(response.content) <= 16_384
         and raw_code == "response_deadline_exceeded"
@@ -345,12 +356,18 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
             "Локальный лимит ожидания ответа модели истёк; результат запроса требует сверки.",
             code="response_deadline_exceeded", http_status=504,
             provider_charge_ambiguous=True, retry_safe=False,
+            provider_scope=context.get("provider_scope"),
+            transport_stage=context.get("transport_stage"),
+            provider_call_id=context.get("provider_call_id"),
         )
     if (
         response.status_code == 504 and len(response.content) <= 16_384
         and raw_code == "deadline_before_dispatch"
         and set(error) <= {"code", "message", "details"}
-        and set(details) == {"provider_failure_kind", "provider_charge_ambiguous", "retry_safe"}
+        and set(details) - {"provider_scope", "transport_stage", "provider_call_id"}
+        == {"provider_failure_kind", "provider_charge_ambiguous", "retry_safe"}
+        and {key: details[key] for key in ("provider_scope", "transport_stage", "provider_call_id")
+             if key in details} == provider_error_context(details)
         and details.get("provider_failure_kind") == "deadline_before_dispatch"
         and details.get("provider_charge_ambiguous") is False
         and details.get("retry_safe") is False
@@ -359,6 +376,9 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
             "Время запроса истекло до отправки провайдеру; новый запрос не отправлен.",
             code="deadline_before_dispatch", http_status=504,
             provider_charge_ambiguous=False, retry_safe=False,
+            provider_scope=context.get("provider_scope"),
+            transport_stage=context.get("transport_stage"),
+            provider_call_id=context.get("provider_call_id"),
         )
     raw_status = details.get("upstream_http_status")
     upstream = raw_status if type(raw_status) is int and 400 <= raw_status <= 599 else None
@@ -413,6 +433,9 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
         provider_charge_ambiguous=ambiguous, retry_safe=retry_safe,
         provider_refusal_category=category,
         retry_after_seconds=rate_delay,
+        provider_scope=context.get("provider_scope"),
+        transport_stage=context.get("transport_stage"),
+        provider_call_id=context.get("provider_call_id"),
     )
 
 

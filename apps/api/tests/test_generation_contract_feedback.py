@@ -172,11 +172,16 @@ async def test_coordinator_fast_check_uses_fixed_accepted_schema_baseline():
 
 
 @pytest.mark.asyncio
-async def test_green_native_build_reports_only_located_managed_source_rejections():
+@pytest.mark.parametrize("kind", ["located", "structural"])
+async def test_green_native_build_reports_managed_source_rejections(kind):
     from yleum_api.services.generation.agent_runtime import guard_native_source_contract
     from yleum_api.services.max_management_generation import ManagedSourceGap
 
-    from .test_max_management_generation import connection_example, connection_files
+    from .test_max_management_generation import (
+        MISSING_SELECTION_PAGE,
+        connection_example,
+        connection_files,
+    )
 
     modules = ("catalog", "orders")
     source = connection_example(modules)
@@ -184,7 +189,7 @@ async def test_green_native_build_reports_only_located_managed_source_rejections
         "return <main>",
         "const count = orders.filter(row => opaque(row)).length;\nreturn <main>",
     )
-    candidate = connection_files(broken, modules)
+    candidate = connection_files(broken if kind == "located" else MISSING_SELECTION_PAGE, modules)
     handle = SimpleNamespace(snapshot_files=AsyncMock(side_effect=lambda: dict(candidate)))
     runtime = GenerationRuntime(handle=handle)
     ids = GenerationIds(*(uuid4() for _ in range(5)))
@@ -200,7 +205,8 @@ async def test_green_native_build_reports_only_located_managed_source_rejections
     assert verdict["ok"] is True
     gap = verdict["managed_source_gap"]
     assert isinstance(gap, ManagedSourceGap) and gap.rejection_key()
-    assert "unproven_statistic_callback" in gap
+    expected = "unproven_statistic_callback" if kind == "located" else "useYleumCatalogSelection"
+    assert expected in gap
     execute.return_value = {"ok": False}
     assert await guarded(action) == {"ok": False}
     execute.return_value = {"ok": True}

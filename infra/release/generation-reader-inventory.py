@@ -294,10 +294,41 @@ _COMMAND_STDOUT_LIMIT = 2_000_000
 _DOCKER_DIAGNOSTIC_STAGES = frozenset({
     "census", "initial_inspect", "unseen_inspect", "reader_reinspect",
 })
+_DOCKER_ERROR_CLASSES = frozenset({
+    "unclassified_exit", "inspect_missing_object", "permission_denied",
+    "daemon_unavailable", "inspect_template_error", "stdout_limit",
+    "invalid_json", "invalid_inventory",
+})
+_DOCKER_CHURN_DELAYS = (0.1, 0.2)
+
+
+def _docker_exit_details(argv: list[str], stderr: str) -> dict:
+    """Classify errors without retaining bodies, names, arguments or raw IDs."""
+    ids = argv[4:] if argv[:3] == ["docker", "inspect", "--format"] else []
+    details = {
+        "error_class": "unclassified_exit",
+        "requested_ids_sha256": digest(sorted(ids)),
+        "missing_ids_sha256": None,
+    }
+    lines = stderr.strip().splitlines()
+    missing = [re.fullmatch(
+        r"(?:Error: No such (?:object|container): |"
+        r"Error response from daemon: No such container: )([0-9a-f]{64})", line
+    ) for line in lines]
+    if ids and missing and all(match and match[1] in ids for match in missing):
+        details.update(error_class="inspect_missing_object",
+                       missing_ids_sha256=digest(sorted({match[1] for match in missing})))
+    elif "permission denied" in stderr.lower():
+        details["error_class"] = "permission_denied"
+    elif stderr.lower().startswith(("cannot connect to the docker daemon", "error during connect:")):
+        details["error_class"] = "daemon_unavailable"
+    elif stderr.lower().startswith(("template parsing error:", "error parsing template:")):
+        details["error_class"] = "inspect_template_error"
+    return details
 
 
 class CommandObservationFailure(ValueError):
-    """Retain numeric failure facts, never command arguments or captured bodies."""
+    """Retain safe failure facts, never command arguments or captured bodies."""
 
     def __init__(self, returncode: int, stdout: str, stderr: str) -> None:
         super().__init__("reader inventory command observation failed")
@@ -307,6 +338,10 @@ class CommandObservationFailure(ValueError):
             "stdout_chars": len(stdout),
             "stdout_bytes": len(stdout.encode("utf-8", errors="replace")),
             "stderr_bytes": len(stderr.encode("utf-8", errors="replace")),
+            "stderr_sha256": hashlib.sha256(stderr.encode("utf-8", errors="replace")).hexdigest(),
+            "error_class": "unclassified_exit" if returncode else "stdout_limit",
+            "requested_ids_sha256": digest([]),
+            "missing_ids_sha256": None,
         }
         self.docker_context: tuple[str, int] | None = None
 
@@ -325,15 +360,20 @@ def command(argv: list[str], *, stdin: str | None = None, timeout: int = 20) -> 
             print(canonical({"host": "commerce", "docker_observation_failure": diagnostic}),
                   file=sys.stderr)
     if result.returncode != 0 or len(result.stdout) > _COMMAND_STDOUT_LIMIT:
-        raise CommandObservationFailure(result.returncode, result.stdout, result.stderr)
+        failure = CommandObservationFailure(result.returncode, result.stdout, result.stderr)
+        if result.returncode != 0 and argv[0] == "docker":
+            failure.metrics.update(_docker_exit_details(argv, result.stderr))
+        raise failure
     return result.stdout.strip()
 
 
 def remote_docker_diagnostics(stderr: str) -> list[dict]:
-    """Forward at most three validated numeric/enum records from a remote scan."""
+    """Forward at most three closed records; hashes never replace authority."""
     diagnostics = []
     numeric = {"returncode", "stdout_chars", "stdout_bytes", "stderr_bytes",
                "requested_count", "attempt", "maximum_attempts"}
+    legacy = numeric | {"reason", "stage"}
+    details = {"stderr_sha256", "error_class", "requested_ids_sha256", "missing_ids_sha256"}
     for line in stderr.splitlines():
         try:
             envelope = json.loads(line)
@@ -343,7 +383,7 @@ def remote_docker_diagnostics(stderr: str) -> list[dict]:
             continue
         row = envelope["docker_observation_failure"]
         if (
-            type(row) is dict and set(row) == numeric | {"reason", "stage"}
+            type(row) is dict and set(row) in (legacy, legacy | details)
             and all(type(row[key]) is int and abs(row[key]) <= 2**53 for key in numeric)
             and type(row["stage"]) is str and row["stage"] in _DOCKER_DIAGNOSTIC_STAGES
             and row["maximum_attempts"] == 3 and 1 <= row["attempt"] <= 3
@@ -354,10 +394,32 @@ def remote_docker_diagnostics(stderr: str) -> list[dict]:
                 (row["reason"] == "nonzero_exit" and row["returncode"] != 0)
                 or (row["reason"] == "stdout_limit" and row["returncode"] == 0
                     and row["stdout_chars"] > _COMMAND_STDOUT_LIMIT)
+                or (set(row) == legacy | details
+                    and row["reason"] == "invalid_output" and row["returncode"] == 0)
             )
         ):
+            if set(row) == legacy | details and not _valid_docker_details(row):
+                continue
             diagnostics.append(row)
     return diagnostics if len(diagnostics) <= 3 else []
+
+
+def _valid_docker_details(row: dict) -> bool:
+    def is_hash(value: object) -> bool:
+        return type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+    category = row["error_class"]
+    allowed = {
+        "invalid_output": {"invalid_json", "invalid_inventory"},
+        "stdout_limit": {"stdout_limit"},
+        "nonzero_exit": _DOCKER_ERROR_CLASSES - {"stdout_limit", "invalid_json", "invalid_inventory"},
+    }
+    return (
+        type(category) is str and category in allowed.get(row["reason"], ())
+        and is_hash(row["stderr_sha256"]) and is_hash(row["requested_ids_sha256"])
+        and (is_hash(row["missing_ids_sha256"]) if category == "inspect_missing_object"
+             else row["missing_ids_sha256"] is None)
+    )
 
 
 def _docker_command(argv: list[str], *, stage: str, requested_count: int = 0) -> str:
@@ -366,6 +428,22 @@ def _docker_command(argv: list[str], *, stage: str, requested_count: int = 0) ->
     except CommandObservationFailure as exc:
         exc.docker_context = (stage, requested_count)
         raise
+
+
+@contextmanager
+def _docker_output(raw: str, *, stage: str, ids: list[str] | None = None):
+    """Turn malformed parser/schema output into bounded, non-secret diagnostics."""
+    try:
+        yield
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        failure = CommandObservationFailure(0, raw, "")
+        failure.metrics.update(
+            reason="invalid_output",
+            error_class="invalid_json" if isinstance(exc, json.JSONDecodeError) else "invalid_inventory",
+            requested_ids_sha256=digest(sorted(ids or [])),
+        )
+        failure.docker_context = (stage, len(ids or []))
+        raise failure from None
 
 
 def remote_failure_context(stderr: str) -> list[dict]:
@@ -405,23 +483,24 @@ def _docker_container_census() -> dict[str, DockerCensusSummary]:
     )
     raw = _docker_command(["docker", "ps", "-a", "--no-trunc", "--format", template],
                           stage="census")
-    rows = [json.loads(line) for line in raw.splitlines()]
-    need(
-        len(rows) <= 10000
-        and all(
-            type(row) is dict
-            and set(row) == {"id", "name", "image_reference", "rendered_command"}
-            and type(row["id"]) is str
-            and re.fullmatch(r"[0-9a-f]{64}", row["id"])
-            and type(row["name"]) is str
-            and bool(re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", row["name"]))
-            and type(row["image_reference"]) is str
-            and type(row["rendered_command"]) is str
-            for row in rows
+    with _docker_output(raw, stage="census"):
+        rows = [json.loads(line) for line in raw.splitlines()]
+        need(
+            len(rows) <= 10000
+            and all(
+                type(row) is dict
+                and set(row) == {"id", "name", "image_reference", "rendered_command"}
+                and type(row["id"]) is str
+                and re.fullmatch(r"[0-9a-f]{64}", row["id"])
+                and type(row["name"]) is str
+                and bool(re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", row["name"]))
+                and type(row["image_reference"]) is str
+                and type(row["rendered_command"]) is str
+                for row in rows
+            )
         )
-    )
-    result = {row["id"]: row for row in rows}
-    need(len(result) == len(rows) and len({row["name"] for row in rows}) == len(rows))
+        result = {row["id"]: row for row in rows}
+        need(len(result) == len(rows) and len({row["name"] for row in rows}) == len(rows))
     return result
 
 
@@ -471,12 +550,13 @@ def _inspect_docker_containers(ids: list[str], *, stage: str = "initial_inspect"
     rows = []
     raw = _docker_command(["docker", "inspect", "--format", template, *ids],
                           stage=stage, requested_count=len(ids)) if ids else ""
-    for line in raw.splitlines():
-        row = json.loads(line)
-        row["name"] = row["name"].removeprefix("/")
-        row["command"] = (row.pop("entrypoint") or []) + (row.pop("cmd") or [])
-        rows.append(row)
-    need(len(rows) == len(ids) and {row["id"] for row in rows} == set(ids))
+    with _docker_output(raw, stage=stage, ids=ids):
+        for line in raw.splitlines():
+            row = json.loads(line)
+            row["name"] = row["name"].removeprefix("/")
+            row["command"] = (row.pop("entrypoint") or []) + (row.pop("cmd") or [])
+            rows.append(row)
+        need(len(rows) == len(ids) and {row["id"] for row in rows} == set(ids))
     return {row["id"]: row for row in rows}
 
 
@@ -498,8 +578,10 @@ def docker_inventory() -> list[dict]:
 
     An opaque-image helper can disappear before inspect classifies it. Restart
     the entire census rather than dropping that ID from the previous evidence.
-    Only a complete fresh observation can pass. The enclosing scan retains its
-    original timestamp and expiry, including all retries and kernel checks.
+    Only a complete fresh observation can pass. Positively identified missing
+    objects receive a short bounded pause before a fresh census, not exemption
+    from inspection. Other failures keep the existing three-attempt bound.
+    The enclosing scan retains its original timestamp and expiry throughout.
     """
     for attempt in range(3):
         try:
@@ -513,6 +595,9 @@ def docker_inventory() -> list[dict]:
                 }}), file=sys.stderr)
             if attempt == 2:
                 raise
+            if (isinstance(exc, CommandObservationFailure)
+                    and exc.metrics["error_class"] == "inspect_missing_object"):
+                time.sleep(_DOCKER_CHURN_DELAYS[attempt])
     raise AssertionError("bounded Docker observation did not return")
 
 

@@ -54,6 +54,7 @@ from yleum_api.services.generation.recovery_contract import (
     IncompleteResponseBudget,
     RecoveryContractError,
 )
+from yleum_api.services.generation.recovery_trace import provider_error_context
 from yleum_api.services.generation_failure import failure_for_error
 from yleum_api.services.integration_providers import PROVIDER_MAP
 from yleum_api.services.llm_client import _overload_refusal_details, rate_limit_retry_delay
@@ -225,7 +226,10 @@ def _gateway_overload_refused(response: httpx.Response, url: str) -> bool:
     return error is not None and _overload_refusal_details(error)
 
 
-def _gateway_ambiguous_server_status(response: httpx.Response, url: str) -> int | None:
+def _gateway_ambiguous_billing_details(
+    response: httpx.Response, url: str,
+) -> dict[str, Any] | None:
+    """Validate observed error headers without treating them as a safe refusal."""
     if not 500 <= response.status_code <= 599:
         return None
     error = _gateway_native_error(response, url)
@@ -233,23 +237,37 @@ def _gateway_ambiguous_server_status(response: httpx.Response, url: str) -> int 
             or error.get("code", "billing_unavailable") != "billing_unavailable"):
         return None
     details = error.get("details")
-    if not isinstance(details, dict) or set(details) != {
-        "upstream_http_status", "provider_charge_ambiguous", "retry_safe",
-    }:
+    required = {"upstream_http_status", "provider_charge_ambiguous", "retry_safe"}
+    optional = {"provider_scope", "transport_stage", "provider_call_id"}
+    if (not isinstance(details, dict) or not required <= set(details)
+            or set(details) - required - optional):
+        return None
+    context = {key: details[key] for key in optional if key in details}
+    if provider_error_context(context) != context:
         return None
     status = details["upstream_http_status"]
-    return status if (
-        type(status) is int and 500 <= status <= 599
+    return details if (
+        type(status) is int and 400 <= status <= 599
         and details["provider_charge_ambiguous"] is True and details["retry_safe"] is False
     ) else None
+
+
+def _gateway_ambiguous_server_status(response: httpx.Response, url: str) -> int | None:
+    details = _gateway_ambiguous_billing_details(response, url)
+    if details is None:
+        return None
+    status = details["upstream_http_status"]
+    return status if type(status) is int and 500 <= status <= 599 else None
 
 
 class _NativeProviderServerError(RuntimeError):
     """Safe typed evidence from one HTTP response, with no replay authorization."""
 
-    def __init__(self, http_status: int, upstream_http_status: int | None = None) -> None:
+    def __init__(self, http_status: int, upstream_http_status: int | None = None, *,
+                 context: object = None) -> None:
         self.http_status = http_status
         self.upstream_http_status = upstream_http_status
+        self.provider_context = provider_error_context(context)
         marker = (
             f"provider_http_{upstream_http_status}"
             if upstream_http_status is not None else "provider_request_failed"
@@ -267,6 +285,27 @@ class _NativeProviderServerError(RuntimeError):
         }
         if self.upstream_http_status is not None:
             result["upstream_http_status"] = self.upstream_http_status
+        result.update(self.provider_context)
+        return result
+
+
+_BILLING_UNAVAILABLE_MESSAGE = (
+    "BILLING_UNAVAILABLE: Не удалось подтвердить учёт расходов. "
+    "Автоматический повтор остановлен, чтобы избежать повторных затрат."
+)
+
+
+class _NativeProviderBillingError(_NativeProviderServerError):
+    """Observed 4xx is diagnostic only; the incomplete outcome stays unresolved."""
+
+    def __init__(self, http_status: int, details: dict[str, Any]) -> None:
+        super().__init__(http_status, context=details)
+        self.observed_status = details["upstream_http_status"]
+        self.args = (_BILLING_UNAVAILABLE_MESSAGE,)
+
+    def diagnostics(self) -> dict[str, Any]:
+        result = super().diagnostics()
+        result.update(upstream_http_status=self.observed_status, error_origin="provider")
         return result
 
 
@@ -1273,7 +1312,11 @@ async def _call_messages(
                             )
             upstream_server_status = _gateway_ambiguous_server_status(r, url)
             if upstream_server_status is not None:
-                raise _NativeProviderServerError(r.status_code, upstream_server_status)
+                server_error = _gateway_native_error(r, url)
+                raise _NativeProviderServerError(
+                    r.status_code, upstream_server_status,
+                    context=server_error.get("details") if server_error else None,
+                )
             category = _provider_refusal_category(r)
             if r.status_code == 503:
                 try:
@@ -1287,10 +1330,10 @@ async def _call_messages(
                 ):
                     # The provider may already have completed this call. Retrying
                     # before accounting settles can incur another paid request.
-                    raise RuntimeError(
-                        "BILLING_UNAVAILABLE: Не удалось подтвердить учёт расходов. "
-                        "Автоматический повтор остановлен, чтобы избежать повторных затрат."
-                    )
+                    incomplete = _gateway_ambiguous_billing_details(r, url)
+                    if incomplete is not None:
+                        raise _NativeProviderBillingError(r.status_code, incomplete)
+                    raise RuntimeError(_BILLING_UNAVAILABLE_MESSAGE)
             if r.status_code == 409:
                 try:
                     route_error = r.json().get("error", {}).get("type")

@@ -7,11 +7,11 @@ from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, NamedTuple, TypedDict
+from uuid import UUID
 
 from yleum_api.core.config import get_settings
 from yleum_api.services import agent_builder
 from yleum_api.services import repo as repo_svc
-from yleum_api.services.agent_progress import bounded_redacted_diagnostic
 from yleum_api.services.generation.agent_recovery import _restore_max_core
 from yleum_api.services.generation.contracts import (
     AgentOperations,
@@ -22,6 +22,7 @@ from yleum_api.services.generation.contracts import (
     SourceBaseline,
     uses_single_max_source_repair,
 )
+from yleum_api.services.generation.recovery_trace import bounded_recovery_diagnostic
 from yleum_api.services.generation.runtime import _restore_project_cell_source
 from yleum_api.services.generation.source_error_classification import SourceFailure
 from yleum_api.services.generation.source_error_classification import (
@@ -51,6 +52,36 @@ _NO_SOURCE_CHANGE_MESSAGE = (
 
 class AdaptationActivationPending(RuntimeError):
     """Forward-only controller reconciliation owns the sealed candidate."""
+
+
+def _canonical_operation_id(value: object) -> str | None:
+    if isinstance(value, UUID):
+        return str(value)
+    if not isinstance(value, str):
+        return None
+    try:
+        return value if str(UUID(value)) == value else None
+    except ValueError:
+        return None
+
+
+class FinalizationRollbackUnverified(RuntimeError):
+    """Preserve both bounded causes without retaining a raw exception chain."""
+
+    def __init__(self, original: Exception, rollback: Exception, *, run_id: object,
+                 operation_id: object = None) -> None:
+        original_detail = bounded_recovery_diagnostic(str(original), max_bytes=2000)
+        rollback_detail = bounded_recovery_diagnostic(
+            str(rollback) or "restored runtime verification failed", max_bytes=1500,
+        )
+        self.diagnostics = {
+            "original_error": original_detail, "rollback_error": rollback_detail,
+            "run_id": _canonical_operation_id(run_id),
+            "operation_id": _canonical_operation_id(operation_id),
+        }
+        identity = self.diagnostics["operation_id"]
+        suffix = f" (operation_id={identity})" if identity else ""
+        super().__init__(f"{original_detail}; rollback_unverified: {rollback_detail}{suffix}")
 
 
 class EditSourceChangeVerdict(NamedTuple):
@@ -475,6 +506,7 @@ async def finalize_max_candidate(
                 raise AdaptationActivationPending(
                     "sealed restoration adaptation activation requires recovery"
                 ) from exc
+            rollback_operation_id = None
             try:
                 if baseline.sha and _max_has_generated_snapshot:
                     _published_source = await asyncio.to_thread(
@@ -497,13 +529,41 @@ async def finalize_max_candidate(
                         probe_build=operations.probe_build,
                         source_only=True,
                     )
+                    rollback_operation_id = restored.get("operation_id")
                     if restored.get("ok") is not True:
-                        raise RuntimeError("MAX core restore did not pass runtime verification")
+                        raise RuntimeError(str(
+                            restored.get("detail") or restored.get("error")
+                            or "MAX core restore did not pass runtime verification"
+                        ))
             except Exception as _repair_rollback_exc:
                 if source_handoff or single_repair:
                     raise_if_terminal_cell_error(_repair_rollback_exc)
-                    cause = bounded_redacted_diagnostic(str(exc), max_bytes=2000)
-                    raise RuntimeError(f"{cause}; rollback_unverified") from _repair_rollback_exc
+                    failure = FinalizationRollbackUnverified(
+                        exc, _repair_rollback_exc, run_id=getattr(ids, "run_id", None),
+                        operation_id=(
+                            rollback_operation_id
+                            or getattr(_repair_rollback_exc, "_rollback_operation_id", None)
+                            or getattr(_repair_rollback_exc, "operation_id", None)
+                        ),
+                    )
+                    _log.warning("MAX finalization rollback unverified", extra=failure.diagnostics)
+                    emit = getattr(operations, "emit", None)
+                    if callable(emit):
+                        try:
+                            await emit("agent.step", {
+                                "action": "rollback", "human": "Восстановление не подтверждено",
+                                "path": "", "detail": str(failure), "ok": False,
+                                "recovery_trace": {
+                                    "stage": "reconciling", "error_origin": "runtime",
+                                    "retry_decision": "stop",
+                                    **{key: value for key, value in failure.diagnostics.items()
+                                       if key in {"run_id", "operation_id"} and value is not None},
+                                },
+                            })
+                        except Exception as diagnostic_exc:
+                            _log.warning("Rollback diagnostic publication failed: %s",
+                                         type(diagnostic_exc).__name__)
+                    raise failure from RuntimeError(failure.diagnostics["rollback_error"])
                 _log.warning("MAX repair source restore failed", exc_info=_repair_rollback_exc)
             raise
         if _finalization.status is MaxFinalizationStatus.COMPLETE:

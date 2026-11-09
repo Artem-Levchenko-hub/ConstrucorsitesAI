@@ -153,9 +153,13 @@ def test_native_server_error_still_quarantines_receipt_without_diagnostic_replay
     })
     assert response.status_code == 503
     assert response.json()["error"]["type"] == "billing_unavailable"
-    assert response.json()["error"]["details"] == {
+    details = response.json()["error"]["details"]
+    assert {key: details[key] for key in (
+        "upstream_http_status", "provider_charge_ambiguous", "retry_safe",
+    )} == {
         "upstream_http_status": status, "provider_charge_ambiguous": True, "retry_safe": False,
     }
+    assert details["provider_scope"] == "llmgw" and details["transport_stage"] == "complete"
     assert "provider_refusal_category" not in response.text and "private" not in response.text
     assert len(calls) == 1
     assert provider_calls.finish_call.await_args.kwargs["status"] == "ambiguous"

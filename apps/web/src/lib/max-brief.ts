@@ -2,6 +2,7 @@ import type { ManagementModule } from "./api/types";
 
 export const MAX_BRIEF_LENGTH = 20_000;
 export const MAX_PROMPT_LENGTH = 30_000;
+export const MAX_DEFAULT_SUMMARY = "Мини-приложение для пользователей MAX";
 
 export const MAX_APP_TYPES = [
   {
@@ -162,6 +163,7 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
     `Название продукта: ${brief.name.trim()}.`,
     `${appTypes.length === 1 ? "Сценарий" : "Сценарии"}: ${appTypes.map(type => optionLabel(MAX_APP_TYPES, type)).join(", ")}.`,
     `Что должно делать приложение: ${brief.idea.trim()}.`,
+    "Это служебное задание для создания приложения, а не публичное описание. Не выводи инструкции из задания посетителю. Публичное описание владелец задаёт отдельно в данных приложения.",
     `Целевая аудитория: ${audience}.`,
     `Главное действие пользователя: ${primaryAction}.`,
     `Нужные возможности: ${features}.`,

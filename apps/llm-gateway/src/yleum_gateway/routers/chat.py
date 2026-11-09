@@ -109,6 +109,22 @@ def _gateway_error_to_http(exc: GatewayError) -> HTTPException:
     )
 
 
+def _provider_error_context(
+    provider_scope: str, call_id: UUID, evidence: dict[str, Any], details: dict[str, Any],
+) -> dict[str, Any]:
+    """Local dispatch identity and observed protocol scalars, never provider content."""
+    stage = details.get("transport_stage", evidence.get("transport_stage"))
+    stage = stage if isinstance(stage, str) and stage in {"connect", "headers", "body", "complete"} else "unknown"
+    status = details.get("upstream_http_status", evidence.get("upstream_http_status"))
+    context: dict[str, Any] = {
+        "provider_scope": provider_scope, "provider_call_id": str(call_id),
+        "transport_stage": stage,
+    }
+    if type(status) is int and 400 <= status <= 599:
+        context["upstream_http_status"] = status
+    return context
+
+
 def _billing_unavailable() -> HTTPException:
     return HTTPException(
         status_code=503,
@@ -219,6 +235,12 @@ async def _dispatch_chat_provider(
                       else "rate_limit_refused" if isinstance(retry_candidate, dict)
                       else "preconnect" if details.get("provider_failure_kind") == "preconnect" and status == "failed"
                       else None)
+            context = _provider_error_context(provider_scope, call_id, transport_evidence, details)
+            log.warning("chat.provider_request_failed", **context,
+                        error_type=failure_type, provider_charge_ambiguous=status == "ambiguous",
+                        run_id=str(meta.run_id) if meta.run_id else None,
+                        project_id=str(meta.project_id) if meta.project_id else None,
+                        message_id=str(meta.message_id) if meta.message_id else None)
             failed_receipt = receipt_evidence({**transport_evidence, **details}, **text_failover.scope_options(provider_scope))
             # One owner survives level cancellation and repeated Task.cancel().
             await await_provider_receipt(_finish_failed_provider(
@@ -253,6 +275,10 @@ async def _dispatch_chat_provider(
                 if identity is not None and status == "failed" and details.get("provider_failure_kind") == "preconnect":
                     exc.details.update(retry_safe=True, retry_policy="llmgw_preconnect_v1")
                 exc.details.setdefault("provider_charge_ambiguous", status == "ambiguous")
+                # The strict, closed safe-refusal payload above is unchanged.
+                # Terminal errors retain the scope of this dispatch, including
+                # legacy CHAT backup errors without a durable generation identity.
+                exc.details.update(context)
                 raise _gateway_error_to_http(exc) from exc
             if isinstance(exc, asyncio.CancelledError):
                 raise

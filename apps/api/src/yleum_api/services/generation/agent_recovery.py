@@ -11,7 +11,6 @@ from uuid import UUID, uuid4
 from yleum_api.core.config import get_settings
 from yleum_api.services import agent_builder
 from yleum_api.services import repo as repo_svc
-from yleum_api.services.agent_progress import bounded_redacted_diagnostic
 from yleum_api.services.generation.contracts import (
     AgentOperations,
     AgentPromptPlan,
@@ -22,6 +21,7 @@ from yleum_api.services.generation.contracts import (
     VerificationRecovery,
     uses_single_max_source_repair,
 )
+from yleum_api.services.generation.recovery_trace import bounded_recovery_diagnostic
 from yleum_api.services.generation.runtime import (
     _apply_project_cell_preview_files,
     _require_project_cell,
@@ -43,7 +43,7 @@ _REPAIRABLE_AGENT_STOPS = frozenset({
 
 def _rollback_failure(detail: object) -> RuntimeError:
     """Retain a bounded, redacted restoration cause in both error and chain."""
-    diagnostic = bounded_redacted_diagnostic(
+    diagnostic = bounded_recovery_diagnostic(
         str(detail) or "restored runtime verification failed", max_bytes=1500,
     )
     return RuntimeError(diagnostic)
@@ -100,7 +100,7 @@ async def recover_stopped_candidate(
             _max_seed_files,
             _seg,
         )
-    _stopped_cause = bounded_redacted_diagnostic(
+    _stopped_cause = bounded_recovery_diagnostic(
         f"generation stopped ({_agent_res.stop_reason or 'incomplete'}): {_agent_res.summary}",
         max_bytes=2000,
     )
@@ -523,5 +523,11 @@ async def _verify_restored_runtime(
         raise RuntimeError("restored runtime verification unavailable")
     # This is a fenced controller operation, not candidate finalization:
     # no new migrations, no promotion and no evaluation of the failed brief.
-    result = await restore(ProjectCellCommandRole.RESTORE_RUNTIME, uuid4())
-    return {"ok": result.ok, "detail": result.redacted_detail}
+    operation_id = uuid4()
+    try:
+        result = await restore(ProjectCellCommandRole.RESTORE_RUNTIME, operation_id)
+    except Exception as exc:
+        raise_if_terminal_cell_error(exc, operation_id=operation_id)
+        exc._rollback_operation_id = operation_id  # type: ignore[attr-defined]
+        raise
+    return {"ok": result.ok, "detail": result.redacted_detail, "operation_id": str(operation_id)}

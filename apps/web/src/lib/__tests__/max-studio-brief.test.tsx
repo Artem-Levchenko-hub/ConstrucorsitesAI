@@ -77,7 +77,8 @@ it("transfers the entire pasted brief from creation to the chat starter", async 
     const submit = [...document.querySelectorAll("button")].find(b => b.textContent?.includes("Создать проект"))!;
     await act(async () => { submit.click(); });
     await act(async () => { await vi.waitFor(() => expect(mocks.push).toHaveBeenCalled()); });
-    expect(mocks.create.mock.calls[0][0].max_config.summary).toBe(brief);
+    expect(mocks.create.mock.calls[0][0].max_config.summary).toBe("Мини-приложение для пользователей MAX");
+    expect(JSON.stringify(mocks.create.mock.calls[0][0])).not.toContain(brief);
     expect(mocks.create.mock.calls[0][0].max_config.management_modules).toEqual(["catalog", "leads"]);
     expect(mocks.save).not.toHaveBeenCalled();
     expect(sessionStorage.getItem("omnia:max:starter:long-brief-qa")).toContain(brief);

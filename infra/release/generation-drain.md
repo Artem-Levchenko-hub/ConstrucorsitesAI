@@ -57,6 +57,16 @@ three API containers and in each orchestrator's systemd mount namespace. Redis
 registration and epoch writes can invalidate readiness, never authorize it by
 themselves.
 
+Docker observation retries keep the original scan timestamp and 30-second
+expiry. A positively identified missing-object error for a requested full
+container ID allows a 100 ms, then 200 ms pause between the existing three
+complete census attempts. No partial inspect result or vanished unknown reader
+is accepted. Persistent churn, malformed output and uninspectable candidates
+still deny readiness. Diagnostics contain bounded error categories, counts and
+SHA-256 hashes of stderr and requested/missing ID sets, never raw stderr, IDs,
+commands or environment. An unclassified Docker failure does not prove that a
+container disappeared or that reader revisions were incompatible.
+
 The canonical release captures the existing supervisors and installs the same
 owned `rollout-inhibit.json` on both hosts before replacing a reader. Its exact
 target SHA and random owner nonce are stored durably in

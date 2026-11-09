@@ -77,6 +77,7 @@ from yleum_api.services.generation.recovery_contract import (
     IncompleteResponseBudget,
     RecoveryContractError,
 )
+from yleum_api.services.generation.recovery_trace import provider_error_context
 from yleum_api.services.generation.source_repair_context import MAX_REPAIR_CONTEXT_BYTES
 from yleum_api.services.max_generation_contract import _is_product_source
 from yleum_api.services.max_management_generation import ManagedSourceGap
@@ -358,11 +359,11 @@ class _SourceRepairState:
     last_checked_rejection: str | None = None
 
     def observe_checked_gap(self, gap: str | None) -> tuple[ManagedSourceGap | None, bool]:
-        located = gap if isinstance(gap, ManagedSourceGap) else None
-        key = located.rejection_key() if located is not None else None
+        managed = gap if isinstance(gap, ManagedSourceGap) else None
+        key = managed.rejection_key() if managed is not None else None
         repeated = key is not None and key == self.last_checked_rejection
         self.last_checked_rejection = key
-        return (located if key is not None else None), repeated
+        return managed, repeated
 
     def repeated_managed_gap(self, gap: str, inventory: Mapping[str, str] | None) -> bool:
         if not isinstance(gap, ManagedSourceGap):
@@ -853,7 +854,7 @@ async def _run_agent_segment(
         if not isinstance(gap, str) or not gap.strip():
             return "Product acceptance check returned invalid feedback."
         detail = bounded_redacted_diagnostic(gap, max_bytes=_MAX_OBS_CHARS)
-        return ManagedSourceGap(detail) if isinstance(gap, ManagedSourceGap) else detail
+        return gap.with_diagnostic(detail) if isinstance(gap, ManagedSourceGap) else detail
 
     def _can_read_repair_source(action: Action) -> bool:
         path = action.path
@@ -1309,6 +1310,7 @@ async def _run_agent_segment(
                     ),
                     "completion_tokens": failure.completion_tokens if failure is not None else None,
                 }
+                diagnostic.update(provider_error_context(failure))
                 local_deadline = failure is not None and failure.code in {
                     "deadline_before_dispatch", "response_deadline_exceeded",
                 }

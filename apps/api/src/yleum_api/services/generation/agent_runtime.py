@@ -169,8 +169,9 @@ async def guard_native_source_contract(
             from yleum_api.services.max_management_generation import management_source_gap
 
             managed_gap = management_source_gap(await runtime.handle.snapshot_files())
-            if managed_gap is not None and managed_gap.rejection_key() is not None:
-                # A located source defect is separate from a green compiler check.
+            if managed_gap is not None:
+                # Source feedback is separate from a green compiler check. Only
+                # stable trusted identities may trigger the agent's early stop.
                 return {**result, "managed_source_gap": managed_gap}
         return result
 
