@@ -91,6 +91,41 @@ def _template_file(relative_path: str) -> str:
     raise RuntimeError(f"MAX managed template file is unavailable: {relative_path}")
 
 
+_MAX_SAST_TEMPLATE_TESTS = (
+    "tests/catalog-config.test.mjs",
+    "tests/database-compatibility.test.mjs",
+)
+
+
+def max_sast_source_view(files: Mapping[str, str], *, is_max: bool) -> dict[str, str]:
+    """Exclude only byte-exact trusted MAX test harnesses from the SAST view.
+
+    These platform tests intentionally transpile local TypeScript and exercise
+    parameterized SQL. Their paths are not security locks: every changed copy
+    still needs the ordinary scan. Neither candidate nor baseline content can
+    establish trust, and unavailable template bytes never grant an exemption.
+    """
+    view = dict(files)
+    if not is_max:
+        return view
+    for path in _MAX_SAST_TEMPLATE_TESTS:
+        if path not in view:
+            continue
+        for candidate in _template_candidates(path):
+            try:
+                trusted = candidate.read_bytes().decode("utf-8")
+            except FileNotFoundError:
+                continue
+            except (OSError, UnicodeError):
+                break
+            # Preserve newlines and all other UTF-8 content exactly; do not use
+            # read_text's universal-newline conversion for a trust comparison.
+            if view[path] == trusted:
+                del view[path]
+            break
+    return view
+
+
 def _json(config: MaxProjectConfigPayload) -> str:
     return json.dumps(
         public_business_config(config),

@@ -36,6 +36,7 @@ from yleum_api.services.generation.source_intent import (
 )
 from yleum_api.services.generation.source_repair_context import with_managed_source_context
 from yleum_api.services.max_finalization import ProofBundle
+from yleum_api.services.max_project_kit import max_sast_source_view
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 
 if TYPE_CHECKING:
@@ -351,10 +352,10 @@ async def run_native_source_repair(
 
         assert runtime.handle is not None
         repaired_source = await runtime.handle.snapshot_files()
-        sast = check_sast({
+        sast = check_sast(max_sast_source_view({
             path: content for path, content in repaired_source.items()
             if path not in MAX_SECURITY_LOCKED_FILES
-        })
+        }, is_max=True))
         if not sast.safe:
             raise RuntimeError("MAX_FINALIZATION_FAILED: repaired source failed security checks")
     if continuation is not None:

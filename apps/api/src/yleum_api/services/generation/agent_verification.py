@@ -32,6 +32,7 @@ from yleum_api.services.generation.runtime import (
     _apply_project_cell_preview_files,
     _require_project_cell,
 )
+from yleum_api.services.max_project_kit import max_sast_source_view
 from yleum_api.services.orchestrator_client import RestorationAdaptationWorkspace
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 
@@ -96,6 +97,11 @@ async def check_backend_and_normalize_css(
                 if path not in _active_max_locked_files
             }
 
+        def _sast_view() -> dict[str, str]:
+            return max_sast_source_view(
+                _guard_view(), is_max=project_info.template == "max_miniapp",
+            )
+
         def _backend_verdict() -> GuardrailVerdict:
             if runtime.handle is not None and runtime.handle.is_portable():
                 return GuardrailVerdict(
@@ -148,7 +154,7 @@ async def check_backend_and_normalize_css(
             if get_settings().use_sast_gate:
                 from yleum_api.services.sast_gate import check_sast as _check_sast
 
-                _sv = _check_sast(_guard_view())
+                _sv = _check_sast(_sast_view())
                 _outcomes.append(
                     _agf.GateOutcome(
                         name="sast",
@@ -234,7 +240,7 @@ async def check_backend_and_normalize_css(
         if get_settings().use_sast_gate:
             from yleum_api.services.sast_gate import check_sast as _check_sast2
 
-            _final_sast = _check_sast2(_guard_view())
+            _final_sast = _check_sast2(_sast_view())
             if not _final_sast.safe:
                 print(
                     f"[PP] sast_gate FINDINGS: {_final_sast.summary}",
