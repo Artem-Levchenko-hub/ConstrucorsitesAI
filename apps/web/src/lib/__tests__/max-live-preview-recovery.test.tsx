@@ -800,6 +800,218 @@ describe("MAX live preview recovery", () => {
     expect(startRuntime).not.toHaveBeenCalled();
   });
 
+  it.each(["history", "messages", "generation"] as const)(
+    "does not prepare a failed first build while initial %s metadata is unresolved",
+    async (lastPending) => {
+      const pendingMessages = deferred<Message[]>();
+      const pendingGeneration = deferred<GenerationRun | null>();
+      listMessages.mockReturnValue(pendingMessages.promise);
+      getLatestGeneration.mockReturnValue(pendingGeneration.promise);
+      getRuntime.mockResolvedValue(runtime("stopped"));
+      syncMaxManagedKit.mockResolvedValue(managedKit("seed-snapshot"));
+      createMaxPreviewSession.mockResolvedValue(session("https://must-not-open.example"));
+      let historyPending = true;
+      const render = () => renderPreview("seed-snapshot", {
+        versions: historyPending ? [] : [buildVersion()], snapshotsLoading: historyPending,
+      });
+      render();
+      await flushPromises();
+      expect(startRuntime).not.toHaveBeenCalled();
+      expect(syncMaxManagedKit).not.toHaveBeenCalled();
+      expect(createMaxPreviewSession).not.toHaveBeenCalled();
+
+      if (lastPending !== "history") { historyPending = false; render(); }
+      if (lastPending !== "messages") pendingMessages.resolve([buildMessage("failed")]);
+      if (lastPending !== "generation") pendingGeneration.resolve(null);
+      await flushPromises();
+      expect(startRuntime).not.toHaveBeenCalled();
+      expect(syncMaxManagedKit).not.toHaveBeenCalled();
+      expect(createMaxPreviewSession).not.toHaveBeenCalled();
+
+      historyPending = false;
+      pendingMessages.resolve([buildMessage("failed")]);
+      pendingGeneration.resolve(null);
+      render();
+      await waitForValue(() => container.textContent?.includes("Первая сборка не завершена"));
+      expect(startRuntime).not.toHaveBeenCalled();
+      expect(syncMaxManagedKit).not.toHaveBeenCalled();
+      expect(createMaxPreviewSession).not.toHaveBeenCalled();
+      expect(container.querySelector("iframe")).toBeNull();
+    },
+  );
+
+  it("opens an accepted version after initial metadata settles without a manual reload", async () => {
+    const pendingMessages = deferred<Message[]>();
+    const pendingGeneration = deferred<GenerationRun | null>();
+    listMessages.mockReturnValue(pendingMessages.promise);
+    getLatestGeneration.mockReturnValue(pendingGeneration.promise);
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://accepted-after-metadata.example"));
+    renderPreview("snapshot-1", { versions: [], snapshotsLoading: true });
+    await flushPromises();
+    expect(syncMaxManagedKit).not.toHaveBeenCalled();
+    expect(createMaxPreviewSession).not.toHaveBeenCalled();
+
+    renderPreview("snapshot-1", {
+      versions: [{ ...buildVersion("ready"), snapshot_id: "snapshot-1" }],
+    });
+    pendingMessages.resolve([buildMessage("failed")]); // A failed later request cannot hide the accepted app.
+    pendingGeneration.resolve(null);
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    expect(frame.src).toBe("https://accepted-after-metadata.example/");
+    expect(startRuntime).not.toHaveBeenCalled();
+    expect(syncMaxManagedKit).toHaveBeenCalledTimes(1);
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains the legacy preview fallback after initial metadata requests settle as errors", async () => {
+    queryClient.setQueryDefaults(["messages", PROJECT.id], { retry: false });
+    listMessages.mockRejectedValue(new Error("message history offline"));
+    getLatestGeneration.mockRejectedValue(new Error("generation metadata offline"));
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://legacy-history-error.example"));
+    renderPreview("snapshot-1", { historyError: true });
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    expect(frame.src).toBe("https://legacy-history-error.example/");
+    expect(queryClient.getQueryState(["messages", PROJECT.id])?.status).toBe("error");
+    expect(queryClient.getQueryState(["generation", PROJECT.id])?.status).toBe("error");
+    expect(container.textContent).not.toContain("Первая сборка не завершена");
+    expect(container.querySelector("[data-testid='max-accepted-preview-status']")?.textContent)
+      .toContain("Готовая версия приложения пока не подтверждена.");
+    expect(startRuntime).not.toHaveBeenCalled();
+  });
+
+  it("keeps the accepted iframe usable during background metadata refetches", async () => {
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://accepted-background.example"));
+    renderPreview("snapshot-1", {
+      versions: [{ ...buildVersion("ready"), snapshot_id: "snapshot-1" }],
+    });
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    const pendingMessages = deferred<Message[]>();
+    const pendingGeneration = deferred<GenerationRun | null>();
+    listMessages.mockReturnValue(pendingMessages.promise);
+    getLatestGeneration.mockReturnValue(pendingGeneration.promise);
+    await act(async () => {
+      void queryClient.invalidateQueries({ queryKey: ["messages", PROJECT.id] });
+      void queryClient.invalidateQueries({ queryKey: ["generation", PROJECT.id] });
+    });
+    await flushPromises();
+    expect(queryClient.isFetching({ queryKey: ["messages", PROJECT.id] })).toBe(1);
+    expect(queryClient.isFetching({ queryKey: ["generation", PROJECT.id] })).toBe(1);
+    expect(container.querySelector("iframe")).toBe(frame);
+    expect(container.querySelector<HTMLButtonElement>("[data-testid='max-refresh-preview']")?.disabled)
+      .toBe(false);
+    expect(startRuntime).not.toHaveBeenCalled();
+    expect(syncMaxManagedKit).toHaveBeenCalledTimes(1);
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
+    pendingMessages.resolve([]);
+    pendingGeneration.resolve(null);
+    await flushPromises();
+  });
+
+  it.each(["failed", "cancelled"] as const)(
+    "keeps a durable %s first draft parked during optimistic prompt admission",
+    async (status) => {
+      const terminal: GenerationRun = {
+        id: "old-terminal", project_id: PROJECT.id, assistant_message_id: "build-1",
+        status, response_mode: "build", created_at: "2026-11-09T12:00:00Z",
+        started_at: "2026-11-09T12:00:00Z", finished_at: "2026-11-09T12:10:00Z",
+      };
+      const failed = buildMessage(status);
+      getLatestGeneration.mockResolvedValue(terminal);
+      queryClient.setQueryData(["generation", PROJECT.id], terminal);
+      listMessages.mockResolvedValue([failed]);
+      queryClient.setQueryData(["messages", PROJECT.id], [failed]);
+      getRuntime.mockResolvedValue(runtime("stopped"));
+      startRuntime.mockImplementation(async () => {
+        getRuntime.mockResolvedValue(runtime());
+        return runtime();
+      });
+      syncMaxManagedKit.mockResolvedValue(managedKit("built-snapshot"));
+      createMaxPreviewSession.mockResolvedValue(session("https://admitted-first-build.example"));
+      renderPreview("seed-snapshot", { versions: [buildVersion(status)] });
+      await flushPromises();
+      const optimistic = buildMessage(null, "__opt_asst_new-request");
+      listMessages.mockResolvedValue([failed, optimistic]);
+      act(() => queryClient.setQueryData(["messages", PROJECT.id], [failed, optimistic]));
+      await flushPromises();
+      expect(startRuntime).not.toHaveBeenCalled();
+      expect(syncMaxManagedKit).not.toHaveBeenCalled();
+      expect(createMaxPreviewSession).not.toHaveBeenCalled();
+      expect(container.querySelector("iframe")).toBeNull();
+
+      const admitted: GenerationRun = { ...terminal, id: "new-admitted", status: "running",
+        assistant_message_id: "new-admitted-message", finished_at: null };
+      getLatestGeneration.mockResolvedValue(admitted);
+      act(() => queryClient.setQueryData(["generation", PROJECT.id], admitted));
+      await waitForValue(() => startRuntime.mock.calls.length === 1);
+      const ready = { ...buildVersion("ready"), snapshot_id: "built-snapshot" };
+      renderPreview("built-snapshot", { versions: [ready] });
+      const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+      expect(frame.src).toBe("https://admitted-first-build.example/");
+      expect(startRuntime).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("does not park an accepted app behind an older failed run and optimistic request", async () => {
+    const terminal: GenerationRun = {
+      id: "old-terminal", project_id: PROJECT.id, assistant_message_id: "build-1",
+      status: "failed", response_mode: "build", created_at: "2026-11-09T12:00:00Z",
+      started_at: "2026-11-09T12:00:00Z", finished_at: "2026-11-09T12:10:00Z",
+    };
+    getLatestGeneration.mockResolvedValue(terminal);
+    queryClient.setQueryData(["generation", PROJECT.id], terminal);
+    listMessages.mockResolvedValue([buildMessage("failed"), buildMessage(null, "__opt_asst_new")]);
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://accepted-during-admission.example"));
+    renderPreview("snapshot-1", {
+      versions: [{ ...buildVersion("ready"), snapshot_id: "snapshot-1" }],
+    });
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    expect(frame.src).toBe("https://accepted-during-admission.example/");
+    expect(startRuntime).not.toHaveBeenCalled();
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not resurface an unaccepted cached iframe while a new optimistic request awaits admission", async () => {
+    const running: GenerationRun = {
+      id: "first-run", project_id: PROJECT.id, assistant_message_id: "build-1",
+      status: "running", response_mode: "build", created_at: "2026-11-09T12:00:00Z",
+      started_at: "2026-11-09T12:00:00Z", finished_at: null,
+    };
+    getLatestGeneration.mockResolvedValue(running);
+    queryClient.setQueryData(["generation", PROJECT.id], running);
+    listMessages.mockResolvedValue([buildMessage("running")]);
+    queryClient.setQueryData(["messages", PROJECT.id], [buildMessage("running")]);
+    syncMaxManagedKit.mockResolvedValue(managedKit("seed-snapshot"));
+    createMaxPreviewSession.mockResolvedValue(session("https://unaccepted-first-draft.example"));
+    renderPreview("seed-snapshot", { versions: [buildVersion("running")] });
+    const oldFrame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    act(() => oldFrame.dispatchEvent(new Event("load")));
+    const sessions = createMaxPreviewSession.mock.calls.length;
+    const syncs = syncMaxManagedKit.mock.calls.length;
+    const terminal: GenerationRun = { ...running, status: "failed", finished_at: "2026-11-09T12:10:00Z" };
+    getLatestGeneration.mockResolvedValue(terminal);
+    const failed = buildMessage("failed");
+    listMessages.mockResolvedValue([failed]);
+    act(() => {
+      queryClient.setQueryData(["generation", PROJECT.id], terminal);
+      queryClient.setQueryData(["messages", PROJECT.id], [failed]);
+    });
+    renderPreview("seed-snapshot", { versions: [buildVersion()] });
+    await waitForValue(() => container.textContent?.includes("Первая сборка не завершена"));
+    const optimistic = buildMessage(null, "__opt_asst_new-request");
+    listMessages.mockResolvedValue([failed, optimistic]);
+    act(() => queryClient.setQueryData(["messages", PROJECT.id], [failed, optimistic]));
+    await flushPromises();
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.textContent).toContain("Первая сборка не завершена");
+    expect(startRuntime).not.toHaveBeenCalled();
+    expect(syncMaxManagedKit).toHaveBeenCalledTimes(syncs);
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(sessions);
+  });
+
   it("releases the terminal state immediately for a new optimistic request and opens its ready build", async () => {
     const failed = buildMessage("failed");
     listMessages.mockResolvedValue([failed]);
@@ -919,7 +1131,8 @@ describe("MAX live preview recovery", () => {
     listMessages.mockResolvedValue([buildMessage("failed")]);
     getRuntime.mockResolvedValue(runtime("provisioning"));
     renderPreview("seed-snapshot", { versions: [buildVersion(status)] });
-    await flushPromises();
+    await waitForValue(() => queryClient.getQueryState(["generation", PROJECT.id])?.status === "success"
+      && getRuntime.mock.calls.length === 1);
     expect(container.textContent).not.toContain("Первая сборка не завершена");
     expect(getRuntime).toHaveBeenCalledTimes(1);
   });

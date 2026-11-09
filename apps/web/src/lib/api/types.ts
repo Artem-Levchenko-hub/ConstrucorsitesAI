@@ -535,6 +535,7 @@ export type ApiErrorCode =
   // Why a prompt was refused with 409. Only `generation_active` means "a build
   // is already running"; the rest are ordinary refusals with their own text.
   | "generation_active"
+  | "project_busy"
   | "restoration_active"
   | "idempotency_conflict"
   | "source_changed"

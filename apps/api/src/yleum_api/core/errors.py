@@ -44,6 +44,7 @@ ErrorCode = Literal[
     # Why a prompt (or another claim on the project) was refused with 409. The
     # client must not guess: only `generation_active` means "a build is running".
     "generation_active",
+    "project_busy",
     "generation_draining",
     "restoration_active",
     "publication_migration_active",

@@ -100,6 +100,7 @@ it.each([
   ["source_changed", "Данные приложения изменились. Откройте настройки.", "Данные приложения изменились"],
   ["idempotency_conflict", "idempotency key was already used for another prompt", "уже был отправлен"],
   ["conflict", "Черновик изменился", "Черновик изменился"],
+  ["project_busy", "Проект сейчас занят другой операцией", "Проект сейчас занят другой операцией"],
 ])("shows %s as its own refusal and keeps the composer free", async (code, message, shown) => {
   vi.mocked(sendPrompt).mockRejectedValueOnce(refusal(code, message + " token=NEVER_PUBLISH"));
   await mount();
@@ -116,6 +117,33 @@ it.each([
   await act(async () => { expect(await stream.submit("Ещё раз", "model")).toBe(true); });
   expect(sendPrompt).toHaveBeenCalledTimes(2);
   expect(stream.pendingPrompt).toBeNull();
+});
+
+it("keeps a busy project's queued text and explicit request identity without an automatic POST", async () => {
+  let refuse!: (error: ApiError) => void;
+  vi.mocked(sendPrompt).mockReturnValueOnce(new Promise((_, reject) => { refuse = reject; }));
+  await mount();
+  const opts = { idempotencyKey: "same-logical-request" };
+  let submitted!: Promise<boolean>;
+  await act(async () => { submitted = stream.submit("Дособери приложение", "model", [], opts); });
+  await act(async () => { expect(await stream.submit("Следующее пожелание", "model")).toBe(true); });
+  expect(stream.pendingPrompt).toBe("Следующее пожелание");
+  await act(async () => {
+    refuse(refusal("project_busy", "token=NEVER_PUBLISH", { retryable: true, retry_after: 2 }));
+    expect(await submitted).toBe(false);
+  });
+  await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+  expect(sendPrompt).toHaveBeenCalledTimes(1);
+  expect(sendPrompt).toHaveBeenLastCalledWith("p", "Дособери приложение", "model", [], opts);
+  expect(getLatestGeneration).not.toHaveBeenCalled();
+  expect(stream.pendingPrompt).toBe("Следующее пожелание");
+  expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).not.toContain("NEVER_PUBLISH");
+  expect(toast.info).not.toHaveBeenCalledWith("Генерация уже запущена", expect.anything());
+  vi.mocked(sendPrompt).mockResolvedValueOnce({ run_id: "r2", message_id: "m2", snapshot_id: null,
+    replayed: false, run_status: "pending" } as never);
+  await act(async () => { expect(await stream.submit("Дособери приложение", "model", [], opts)).toBe(true); });
+  expect(sendPrompt).toHaveBeenCalledTimes(2);
+  expect(sendPrompt).toHaveBeenLastCalledWith("p", "Дособери приложение", "model", [], opts);
 });
 
 it("trusts the server when the confirming probe itself fails", async () => {
@@ -165,7 +193,7 @@ it("keeps a restoration adaptation out of the follow-the-build branch", async ()
   }));
 });
 
-it.each(["unauthorized", "internal_error", "generation_active", "conflict"])(
+it.each(["unauthorized", "internal_error", "generation_active", "project_busy", "conflict"])(
   "explains an expired session for HTTP401 with code %s without leaking details", async (code) => {
     vi.mocked(sendPrompt).mockRejectedValueOnce(new ApiError(401, {
       code, message: "token=NEVER_PUBLISH private diagnostic",

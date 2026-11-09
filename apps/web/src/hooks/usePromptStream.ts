@@ -41,6 +41,7 @@ import type { RestorationAdaptationReference } from "@/lib/api/messages";
 /** What the user is told when a prompt is refused for a reason other than a running build. */
 const PROMPT_REFUSALS: Record<string, string> = {
   generation_draining: "Сервис обновляется. Подождите несколько минут и повторите запрос.",
+  project_busy: "Проект сейчас занят другой операцией. Подождите немного и отправьте запрос ещё раз.",
   generation_active:
     "Сейчас идёт другая сборка. Дождитесь её завершения и отправьте запрос ещё раз.",
   idempotency_conflict:
@@ -885,9 +886,10 @@ export function usePromptStream(projectId: string, projectSlug: string) {
 
       // Helper: collapse the optimistic placeholder into an error state so
       // the user gets an explicit message instead of a stuck "AI читает
-      // контекст" spinner. This is only for a POST that the backend did not
-      // accept. Stream silence is reconciled against durable generation state
-      // below and must never manufacture a terminal error.
+      // контекст" spinner. This updates only this POST's optimistic row when
+      // no acceptance receipt arrived; it does not decide the state of an
+      // earlier request. Stream silence is reconciled against durable generation
+      // state below and must never manufacture a terminal error.
       const _failPrompt = (reason: string, drainQueued = true) => {
         updateMessage(tempAssistantId, (m) => ({
           ...m,
@@ -1092,7 +1094,10 @@ export function usePromptStream(projectId: string, projectSlug: string) {
             : e instanceof ApiError && Object.hasOwn(PROMPT_REFUSALS, e.code)
             ? PROMPT_REFUSALS[e.code]
             : "Не удалось отправить запрос. Проверьте соединение и попробуйте ещё раз.";
-        _failPrompt(errMsg);
+        // This refusal does not identify a run to follow. Keep queued text for an
+        // explicit user action rather than submitting another request into the
+        // same contention. Caller-supplied idempotency keys remain unchanged.
+        _failPrompt(errMsg, !(e instanceof ApiError && e.code === "project_busy"));
         return false;
       }
 

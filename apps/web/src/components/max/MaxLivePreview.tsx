@@ -209,13 +209,22 @@ export function MaxLivePreview({
   // come from an HTTP error page, so a remembered URL is not build evidence.
   const noSuccessfulBuild = !snapshotsLoading && !historyError && historyCurrent && !hasOlder &&
     !versions.some((version) => version.status === "ready" || version.status === "unchanged");
-  const firstBuildTerminal = !viewingHistorical && noSuccessfulBuild && messages.isSuccess &&
-    !versions.some((version) => version.status === "queued" || version.status === "running") &&
-    lastMessage?.role === "assistant" && !isChatMessageStreaming(lastMessage) &&
+  const terminalRunStatus = currentRun?.status === "failed" || currentRun?.status === "cancelled"
+    ? currentRun.status : null;
+  const terminalMessageStatus = messages.isSuccess && lastMessage?.role === "assistant" &&
+    !isChatMessageStreaming(lastMessage) &&
     (lastMessage.generation_status === "failed" || lastMessage.generation_status === "cancelled")
       ? lastMessage.generation_status : null;
-  const previewDisabled = viewingHistorical || Boolean(firstBuildTerminal) ||
-    (noSuccessfulBuild && messages.isPending);
+  // Optimistic chat rows cannot release a durable failed/cancelled first draft.
+  // An admitted active run or accepted history owns that transition instead.
+  const firstBuildTerminal = !viewingHistorical && noSuccessfulBuild && !isGenerationActive(currentRun) &&
+    !versions.some((version) => version.status === "queued" || version.status === "running")
+      ? terminalRunStatus ?? terminalMessageStatus : null;
+  // A reload has no first-build verdict until the initial owner metadata joins.
+  // Starting/syncing the draft in that gap can race normal prompt admission.
+  // Background refetches keep their settled data and must not retire a live app.
+  const initialPreviewMetadataPending = snapshotsLoading || messages.isPending || latestGeneration.isPending;
+  const previewDisabled = viewingHistorical || initialPreviewMetadataPending || Boolean(firstBuildTerminal);
   const previewTargetSnapshotId = currentSnapshotId ?? "no-current-snapshot";
   const previewDocumentKey = `${previewTargetSnapshotId}:${acceptedGenerationId ?? "unconfirmed"}`;
   // Each pause/project change retires the old mutation, including retries

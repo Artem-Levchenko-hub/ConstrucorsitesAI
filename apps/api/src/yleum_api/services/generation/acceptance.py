@@ -71,6 +71,24 @@ from yleum_api.services.secret_safety import redact_provider_secrets
 RESERVED_BALANCE = Decimal("5.0000")
 
 
+async def _try_prompt_project_lock(session: AsyncSession, project_id: UUID) -> None:
+    """Refuse contention before reservations without waiting through preview HTTP."""
+    acquired = await session.scalar(
+        text("SELECT pg_try_advisory_xact_lock(hashtext(:project_id))"),
+        {"project_id": str(project_id)},
+    )
+    if acquired is not True:
+        # Keep the canonical transaction lock when acquired. A busy response
+        # does not establish whether an earlier same-key request was accepted.
+        raise ApiError(
+            "project_busy",
+            "Проект сейчас занят другой операцией. "
+            "Подождите немного и отправьте запрос ещё раз.",
+            status.HTTP_409_CONFLICT,
+            details={"reason": "project_admission_busy", "retryable": True, "retry_after": 2},
+        )
+
+
 class PromptAcceptance:
     """One request session, with explicit admission, routing and commit stages."""
 
@@ -180,10 +198,7 @@ class PromptAcceptance:
         idempotency_key = self.payload.idempotency_key or str(uuid4())
         # Serialize receipt lookup with reservation before resolving expiring
         # drafts. Only a definitely unaccepted request may ask the UI to reupload.
-        await self.session.execute(
-            text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
-            {"project_id": str(self.project_id)},
-        )
+        await _try_prompt_project_lock(self.session, self.project_id)
         existing = await self.session.scalar(select(GenerationRun).where(
             GenerationRun.project_id == self.project_id,
             GenerationRun.idempotency_key == idempotency_key,
