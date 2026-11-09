@@ -382,8 +382,8 @@ def _normalize_owner_management(files):
     return normalized
 
 
-def _assert_render_golden(files, expected, *, portable=False):
-    """Check reviewed changed files, then the unchanged original full SDK golden."""
+def _reviewed_render_signature(files, *, portable=False):
+    """Validate reviewed overrides before fingerprinting the historical SDK view."""
     files = _normalize_catalog(_normalize_owner_management(files))
     fixture_root = Path(__file__).parent / "fixtures"
     legacy = json.loads(
@@ -436,8 +436,49 @@ def _assert_render_golden(files, expected, *, portable=False):
     digest = hashlib.sha256(
         json.dumps(original_dependencies, sort_keys=True, ensure_ascii=False).encode()
     ).hexdigest()
-    assert {"files": len(original_dependencies), "sha256": digest} == expected
-    return digest
+    return {"files": len(original_dependencies), "sha256": digest}
+
+
+def _assert_render_golden(files, expected, *, portable=False):
+    actual = _reviewed_render_signature(files, portable=portable)
+    assert actual == expected
+    return actual["sha256"]
+
+
+@pytest.mark.parametrize("portable", [False, True])
+@pytest.mark.parametrize("fallback", ["long", "empty", "named"])
+def test_neutral_fallback_render_changes_only_public_summary(fallback, portable):
+    prompt = "" if fallback == "empty" else "Создай сервис " + "я" * 1050
+    app_name = "Named fallback" if fallback == "named" else "MAX Mini App"
+    legacy = MaxProjectConfigPayload(
+        app_name=app_name,
+        app_type="custom",
+        summary=prompt[:1000] or "Сервис внутри MAX",
+    )
+    neutral = MaxProjectConfigPayload.default_for(app_name)
+    legacy_payload, neutral_payload = legacy.model_dump(), neutral.model_dump()
+    assert neutral.summary == "Мини-приложение для пользователей MAX"
+    assert {key for key in legacy_payload if legacy_payload[key] != neutral_payload[key]} == {
+        "summary",
+    }
+    before = max_project_kit.render_max_starter_files(legacy, UUID(int=1), portable=portable)
+    after = max_project_kit.render_max_starter_files(neutral, UUID(int=1), portable=portable)
+    assert before.keys() == after.keys()
+    config_path = "src/lib/omnia/max-config.ts"
+    assert {path for path in before if before[path] != after[path]} == {config_path}
+    marker = "export const omniaMaxConfig: YleumMaxConfig = "
+    public_configs = []
+    for files in (before, after):
+        assert files[config_path].count(marker) == 1
+        body = files[config_path].split(marker, 1)[1]
+        assert body.endswith(";\n")
+        public_configs.append(json.loads(body[:-2]))
+    old_public, new_public = public_configs
+    assert old_public.pop("summary") == legacy.summary
+    assert new_public.pop("summary") == neutral.summary
+    assert old_public == new_public
+    if prompt:
+        assert not any(prompt[:64] in content for content in after.values())
 
 
 @pytest.mark.asyncio
@@ -750,7 +791,7 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         else project.name or "MAX Mini App"
     )
     assert config["summary"] == (
-        "Persisted summary" if stored else prompt[:1000] or "Сервис внутри MAX"
+        "Persisted summary" if stored else "Мини-приложение для пользователей MAX"
     )
     assert "src/app/api/omnia/actions/[id]/route.ts" in files
     golden = json.loads(
