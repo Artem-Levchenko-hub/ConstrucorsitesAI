@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from slugify import slugify
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.exc import IntegrityError
 
 from yleum_api.core.deps import (
@@ -18,6 +18,7 @@ from yleum_api.core.minio import preview_public_url
 from yleum_api.core.redis import publish_event
 from yleum_api.models.max_project_config import MaxProjectConfig
 from yleum_api.models.project import Project
+from yleum_api.models.project_cell import ProjectCellWorkspace
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.schemas.max_management import ManagementModule
 from yleum_api.schemas.max_studio import MaxProjectConfigPayload
@@ -166,9 +167,16 @@ async def create_project(
 async def list_projects(
     session: SessionDep, current_user: CurrentUserDep
 ) -> list[ProjectPublic]:
+    # A committed deletion is removed from the owner list while the worker
+    # retains the project and its workspace for verified physical cleanup.
+    deleting = exists().where(
+        ProjectCellWorkspace.project_id == Project.id,
+        ProjectCellWorkspace.owner_id == Project.owner_id,
+        ProjectCellWorkspace.deleted_at.is_not(None),
+    )
     res = await session.execute(
         select(Project)
-        .where(Project.owner_id == current_user.id)
+        .where(Project.owner_id == current_user.id, ~deleting)
         .order_by(Project.created_at.desc())
     )
     projects = list(res.scalars().all())
@@ -241,7 +249,7 @@ async def update_project(
 @router.delete(
     "/{project_id}", status_code=status.HTTP_204_NO_CONTENT,
     responses={202: {
-        "description": "Deletion accepted; the server continues until GET returns 404",
+        "description": "Accepted. Hidden from the owner list. GET returns 404 after cleanup.",
     }},
 )
 async def delete_project(

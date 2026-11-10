@@ -1,9 +1,9 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { LoaderCircle } from "lucide-react";
 import { toast } from "sonner";
-import { deleteProject, waitForProjectDeletion } from "@/lib/api/projects";
+import { deleteProject } from "@/lib/api/projects";
 import type { Project } from "@/lib/api/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,6 +14,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+
+const projectLists = { queryKey: ["projects"] } as const;
 
 /**
  * Confirm-to-delete. A single confirmation click — no type-the-name speed-bump
@@ -28,69 +30,76 @@ export function DeleteProjectDialog({
   project,
   open,
   onOpenChange,
+  onCloseAutoFocus,
+  onAccepted,
   maxStudio = false,
 }: {
   project: Project;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onCloseAutoFocus?: (event: Event) => void;
+  onAccepted?: () => void;
   maxStudio?: boolean;
 }) {
   const qc = useQueryClient();
-  const [acceptedProjectId, setAcceptedProjectId] = useState<string | null>(null);
-  const deletionAccepted = acceptedProjectId === project.id;
-
   const mutation = useMutation({
-    mutationFn: async () => {
-      const result = deletionAccepted ? { state: "deleting" } : await deleteProject(project.id);
-      if (result.state === "deleted") return result;
-      setAcceptedProjectId(project.id);
-      return waitForProjectDeletion(project.id);
-    },
-    onSuccess: (result) => {
-      if (result.state !== "deleted") return;
-      toast.success(`Проект «${project.name}» удалён`);
-      qc.invalidateQueries({ queryKey: ["projects"] });
+    mutationFn: () => deleteProject(project.id),
+    onSuccess: async (result) => {
+      // An in-flight list read may predate the accepted deletion.
+      await qc.cancelQueries(projectLists);
+      onAccepted?.();
+      qc.setQueriesData<Project[]>(projectLists, (list) => list?.filter(({ id }) => id !== project.id));
+      void qc.invalidateQueries(projectLists);
+      if (result.state === "deleting") {
+        toast.success(`Проект «${project.name}» убран из списка`, {
+          description: "Очистка продолжится в фоне.",
+        });
+      } else {
+        toast.success(`Проект «${project.name}» удалён`);
+      }
       onOpenChange(false);
     },
     onError: (error) => {
+      // The acknowledgement can be lost after the server commits the intent.
+      void qc.invalidateQueries(projectLists);
       toast.error(error instanceof Error ? error.message : "Не удалось удалить проект. Попробуйте ещё раз.");
     },
   });
+  const pending = mutation.isPending;
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!mutation.isPending || deletionAccepted) onOpenChange(next);
-      }}
-    >
-      <DialogContent data-max-studio={maxStudio || undefined}>
-        <DialogHeader>
-          <DialogTitle>{deletionAccepted ? "Удаляем проект" : "Удалить проект?"}</DialogTitle>
-          <DialogDescription>
-            {deletionAccepted ? "Сервер завершает удаление. Можно закрыть окно: процесс продолжится. Проект исчезнет из списка после завершения." : <>Это безвозвратно удалит проект «{project.name}», все его снапшоты,
-            файлы и — для приложений — рабочий контейнер с данными. Действие
-            нельзя отменить.</>}
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent data-max-studio={maxStudio || undefined} onCloseAutoFocus={onCloseAutoFocus}>
+        <DialogHeader className="pr-8">
+          <DialogTitle>{pending ? "Удаляем проект" : "Удалить проект?"}</DialogTitle>
+          <DialogDescription aria-live="polite">
+            {pending
+              ? "Ждём подтверждения сервера. Как только он примет запрос, проект исчезнет из списка."
+              : <>Это безвозвратно удалит проект «{project.name}», его версии, файлы и данные.</>}
           </DialogDescription>
         </DialogHeader>
 
-        <DialogFooter>
+        <DialogFooter className="gap-2">
           <Button
             type="button"
             variant="ghost"
+            size="lg"
             onClick={() => onOpenChange(false)}
-            disabled={mutation.isPending && !deletionAccepted}
+            autoFocus
           >
-            {deletionAccepted ? "Закрыть" : "Отмена"}
+            {pending ? "Закрыть" : "Отмена"}
           </Button>
           <Button
             type="button"
             variant="danger"
+            size="lg"
+            className="disabled:opacity-100"
             onClick={() => mutation.mutate()}
-            disabled={mutation.isPending}
-            autoFocus
+            disabled={pending}
+            aria-busy={pending}
           >
-            {mutation.isPending ? "Удаление…" : deletionAccepted ? "Проверить удаление" : "Удалить навсегда"}
+            {pending && <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" />}
+            {pending ? "Удаление…" : "Удалить навсегда"}
           </Button>
         </DialogFooter>
       </DialogContent>

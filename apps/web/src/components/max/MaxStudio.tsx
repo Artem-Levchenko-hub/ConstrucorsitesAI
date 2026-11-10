@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleAlert, FolderKanban, Plus, Search } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -40,6 +40,7 @@ export function MaxStudio({ email }: { email: string }) {
   const learning = useLearningGate();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const searchField = useRef<HTMLInputElement>(null);
   const [name, setName] = useState("");
   const [idea, setIdea] = useState("");
 
@@ -270,7 +271,7 @@ export function MaxStudio({ email }: { email: string }) {
           <div className="max-projects-toolbar">
             <label data-learning="projects-search" className="max-projects-search">
               <Search className="size-4 shrink-0" aria-hidden="true" />
-              <Input type="search" aria-label="Найти проект" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти проект" />
+              <Input ref={searchField} type="search" aria-label="Найти проект" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти проект" />
             </label>
             {projects.isSuccess && <span className="text-sm text-fg-secondary" aria-live="polite">
               {search.trim() ? `Найдено: ${maxProjects.length} из ${allMaxProjects.length}` : `Всего: ${allMaxProjects.length}`}
@@ -307,7 +308,7 @@ export function MaxStudio({ email }: { email: string }) {
               <div className="max-projects-list-heading" aria-hidden="true">
                 <span>Приложение</span><span>Состояние</span><span>Следующее действие</span>
               </div>
-              {maxProjects.map((project) => <MaxStudioProjectCard key={project.id} project={project} />)}
+              {maxProjects.map((project) => <MaxStudioProjectCard key={project.id} project={project} fallbackFocus={searchField} />)}
             </section>
           )}
 

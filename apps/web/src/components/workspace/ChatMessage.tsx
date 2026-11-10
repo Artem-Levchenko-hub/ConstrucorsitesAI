@@ -83,6 +83,7 @@ export function ChatMessage({
   const studio = presentation === "studio";
   const studioUser = studio && isUser;
   const quiz = isUser ? parseQuizBrief(message.content) : null;
+  const integrationRequest = isUser && !quiz ? recognizeBuiltinIntegrationRequest(message.content) : null;
   const parts: AssistantPart[] = isUser ? [] : parseAssistantContent(message.content);
 
   return (
@@ -131,7 +132,7 @@ export function ChatMessage({
         <div
           className={cn(
             "text-sm text-fg-primary leading-6 space-y-2",
-            studio && "max-editor-message-body w-full",
+            studio && (integrationRequest ? "w-full" : "max-editor-message-body w-full"),
           )}
         >
           {!isUser && streaming && projectId && (
@@ -169,7 +170,9 @@ export function ChatMessage({
               <strong className="text-fg-primary">{font.family}</strong> · {FONT_ROLE_LABELS[font.role]}
             </li>)}
           </ul>}
-          {isUser ? (
+          {integrationRequest ? (
+            <IntegrationRequestCard request={integrationRequest} text={message.content} />
+          ) : isUser ? (
             quiz ? (
               <QuizSummary idea={quiz.idea} items={quiz.items} />
             ) : (
@@ -241,10 +244,6 @@ export function ChatMessage({
 /** The user's words in a soft accent-tinted speech bubble. */
 function UserBubble({ text, plain = false }: { text: string; plain?: boolean }) {
   const [expanded, setExpanded] = useState(false);
-  const integrationRequest = recognizeBuiltinIntegrationRequest(text);
-  if (integrationRequest) {
-    return <IntegrationRequestCard request={integrationRequest} text={text} />;
-  }
   if (plain) {
     const collapsible = text.length > 700;
     return (

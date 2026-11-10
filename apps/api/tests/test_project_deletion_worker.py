@@ -76,6 +76,8 @@ async def test_permanent_outage_keeps_tombstone_repo_and_project(
     client, db_session, test_engine, as_user, fake_teardown, monkeypatch,
 ):
     owner, project, workspace = await _cell_project(db_session)
+    other = await _make_project(db_session, owner)
+    await db_session.commit()
     project_id, workspace_id = project.id, workspace.id
     as_user(owner)
 
@@ -84,6 +86,8 @@ async def test_permanent_outage_keeps_tombstone_repo_and_project(
 
     monkeypatch.setattr(HttpProjectCellOrchestratorClient, "control", offline)
     monkeypatch.setattr(HttpProjectCellOrchestratorClient, "observe_resources", offline)
+    before = await client.get("/api/projects")
+    assert {p["id"] for p in before.json()} == {str(project_id), str(other.id)}
     assert (await client.delete(f"/api/projects/{project_id}")).status_code == 202
     for _ in range(3):
         assert await advance_project_deletions(test_engine) == 0
@@ -92,6 +96,35 @@ async def test_permanent_outage_keeps_tombstone_repo_and_project(
         tombstone = await observed.get(ProjectCellWorkspace, workspace_id)
         assert tombstone.state == "deleting" and tombstone.deleted_at is not None
     assert fake_teardown["repo"] == [] and fake_teardown["destroy"] == []
+    # Reloading the owner list hides an accepted deletion even while the detail
+    # endpoint can still be used to observe physical cleanup.
+    assert (await client.get(f"/api/projects/{project_id}")).status_code == 200
+    after = await client.get("/api/projects")
+    assert [p["id"] for p in after.json()] == [str(other.id)]
+
+
+async def test_worker_finishes_delete_after_late_pause_changes_state(
+    client, db_session, test_engine, as_user, fake_teardown, monkeypatch,
+):
+    owner, project, workspace = await _cell_project(db_session)
+    project_id, workspace_id = project.id, workspace.id
+    as_user(owner)
+
+    async def destroy(_self, request):
+        return _destroyed_cell(request)
+
+    monkeypatch.setattr(HttpProjectCellOrchestratorClient, "control", destroy)
+    assert (await client.delete(f"/api/projects/{project_id}")).status_code == 202
+    async with async_sessionmaker(test_engine)() as observed:
+        tombstone = await observed.get(ProjectCellWorkspace, workspace_id)
+        assert tombstone.deleted_at is not None
+        tombstone.state = "stopped"
+        await observed.commit()
+
+    assert await advance_project_deletions(test_engine) == 1
+    assert fake_teardown["repo"] == [project_id]
+    db_session.expunge_all()
+    assert (await client.get(f"/api/projects/{project_id}")).status_code == 404
 
 
 async def test_two_executors_do_not_dispatch_twice_across_internal_commits(

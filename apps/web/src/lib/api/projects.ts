@@ -1,11 +1,11 @@
-import { ApiError, apiFetch, apiUrl } from "./client";
+import { apiFetch, apiUrl } from "./client";
 import { mockApi, USE_MOCKS } from "./mocks";
 import type { TeamSettings } from "./max-staff";
 import type { Project, ProjectTemplate, MaxProjectConfigPayload } from "./types";
 
 export async function listProjects(): Promise<Project[]> {
   if (USE_MOCKS) return mockApi.listProjects();
-  return apiFetch<Project[]>("/api/projects");
+  return apiFetch<Project[]>("/api/projects", { cache: "no-store" });
 }
 
 export async function getProject(id: string): Promise<Project> {
@@ -36,26 +36,6 @@ export async function deleteProject(id: string): Promise<ProjectDeletionResult> 
   if (result === undefined) return { state: "deleted" };
   if (result.state !== "deleting" || result.project_id !== id) {
     throw new Error("Не удалось подтвердить запрос на удаление проекта.");
-  }
-  return { state: "deleting" };
-}
-
-/** The server owns deletion. Observation never sends another DELETE or claims
- * success from 202/200, a lost connection, or an expired browser deadline. */
-export async function waitForProjectDeletion(id: string): Promise<ProjectDeletionResult> {
-  const deadline = Date.now() + 120_000;
-  while (Date.now() < deadline) {
-    try {
-      await apiFetch<Project>(`/api/projects/${id}`, {
-        cache: "no-store", timeoutMs: Math.min(10_000, deadline - Date.now()),
-      });
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 404) return { state: "deleted" };
-      // The durable intent remains active even if observation is unavailable.
-      return { state: "deleting" };
-    }
-    const remaining = deadline - Date.now();
-    if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(2_000, remaining)));
   }
   return { state: "deleting" };
 }

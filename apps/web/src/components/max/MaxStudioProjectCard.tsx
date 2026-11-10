@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, type RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Copy, MoreVertical, Trash2 } from "lucide-react";
 import Link from "next/link";
@@ -75,8 +75,13 @@ function MaxProjectArtwork({ project }: { project: Project }) {
   );
 }
 
-export function MaxStudioProjectCard({ project }: { project: Project }) {
+export function MaxStudioProjectCard({ project, fallbackFocus }: {
+  project: Project;
+  fallbackFocus?: RefObject<HTMLInputElement | null>;
+}) {
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const row = useRef<HTMLElement>(null);
+  const menuTrigger = useRef<HTMLButtonElement>(null);
   const readiness = useQuery({ queryKey: ["max-readiness", project.id], queryFn: () => getMaxReadiness(project.id), retry: false, staleTime: 20_000 });
   const items = readiness.data?.items ?? [];
   const publishedCurrent = readiness.isSuccess && items.some(item => item.id === "publish" && item.done);
@@ -102,7 +107,7 @@ export function MaxStudioProjectCard({ project }: { project: Project }) {
   const changed = relativeDateLabel(project.updated_at);
 
   return (
-    <article className="max-project-row">
+    <article ref={row} className="max-project-row">
       <div className="max-project-identity">
         <MaxProjectArtwork key={safeProjectPreviewUrl(project.preview_url) ?? "fallback"} project={project} />
         <div className="min-w-0">
@@ -132,14 +137,25 @@ export function MaxStudioProjectCard({ project }: { project: Project }) {
       <div className="max-project-actions">
         <Link href={nextHref} className="max-project-next">{nextStage?.actionLabel ?? (publishedCurrent ? "Статистика" : "Открыть проект")}<ArrowRight className="size-4 shrink-0" /></Link>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button type="button" variant="ghost" size="icon" aria-label={`Действия с проектом ${project.name}`} className="size-11 shrink-0"><MoreVertical className="size-4" /></Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button ref={menuTrigger} type="button" variant="ghost" size="icon" aria-label={`Действия с проектом ${project.name}`} className="size-11 shrink-0"><MoreVertical className="size-4" /></Button></DropdownMenuTrigger>
           <DropdownMenuContent data-max-studio align="end">
             <DropdownMenuItem asChild><Link href={`/max/${project.id}/catalog`}>Товары и услуги</Link></DropdownMenuItem>
             <DropdownMenuItem className="text-danger focus:text-danger" onSelect={() => setDeleteOpen(true)}><Trash2 className="size-4" />Удалить проект</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      <DeleteProjectDialog project={project} open={deleteOpen} onOpenChange={setDeleteOpen} maxStudio />
+      <DeleteProjectDialog project={project} open={deleteOpen} onOpenChange={setDeleteOpen} maxStudio
+        onAccepted={() => {
+          if (row.current?.contains(document.activeElement)) fallbackFocus?.current?.focus();
+        }}
+        onCloseAutoFocus={(event) => {
+          const trigger = menuTrigger.current;
+          const target = trigger?.isConnected ? trigger : fallbackFocus?.current;
+          if (target) {
+            event.preventDefault();
+            target.focus();
+          }
+        }} />
     </article>
   );
 }

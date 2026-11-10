@@ -75,11 +75,21 @@ function error(code: string, status: number) {
 }
 
 it("links staff to their guide chapter in a new tab", async () => {
-  await render(<MaxStaffShell project><p>Рабочая очередь</p></MaxStaffShell>);
+  await render(await MaxStaffShell({ project: true, children: <p>Рабочая очередь</p> }));
   const link = container.querySelector<HTMLAnchorElement>('header a[href="/max/guide#staff"]');
   expect(link?.textContent?.trim()).toBe("Руководство в новой вкладке");
   expect(link?.target).toBe("_blank");
   expect(link?.relList.contains("noopener")).toBe(true);
+});
+
+it.each([true, false])("offers a return to My Applications when studio access is %s", async (allowed) => {
+  vi.stubEnv("NEXT_PUBLIC_USE_MOCKS", "false");
+  vi.stubEnv("INTERNAL_API_URL", "http://api.example.test");
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ can_create_project: allowed })));
+  await render(await MaxStaffShell({ children: <p>Рабочие приложения</p> }));
+
+  const link = container.querySelector<HTMLAnchorElement>('header a[href="/max"]');
+  expect(link?.textContent?.trim()).toBe(allowed ? "Мои приложения" : undefined);
 });
 
 it("offers email confirmation on the invite page when delivery is configured", async () => {

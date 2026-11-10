@@ -268,7 +268,6 @@ async def finish_pending_project_deletion(
                 return "missing"
             workspace = await session.scalar(select(ProjectCellWorkspace).where(
                 ProjectCellWorkspace.project_id == project_id,
-                ProjectCellWorkspace.state == "deleting",
                 ProjectCellWorkspace.deleted_at.is_not(None),
             ))
             if workspace is None:
@@ -305,10 +304,11 @@ async def finish_pending_project_deletion(
 async def pending_project_deletions(
     engine: AsyncEngine, *, limit: int = 20, exclude: tuple[UUID, ...] = (),
 ) -> list[UUID]:
+    # A late Cell operation can update state after admission. The committed
+    # deletion timestamp remains authoritative for retries.
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
         return list((await session.scalars(select(ProjectCellWorkspace.project_id).where(
-            ProjectCellWorkspace.state == "deleting",
             ProjectCellWorkspace.deleted_at.is_not(None),
             ProjectCellWorkspace.project_id.not_in(exclude),
         ).order_by(

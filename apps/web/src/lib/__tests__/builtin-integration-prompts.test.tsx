@@ -39,6 +39,7 @@ it.each(["default", "studio"] as const)("summarizes the exact built-in request i
   const message = render(originalAmoPrompt, presentation);
   const heading = Array.from(container.querySelectorAll("h3")).find(el => el.textContent === "Добавить amoCRM");
   expect(heading).toBeDefined();
+  expect(heading?.closest(".max-editor-message-body")).toBeNull();
   expect(container.querySelectorAll("li")).toHaveLength(4);
   const button = container.querySelector<HTMLButtonElement>('button[aria-expanded]');
   expect(button?.textContent).toBe("Раскрыть полный запрос");
@@ -62,9 +63,10 @@ it.each([
   " " + originalAmoPrompt,
   originalAmoPrompt.replace("amoCRM", "Неизвестный CRM"),
 ])("preserves an edited or unknown request as ordinary chat prose", text => {
-  render(text);
+  render(text, "studio");
   expect(container.querySelector("h3")).toBeNull();
-  expect(container.querySelector('button[aria-expanded]')).toBeNull();
+  expect(container.textContent).not.toContain("Раскрыть полный запрос");
+  expect(container.querySelector(".max-editor-message-body")?.textContent).toContain(text);
   expect(container.textContent).toContain(text);
 });
 

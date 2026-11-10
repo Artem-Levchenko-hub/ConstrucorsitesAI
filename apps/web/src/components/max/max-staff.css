@@ -4,20 +4,16 @@
   font-family: var(--font-onest), var(--font-sans);
 }
 .max-staff-shell { display: flex; flex: 1; min-height: 0; flex-direction: column; }
-.max-staff-header {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  min-height: 72px; padding: 8px clamp(16px, 4vw, 48px);
-  border-bottom: 1px solid var(--color-border-subtle); background: var(--color-surface-raised);
-}
 .max-staff-brand, .max-staff-join-brand { display: inline-flex; align-items: center; gap: 9px; font-size: 18px; font-weight: 700; letter-spacing: -.035em; min-height: 44px; }
-.max-staff-header-actions, .max-staff-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.max-staff-header-actions { flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
+.max-staff-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .max-staff-main {
   flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; width: 100%;
   padding: 36px clamp(16px, 4vw, 48px) max(80px, env(safe-area-inset-bottom));
 }
 .max-staff-main > * { width: min(100%, 1120px); margin-inline: auto; }
-.max-staff-shell button, .max-staff-team button, .max-staff-queue button, .max-staff-join button,
-.max-staff-header-actions a, .max-staff-actions a, .max-staff-empty > a,
+.max-staff-main button, .max-staff-team button, .max-staff-queue button, .max-staff-join button,
+.max-staff-actions a, .max-staff-empty > a,
 .max-staff-team > .max-staff-board-heading > a { min-height: 44px; border-radius: 8px; }
 .max-staff-page-heading { margin-bottom: 22px; }
 .max-staff-kicker {
@@ -149,15 +145,15 @@
   .max-staff-team-columns, .max-staff-settings-fields { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 760px) {
-  .max-staff-header { min-height: 64px; }
-  .max-staff-header-actions { gap: 2px; justify-content: flex-end; }
-  .max-staff-header-actions :is(a,button) { font-size: 12px; padding-inline: 7px; }
   .max-staff-main { padding-top: 24px; }
   .max-staff-board { grid-template-columns: minmax(0, 1fr); }
   .max-staff-board[data-detail-open=false] .max-staff-placeholder,
   .max-staff-board[data-detail-open=true] .max-staff-list { display: none; }
   .max-staff-record-back { display: inline-flex; justify-self: start; }
   .max-staff-team > .max-staff-board-heading { align-items: flex-start; flex-direction: column; }
+}
+@media (max-width: 639px) {
+  .max-staff-header { flex-wrap: wrap; }
 }
 @media (max-width: 430px) {
   .max-staff-brand { font-size: 16px; }
