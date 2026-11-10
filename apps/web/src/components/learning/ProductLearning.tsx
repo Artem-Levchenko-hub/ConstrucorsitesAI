@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import * as Dialog from "@radix-ui/react-dialog";
 import { ArrowUpRight, BookOpen, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { usePathname, useSearchParams } from "next/navigation";
+import { Button } from "@/components/ui/button";
 import { guideChapterHref, type GuideLessonId } from "@/lib/guide-lessons";
 import { learningForRoute, learningForSurface, placeLearningCard, type LearningDefinition, type LearningStep } from "@/lib/product-learning";
 import { LEARNING_OPEN_EVENT, readLearningRecord, rememberLearning, requestLearning, useLearningGate, type LearningStatus } from "./LearningProvider";
@@ -29,7 +30,13 @@ const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce
 
 export function LearningButton({ label = "Обучение", className = "" }: { label?: string; className?: string }) {
   const gate = useLearningGate();
-  return <button type="button" className={`learning-launch ${className}`} onClick={event => requestLearning(gate?.userKey, event.currentTarget)}><BookOpen aria-hidden="true" size={16} /><span>{label}</span></button>;
+  return (
+    <Button type="button" variant="secondary" size="nav" className={`learning-launch ${className}`}
+      onClick={event => requestLearning(gate?.userKey, event.currentTarget)}>
+      <BookOpen aria-hidden="true" />
+      <span>{label}</span>
+    </Button>
+  );
 }
 
 function LearningGuideLink({ lesson }: { lesson: GuideLessonId }) {
@@ -207,5 +214,14 @@ export function ProductLearning({ userKey }: { userKey: string }) {
 
 export function GuideLearning() {
   const guide = learningForRoute("/max/guide", "")!;
-  return <><button type="button" className="learning-launch learning-guide-launch" onClick={event => requestLearning("public-guide", event.currentTarget, "guide")}><BookOpen size={17} aria-hidden="true" />Перейти в режим обучения</button><LearningHost definition={guide} userKey="public-guide" scope="guide" /></>;
+  return (
+    <>
+      <Button type="button" variant="secondary" size="nav" className="learning-launch px-4"
+        onClick={event => requestLearning("public-guide", event.currentTarget, "guide")}>
+        <BookOpen aria-hidden="true" />
+        Перейти в режим обучения
+      </Button>
+      <LearningHost definition={guide} userKey="public-guide" scope="guide" />
+    </>
+  );
 }

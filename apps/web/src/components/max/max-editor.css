@@ -163,6 +163,7 @@
   .max-editor-header-actions { gap: 5px; flex-wrap: wrap; max-width: 100%; }
   .max-editor-header-actions > button { width: 36px; }
   .max-editor-header-actions .max-editor-section-link { padding-inline: 10px; font-size: 12px; }
+  .max-editor-header-actions .learning-launch { width: auto; }
   .max-editor-header-actions .max-editor-publish { width: auto; padding-inline: 10px; font-size: 12px; }
   .max-editor-publish svg { display: none; }
   .max-editor-section-link svg { display: none; }

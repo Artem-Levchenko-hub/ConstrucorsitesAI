@@ -125,6 +125,10 @@
   to { opacity: 1; }
 }
 
+@keyframes yleum-page-in {
+  from { opacity: .86; translate: 0 4px; }
+}
+
 @keyframes yleum-dialog-in {
   from { opacity: 0; scale: .99; }
   to { opacity: 1; scale: 1; }
@@ -140,11 +144,14 @@
 
 @media (prefers-reduced-motion: no-preference) {
   :where(
-    .yl, .max-docs, .max-auth-layout, .max-public-content, .max-project-content,
-    .max-editor-workspace, .max-projects-content, .max-staff-main, .max-staff-join-card,
+    .yl, .max-docs:not(.max-help-page), .max-help-page > div, .max-auth-layout, .max-public-content, .max-project-content,
+    .max-editor-workspace, .max-staff-main, .max-staff-join-card,
     .max-setup-section, .max-owner-workbench-content > section
   ) {
     animation: yleum-content-in var(--yleum-motion-content) var(--yleum-motion-ease);
+  }
+  :where(.max-help-page > section, .max-projects-content, .account-page-transition) {
+    animation: yleum-page-in var(--yleum-motion-content) var(--yleum-motion-ease);
   }
   .yleum-dialog-backdrop[data-state=open] {
     animation: yleum-fade-in var(--yleum-motion-control) var(--yleum-motion-ease);

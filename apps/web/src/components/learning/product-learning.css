@@ -1,10 +1,4 @@
-.learning-launch { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 44px; flex-shrink: 0; padding: 8px 11px; border: 1px solid rgb(3 129 250 / .2); border-radius: 8px; background: transparent; color: inherit; font: inherit; font-size: 12px; font-weight: 550; cursor: pointer; transition: background .18s, border-color .18s; }
-.learning-launch:hover { background: rgb(3 129 250 / .08); border-color: rgb(3 129 250 / .48); }
-.learning-launch svg { flex-shrink: 0; color: var(--color-accent); }
-.max-editor-header-actions > .learning-launch { width: auto; }
-.account-user .learning-launch { display: inline-flex; width: auto; height: auto; }
-.learning-guide-launch { color: var(--color-fg-primary, #14141a); background: var(--color-surface, #fff); border-color: var(--color-border-strong, #c7ccd5); padding-inline: 16px; }
-.learning-launch:focus-visible, .learning-card :is(button,a):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.learning-card :is(button,a):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 .learning-overlay { position: fixed; inset: 0; z-index: 1010; background: transparent; pointer-events: auto; overflow: hidden; }
 .learning-overlay[data-dimmed] { background: rgb(12 22 39 / .62); }
 .learning-spotlight { position: fixed; box-sizing: border-box; border: 2px solid #55a9ff; border-radius: 10px; background: transparent; box-shadow: 0 0 0 150vmax rgb(12 22 39 / .62), 0 0 0 5px rgb(67 151 255 / .17); pointer-events: none; transition: left .28s ease, top .28s ease, width .28s ease, height .28s ease; animation: learning-outline 2.5s ease-in-out infinite; }
@@ -34,4 +28,4 @@
 .learning-actions button.learning-next:hover { background: #0054be; }
 @keyframes learning-appear { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes learning-outline { 50% { border-color: #9acfff; } }
-@media (prefers-reduced-motion: reduce) { .learning-card, .learning-spotlight, .learning-progress > span, .learning-launch { animation: none; transition: none; scroll-behavior: auto; } }
+@media (prefers-reduced-motion: reduce) { .learning-card, .learning-spotlight, .learning-progress > span { animation: none; transition: none; scroll-behavior: auto; } }

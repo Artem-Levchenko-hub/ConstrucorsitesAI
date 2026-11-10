@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import {
   AlertTriangle,
-  ArrowLeft,
   ArrowRight,
   BookOpenText,
   Check,
@@ -15,6 +14,7 @@ import type { ReactNode } from "react";
 
 import { BrandMark } from "@/components/marketing/BrandMark";
 import { GuideLearning } from "@/components/learning/ProductLearning";
+import { MaxHelpHeader } from "@/components/max/MaxHelpHeader";
 import { GoldenPathVisual, GuideScreenshot } from "@/components/max/guide/GuideVisuals";
 import { guideChapters, type GuideLessonId } from "@/lib/guide-lessons";
 import { getMaxHelpBrandProps } from "@/lib/max-help-brand";
@@ -143,21 +143,8 @@ function ChapterLinks() {
 export default async function MaxGuidePage() {
   const brand = await getMaxHelpBrandProps("/");
   return (
-    <main data-max-studio className="max-docs max-guide-page min-h-screen">
-      <header className="sticky top-0 z-50 border-b border-[#2b2d32] bg-[#191b20]/95 backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between gap-4 px-4 sm:px-7">
-          <div className="flex min-w-0 items-center gap-3">
-            <BrandMark {...brand} />
-            <span className="hidden h-5 w-px bg-[#2b2d32] sm:block" />
-            <span className="hidden truncate text-xs font-medium text-[#9fa1b1] sm:block">Руководство Yleum</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Link href="/max/product" className="hidden min-h-10 items-center rounded-md px-3 text-xs text-[#9fa1b1] hover:bg-[#121519] sm:inline-flex"><ArrowLeft className="mr-2 size-3.5" aria-hidden="true" />О продукте</Link>
-            <Link href="/max" className="omnia-button omnia-button-secondary min-h-10 px-4 text-xs">Открыть Yleum</Link>
-            <Link href="/max/register" className="omnia-button omnia-button-primary min-h-10 px-4 text-xs">Начать</Link>
-          </div>
-        </div>
-      </header>
+    <main data-max-studio className="max-docs max-help-page max-guide-page min-h-screen">
+      <MaxHelpHeader brand={brand} guide />
 
       <section data-graphite-shell className="bg-[#121519] px-4 py-14 sm:px-7 sm:py-20 lg:py-24">
         <div className="mx-auto grid max-w-[1320px] gap-10 lg:grid-cols-[1fr_320px] lg:items-end">

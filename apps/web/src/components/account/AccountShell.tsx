@@ -13,6 +13,7 @@ import Link from "next/link";
 import { logoutAction } from "@/app/(auth)/actions";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import { LearningButton } from "@/components/learning/ProductLearning";
+import { Button } from "@/components/ui/button";
 import type { AccountView } from "@/components/account/AccountControlCenter";
 import { AccountPageTransition } from "./AccountPageTransition";
 import { getMaxAdminAccessServer } from "@/lib/auth-mock";
@@ -50,17 +51,18 @@ export async function AccountShell({
   const isAdmin = await getMaxAdminAccessServer();
   return (
     <div data-max-studio className="account-shell">
-      <header className="account-topbar">
+      <header className="max-topbar">
         <BrandMark href="/max" />
-        <Link data-learning="account-projects" href="/max" className="account-back">
-          <LayoutGrid className="size-4" />К приложениям</Link>
-        <div className="account-user">
+        <div className="max-topbar-actions account-user">
+          <Button asChild variant="secondary" size="nav" className="hidden md:inline-flex">
+            <Link data-learning="account-projects" href="/max"><LayoutGrid aria-hidden="true" />К приложениям</Link>
+          </Button>
           {active !== "admin" && <LearningButton />}
           <span>{email}</span>
           <form action={logoutAction}>
-            <button aria-label="Выйти из аккаунта">
-              <LogOut className="size-4" />
-            </button>
+            <Button type="submit" variant="secondary" size="nav" className="w-11 px-0" aria-label="Выйти из аккаунта">
+              <LogOut aria-hidden="true" />
+            </Button>
           </form>
         </div>
       </header>

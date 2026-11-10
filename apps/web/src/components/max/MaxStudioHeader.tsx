@@ -39,7 +39,7 @@ export function MaxStudioHeader({
   const initial = email.slice(0, 1).toUpperCase();
 
   return (
-    <header data-max-studio className="max-studio-header">
+    <header data-max-studio className="max-topbar">
       <div className="flex min-w-0 items-center gap-3">
         <BrandMark href="/max" />
         {compact && (
@@ -50,16 +50,11 @@ export function MaxStudioHeader({
         )}
       </div>
 
-      <div className="flex items-center gap-2">
-        <LearningButton />
-        <Button
-          asChild
-          variant="ghost"
-          size="sm"
-          className="min-h-11 px-2"
-        >
+      <div className="max-topbar-actions">
+        <LearningButton className="max-[360px]:w-11 max-[360px]:px-0 max-[360px]:[&>span]:sr-only" />
+        <Button asChild variant="secondary" size="nav" className="max-sm:w-11 max-sm:px-0">
           <Link href="/max/start" aria-label="Помощь и быстрый старт" data-learning="projects-help">
-            <CircleHelp className="h-4 w-4" />
+            <CircleHelp aria-hidden="true" />
             <span className="hidden sm:inline">Помощь</span>
           </Link>
         </Button>
@@ -67,17 +62,17 @@ export function MaxStudioHeader({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
-              variant="ghost"
-              size="sm"
+              variant="secondary"
+              size="nav"
               aria-label="Аккаунт"
               data-learning="account-menu"
-              className="min-h-11 gap-2 px-1.5"
+              className="group data-[state=open]:bg-surface-3 max-sm:w-11 max-sm:px-0"
             >
-              <Avatar className="h-8 w-8">
+              <Avatar aria-hidden="true" className="size-6">
                 <AvatarFallback>{initial}</AvatarFallback>
               </Avatar>
               <span className="hidden sm:inline">Аккаунт</span>
-              <ChevronDown className="h-3.5 w-3.5 text-fg-secondary" />
+              <ChevronDown aria-hidden="true" className="hidden text-fg-secondary transition-transform duration-[var(--yleum-motion-control)] ease-[var(--yleum-motion-ease)] group-data-[state=open]:rotate-180 motion-reduce:transition-none sm:block" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent

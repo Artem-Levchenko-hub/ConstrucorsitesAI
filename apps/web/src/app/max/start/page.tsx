@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 
-import { BrandMark } from "@/components/marketing/BrandMark";
+import { MaxHelpHeader } from "@/components/max/MaxHelpHeader";
 import { getMaxHelpBrandProps } from "@/lib/max-help-brand";
 import "@/components/max/max-studio.css";
 import "@/components/marketing/max-public.css";
@@ -76,20 +76,8 @@ const steps = [
 export default async function MaxQuickStartPage() {
   const brand = await getMaxHelpBrandProps("/max/product");
   return (
-    <main data-max-studio className="max-docs max-quick-start min-h-screen">
-      <header className="border-b border-[#2b2d32] bg-[#191b20]">
-        <div className="mx-auto flex min-h-16 max-w-[1120px] items-center justify-between gap-4 px-5 sm:px-8">
-          <BrandMark {...brand} />
-          <div className="flex items-center gap-2">
-            <Link href="/max/guide" className="hidden min-h-11 items-center px-3 text-xs text-[#9fa1b1] hover:text-white sm:inline-flex">
-              Полное руководство
-            </Link>
-            <Link href="/max" className="inline-flex min-h-11 items-center rounded-[8px] bg-accent px-4 text-xs font-semibold text-[#121519] hover:bg-[#6a95fa]">
-              Открыть Yleum
-            </Link>
-          </div>
-        </div>
-      </header>
+    <main data-max-studio className="max-docs max-help-page max-quick-start min-h-screen">
+      <MaxHelpHeader brand={brand} />
 
       <section className="border-b border-[#2b2d32] bg-[#121519] text-white">
         <div className="mx-auto max-w-[1120px] px-5 py-14 sm:px-8 sm:py-20">

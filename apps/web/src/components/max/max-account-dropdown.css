@@ -1,3 +1,20 @@
+.max-account-dropdown {
+  max-height: var(--radix-dropdown-menu-content-available-height);
+  overflow-y: auto;
+  box-shadow: 0 12px 36px rgb(15 23 42 / .14);
+  transform-origin: var(--radix-dropdown-menu-content-transform-origin);
+}
+
+@keyframes max-account-menu-in {
+  from { opacity: 0; scale: .98; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .max-account-dropdown[data-state="open"] {
+    animation: max-account-menu-in var(--yleum-motion-content) var(--yleum-motion-ease);
+  }
+}
+
 [data-max-studio].max-account-dropdown :is(a, button)[role="menuitem"] {
   width: 100%;
   border: 0;

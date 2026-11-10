@@ -34,9 +34,9 @@ export function AccountPageTransition({ children, transitionKey, className }: { 
 
     // Animate the current surface only: no remount, outgoing page or retained private content.
     const animation = element.animate([
-      { opacity: .72, transform: "translateY(6px)" },
+      { opacity: .86, transform: "translateY(4px)" },
       { opacity: 1, transform: "translateY(0)" },
-    ], { duration: 320, easing: `cubic-bezier(${EASE_OUT.join(",")})` });
+    ], { duration: 180, easing: `cubic-bezier(${EASE_OUT.join(",")})` });
     return () => animation.cancel();
   }, [transitionKey, reducedMotion]);
 
