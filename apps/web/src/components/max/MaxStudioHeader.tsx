@@ -32,9 +32,11 @@ const accountLinks = [
 export function MaxStudioHeader({
   email,
   compact = false,
+  showLearning = true,
 }: {
   email: string;
   compact?: boolean;
+  showLearning?: boolean;
 }) {
   const initial = email.slice(0, 1).toUpperCase();
 
@@ -51,7 +53,7 @@ export function MaxStudioHeader({
       </div>
 
       <div className="max-topbar-actions">
-        <LearningButton className="max-[360px]:w-11 max-[360px]:px-0 max-[360px]:[&>span]:sr-only" />
+        {showLearning && <LearningButton className="max-[360px]:w-11 max-[360px]:px-0 max-[360px]:[&>span]:sr-only" />}
         <Button asChild variant="secondary" size="nav" className="max-sm:w-11 max-sm:px-0">
           <Link href="/max/start" aria-label="Помощь и быстрый старт" data-learning="projects-help">
             <CircleHelp aria-hidden="true" />

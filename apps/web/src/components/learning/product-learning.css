@@ -13,12 +13,6 @@
 .learning-title { margin: 0; font-size: 21px; line-height: 1.22; font-weight: 600; letter-spacing: -.035em; }
 .learning-description { margin: 12px 0 20px; color: #4a596e; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
 .learning-missing { margin-bottom: 16px; padding: 10px; border-radius: 8px; background: #f3f6fa; color: #526179; font-size: 12px; line-height: 1.5; }
-.learning-welcome { left: 50%; top: 50%; width: min(440px, calc(100vw - 32px)); padding: 38px 28px 28px; text-align: center; transform: translate(-50%, -50%); animation: none; }
-.learning-welcome .learning-title { font-size: 25px; line-height: 1.25; }
-.learning-welcome .learning-description { margin-block: 18px 24px; color: #647183; }
-.learning-welcome-close { position: absolute; top: 4px; right: 4px; }
-.learning-welcome-actions { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.learning-welcome-start { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 8px; padding: 11px 18px; border: 0; border-radius: 8px; background: #0062dc; color: #fff; font: inherit; font-size: 14px; font-weight: 550; cursor: pointer; }
 .learning-guide-link { display: inline-flex; min-height: 44px; align-items: center; gap: 7px; padding: 8px 10px; border-radius: 8px; background: #eff6ff; color: #0958ba; font-size: 13px; font-weight: 600; }
 .learning-guide-link:hover { background: #e0eeff; }
 .learning-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 20px; }

@@ -68,10 +68,9 @@ function blockBackground() {
   };
 }
 
-type Session = { definition: LearningDefinition; steps: LearningStep[]; index: number; phase: "welcome" | "tour"; returnFocus: HTMLElement | null };
-function LearningHost({ definition, userKey, auto = false, scope = "product" }: { definition: LearningDefinition; userKey: string; auto?: boolean; scope?: Scope }) {
+type Session = { definition: LearningDefinition; steps: LearningStep[]; index: number; returnFocus: HTMLElement | null };
+function LearningHost({ definition, userKey, scope = "product" }: { definition: LearningDefinition; userKey: string; scope?: Scope }) {
   const [session, setSession] = useState<Session | null>(null);
-  const autoAttempted = useRef(false);
   const token = useRef({});
   const gate = useLearningGate();
   const setActive = gate?.userKey === userKey ? gate.setActive : undefined;
@@ -92,10 +91,9 @@ function LearningHost({ definition, userKey, auto = false, scope = "product" }: 
     const returnFocus = trigger ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     const saved = readLearningRecord(userKey);
     const progress = saved.progress[activeDefinition.id];
-    const welcome = activeDefinition.id === "cabinet" && saved.tours.cabinet !== "completed" && !saved.creationExempt && (!progress || progress === "welcome");
     const index = saved.tours[activeDefinition.id] === "completed" ? 0 : Math.max(0, steps.findIndex(step => step.id === progress));
-    rememberLearning(userKey, activeDefinition.id, "started", welcome ? "welcome" : steps[index].id);
-    setSession({ definition: activeDefinition, steps, index, phase: welcome ? "welcome" : "tour", returnFocus });
+    rememberLearning(userKey, activeDefinition.id, "started", steps[index].id);
+    setSession({ definition: activeDefinition, steps, index, returnFocus });
     return true;
   }, [definition, userKey]);
 
@@ -108,47 +106,15 @@ function LearningHost({ definition, userKey, auto = false, scope = "product" }: 
     return () => window.removeEventListener(LEARNING_OPEN_EVENT, open);
   }, [begin, definition, scope, session, userKey]);
 
-  useEffect(() => {
-    if (!auto || session || autoAttempted.current || readLearningRecord(userKey).tours[definition.id] || readLearningRecord(userKey).creationExempt) return;
-    let timer: ReturnType<typeof setTimeout>;
-    const check = () => {
-      const saved = readLearningRecord(userKey);
-      if (saved.tours[definition.id] || saved.creationExempt) return;
-      if (document.visibilityState === "hidden" || document.querySelector(`${DIALOG_SELECTOR},[data-learning-ready="false"]`)) return;
-      if (document.activeElement?.matches('input,textarea,select,[contenteditable="true"]')) return;
-      if (Number(document.querySelector<HTMLElement>("[data-learning-project-count]")?.dataset.learningProjectCount ?? 0) > 0) return;
-      autoAttempted.current = begin();
-    };
-    const schedule = () => { clearTimeout(timer); timer = setTimeout(check, 600); };
-    const observer = new MutationObserver(schedule);
-    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-learning-ready", "hidden"] });
-    document.addEventListener("focusout", schedule);
-    document.addEventListener("visibilitychange", schedule);
-    schedule();
-    return () => { clearTimeout(timer); observer.disconnect(); document.removeEventListener("focusout", schedule); document.removeEventListener("visibilitychange", schedule); };
-  }, [auto, begin, definition.id, session, userKey]);
-
-  const close = (status: Status = "dismissed") => { rememberLearning(userKey, session?.definition.id ?? definition.id, status, session?.phase === "welcome" ? "welcome" : session?.steps[session.index]?.id); setSession(null); };
+  const close = (status: Status = "dismissed") => { rememberLearning(userKey, session?.definition.id ?? definition.id, status, session?.steps[session.index]?.id); setSession(null); };
   const goTo = (index: number) => {
     if (!session || !session.steps[index]) return;
     rememberLearning(userKey, session.definition.id, "started", session.steps[index].id);
-    setSession({ ...session, phase: "tour", index });
+    setSession({ ...session, index });
   };
   return <Dialog.Root open={session !== null} onOpenChange={open => { if (!open) close(); }}>
-    {session && <Dialog.Portal>{session.phase === "welcome" ? <>
-      <Dialog.Overlay className="learning-overlay" data-dimmed />
-      <Dialog.Content className="learning-card learning-welcome" data-learning-welcome onPointerDownOutside={event => event.preventDefault()}
-        onEscapeKeyDown={event => event.stopPropagation()} onCloseAutoFocus={event => { event.preventDefault(); if (session.returnFocus?.isConnected) session.returnFocus.focus(); }}>
-        <Dialog.Close asChild><button type="button" aria-label="Закрыть обучение" className="learning-close learning-welcome-close"><X size={18} aria-hidden="true" /></button></Dialog.Close>
-        <Dialog.Title className="learning-title">Для начала пройдём короткое обучение</Dialog.Title>
-        <Dialog.Description className="learning-description">Создание проекта начнётся только после прохождения обучения. Во время обучения кнопки приложения неактивны</Dialog.Description>
-        <div className="learning-welcome-actions">
-          <button type="button" className="learning-welcome-start" onClick={() => goTo(0)}>Начать обучение<ChevronRight size={17} aria-hidden="true" /></button>
-          <LearningGuideLink lesson={session.definition.lesson} />
-        </div>
-      </Dialog.Content>
-    </> : <LearningTour definition={session.definition} steps={session.steps} index={session.index}
-      onIndex={goTo} onClose={close} returnFocus={session.returnFocus} />}</Dialog.Portal>}
+    {session && <Dialog.Portal><LearningTour definition={session.definition} steps={session.steps} index={session.index}
+      onIndex={goTo} onClose={close} returnFocus={session.returnFocus} /></Dialog.Portal>}
   </Dialog.Root>;
 }
 
@@ -209,7 +175,7 @@ export function ProductLearning({ userKey }: { userKey: string }) {
   const query = useSearchParams()?.toString() ?? "";
   const definition = useMemo(() => learningForRoute(pathname, query), [pathname, query]);
   if (!definition || definition.id === "guide") return null;
-  return <LearningHost key={`${userKey}:${pathname}?${query}`} definition={definition} userKey={userKey} auto={pathname === "/max"} />;
+  return <LearningHost key={`${userKey}:${pathname}?${query}`} definition={definition} userKey={userKey} />;
 }
 
 export function GuideLearning() {

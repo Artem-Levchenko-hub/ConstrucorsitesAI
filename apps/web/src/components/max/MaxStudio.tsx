@@ -65,17 +65,8 @@ export function MaxStudio({ email }: { email: string }) {
 
   const projects = useQuery({ queryKey: learning ? ["projects", learning.userKey] : ["projects"], queryFn: listProjects });
   const allMaxProjects = useMemo(() => (projects.data ?? []).filter(project => project.template === "max_miniapp"), [projects.data]);
-  const hasExistingProjects = projects.isSuccess && allMaxProjects.length > 0;
-  const canOpenWizard = !learning || ((learning.completed || learning.creationExempt || hasExistingProjects) && !learning.active);
-  const grandfatherCreation = learning?.grandfatherCreation;
+  // Открытие мастера переносит черновик один раз и не создаёт проект.
   useEffect(() => {
-    if (hasExistingProjects) grandfatherCreation?.();
-  }, [hasExistingProjects, grandfatherCreation]);
-
-  // До завершения обучения черновик остаётся в хранилище. Открытие мастера
-  // переносит его один раз и само по себе не создаёт проект.
-  useEffect(() => {
-    if (!canOpenWizard) return;
     const pending = takeLandingPrompt();
     if (!pending) return;
     let applied = false;
@@ -88,7 +79,7 @@ export function MaxStudio({ email }: { email: string }) {
       window.cancelAnimationFrame(frame);
       if (!applied) saveLandingPrompt(pending);
     };
-  }, [canOpenWizard]);
+  }, []);
   const maxProjects = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ru-RU");
     return allMaxProjects.filter(project => !needle || project.name.toLocaleLowerCase("ru-RU").includes(needle));
@@ -96,7 +87,6 @@ export function MaxStudio({ email }: { email: string }) {
 
   const create = useMutation({
     mutationFn: async () => {
-      if (!canOpenWizard) throw new Error("Сначала завершите обучение.");
       if (quota.initialExhausted) throw new Error(FREE_CHAT_UPGRADE_MESSAGE);
       const content = publicInitialCatalog(initialContent);
       const contentError = initialCatalogError(content, tooManyItems);
@@ -215,17 +205,12 @@ export function MaxStudio({ email }: { email: string }) {
     },
   });
 
-  function openWizard(trigger?: HTMLElement) {
-    if (!canOpenWizard) {
-      if (projects.isSuccess) learning?.request(trigger);
-      return;
-    }
+  function openWizard() {
     setDialogOpen(true);
   }
 
   /** Готовая идея заполняет мастер, а не создаёт проект молча. */
   function applyIdea(idea: MaxStudioIdea) {
-    if (!canOpenWizard) { openWizard(); return; }
     setName(idea.title);
     setIdea(idea.idea);
     setAppTypes([idea.appType]);
@@ -234,7 +219,7 @@ export function MaxStudio({ email }: { email: string }) {
     setCatalogDraft(null);
     setAudience(idea.audience);
     setPrimaryAction(idea.primaryAction);
-    setDialogOpen(true);
+    openWizard();
   }
 
   function updateBrief(patch: Partial<MaxProjectBrief>) {
@@ -266,8 +251,8 @@ export function MaxStudio({ email }: { email: string }) {
   }
 
   return (
-    <div data-max-studio data-learning-ready={!projects.isPending && !projects.isError ? "true" : "false"} data-learning-project-count={projects.isSuccess ? allMaxProjects.length : undefined} className="max-studio-workspace">
-      <MaxStudioHeader email={email} />
+    <div data-max-studio className="max-studio-workspace">
+      <MaxStudioHeader email={email} showLearning={false} />
       <main className="max-projects-main">
         <div className="max-projects-content">
           <div className="max-projects-heading">
@@ -276,7 +261,7 @@ export function MaxStudio({ email }: { email: string }) {
               <h1>Мои приложения</h1>
               <p>Продолжите работу или запустите новую идею в MAX.</p>
             </div>
-            <Button data-learning="create-project" size="lg" disabled={quota.initialExhausted} onClick={event => openWizard(event.currentTarget)}>
+            <Button data-learning="create-project" size="lg" disabled={quota.initialExhausted} onClick={openWizard}>
               <Plus className="size-4" /> Создать приложение
             </Button>
           </div>
@@ -315,7 +300,7 @@ export function MaxStudio({ email }: { email: string }) {
               <FolderKanban className="mx-auto size-7 text-accent" />
               <h2>Первого приложения ещё нет</h2>
               <p>Опишите задачу своими словами — ИИ соберёт рабочее приложение внутри MAX. Или возьмите готовую идею ниже.</p>
-              <Button disabled={quota.initialExhausted} onClick={event => openWizard(event.currentTarget)}>Описать свою идею</Button>
+              <Button disabled={quota.initialExhausted} onClick={openWizard}>Описать свою идею</Button>
             </section>
           ) : (
             <section className="max-projects-list" aria-label="Приложения">
@@ -334,8 +319,8 @@ export function MaxStudio({ email }: { email: string }) {
         </div>
       </main>
       <MaxProjectWizard
-        open={dialogOpen && canOpenWizard}
-        onOpenChange={open => { if (open) openWizard(); else setDialogOpen(false); }}
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
         pending={create.isPending}
         submitDisabled={quota.initialExhausted || Boolean(catalogError)}
         quotaNotice={<OwnerChatQuotaNotice {...quota} initialOnly />}

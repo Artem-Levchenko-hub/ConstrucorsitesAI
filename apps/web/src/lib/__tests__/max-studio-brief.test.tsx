@@ -89,7 +89,7 @@ it("transfers the entire pasted brief from creation to the chat starter", async 
   }
 });
 
-it("creates one mixed app only after tutorial completion with all scenarios and the reviewed catalog IDs and prices", async () => {
+it("opens the home wizard without a tutorial and creates one mixed app after confirming all scenarios and reviewed catalog IDs and prices", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   mocks.create.mockResolvedValue({ id: "mixed-app-qa" });
   const fetcher = vi.fn(async (path: string) => {
@@ -99,14 +99,23 @@ it("creates one mixed app only after tutorial completion with all scenarios and 
     throw new Error("Unexpected API request");
   });
   vi.stubGlobal("fetch", fetcher);
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ x: 30, y: 100, left: 30, top: 100, width: 336, height: 300, bottom: 400, right: 366, toJSON() {} });
-  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
-  vi.stubGlobal("matchMedia", () => ({ matches: true }));
-  const previousScroll = HTMLElement.prototype.scrollIntoView;
-  HTMLElement.prototype.scrollIntoView = vi.fn();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
-  const userKey = "multi-after-tutorial-owner";
+  const userKey = "multi-without-tutorial-owner";
+  const expectDraftOnly = () => {
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.save).not.toHaveBeenCalled();
+    expect(mocks.push).not.toHaveBeenCalled();
+    expect(document.querySelector("[data-learning-welcome], .learning-card, .learning-spotlight, .learning-launch")).toBeNull();
+    expect(localStorage.getItem(`yleum:learning:v1:${userKey}`)).toBeNull();
+  };
+  const expectWizardStep = (step: number) => {
+    const progress = document.querySelector<HTMLProgressElement>(".max-wizard-progress")!;
+    expect(progress.max).toBe(4);
+    expect(progress.value).toBe(step);
+    expect(progress.getAttribute("aria-label")).toBe(`Шаг ${step} из 4`);
+    expectDraftOnly();
+  };
   const reviewedCatalog = () => [...document.querySelectorAll(".max-initial-catalog__row")].map(row => {
     const inputs = row.querySelectorAll<HTMLInputElement>("input");
     const id = inputs[0].id.match(/(item-[a-f0-9-]{36})-title$/)?.[1];
@@ -117,19 +126,14 @@ it("creates one mixed app only after tutorial completion with all scenarios and 
     await act(async () => root.render(<QueryClientProvider client={client}><LearningProvider userKey={userKey}>
       <MaxStudio email="qa@example.test" /><ProductLearning userKey={userKey} />
     </LearningProvider></QueryClientProvider>));
-    await act(async () => { await vi.waitFor(() => expect(document.querySelector("[data-learning-welcome]")).not.toBeNull()); });
-    await click("Создать приложение");
+    await act(async () => { await vi.waitFor(() => expect(document.querySelector(".max-studio-idea")).not.toBeNull()); });
     expect(document.querySelector("#max-project-name")).toBeNull();
-    expect(mocks.create).not.toHaveBeenCalled();
-    await click("Начать обучение");
-    for (let step = 0; step < 8 && button("Далее"); step += 1) await click("Далее");
-    await click("Завершить");
-    expect(document.querySelector("#max-project-name")).toBeNull();
-    expect(mocks.create).not.toHaveBeenCalled();
-    expect(JSON.parse(localStorage.getItem(`yleum:learning:v1:${userKey}`)!).tours.cabinet).toBe("completed");
+    expectDraftOnly();
     expect(client.getQueryData(["projects", userKey])).toEqual([]);
     expect(client.getQueryData(["projects"])).toBeUndefined();
     await click("Создать приложение");
+    expect(document.querySelector("#max-project-name")).not.toBeNull();
+    expectWizardStep(1);
     await act(async () => {
       change(document.querySelector<HTMLInputElement>("#max-project-name")!, "Кофейня с записью");
       change(document.querySelector<HTMLTextAreaElement>("#max-project-idea")!, "Кофейня с баллами, каталогом и записью.\nЛатте — 300 ₽\nЧай — 150 ₽");
@@ -137,16 +141,16 @@ it("creates one mixed app only after tutorial completion with all scenarios and 
     });
     await act(async () => typeButton("Запись").click());
     for (const name of ["Лояльность", "Каталог", "Запись"]) expect(typeButton(name).getAttribute("aria-pressed"), name).toBe("true");
-    for (let step = 0; step < 3; step += 1) await click("Далее");
+    for (let step = 2; step <= 4; step += 1) { await click("Далее"); expectWizardStep(step); }
     expect(document.querySelector('[aria-label="Сводка проекта"] .max-project-review__facts')?.textContent).toContain("Лояльность, Каталог, Запись");
     const initial = reviewedCatalog();
     expect(initial.map(({ title, price }) => ({ title, price }))).toEqual([{ title: "Латте", price: "300 ₽" }, { title: "Чай", price: "150 ₽" }]);
     await act(async () => change(document.querySelectorAll<HTMLInputElement>(".max-initial-catalog__row input")[1], "325 ₽"));
-    for (let step = 0; step < 3; step += 1) await click("Назад");
+    for (let step = 3; step >= 1; step -= 1) { await click("Назад"); expectWizardStep(step); }
     await act(async () => typeButton("Запись").click());
     await act(async () => typeButton("Запись").click());
     for (const name of ["Лояльность", "Каталог", "Запись"]) expect(typeButton(name).getAttribute("aria-pressed")).toBe("true");
-    for (let step = 0; step < 3; step += 1) await click("Далее");
+    for (let step = 2; step <= 4; step += 1) { await click("Далее"); expectWizardStep(step); }
     const expected = [{ ...initial[0], price: "325 ₽" }, initial[1]];
     expect(reviewedCatalog()).toEqual(expected);
     await act(async () => { button("Создать проект").click(); button("Создать проект").click(); });
@@ -165,7 +169,6 @@ it("creates one mixed app only after tutorial completion with all scenarios and 
     expect(fetcher.mock.calls.every(([path]) => path === "/api/auth/me")).toBe(true);
   } finally {
     await act(async () => root.unmount()); client.clear(); container.remove();
-    HTMLElement.prototype.scrollIntoView = previousScroll;
   }
 });
 

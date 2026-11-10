@@ -35,7 +35,7 @@ describe("MAX account menus", () => {
       expect(studioDisclosure).toContain(`"${href}"`);
     }
     expect(workspace).toContain("<MaxAccountMenu");
-    expect(studio).toContain("<MaxStudioHeader email={email} />");
+    expect(studio).toMatch(/<MaxStudioHeader\b[^>]*\bemail=\{email\}[^>]*\/>/);
   });
 
   it("keeps keyboard and focus-safe close behavior", () => {

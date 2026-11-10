@@ -11,12 +11,6 @@ function step(id: string, title: string, body: string, { selector = `[data-learn
   return { id, selector, title, body, lesson };
 }
 
-const cabinet: LearningDefinition = { id: "cabinet", title: "Обучение", lesson: "start", steps: [
-  step("create-project", "Создайте первое приложение", "Начните с описания своей идеи.", { lesson: "project" }),
-  step("projects-search", "Найдите своё приложение", "Введите название в поиске, чтобы вернуться к нужному проекту.", { lesson: "project" }),
-  step("projects-help", "Помощь всегда рядом", "Здесь находятся быстрый старт по созданию приложения и подробная инструкция по его запуску в MAX."),
-  step("account-menu", "Ваш аккаунт", "В меню аккаунта доступны профиль, безопасность, баланс, операции и тариф.", { lesson: "account" }),
-] };
 const editor: LearningDefinition = { id: "editor", title: "Редактор приложения", lesson: "builder", steps: [
   step("editor-conversation", "Опишите нужное изменение", "В диалоге с ИИ создают и меняют экраны и функции. Проверяйте результат перед публикацией."),
   step("editor-preview", "Проверьте приложение", "Предпросмотр помогает пройти сценарий пользователя. На узком экране он открывается отдельной кнопкой."),
@@ -79,7 +73,6 @@ export function learningForSurface(surface: string): LearningDefinition | null {
 
 export function learningForRoute(pathname: string, query: string): LearningDefinition | null {
   if (pathname === "/max/guide") return guide;
-  if (pathname === "/max") return cabinet;
   const account = accounts[pathname];
   if (account) return { id: account[0], title: account[1], lesson: pathname.startsWith("/billing") ? "billing" : "account", steps: [
     step("account-content", account[1], account[2], { selector: ".account-content" }),

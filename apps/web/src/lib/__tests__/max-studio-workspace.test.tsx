@@ -1,4 +1,4 @@
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -8,7 +8,11 @@ import { ProductLearning } from "@/components/learning/ProductLearning";
 import { saveLandingPrompt } from "@/lib/landing-prompt";
 import type { Project } from "@/lib/api/types";
 
-const mocks = vi.hoisted(() => ({ list: vi.fn(), create: vi.fn(), save: vi.fn(), push: vi.fn(), readiness: vi.fn(), integrations: vi.fn(), connect: vi.fn() }));
+const mocks = vi.hoisted(() => ({ list: vi.fn(), create: vi.fn(), save: vi.fn(), push: vi.fn(), readiness: vi.fn(), integrations: vi.fn(), connect: vi.fn(), quota: {
+  limited: false, remaining: null as number | null, initials: null as number | null,
+  edits: null as number | null, exhausted: false, initialExhausted: false, refresh: vi.fn(),
+} }));
+vi.mock("@/hooks/useOwnerChatQuota", () => ({ useOwnerChatQuota: () => mocks.quota }));
 vi.mock("@/lib/api/projects", () => ({ listProjects: mocks.list, createProject: mocks.create }));
 vi.mock("@/lib/api/max-studio", () => ({ saveMaxProjectConfig: mocks.save, getMaxReadiness: mocks.readiness }));
 vi.mock("@/lib/api/app-integrations", () => ({ getIntegrationCatalog: mocks.integrations, connectAppIntegration: mocks.connect }));
@@ -37,6 +41,7 @@ async function openWizard() { await render(); await settle(() => expect(button("
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
+  Object.assign(mocks.quota, { limited: false, remaining: null, initials: null, edits: null, exhausted: false, initialExhausted: false });
   mocks.list.mockResolvedValue([]);
   mocks.readiness.mockResolvedValue({ items: [] });
   mocks.create.mockResolvedValue(project);
@@ -46,118 +51,174 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => { root.unmount(); }); container.remove(); client.clear(); sessionStorage.clear(); localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-async function renderLearning(userKey: string) {
+async function renderHome(userKey: string, strict = false) {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ x: 30, y: 100, left: 30, top: 100, width: 336, height: 300, bottom: 400, right: 366, toJSON() {} });
   HTMLElement.prototype.scrollIntoView = vi.fn();
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   vi.stubGlobal("matchMedia", () => ({ matches: true }));
-  await act(async () => root.render(<QueryClientProvider client={client}><LearningProvider key={userKey} userKey={userKey}><MaxStudio email="owner@example.test" /><ProductLearning userKey={userKey} /></LearningProvider></QueryClientProvider>));
-}
-async function finishLearning() {
-  if (document.querySelector("[data-learning-welcome]")) await click("Начать обучение");
-  for (let step = 0; step < 8 && button("Далее"); step++) await click("Далее");
-  await click("Завершить");
+  const home = <QueryClientProvider client={client}><LearningProvider key={userKey} userKey={userKey}><MaxStudio email="owner@example.test" /><ProductLearning userKey={userKey} /></LearningProvider></QueryClientProvider>;
+  await act(async () => root.render(strict ? <StrictMode>{home}</StrictMode> : home));
 }
 
-it("defers a saved landing prompt until first learning completes and never creates a project during the tour", async () => {
-  saveLandingPrompt("Приложение моей пекарни с каталогом выпечки");
-  await renderLearning("fresh-prompt-owner");
-  await settle(() => expect(document.querySelector("[data-learning-welcome]")).not.toBeNull());
-  expect(document.querySelector("#max-project-idea")).toBeNull();
-  expect(localStorage.getItem("yleum:landing-prompt")).toContain("Приложение моей пекарни");
-  await click("Начать обучение");
-  expect(document.querySelector("#max-project-idea")).toBeNull();
+function expectNoTraining() {
+  expect(document.querySelector("[data-learning-welcome]")).toBeNull();
+  expect(document.querySelector(".learning-card")).toBeNull();
+  expect(document.querySelector(".learning-spotlight")).toBeNull();
+  expect(container.querySelector(".learning-launch")).toBeNull();
+}
+function expectNoCreation() {
   expect(mocks.create).not.toHaveBeenCalled();
-  await finishLearning();
-  await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)); });
-  await settle(() => expect(document.querySelector<HTMLTextAreaElement>("#max-project-idea")?.value).toBe("Приложение моей пекарни с каталогом выпечки"));
-  expect(mocks.create).not.toHaveBeenCalled();
-});
+  expect(mocks.save).not.toHaveBeenCalled();
+  expect(mocks.connect).not.toHaveBeenCalled();
+  expect(mocks.push).not.toHaveBeenCalled();
+}
+function controlledFrames() {
+  let next = 0;
+  const pending = new Map<number, FrameRequestCallback>();
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { const id = ++next; pending.set(id, callback); return id; });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => { pending.delete(id); });
+  return { pending, async flush() {
+    const callbacks = [...pending.values()]; pending.clear();
+    await act(async () => { for (const callback of callbacks) callback(0); });
+  } };
+}
 
-it("resumes learning from Create after closing and unlocks only after explicit completion", async () => {
-  await renderLearning("first-create-owner");
-  await settle(() => expect(document.querySelector("[data-learning-welcome]")).not.toBeNull());
-  await click("Закрыть обучение");
-  await click("Создать приложение");
-  expect(document.querySelector("[data-learning-welcome]")).not.toBeNull();
-  expect(document.querySelector("#max-project-name")).toBeNull();
-  await click("Начать обучение"); await click("Далее"); await click("Закрыть обучение");
-  await click("Создать приложение");
-  expect(document.querySelector(".learning-title")?.textContent).toBe("Найдите своё приложение");
-  await finishLearning();
-  expect(document.querySelector("#max-project-name")).toBeNull();
-  expect(mocks.create).not.toHaveBeenCalled();
+it.each(["fresh", "dismissed", "completed"])("opens creation immediately for %s learning records without a tour", async status => {
+  const userKey = `creation-${status}`;
+  const key = `yleum:learning:v1:${userKey}`;
+  if (status !== "fresh") localStorage.setItem(key, JSON.stringify({ version: 1, tours: { cabinet: status }, progress: { cabinet: "projects-search" } }));
+  const previous = localStorage.getItem(key);
+  await renderHome(userKey);
+  await settle(() => expect(container.textContent).toContain("Первого приложения ещё нет"));
+  expectNoTraining();
   await click("Создать приложение");
   expect(document.querySelector("#max-project-name")).not.toBeNull();
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Что создаём?");
+  expectNoTraining(); expectNoCreation();
+  expect(localStorage.getItem(key)).toBe(previous);
 });
 
-it("keeps an established owner able to create even after their last existing project disappears", async () => {
+it.each(["create", "empty-state", "ready-idea"])("opens the wizard directly from %s before any project or provider request", async entrance => {
+  await renderHome(`entrance-${entrance}`);
+  await settle(() => expect(container.textContent).toContain("Первого приложения ещё нет"));
+  if (entrance === "ready-idea") await act(async () => container.querySelector<HTMLButtonElement>(".max-studio-idea")!.click());
+  else await click(entrance === "create" ? "Создать приложение" : "Описать свою идею");
+  expect(document.querySelector("#max-project-name")).not.toBeNull();
+  const name = document.querySelector<HTMLInputElement>("#max-project-name")!;
+  const idea = document.querySelector<HTMLTextAreaElement>("#max-project-idea")!;
+  expect(name.value).toBe(entrance === "ready-idea" ? "Кофейня" : "");
+  if (entrance === "ready-idea") expect(idea.value).toContain("предзаказ");
+  else expect(idea.value).toBe("");
+  expectNoTraining(); expectNoCreation();
+});
+
+it("consumes the saved landing prompt once under StrictMode and does not create before review", async () => {
+  const frames = controlledFrames();
+  const prompt = "Приложение моей пекарни с каталогом выпечки";
+  saveLandingPrompt(prompt);
+  await renderHome("strict-landing-owner", true);
+  expect(frames.pending.size).toBe(1);
+  expectNoCreation(); expectNoTraining();
+  await frames.flush();
+  await settle(() => expect(document.querySelector<HTMLTextAreaElement>("#max-project-idea")?.value).toBe(prompt));
+  expect(localStorage.getItem("yleum:landing-prompt")).toBeNull();
+  expectNoCreation(); expectNoTraining();
+  await act(async () => root.render(<></>));
+  await renderHome("strict-landing-owner", true);
+  await frames.flush();
+  expect(document.querySelector("#max-project-idea")).toBeNull();
+  await click("Создать приложение");
+  expect(document.querySelector<HTMLTextAreaElement>("#max-project-idea")?.value).toBe("");
+  expectNoCreation();
+});
+
+it("restores an unconsumed landing prompt when unmounted before its scheduled opening", async () => {
+  const frames = controlledFrames();
+  const prompt = "Каталог с заявками и моим сохранённым описанием";
+  saveLandingPrompt(prompt);
+  await renderHome("cancelled-landing-owner");
+  expect(frames.pending.size).toBe(1);
+  await act(async () => root.render(<></>));
+  expect(frames.pending.size).toBe(0);
+  expect(JSON.parse(localStorage.getItem("yleum:landing-prompt")!).text).toBe(prompt);
+  await renderHome("cancelled-landing-owner");
+  await frames.flush();
+  await settle(() => expect(document.querySelector<HTMLTextAreaElement>("#max-project-idea")?.value).toBe(prompt));
+  expect(localStorage.getItem("yleum:landing-prompt")).toBeNull();
+  expectNoTraining(); expectNoCreation();
+});
+
+it("keeps an established owner able to create after the last project disappears without writing a learning exemption", async () => {
   mocks.list.mockResolvedValue([project]);
-  await renderLearning("established-owner");
+  await renderHome("established-owner");
   await settle(() => expect(container.textContent).toContain("Кофе рядом"));
-  await new Promise(resolve => setTimeout(resolve, 700));
-  expect(document.querySelector(".learning-card")).toBeNull();
+  expectNoTraining();
+  expect(localStorage.getItem("yleum:learning:v1:established-owner")).toBeNull();
   mocks.list.mockResolvedValue([]);
   await act(async () => { await client.invalidateQueries({ queryKey: ["projects"] }); });
   await settle(() => expect(container.textContent).toContain("Первого приложения ещё нет"));
   await click("Создать приложение");
   expect(document.querySelector("#max-project-name")).not.toBeNull();
-  expect(mocks.create).not.toHaveBeenCalled();
+  expectNoTraining(); expectNoCreation();
 });
 
-it("does not share another account's completion or accept its stale replay event", async () => {
-  localStorage.setItem("yleum:learning:v1:completed-owner", JSON.stringify({ version: 1, tours: { cabinet: "completed" } }));
-  await renderLearning("completed-owner");
+it("ignores old home replay events without changing an open creation draft", async () => {
+  localStorage.setItem("yleum:learning:v1:previous-owner", JSON.stringify({ version: 1, tours: { cabinet: "completed" } }));
+  await renderHome("previous-owner");
   await settle(() => expect(container.textContent).toContain("Первого приложения ещё нет"));
-  await renderLearning("other-owner");
-  await settle(() => expect(document.querySelector("[data-learning-welcome]")).not.toBeNull());
-  await click("Закрыть обучение");
-  await act(async () => window.dispatchEvent(new CustomEvent("yleum:learning:open", { detail: { userKey: "completed-owner", scope: "product", trigger: container.querySelector("button") } })));
-  expect(document.querySelector(".learning-card")).toBeNull();
+  await renderHome("current-owner");
+  await settle(() => expect(container.textContent).toContain("Первого приложения ещё нет"));
   await click("Создать приложение");
-  expect(document.querySelector("[data-learning-welcome]")).not.toBeNull();
-  expect(document.querySelector("#max-project-name")).toBeNull();
-  expect(mocks.create).not.toHaveBeenCalled();
+  await change("#max-project-name", "Сохранить мой проект");
+  for (const userKey of ["previous-owner", "current-owner"]) {
+    await act(async () => window.dispatchEvent(new CustomEvent("yleum:learning:open", { detail: { userKey, scope: "product", surface: "preview", trigger: button("Создать приложение") } })));
+    expectNoTraining();
+    expect(document.querySelector<HTMLInputElement>("#max-project-name")?.value).toBe("Сохранить мой проект");
+  }
+  expectNoCreation();
 });
 
-it("does not use a previous account's cached projects to exempt a new owner", async () => {
+it("uses account-scoped project queries without showing cached projects from another owner", async () => {
   mocks.list.mockResolvedValueOnce([project]).mockResolvedValue([]);
-  await renderLearning("established-before-switch");
+  await renderHome("first-owner");
   await settle(() => expect(container.textContent).toContain("Кофе рядом"));
-  await renderLearning("new-after-switch");
-  await settle(() => expect(document.querySelector("[data-learning-welcome]")).not.toBeNull());
+  expect(client.getQueryData(["projects", "first-owner"])).toEqual([project]);
+  await renderHome("second-owner");
+  await settle(() => expect(container.textContent).toContain("Первого приложения ещё нет"));
   expect(container.textContent).not.toContain("Кофе рядом");
-  await click("Закрыть обучение"); await click("Создать приложение");
-  expect(document.querySelector("[data-learning-welcome]")).not.toBeNull();
-  expect(document.querySelector("#max-project-name")).toBeNull();
-  expect(mocks.create).not.toHaveBeenCalled();
-});
-
-it("gates both the empty-state and ready-idea entrances without applying an idea during learning", async () => {
-  await renderLearning("all-entrances-owner");
-  await settle(() => expect(document.querySelector("[data-learning-welcome]")).not.toBeNull());
-  await click("Закрыть обучение"); await click("Описать свою идею");
-  expect(document.querySelector("[data-learning-welcome]")).not.toBeNull();
-  await click("Закрыть обучение");
-  await act(async () => container.querySelector<HTMLButtonElement>(".max-studio-idea")!.click());
-  expect(document.querySelector("[data-learning-welcome]")).not.toBeNull();
-  await finishLearning(); await click("Создать приложение");
-  expect(document.querySelector<HTMLInputElement>("#max-project-name")?.value).toBe("");
-  expect(document.querySelector<HTMLTextAreaElement>("#max-project-idea")?.value).toBe("");
-  expect(mocks.create).not.toHaveBeenCalled();
-});
-
-it.each(["write", "all"])("does not strand first creation when %s access to local storage is denied", async denied => {
-  vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("Storage unavailable"); });
-  if (denied === "all") vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("Storage unavailable"); });
-  await renderLearning(`storage-denied-${denied}`);
-  await settle(() => expect(document.querySelector("[data-learning-welcome]")).not.toBeNull());
-  await finishLearning();
+  expect(client.getQueryData(["projects", "second-owner"])).toEqual([]);
+  expect(client.getQueryData(["projects"])).toBeUndefined();
   await click("Создать приложение");
   expect(document.querySelector("#max-project-name")).not.toBeNull();
-  expect(mocks.create).not.toHaveBeenCalled();
+  expectNoTraining(); expectNoCreation();
 });
 
+it.each(["write", "all"])("opens creation without training when %s access to local storage is denied", async denied => {
+  vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("Storage unavailable"); });
+  if (denied === "all") vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("Storage unavailable"); });
+  await renderHome(`storage-denied-${denied}`);
+  await settle(() => expect(container.textContent).toContain("Первого приложения ещё нет"));
+  await click("Создать приложение");
+  expect(document.querySelector("#max-project-name")).not.toBeNull();
+  expectNoTraining(); expectNoCreation();
+});
+
+it("preserves quota admission while allowing the owner to review a ready idea", async () => {
+  Object.assign(mocks.quota, { limited: true, remaining: 0, initials: 0, edits: 0, exhausted: true, initialExhausted: true });
+  await renderHome("exhausted-owner");
+  await settle(() => expect(container.textContent).toContain("Первого приложения ещё нет"));
+  expect(button("Создать приложение").disabled).toBe(true);
+  expect(button("Описать свою идею").disabled).toBe(true);
+  await click("Создать приложение"); await click("Описать свою идею");
+  expect(document.querySelector("#max-project-name")).toBeNull();
+  await act(async () => container.querySelector<HTMLButtonElement>(".max-studio-idea")!.click());
+  expect(document.querySelector<HTMLInputElement>("#max-project-name")?.value).toBe("Кофейня");
+  await click("Далее"); await click("Далее"); await click("Далее");
+  expect(button("Создать проект").disabled).toBe(true);
+  await click("Создать проект");
+  await act(async () => button("Создать проект").closest("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  expectNoTraining(); expectNoCreation();
+});
 it("keeps search editable with a clear action when no names match", async () => {
   mocks.list.mockResolvedValue([project]);
   await render(); await settle(() => expect(container.textContent).toContain("Кофе рядом"));

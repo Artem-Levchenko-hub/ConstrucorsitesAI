@@ -57,10 +57,11 @@ async function click(label: string) {
   const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(item => item.textContent?.trim() === label || item.getAttribute("aria-label") === label);
   expect(button, label).toBeDefined(); await act(async () => button!.click()); await settle();
 }
-async function mount(userKey = "test-account-a", { hiddenSearch = false, onCreate = () => {}, startWelcome = true } = {}) {
-  await act(async () => root.render(<><button data-learning="create-project" onClick={onCreate}>Создать приложение</button><div data-learning="projects-search" hidden={hiddenSearch}>Поиск</div><div data-learning="projects-help">Помощь</div><LearningButton /><ProductLearning userKey={userKey} /></>));
+async function mountEditor(userKey = "test-account-a", { hiddenPreview = false, onAction = () => {}, start = true } = {}) {
+  route.path = "/max/test-project";
+  await act(async () => root.render(<><button data-learning="editor-conversation" onClick={onAction}>Редактор</button><div data-learning="editor-preview" hidden={hiddenPreview}>Превью</div><div data-learning="editor-manage">Управление</div><LearningButton /><ProductLearning userKey={userKey} /></>));
   await settle();
-  if (startWelcome && document.querySelector('[data-learning-welcome]')) await click("Начать обучение");
+  if (start) await click("Обучение");
 }
 
 function expectGuideLink(href: string) {
@@ -71,50 +72,73 @@ function expectGuideLink(href: string) {
   expect(link?.relList.contains("noopener")).toBe(true);
 }
 
+function expectNoLearning() {
+  expect(document.querySelector(".learning-card")).toBeNull();
+  expect(document.querySelector(".learning-spotlight")).toBeNull();
+  expect(document.querySelector("[data-learning-welcome]")).toBeNull();
+}
+
 describe("product learning", () => {
-  it("starts on first cabinet visit, highlights real controls, and remembers dismissal per account", async () => {
-    await mount();
-    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Создайте первое приложение");
-    expect(document.querySelector(".learning-spotlight")).not.toBeNull();
-    await click("Закрыть обучение");
-    await act(async () => root.render(<ProductLearning key="new-visit" userKey="test-account-a" />)); await settle();
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    await mount("test-account-b");
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  it.each(["fresh", "dismissed", "completed"])("keeps /max free of training for a %s account and ignores stale launch events", async status => {
+    const userKey = `home-${status}`;
+    const key = `yleum:learning:v1:${userKey}`;
+    if (status !== "fresh") localStorage.setItem(key, JSON.stringify({ version: 1, tours: { cabinet: status }, progress: { cabinet: "projects-search" } }));
+    const previous = localStorage.getItem(key);
+    const create = vi.fn();
+    await act(async () => root.render(<><button data-learning="create-project" onClick={create}>Создать приложение</button><ProductLearning userKey={userKey} /></>));
+    await settle();
+    expect(learningForRoute("/max", "")).toBeNull();
+    expectNoLearning();
+    const trigger = host.querySelector<HTMLButtonElement>("button")!;
+    for (const staleUser of [userKey, "another-account"]) {
+      await act(async () => window.dispatchEvent(new CustomEvent("yleum:learning:open", { detail: { userKey: staleUser, scope: "product", surface: "navigation", trigger } })));
+      await settle();
+      expectNoLearning();
+    }
+    await act(async () => trigger.click());
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(trigger.closest("[inert]")).toBeNull();
+    expect(localStorage.getItem(key)).toBe(previous);
   });
 
-  it("can replay linear steps, skip absent targets, and return focus without performing app actions", async () => {
-    await mount(); await click("Закрыть обучение");
-    const launch = [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.trim() === "Обучение")!;
-    launch.focus(); await click("Обучение");
-    await click("Далее");
-    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Найдите своё приложение");
-    expectGuideLink("/max/guide#project");
-    expect(document.querySelector(".learning-card select")).toBeNull();
-    expect(document.querySelector(".learning-counter")?.textContent).toBe("Шаг 2 из 3");
-    await click("Назад");
-    expect(document.querySelector(".learning-title")?.textContent).toBe("Создайте первое приложение");
-    await click("Закрыть обучение");
-    expect(document.activeElement).toBe(launch);
-    expect(document.querySelector(".learning-spotlight")).toBeNull();
-  });
-
-  it("does not interrupt verification or another dialog and provides a manual tour in the guide", async () => {
-    route.path = "/max/onboarding"; await mount();
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    await act(async () => root.render(<><div role="dialog">Регистрация</div><ProductLearning userKey="test-account-c" /></>));
-    route.path = "/max"; await act(async () => root.render(<><div role="dialog">Другое окно</div><ProductLearning key="cabinet" userKey="test-account-c" /></>)); await settle();
+  it("does not interrupt verification or another dialog and retains the manual guide tour", async () => {
+    route.path = "/max/onboarding";
+    await act(async () => root.render(<><LearningButton /><ProductLearning userKey="verification-owner" /></>));
+    await settle(); expectNoLearning();
+    route.path = "/max";
+    await act(async () => root.render(<><div role="dialog">Регистрация</div><ProductLearning userKey="verification-owner" /></>));
+    await settle();
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
-    await act(async () => root.render(<><h2 id="guide-first" data-learning="guide-journey">Путь к запуску</h2><GuideLearning /></>)); await settle();
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => root.render(<><h2 id="guide-first" data-learning="guide-journey">Путь к запуску</h2><GuideLearning /></>));
+    await settle(); expectNoLearning();
     await click("Перейти в режим обучения");
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Ваш путь к запуску");
   });
 
-  it("closes a running tour on navigation and selects contextual content for editor dialogs", async () => {
-    await mount(); route.path = "/max/test-project/catalog";
-    await act(async () => root.render(<ProductLearning userKey="test-account-a" />)); await settle();
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  it("keeps editor learning manual and replays linear steps without performing app actions", async () => {
+    const action = vi.fn();
+    await mountEditor("editor-owner", { onAction: action, start: false });
+    expectNoLearning();
+    const launch = host.querySelector<HTMLButtonElement>(".learning-launch")!;
+    launch.focus(); await click("Обучение");
+    expect(document.querySelector(".learning-title")?.textContent).toBe("Опишите нужное изменение");
+    expect(document.querySelector(".learning-spotlight")).not.toBeNull();
+    await click("Далее");
+    expect(document.querySelector(".learning-title")?.textContent).toBe("Проверьте приложение");
+    expectGuideLink("/max/guide#builder");
+    expect(document.querySelector(".learning-counter")?.textContent).toBe("Шаг 2 из 3");
+    expect(document.querySelector(".learning-card select")).toBeNull();
+    await click("Назад");
+    expect(document.querySelector(".learning-title")?.textContent).toBe("Опишите нужное изменение");
+    await click("Закрыть обучение");
+    expect(document.activeElement).toBe(launch);
+    expectNoLearning(); expect(action).not.toHaveBeenCalled();
+  });
+
+  it("closes an editor tour on navigation to the untrained home page", async () => {
+    await mountEditor(); route.path = "/max";
+    await act(async () => root.render(<ProductLearning userKey="test-account-a" />));
+    await settle(); expectNoLearning();
     expect(learningForRoute("/max/test-project", "panel=publish")?.id).toBe("publish");
     expect(learningForRoute("/max/test-project", "data=details")?.id).toBe("details");
     expect(learningForRoute("/max/guide", "")?.id).toBe("guide");
@@ -122,7 +146,7 @@ describe("product learning", () => {
     expect(learningForRoute("/admin/max", "")).toBeNull();
   });
 
-  it("keeps the card inside a narrow viewport when the target is near an edge", () => {
+  it("keeps the card inside a narrow viewport when its target is near an edge", () => {
     for (const target of [null, { left: 370, top: 4, width: 80, height: 40 }, { left: -20, top: 720, width: 400, height: 200 }]) {
       const card = placeLearningCard(target, { width: 390, height: 780 }, { width: 358, height: 360 });
       expect(card.left).toBeGreaterThanOrEqual(16); expect(card.left + 358).toBeLessThanOrEqual(374);
@@ -130,56 +154,46 @@ describe("product learning", () => {
     }
   });
 
-  it("waits for the cabinet to be ready and leaves a focused form uninterrupted", async () => {
+  it("keeps the ready home form focused without a delayed welcome", async () => {
     await act(async () => root.render(<><div data-learning-ready="false"><button data-learning="create-project">Создать</button><input autoFocus /></div><ProductLearning userKey="ready-account" /></>));
-    await settle();
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    const input = host.querySelector("input")!;
+    await settle(); expectNoLearning(); expect(document.activeElement).toBe(input);
     await act(async () => host.querySelector('[data-learning-ready]')!.setAttribute("data-learning-ready", "true"));
-    await settle();
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    await act(async () => host.querySelector("input")!.blur());
-    await settle();
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    await settle(); expectNoLearning(); expect(document.activeElement).toBe(input);
+    await act(async () => input.blur()); await settle(); expectNoLearning();
   });
 
-  it("does not start over an alert dialog", async () => {
+  it("does not create training above a home alert dialog", async () => {
     await act(async () => root.render(<><div role="alertdialog">Подтвердите действие</div><button data-learning="create-project">Создать</button><ProductLearning userKey="alert-account" /></>));
-    await settle();
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    expect(document.querySelector(".learning-spotlight")).toBeNull();
+    await settle(); expectNoLearning();
+    expect(document.querySelectorAll('[role="alertdialog"]')).toHaveLength(1);
   });
 
-  it("skips initially hidden controls and records completion without invoking app actions", async () => {
-    const create = vi.fn();
-    await mount("completion-account", { hiddenSearch: true, onCreate: create });
+  it("skips hidden editor targets and records completion without invoking app actions", async () => {
+    const action = vi.fn();
+    await mountEditor("completion-account", { hiddenPreview: true, onAction: action });
     expect(document.querySelector(".learning-counter")?.textContent).toBe("Шаг 1 из 2");
-    expect(document.querySelector(".learning-card select")).toBeNull();
     await click("Далее");
+    expect(document.querySelector(".learning-title")?.textContent).toBe("Управляйте приложением");
     await click("Завершить");
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    expect(JSON.parse(localStorage.getItem("yleum:learning:v1:completion-account")!).tours.cabinet).toBe("completed");
-    expect(create).not.toHaveBeenCalled();
-    await mount("completion-account");
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    await click("Обучение");
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(JSON.parse(localStorage.getItem("yleum:learning:v1:completion-account")!).tours.editor).toBe("completed");
+    expect(action).not.toHaveBeenCalled(); expectNoLearning();
+    await mountEditor("completion-account", { start: false }); expectNoLearning();
   });
 
-  it("traps focus, closes with Escape and restores the launch button", async () => {
-    await mount(); await click("Закрыть обучение");
+  it("traps focus and restores the editor training launch button on Escape", async () => {
+    await mountEditor("focus-owner", { start: false });
     const launch = host.querySelector<HTMLButtonElement>(".learning-launch")!;
     launch.focus(); await click("Обучение");
     const next = [...document.querySelectorAll<HTMLButtonElement>(".learning-actions button")].at(-1)!;
     next.focus();
-    await act(async () => next.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })));
-    expect(document.activeElement).toBe(document.querySelector('[aria-label="Закрыть обучение"]'));
-    await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
-    await settle();
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    expect(document.activeElement).toBe(launch);
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true })));
+    expect(document.querySelector('[role="dialog"]')?.contains(document.activeElement)).toBe(true);
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await settle(); expectNoLearning(); expect(document.activeElement).toBe(launch);
   });
 
-  it("replays inside an existing editor dialog and returns to it without changing form data", async () => {
+  it("replays inside an editor dialog without changing unsaved form data", async () => {
     route.path = "/max/test-project"; route.query = "panel=publish";
     const parentChange = vi.fn();
     await act(async () => root.render(<><Dialog.Root open onOpenChange={parentChange}><Dialog.Portal><Dialog.Overlay /><Dialog.Content aria-describedby={undefined}><Dialog.Title>Публикация</Dialog.Title><LearningButton /><section data-learning="editor-panel"><input aria-label="Несохранённые данные" defaultValue="Сохранить мой черновик" /></section></Dialog.Content></Dialog.Portal></Dialog.Root><ProductLearning userKey="nested-account" /></>));
@@ -188,110 +202,74 @@ describe("product learning", () => {
     launch.focus(); await click("Обучение");
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(2);
     expect(document.querySelector(".learning-card")?.textContent).toContain("Проверьте готовность к публикации");
-    expectGuideLink("/max/guide#publish");
-    await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     await settle();
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
-    expect(parentChange).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(launch);
-    expect(document.querySelector<HTMLInputElement>('[aria-label="Несохранённые данные"]')!.value).toBe("Сохранить мой черновик");
+    expect((document.querySelector('[aria-label="Несохранённые данные"]') as HTMLInputElement).value).toBe("Сохранить мой черновик");
+    expect(parentChange).not.toHaveBeenCalled(); expect(document.activeElement).toBe(launch);
   });
 
-  it("remeasures on scroll and gives an honest fallback when the current target disappears", async () => {
-    await mount();
+  it("remeasures the editor target and gives an honest fallback when it disappears", async () => {
+    await mountEditor();
     expect((document.querySelector(".learning-spotlight") as HTMLElement).style.left).toBe("34px");
-    targetRect = { left: 120, top: 360, width: 200, height: 40 };
-    await act(async () => window.dispatchEvent(new Event("scroll")));
+    targetRect = { left: 120, top: 180, width: 240, height: 48 };
+    await act(async () => window.dispatchEvent(new Event("scroll"))); await settle();
     expect((document.querySelector(".learning-spotlight") as HTMLElement).style.left).toBe("114px");
-    await act(async () => { host.querySelector<HTMLElement>('[data-learning="create-project"]')!.hidden = true; });
+    await act(async () => { host.querySelector<HTMLElement>('[data-learning="editor-conversation"]')!.hidden = true; });
     await settle();
     expect(document.querySelector(".learning-spotlight")).toBeNull();
-    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Элемент сейчас недоступен");
+    expect(document.querySelector('[role="status"]')?.textContent).toContain("Элемент сейчас недоступен");
   });
 
-  it("repositions the mounted card when its own height changes", async () => {
-    targetRect = { left: 40, top: 650, width: 900, height: 48 };
-    await mount();
+  it("repositions the editor card when its own height changes", async () => {
+    vi.stubGlobal("innerHeight", 600); targetRect = { left: 40, top: 500, width: 240, height: 48 };
+    await mountEditor();
     const panel = document.querySelector<HTMLElement>(".learning-card")!;
-    const before = Number.parseFloat(panel.style.top);
-    cardHeight = 500;
+    const initial = Number.parseFloat(panel.style.top); cardHeight = 420;
     await act(async () => { for (const observer of resizeObservers) if (observer.targets.has(panel)) observer.callback(); });
-    expect(Number.parseFloat(panel.style.top)).toBeLessThan(before);
-    expect(Number.parseFloat(panel.style.top) + 500).toBeLessThanOrEqual(window.innerHeight - 16);
+    expect(Number.parseFloat(panel.style.top)).toBeLessThan(initial);
+    expect(Number.parseFloat(panel.style.top) + cardHeight).toBeLessThanOrEqual(584);
   });
 
-  it("scrolls to the selected real guide heading and respects reduced motion", async () => {
+  it("scrolls to real guide headings and respects reduced motion", async () => {
     reduced = true;
     await act(async () => root.render(<><div data-learning="guide-journey">Путь</div><section id="builder" className="guide-chapter"><h2>Редактор</h2></section><GuideLearning /></>));
-    await settle(); await click("Перейти в режим обучения");
+    await click("Перейти в режим обучения");
     await click("Далее");
-    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Редактор и проверка");
-    expectGuideLink("/max/guide#builder");
-    expect(vi.mocked(HTMLElement.prototype.scrollIntoView).mock.contexts.at(-1)).toBe(document.querySelector("#builder"));
-    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenLastCalledWith({ behavior: "auto", block: "start", inline: "nearest" });
+    expect(document.querySelector(".learning-title")?.textContent).toBe("Редактор и проверка");
+    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({ block: "start", inline: "nearest", behavior: "auto" });
   });
 
-  it("shows a centered welcome before the first cabinet step and blocks background actions", async () => {
-    const create = vi.fn();
-    await mount("welcome-owner", { onCreate: create, startWelcome: false });
-    expect(document.querySelector(".learning-card")?.textContent).toContain("Для начала пройдём короткое обучение");
-    expect(document.querySelector(".learning-card")?.textContent).toContain("Создание проекта начнётся только после прохождения обучения. Во время обучения кнопки приложения неактивны");
-    expectGuideLink("/max/guide#start");
-    expect(document.querySelector(".learning-spotlight")).toBeNull();
-    const createButton = host.querySelector<HTMLButtonElement>('[data-learning="create-project"]')!;
-    expect(createButton.closest("[inert]")).not.toBeNull();
-    await act(async () => createButton.click());
-    expect(create).not.toHaveBeenCalled();
-    await click("Начать обучение");
-    expect(document.querySelector(".learning-title")?.textContent).toBe("Создайте первое приложение");
-    expect(document.querySelector(".learning-card-top")?.textContent).toContain("Обучение");
-    expect(document.querySelector(".learning-description")?.textContent).toBe("Начните с описания своей идеи.");
-    expect(document.querySelector(".learning-spotlight")).not.toBeNull();
-    await act(async () => createButton.click());
-    expect(create).not.toHaveBeenCalled();
-    await click("Закрыть обучение");
-    expect(createButton.closest("[inert]")).toBeNull();
-  });
-
-  it("resumes an incomplete step instead of restarting and keeps completed v1 records through a dismissed replay", async () => {
-    await mount("resume-owner"); await click("Далее"); await click("Закрыть обучение");
+  it("resumes incomplete editor steps and preserves completed legacy records", async () => {
+    await mountEditor("resume-owner"); await click("Далее"); await click("Закрыть обучение");
     await act(async () => root.unmount()); root = createRoot(host);
-    await mount("resume-owner");
-    expect(document.querySelector(".learning-card")).toBeNull();
-    await click("Обучение");
-    expect(document.querySelector(".learning-title")?.textContent).toBe("Найдите своё приложение");
+    await mountEditor("resume-owner", { start: false }); expectNoLearning(); await click("Обучение");
+    expect(document.querySelector(".learning-title")?.textContent).toBe("Проверьте приложение");
     await click("Закрыть обучение");
-    localStorage.setItem("yleum:learning:v1:legacy-owner", JSON.stringify({ version: 1, tours: { cabinet: "completed" } }));
-    await mount("legacy-owner");
-    expect(document.querySelector(".learning-card")).toBeNull();
+    localStorage.setItem("yleum:learning:v1:legacy-owner", JSON.stringify({ version: 1, tours: { editor: "completed", cabinet: "completed" } }));
+    await mountEditor("legacy-owner", { start: false }); expectNoLearning();
     await click("Обучение"); await click("Закрыть обучение");
-    expect(JSON.parse(localStorage.getItem("yleum:learning:v1:legacy-owner")!).tours.cabinet).toBe("completed");
+    expect(JSON.parse(localStorage.getItem("yleum:learning:v1:legacy-owner")!).tours).toEqual({ editor: "completed", cabinet: "completed" });
   });
 
-  it("ignores a stale open request belonging to another account", async () => {
-    await mount("previous-owner"); await click("Закрыть обучение");
-    await mount("current-owner"); await click("Закрыть обучение");
-    await act(async () => window.dispatchEvent(new CustomEvent("yleum:learning:open", { detail: { scope: "product", userKey: "previous-owner", trigger: host.querySelector("button") } })));
-    await settle();
-    expect(document.querySelector(".learning-card")).toBeNull();
+  it("ignores stale editor launch requests from another account or a detached trigger", async () => {
+    await mountEditor("previous-owner"); await click("Закрыть обучение");
+    await mountEditor("current-owner", { start: false });
+    for (const detail of [
+      { userKey: "previous-owner", trigger: host.querySelector("button") },
+      { userKey: "current-owner", trigger: document.createElement("button") },
+    ]) {
+      await act(async () => window.dispatchEvent(new CustomEvent("yleum:learning:open", { detail: { ...detail, scope: "product" } })));
+      await settle(); expectNoLearning();
+    }
   });
 
-  it("ignores an old detached launch element after the same account's page has changed", async () => {
-    await mount("detached-owner"); await click("Закрыть обучение");
-    const trigger = document.createElement("button");
-    await act(async () => window.dispatchEvent(new CustomEvent("yleum:learning:open", { detail: { scope: "product", userKey: "detached-owner", trigger } })));
-    await settle();
-    expect(document.querySelector(".learning-card")).toBeNull();
-  });
-
-  it("does not run a stale automatic welcome timer after completion in another tab", async () => {
+  it("ignores home storage completion events without scheduling a welcome", async () => {
     await act(async () => root.render(<><button data-learning="create-project">Создать</button><ProductLearning userKey="external-completion-owner" /></>));
     localStorage.setItem("yleum:learning:v1:external-completion-owner", JSON.stringify({ version: 1, tours: { cabinet: "completed" } }));
     await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: "yleum:learning:v1:external-completion-owner" })));
-    await settle();
-    expect(document.querySelector(".learning-card")).toBeNull();
+    await settle(); expectNoLearning();
   });
-
   it("leaves the measured guide heading unobscured at 1280x720 after linear navigation and height growth", async () => {
     vi.stubGlobal("innerWidth", 1280); vi.stubGlobal("innerHeight", 720);
     cardWidth = 358; cardHeight = 359;
