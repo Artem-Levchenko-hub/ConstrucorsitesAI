@@ -73,7 +73,7 @@ export function YleumLanding({ plans = null, signedIn = false }: { plans?: Billi
       {/* 1 — обещание и работающий пример */}
       <section id="main-content" className="yl-hero" data-marketing-section="hero">
         <div className="yl-wrap yl-hero-copy">
-          <h1>Опишите словами.<br /><em className="yl-grad-text">Получите приложение.</em></h1>
+          <h1>Опишите словами<br /><em className="yl-grad-text">Получите приложение</em></h1>
           <p className="yl-lead">Приложение для вашего бизнеса в MAX.<br />Клиенты открывают его в мессенджере — без отдельной установки.</p>
           <ul className="yl-niches" aria-label="Для какого бизнеса">
             {["Кофейня", "Кафе", "Ресторан", "Салон красоты", "Барбершоп", "Магазин", "Студия", "Школа", "Клуб"].map((niche) => (

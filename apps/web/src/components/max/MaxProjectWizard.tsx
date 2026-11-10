@@ -13,12 +13,11 @@ import { MaxProjectReview } from "./MaxProjectReview";
 import "./max-studio.css";
 
 type WizardValues = Omit<MaxProjectBrief, "catalogItemCount">;
-export type WizardOrderSettings = { mode: "pickup" | "yookassa"; prepMinutes: string };
 
 const titles = ["Что создаём?", "Для кого приложение?", "Функции и оформление", "Проверьте описание"];
 
 /** Presentation only: the parent owns all answers and the real creation mutation. */
-export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending, onSubmit, submitDisabled = false, quotaNotice, initialCatalog, orderSettings, onOrderSettingsChange }: {
+export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending, onSubmit, submitDisabled = false, quotaNotice, initialCatalog }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   values: WizardValues;
@@ -27,8 +26,6 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
   submitDisabled?: boolean;
   quotaNotice?: ReactNode;
   initialCatalog?: ReactNode;
-  orderSettings?: WizardOrderSettings;
-  onOrderSettingsChange?: (settings: WizardOrderSettings) => void;
   onSubmit: () => Promise<unknown>;
 }) {
   const [step, setStep] = useState(0);
@@ -42,7 +39,6 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
   const appTypes = selectedMaxAppTypes(values.appType, values.appTypes);
   const multipleTypes = values.appTypes !== undefined;
   const managementModules = newProjectManagementModules(values.appType, values.managementModules, values.appTypes);
-  const showOrderSettings = orderSettings && onOrderSettingsChange && managementModules.includes("orders");
   const length = Array.from(values.idea.trim()).length;
   const ready = values.name.trim().length > 1 && values.idea.trim().length > 9 && length <= MAX_BRIEF_LENGTH;
 
@@ -137,27 +133,6 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
                   </label>)}
                 </div>
               </fieldset>
-              {showOrderSettings && <fieldset className="grid gap-3 rounded-xl border border-border-subtle bg-surface-panel p-4">
-                <legend className="px-1 text-sm font-semibold">Самовывоз и оплата</legend>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="grid gap-2">
-                    <Label htmlFor="max-order-mode">Как клиент оплачивает</Label>
-                    <select id="max-order-mode" className="min-h-11 rounded-lg border border-border-subtle bg-surface-panel px-3 text-sm focus-visible:outline-2 focus-visible:outline-accent" value={orderSettings.mode}
-                      onChange={event => onOrderSettingsChange({ ...orderSettings, mode: event.target.value === "yookassa" ? "yookassa" : "pickup" })}>
-                      <option value="pickup">При получении</option>
-                      <option value="yookassa">Онлайн через ЮKassa</option>
-                    </select>
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="max-order-prep">Время приготовления, мин</Label>
-                    <Input id="max-order-prep" type="number" inputMode="numeric" min={1} max={120} step={1} required
-                      value={orderSettings.prepMinutes} onChange={event => onOrderSettingsChange({ ...orderSettings, prepMinutes: event.target.value })} />
-                  </div>
-                </div>
-                <p className="max-wizard-note">{orderSettings.mode === "yookassa"
-                  ? "Подключите магазин в «Интеграциях». В очередь попадут заказы с подтверждённой оплатой."
-                  : "Сотрудник увидит заказ к началу приготовления. Например, для выдачи в 10:30 и 7 минут на приготовление — в 10:23."}</p>
-              </fieldset>}
               <fieldset>
                 <legend className="text-sm font-medium">Функции</legend>
                 <p className="max-wizard-note">Нажмите на функцию, чтобы добавить её в приложение. Кнопка <Eye aria-hidden="true" className="inline size-3.5 -mt-0.5" /> показывает, как выглядит такой экран.</p>
