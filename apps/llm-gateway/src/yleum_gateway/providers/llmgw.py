@@ -49,6 +49,7 @@ from yleum_gateway.providers import native_stream
 from yleum_gateway.providers.rate_limit import bounded_error_body, refusal_retry_candidate
 from yleum_gateway.services.output_budget import output_tokens, uses_provider_output_default
 from yleum_gateway.services.provider_calls import ReceiptFailure
+from yleum_gateway.services.provider_failure_diagnostics import record_provider_failure
 from yleum_gateway.services.receipt_evidence import receipt_evidence
 
 # Retry only failures before the POST can be accepted. A missing response can
@@ -276,6 +277,30 @@ def _refusal_category(response: httpx.Response) -> str | None:
     return next(iter(categories)) if len(categories) == 1 else None
 
 
+def _http_failure_details(
+    response: httpx.Response, *, model: str, provider_scope: str,
+) -> dict[str, Any]:
+    """Keep existing receipt/refusal policy separate from private diagnostics."""
+    from yleum_gateway.services.text_failover import primary_refusal_candidate
+
+    details = _failure_details(
+        bounded_error_body(response) or {}, _receipt_headers(response.headers),
+        upstream_http_status=response.status_code, provider_scope=provider_scope,
+    )
+    category = _refusal_category(response)
+    if category is not None:
+        details["provider_refusal_category"] = category
+    candidate = refusal_retry_candidate(response)
+    if candidate is not None:
+        details["provider_charge_ambiguous"] = False
+        details["_rate_limit_retry_candidate"] = candidate
+    overload = primary_refusal_candidate(response, model) if provider_scope == "llmgw" else None
+    if overload is not None:
+        details["provider_charge_ambiguous"] = False
+        details["_overload_retry_candidate"] = overload
+    return details
+
+
 def normalize_usage(
     usage: dict[str, Any], fallback_input: int, fallback_output: int,
 ) -> tuple[dict[str, Any], bool]:
@@ -445,6 +470,10 @@ async def astream(
                         details = failure_details({}, r.headers, transport_stage=transport_stage,
                                                   upstream_http_status=r.status_code)
                         bounded = read_refusal_body(r)
+                        record_provider_failure(
+                            bounded if bounded is not None else r,
+                            credential=key, provider_scope=provider_scope,
+                        )
                         candidate = primary_refusal_candidate(bounded, model) if provider_scope == "llmgw" and bounded is not None else None
                         if candidate is not None:
                             details["_overload_retry_candidate"] = candidate
@@ -707,25 +736,11 @@ async def acompletion(
         from yleum_gateway.services.provider_validation_diagnostics import (
             capture_validation_failure,
         )
-        from yleum_gateway.services.text_failover import primary_refusal_candidate
-
+        record_provider_failure(exc.response, credential=key, provider_scope=provider_scope)
         capture_validation_failure(exc, credential=key)
-        details = failure_details(bounded_error_body(exc.response) or {},
-            _receipt_headers(exc.response.headers), upstream_http_status=exc.response.status_code)
-        category = _refusal_category(exc.response)
-        if category is not None:
-            details["provider_refusal_category"] = category
-        candidate = refusal_retry_candidate(exc.response)
-        if candidate is not None:
-            details["provider_charge_ambiguous"] = False
-            details["_rate_limit_retry_candidate"] = candidate
-        overload = primary_refusal_candidate(exc.response, model) if provider_scope == "llmgw" else None
-        if overload is not None:
-            details["provider_charge_ambiguous"] = False
-            details["_overload_retry_candidate"] = overload
         raise UpstreamProviderError(
             f"llmgw HTTP {exc.response.status_code}",
-            details=details,
+            details=_http_failure_details(exc.response, model=model, provider_scope=provider_scope),
         ) from exc
     except httpx.HTTPError as exc:
         safe = _is_preconnect_failure(exc, evidence.get("transport_stage"))

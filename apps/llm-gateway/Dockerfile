@@ -45,6 +45,10 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY src /app/src
 
+# Dedicated operator-only diagnostics; the production named volume inherits
+# this empty directory's ownership/mode and survives container replacement.
+RUN install -d -m 0700 /var/lib/yleum/provider-failures
+
 EXPOSE 8001
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=5 \

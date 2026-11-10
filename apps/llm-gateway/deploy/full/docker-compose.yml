@@ -128,6 +128,9 @@ services:
       dockerfile: Dockerfile
     image: omnia-gateway:prod
     container_name: yleum-prod-gw
+    volumes:
+      # Sanitized provider refusals stay outside stdout and customer volumes.
+      - gateway-provider-failures:/var/lib/yleum/provider-failures
     depends_on:
       postgres:
         condition: service_healthy
@@ -771,6 +774,7 @@ services:
       - yleum-prod
 
 volumes:
+  gateway-provider-failures:
   postgres-data:
   redis-data:
   minio-data:

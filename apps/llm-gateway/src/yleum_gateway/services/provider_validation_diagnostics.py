@@ -13,11 +13,12 @@ import json
 import os
 import re
 import stat
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import MappingProxyType
 from urllib.parse import quote, quote_plus
 from uuid import UUID
 
@@ -69,6 +70,13 @@ def provider_validation_scope(
         yield
     finally:
         _SCOPE.reset(token)
+
+
+def provider_diagnostic_scope() -> Mapping[str, str]:
+    """Copy committed dispatch identifiers without exposing the context object."""
+    scope = _SCOPE.get()
+    return MappingProxyType({"project_id": scope.project_id, "run_id": scope.run_id,
+                             "call_id": scope.call_id} if scope is not None else {})
 
 
 def _open_directory() -> int:
@@ -142,6 +150,18 @@ def _secret_forms(secret: str) -> set[str]:
     return forms
 
 
+def provider_secret_forms(credential: str, *header_sets: httpx.Headers) -> frozenset[str]:
+    """Reuse wire-capture credential spellings without returning header values."""
+    secrets = _secret_forms(credential)
+    for headers in header_sets:
+        for name, value in headers.multi_items():
+            if _SENSITIVE_HEADER.search(name):
+                secrets |= _secret_forms(value)
+                if name.lower() == "authorization" and " " in value:
+                    secrets |= _secret_forms(value.split(" ", 1)[1])
+    return frozenset(secrets)
+
+
 def _redact(value: str, secrets: set[str]) -> str:
     for secret in sorted(secrets, key=len, reverse=True):
         value = value.replace(secret, "[REDACTED]")
@@ -203,13 +223,7 @@ def _capture(error: httpx.HTTPStatusError, credential: str) -> None:
         # recording another call, and never affects the original provider error.
         _write_new(directory, f"claim-{nonce}.json", json.dumps(binding).encode("utf-8"))
         os.fsync(directory)
-        secrets = _secret_forms(credential)
-        for headers in (request.headers, response.headers):
-            for name, value in headers.multi_items():
-                if _SENSITIVE_HEADER.search(name):
-                    secrets |= _secret_forms(value)
-                    if name.lower() == "authorization" and " " in value:
-                        secrets |= _secret_forms(value.split(" ", 1)[1])
+        secrets = set(provider_secret_forms(credential, request.headers, response.headers))
         sent, received = request.content, response.content
         within_budget = len(sent) + len(received) <= _MAX_BODY_BYTES
         record = {**binding, "request": {"method": request.method, "url": str(url),

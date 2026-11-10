@@ -52,6 +52,7 @@ from yleum_gateway.services import provider_calls as provider_calls
 from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
 from yleum_gateway.services.generation_identity import GenerationProviderIdentity
 from yleum_gateway.services.model_router import is_supported, native_messages_route, slug_to_omnia
+from yleum_gateway.services.native_request_validation import validate_native_chat_request
 from yleum_gateway.services.output_budget import output_tokens, uses_provider_output_default
 from yleum_gateway.services.output_stop import output_stop_error
 from yleum_gateway.services.pricing import (
@@ -60,9 +61,11 @@ from yleum_gateway.services.pricing import (
     read_reported_cost,
     resolve_request_cost,
 )
+from yleum_gateway.services.provider_failure_diagnostics import record_provider_failure
 from yleum_gateway.services.provider_receipt_cleanup import (
     await_provider_receipt as _await_provider_receipt,
 )
+from yleum_gateway.services.provider_validation_diagnostics import provider_validation_scope
 from yleum_gateway.services.receipt_evidence import receipt_evidence
 
 log = structlog.get_logger(__name__)
@@ -706,6 +709,11 @@ async def _dispatch_native_provider(
                 provider_call_id=provider_call_id, transport_stage=transport_stage,
             )
 
+        if upstream.status_code >= 400:
+            with provider_validation_scope(
+                project_id=project_id, run_id=run_id, call_id=provider_call_id,
+            ):
+                record_provider_failure(upstream, credential=api_key, provider_scope=provider_scope)
         known_evidence = _known_response_evidence(upstream, provider_scope)
         if upstream.status_code >= 400:
             overload = text_failover.primary_refusal_candidate(upstream, model) if provider_scope == "llmgw" else None
@@ -867,6 +875,12 @@ async def _native_messages_execute(
         payload["tool_choice"] = _openai_tool_choice(body.get("tool_choice"))
     if isinstance(body.get("temperature"), (int, float)):
         payload["temperature"] = body["temperature"]
+
+    try:
+        validate_native_chat_request(payload)
+    except ValueError:
+        # Invalid converted transcripts must fail before admission or a paid POST.
+        return _err(400, "invalid_request_error", "Invalid native provider request")
 
     # Fail closed before the provider call. A native build must never keep
     # spending after the user's wallet floor or when accounting is unavailable.

@@ -1,5 +1,10 @@
 # Private, one-shot LLMGW validation evidence
 
+For automatic sanitized error-body records, including the native-agent route,
+see [provider failure diagnostics](provider-failure-diagnostics.md). No arm is
+needed for those records. The procedure below is the separate opt-in full-wire
+capture; it does not cover every Gateway route.
+
 This opt-in diagnostic records a **future** HTTP 422 from the LLMGW chat
 completion surface for one explicitly authorized QA project. The earlier failed
 wire request was not retained and cannot be reconstructed by this feature.
