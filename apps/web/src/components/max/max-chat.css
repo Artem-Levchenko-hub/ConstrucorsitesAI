@@ -43,7 +43,10 @@
 [data-max-editor] .max-editor-chat > div:first-child { padding-top: 0; }
 [data-max-editor] .max-editor-chat .max-chat-composer { background: transparent; }
 [data-max-editor] .max-studio-prompt.max-chat-composer > .prompt-input-surface { background: var(--color-surface-raised); border-color: var(--color-border-default); box-shadow: none; }
-[data-max-editor] .max-studio-prompt.max-chat-composer textarea { min-height: 46px; padding: 12px 14px; line-height: 1.5; }
+[data-max-editor] .max-studio-prompt.max-chat-composer > .prompt-input-surface > textarea {
+  min-height: 46px; padding: 12px 14px; line-height: 1.5; overflow-y: auto; scrollbar-width: none;
+}
+[data-max-editor] .max-studio-prompt.max-chat-composer > .prompt-input-surface > textarea::-webkit-scrollbar { display: none; }
 [data-max-editor] .max-chat-composer .prompt-input-attachment { width: 44px; min-width: 44px; height: 44px; min-height: 44px; padding: 0; border-radius: 12px; }
 [data-max-editor] .generation-failure-card { background: color-mix(in srgb, var(--color-danger-fg) 7%, var(--color-surface-raised)); border-color: color-mix(in srgb, var(--color-danger-fg) 28%, var(--color-surface-raised)); }
 [data-max-editor] .generation-failure-card .generation-failure-action { min-height: 44px; border-radius: 12px; }

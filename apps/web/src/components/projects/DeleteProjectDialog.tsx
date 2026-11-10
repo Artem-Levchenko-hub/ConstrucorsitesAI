@@ -3,6 +3,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { LoaderCircle } from "lucide-react";
 import { toast } from "sonner";
+import { ApiError } from "@/lib/api/client";
 import { deleteProject } from "@/lib/api/projects";
 import type { Project } from "@/lib/api/types";
 import { Button } from "@/components/ui/button";
@@ -62,6 +63,13 @@ export function DeleteProjectDialog({
     onError: (error) => {
       // The acknowledgement can be lost after the server commits the intent.
       void qc.invalidateQueries(projectLists);
+      if (error instanceof ApiError && error.code === "generation_draining") {
+        toast.info("Сервис обновляется", {
+          id: `project-delete-${project.id}`,
+          description: "Подождите несколько минут и повторите удаление.",
+        });
+        return;
+      }
       toast.error(error instanceof Error ? error.message : "Не удалось удалить проект. Попробуйте ещё раз.");
     },
   });

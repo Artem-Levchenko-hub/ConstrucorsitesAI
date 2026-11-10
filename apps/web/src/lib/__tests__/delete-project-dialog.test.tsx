@@ -4,12 +4,13 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
+import { ApiError } from "@/lib/api/client";
 import type { ProjectDeletionResult } from "@/lib/api/projects";
 import type { Project } from "@/lib/api/types";
 
-const mocks = vi.hoisted(() => ({ request: vi.fn(), success: vi.fn(), error: vi.fn() }));
+const mocks = vi.hoisted(() => ({ request: vi.fn(), success: vi.fn(), error: vi.fn(), info: vi.fn() }));
 vi.mock("@/lib/api/projects", () => ({ deleteProject: mocks.request }));
-vi.mock("sonner", () => ({ toast: { success: mocks.success, error: mocks.error } }));
+vi.mock("sonner", () => ({ toast: { success: mocks.success, error: mocks.error, info: mocks.info } }));
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -79,6 +80,22 @@ describe("one-click project deletion", () => {
     expect(close).not.toHaveBeenCalled();
     expect(mocks.error).toHaveBeenCalledWith("Перед удалением проекта остановите активную сборку");
     expect(mocks.success).not.toHaveBeenCalled();
+  });
+
+  it("explains the release pause and keeps the unaccepted project in the list", async () => {
+    mocks.request.mockRejectedValue(new ApiError(503, {
+      code: "generation_draining",
+      message: "Generation admission is temporarily paused",
+    }));
+    const { client, close } = await mountDialog();
+    await act(async () => button("Удалить навсегда").click());
+    await vi.waitFor(() => expect(mocks.info).toHaveBeenCalledWith("Сервис обновляется", {
+      id: "project-delete-own",
+      description: "Подождите несколько минут и повторите удаление.",
+    }));
+    expect(client.getQueryData(["projects"])).toEqual([project, other]);
+    expect(close).not.toHaveBeenCalled();
+    expect(mocks.error).not.toHaveBeenCalled();
   });
 
   it("restarts an active list's first read if it was cancelled on acceptance", async () => {
