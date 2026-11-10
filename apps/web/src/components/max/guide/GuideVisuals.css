@@ -85,6 +85,48 @@
   outline-offset: 4px;
 }
 
+.guide-screenshot-dialog__backdrop {
+  background-color: rgb(3 5 10 / 48%);
+  backdrop-filter: blur(7px);
+}
+
+.guide-screenshot-dialog {
+  width: min(calc(100% - 24px), 1120px);
+  max-width: none;
+  max-height: calc(100dvh - 24px);
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+}
+
+.guide-screenshot-dialog__title {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  padding-inline: 4px 52px;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.guide-screenshot-dialog__stage {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: 7px;
+}
+
+.guide-screenshot-dialog > button {
+  top: 12px;
+  right: 12px;
+  width: 44px;
+  height: 44px;
+}
+
+:is(.guide-screenshot-dialog > button, .guide-screenshot-dialog__stage):focus-visible {
+  outline: 2px solid var(--color-accent, #0062ee);
+  outline-offset: 2px;
+}
+
 .guide-screenshot__callouts {
   display: grid;
   gap: 16px;

@@ -126,7 +126,7 @@ describe("MAX guide screenshots", () => {
     }
   });
 
-  it("provides a full-size original and dated source for every capture", () => {
+  it("provides a screenshot dialog trigger with the original image as a fallback", () => {
     for (const [id, screenshot] of Object.entries(guideScreenshots)) {
       const document = renderScreenshot(id);
       const caption = document.querySelector("figcaption");
@@ -136,6 +136,7 @@ describe("MAX guide screenshots", () => {
       const original = links.find((link) => link.getAttribute("href") === screenshot.src);
       expect(original?.textContent).toContain("Открыть в полном размере");
       expect(original?.getAttribute("aria-label")).toContain(screenshot.title);
+      expect(original?.getAttribute("aria-haspopup")).toBe("dialog");
 
       const source = links.find((link) => link.getAttribute("href") === screenshot.sourceUrl);
       expect(source?.textContent).toBe(screenshot.sourceLabel);

@@ -2,6 +2,7 @@ import Image from "next/image";
 import { ArrowRight, Bot, Eye, FileCheck2, Rocket, Smartphone } from "lucide-react";
 
 import { guideScreenshots, type GuideScreenshotData } from "./guide-screenshots";
+import { GuideScreenshotDialog } from "./GuideScreenshotDialog";
 import "./GuideVisuals.css";
 
 export const guideColors = {
@@ -102,34 +103,27 @@ export function GuideScreenshot({ id }: { id: string }) {
     year: "numeric",
     timeZone: "Europe/Moscow",
   }).format(new Date(screenshot.capturedAt));
+  const visual = (
+    <div className="guide-screenshot__image">
+      <Image
+        className="guide-screenshot__photo"
+        src={screenshot.src}
+        width={screenshot.width}
+        height={screenshot.height}
+        alt={screenshot.alt}
+        unoptimized
+      />
+      <ScreenshotAnnotations screenshot={screenshot} />
+    </div>
+  );
 
   return (
     <figure className="guide-screenshot" data-guide-screenshot={id} aria-labelledby={`guide-${id}-title`} aria-describedby={`guide-${id}-source`}>
-      <div className="guide-screenshot__media">
-        <div className="guide-screenshot__image">
-          <Image
-            className="guide-screenshot__photo"
-            src={screenshot.src}
-            width={screenshot.width}
-            height={screenshot.height}
-            alt={screenshot.alt}
-            unoptimized
-          />
-          <ScreenshotAnnotations screenshot={screenshot} />
-        </div>
-      </div>
+      <div className="guide-screenshot__media">{visual}</div>
       <figcaption className="guide-screenshot__caption">
         <div className="guide-screenshot__heading">
           <h3 className="guide-screenshot__title" id={`guide-${id}-title`}>{screenshot.title}</h3>
-          <a
-            className="guide-screenshot__original"
-            href={screenshot.src}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label={`Открыть в полном размере: ${screenshot.title}`}
-          >
-            Открыть в полном размере <span aria-hidden="true">↗</span>
-          </a>
+          <GuideScreenshotDialog title={screenshot.title} src={screenshot.src}>{visual}</GuideScreenshotDialog>
         </div>
         <ol className="guide-screenshot__callouts" aria-label="Действия на снимке" role="list">
           {screenshot.callouts.map((callout, index) => (
