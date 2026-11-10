@@ -2,6 +2,7 @@ import { StrictMode, act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import MaxStaffJoinPage from "@/app/max/staff/join/page";
 import { MaxStaffInvite } from "@/components/max/MaxStaffInvite";
 import { MaxStaffQueue } from "@/components/max/MaxStaffQueue";
 import { MaxStaffShell } from "@/components/max/MaxStaffShell";
@@ -9,6 +10,9 @@ import type { StaffLead, StaffOrder } from "@/lib/api/max-staff";
 
 const router = vi.hoisted(() => ({ replace: vi.fn(), refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ get: (name: string) => name === "omnia_session" ? { value: "staff-session" } : undefined }),
+}));
 vi.mock("@/app/(auth)/actions", () => ({ logoutAction: vi.fn() }));
 
 const project = "00000000-0000-4000-8000-000000000001";
@@ -40,6 +44,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount()); container.remove(); client.clear();
   sessionStorage.clear(); history.replaceState(null, "", originalHref); vi.unstubAllGlobals(); vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 
 async function render(children: React.ReactNode) {
@@ -75,6 +80,28 @@ it("links staff to their guide chapter in a new tab", async () => {
   expect(link?.textContent?.trim()).toBe("Руководство в новой вкладке");
   expect(link?.target).toBe("_blank");
   expect(link?.relList.contains("noopener")).toBe(true);
+});
+
+it("offers email confirmation on the invite page when delivery is configured", async () => {
+  vi.stubEnv("NEXT_PUBLIC_USE_MOCKS", "false");
+  vi.stubEnv("INTERNAL_API_URL", "http://api.example.test");
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    switch (new URL(url).pathname) {
+      case "/api/auth/me":
+        return Response.json({ id: "staff-id", email: "staff@example.test", is_anon: false, email_verified_at: null });
+      case "/api/max/account/access":
+        return Response.json({ email_verified: false, email_delivery_configured: true });
+      default:
+        return new Response(null, { status: 404 });
+    }
+  }));
+  history.replaceState(null, "", `/max/staff/join#token=${proof}`);
+
+  await render(await MaxStaffJoinPage());
+
+  expect(container.querySelector('[name="one-time-code"]')).not.toBeNull();
+  expect(button("Отправить ещё раз")?.disabled).toBe(false);
+  expect(button("Принять приглашение")).toBeUndefined();
 });
 
 it("scrubs the invite, preserves it across auth, and accepts only after an explicit click", async () => {
