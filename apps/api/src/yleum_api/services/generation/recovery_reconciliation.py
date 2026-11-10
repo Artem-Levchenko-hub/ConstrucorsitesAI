@@ -142,13 +142,15 @@ def _preserve_legacy_chat_allowance(
     current: ProviderDispatchPlan, saved: ProviderDispatchPlan,
 ) -> ProviderDispatchPlan:
     # Historical cold calls retain their recorded cap; never refill their budget.
-    compatible = (
-        current.kind == saved.kind == "chat"
-        and (current.wire_allowance, saved.wire_allowance) == (2, 1)
-    ) or (
-        current.kind == saved.kind and current.kind in {"chat", "sse"}
-        and (current.wire_allowance, saved.wire_allowance) == (3, 2)
-    )
+    # New refusal-only slots apply to fresh calls. A persisted pre-upgrade
+    # dispatch must reach identity reconciliation with its exact original cap.
+    historical_pairs = {
+        "chat": {(2, 1), (3, 2), (4, 1), (4, 2), (5, 2), (5, 3)},
+        "sse": {(3, 2), (4, 2), (5, 2), (5, 3)},
+    }
+    compatible = current.kind == saved.kind and (
+        current.wire_allowance, saved.wire_allowance
+    ) in historical_pairs.get(current.kind, set())
     if compatible:
         return current.model_copy(update={"wire_allowance": saved.wire_allowance})
     return current

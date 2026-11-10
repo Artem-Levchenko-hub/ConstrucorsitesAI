@@ -40,7 +40,7 @@ from yleum_gateway.core.runner_auth import (
     validate_runner_metadata,
     verify_runner_bearer_header,
 )
-from yleum_gateway.providers import llmgw
+from yleum_gateway.providers import inflight_budget, llmgw
 from yleum_gateway.providers.native_stream import (
     RECEIPT_RESERVE_SECONDS,
     open_aitunnel_response,
@@ -716,7 +716,11 @@ async def _dispatch_native_provider(
                 record_provider_failure(upstream, credential=api_key, provider_scope=provider_scope)
         known_evidence = _known_response_evidence(upstream, provider_scope)
         if upstream.status_code >= 400:
-            overload = text_failover.primary_refusal_candidate(upstream, model) if provider_scope == "llmgw" else None
+            inflight = inflight_budget.retry_candidate(upstream, provider_scope=provider_scope)
+            overload = (
+                text_failover.primary_refusal_candidate(upstream, model)
+                if provider_scope == "llmgw" and inflight is None else None
+            )
             if overload is not None:
                 recorded = await _finish_provider_call(
                     provider_call_id, identity=identity, status="failed", reason="upstream_refused",
@@ -741,7 +745,7 @@ async def _dispatch_native_provider(
                     }))
                 provider_scope = "aitunnel"
                 continue
-            retry_candidate = refusal_retry_candidate(upstream)
+            retry_candidate = inflight or refusal_retry_candidate(upstream)
             ambiguous = upstream.status_code >= 500 or (upstream.status_code == 429 and retry_candidate is None)
             recorded = await _finish_provider_call(
                 provider_call_id, identity=identity, status="ambiguous" if ambiguous else "failed",
@@ -761,7 +765,7 @@ async def _dispatch_native_provider(
                 )
 
                 confirm_response_accounting()
-            category = llmgw._refusal_category(upstream)
+            category = "rate_limit" if inflight is not None else llmgw._refusal_category(upstream)
             details: dict[str, Any] = {
                 "upstream_http_status": upstream.status_code,
                 "provider_charge_ambiguous": ambiguous,

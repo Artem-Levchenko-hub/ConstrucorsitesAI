@@ -1216,12 +1216,13 @@ async def _run_agent_segment(
                     call: Callable[..., Awaitable[str]] = bounded_complete,
                     messages: list[dict[str, Any]] = call_msgs,
                 ) -> str:
-                    return await call(
-                        messages, active_model, user_id=user_id, project_id=project_id,
-                        max_tokens=(agent_output_tokens(active_model, fallback=16384)
-                                    if max_tokens is None else max_tokens),
-                        temperature=0.0,
-                    )
+                    with llm_client.provider_wait_events(emit):
+                        return await call(
+                            messages, active_model, user_id=user_id, project_id=project_id,
+                            max_tokens=(agent_output_tokens(active_model, fallback=16384)
+                                        if max_tokens is None else max_tokens),
+                            temperature=0.0,
+                        )
 
                 async with asyncio.timeout(None if restoring else rate_remaining):
                     if continuation is None:

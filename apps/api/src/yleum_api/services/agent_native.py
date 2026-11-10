@@ -1318,6 +1318,15 @@ async def _call_messages(
                     context=server_error.get("details") if server_error else None,
                 )
             category = _provider_refusal_category(r)
+            budget_error = _gateway_native_error(r, url) if r.status_code == 402 else None
+            budget_details = budget_error.get("details") if budget_error is not None else None
+            budget_delay = (
+                rate_limit_retry_delay(budget_details)
+                if budget_error is not None and budget_error.get("type") == "api_error"
+                and budget_error.get("code", "api_error") == "api_error"
+                and isinstance(budget_details, dict)
+                and budget_details.get("upstream_http_status") == 402 else None
+            )
             if r.status_code == 503:
                 try:
                     error_body = r.json()
@@ -1355,7 +1364,7 @@ async def _call_messages(
                     and output_error.get("type") == "wallet_empty"):
                 # Gateway wallet admission happens before any provider POST.
                 raise _terminal_provider_error("PLATFORM_WALLET_EMPTY")
-            if r.status_code == 402 or category in {"access", "funds"}:
+            if (r.status_code == 402 and budget_delay is None) or category in {"access", "funds"}:
                 raise _terminal_provider_error(
                     f"provider_refusal_{category}" if category is not None
                     else "provider_http_402"
@@ -1364,7 +1373,13 @@ async def _call_messages(
                 # Repeating the same rejected request cannot fix its contract.
                 # Keep only the HTTP class; never infer quota or expose its body.
                 raise _terminal_provider_error(f"provider_http_{r.status_code}")
-            if _gateway_overload_refused(r, url):
+            if budget_delay is not None:
+                # The same transcript/tool position waits; the next dispatch
+                # obtains a SQL-verified child of the committed refused parent.
+                last = _terminal_provider_error("provider_refusal_rate_limit")
+                delay = max(6.0 * (attempt + 1), budget_delay)
+                retry_parent, generation_attempt = generation_attempt, None
+            elif _gateway_overload_refused(r, url):
                 if generation_attempt is None or overload_used:
                     raise _terminal_provider_error("provider_request_failed")
                 overload_used = True

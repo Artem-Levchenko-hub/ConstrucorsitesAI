@@ -45,7 +45,7 @@ from yleum_gateway.core.errors import (
     UpstreamProviderError,
     ValidationFailedError,
 )
-from yleum_gateway.providers import native_stream
+from yleum_gateway.providers import inflight_budget, native_stream
 from yleum_gateway.providers.rate_limit import bounded_error_body, refusal_retry_candidate
 from yleum_gateway.services.output_budget import output_tokens, uses_provider_output_default
 from yleum_gateway.services.provider_calls import ReceiptFailure
@@ -290,11 +290,15 @@ def _http_failure_details(
     category = _refusal_category(response)
     if category is not None:
         details["provider_refusal_category"] = category
-    candidate = refusal_retry_candidate(response)
+    inflight = inflight_budget.retry_candidate(response, provider_scope=provider_scope)
+    candidate = inflight or refusal_retry_candidate(response)
     if candidate is not None:
         details["provider_charge_ambiguous"] = False
         details["_rate_limit_retry_candidate"] = candidate
-    overload = primary_refusal_candidate(response, model) if provider_scope == "llmgw" else None
+    overload = (
+        primary_refusal_candidate(response, model)
+        if provider_scope == "llmgw" and inflight is None else None
+    )
     if overload is not None:
         details["provider_charge_ambiguous"] = False
         details["_overload_retry_candidate"] = overload

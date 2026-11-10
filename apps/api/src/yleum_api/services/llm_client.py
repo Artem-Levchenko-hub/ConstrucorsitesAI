@@ -6,7 +6,8 @@ import asyncio
 import contextvars
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import httpx
@@ -20,6 +21,27 @@ from yleum_api.services.generation.recovery_trace import provider_error_context
 from yleum_api.services.generation.response_auth import record_headers
 
 log = logging.getLogger(__name__)
+
+_INFLIGHT_POLICY = "llmgw_inflight_budget_v1"
+_GENERATION_MODELS = frozenset({
+    "gemini-3.1-pro-preview-customtools", "claude-sonnet-5", "claude-sonnet-5.5",
+    "~anthropic/claude-sonnet-latest",
+})
+_provider_wait_observer: contextvars.ContextVar[
+    Callable[[str, dict[str, Any]], Awaitable[None]] | None
+] = contextvars.ContextVar("provider_wait_observer", default=None)
+
+
+@contextmanager
+def provider_wait_events(
+    observer: Callable[[str, dict[str, Any]], Awaitable[None]] | None,
+) -> Iterator[None]:
+    """Keep a wait in the owning transcript without leaking into later calls."""
+    token = _provider_wait_observer.set(observer)
+    try:
+        yield
+    finally:
+        _provider_wait_observer.reset(token)
 
 
 async def recover_generation_response(
@@ -178,6 +200,7 @@ class LLMError(Exception):
         provider_charge_ambiguous: bool | None = None, retry_safe: bool = False,
         provider_refusal_category: str | None = None,
         retry_after_seconds: int | None = None,
+        retry_policy: str | None = None,
         finish_reason: object = None, requested_max_tokens: object = None,
         completion_tokens: object = None,
         provider_scope: object = None, transport_stage: object = None,
@@ -191,6 +214,7 @@ class LLMError(Exception):
         self.retry_safe = retry_safe
         self.provider_refusal_category = provider_refusal_category
         self.retry_after_seconds = retry_after_seconds
+        self.retry_policy = retry_policy
         context = provider_error_context({
             "provider_scope": provider_scope, "transport_stage": transport_stage,
             "provider_call_id": provider_call_id,
@@ -236,15 +260,60 @@ def rate_limit_retry_delay(details: object) -> int | None:
     """Accept only the Gateway's post-journal, closed refusal policy contract."""
     if not isinstance(details, dict) or not (
         type(details.get("upstream_http_status")) is int
-        and details["upstream_http_status"] == 429
         and details.get("provider_refusal_category") == "rate_limit"
         and details.get("provider_charge_ambiguous") is False
         and details.get("retry_safe") is True
-        and details.get("retry_policy") == "llmgw_key_rate_limit_v1"
     ):
+        return None
+    policy = details.get("retry_policy")
+    if policy == _INFLIGHT_POLICY:
+        if details["upstream_http_status"] != 402 or details.get("provider_scope") != "llmgw":
+            return None
+        # This provider promises a delay, never an immediate billing retry.
+        delay = details.get("retry_after_seconds")
+        return delay if type(delay) is int and 0 < delay <= 86_400 else None
+    if policy != "llmgw_key_rate_limit_v1" or details["upstream_http_status"] != 429:
         return None
     delay = details.get("retry_after_seconds", 0)
     return delay if type(delay) is int and 0 <= delay <= 86_400 else None
+
+
+def inflight_budget_delay(failure: LLMError) -> int | None:
+    """Only a fully validated Gateway contract may enter a budget wait."""
+    if failure.retry_policy != _INFLIGHT_POLICY:
+        return None
+    return rate_limit_retry_delay({
+        "retry_policy": failure.retry_policy,
+        "upstream_http_status": failure.upstream_http_status,
+        "provider_scope": failure.provider_scope,
+        "provider_refusal_category": failure.provider_refusal_category,
+        "provider_charge_ambiguous": failure.provider_charge_ambiguous,
+        "retry_safe": failure.retry_safe,
+        "retry_after_seconds": failure.retry_after_seconds,
+    })
+
+
+async def _wait_for_inflight_budget(failure: LLMError, deadline: float) -> None:
+    """Wait before a verified child, never shorten Retry-After or renew a clock."""
+    delay = inflight_budget_delay(failure)
+    loop = asyncio.get_running_loop()
+    if delay is None or delay >= deadline - loop.time():
+        failure.retry_safe = False
+        raise failure
+    observer = _provider_wait_observer.get()
+    if observer is not None:
+        await observer("agent.wait", {
+            "human": "Жду освобождения бюджета модели",
+            "tool": "provider_request",
+            "detail": (
+                f"Провайдер временно зарезервировал бюджет. Жду {delay} с "
+                "и продолжаю тот же шаг; выполненные команды не повторяются."
+            ),
+        })
+    await asyncio.sleep(delay)
+    if loop.time() >= deadline:
+        failure.retry_safe = False
+        raise failure
 
 
 def _overload_refusal_details(error: object) -> bool:
@@ -330,14 +399,26 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
                         provider_charge_ambiguous=False, retry_safe=True)
     # Never forward provider messages, raw bodies, headers or URLs to the agent.
     error: dict[str, Any] = {}
-    try:
-        body = response.json()
-    except (ValueError, RecursionError):
-        body = None
+    body = _refusal_document(response.content)
+    retained_native_budget = False
     if isinstance(body, dict) and isinstance(body.get("detail"), dict):
         candidate = body["detail"].get("error")
         if isinstance(candidate, dict):
             error = candidate
+    elif (response.status_code == 402 and isinstance(body, dict)
+          and not set(body) - {"type", "error"} and body.get("type", "error") == "error"):
+        candidate = body.get("error")
+        if (isinstance(candidate, dict)
+                and not set(candidate) - {"type", "code", "message", "details"}
+                and candidate.get("type") == "api_error"
+                and candidate.get("code", "api_error") == "api_error"):
+            details = candidate.get("details")
+            if (isinstance(details, dict) and details.get("upstream_http_status") == 402
+                    and rate_limit_retry_delay(details) is not None):
+                # Authenticated retained native bodies use this distinct envelope;
+                # only the same closed budget policy is normalized for cold replay.
+                error = {"code": "model_unavailable", "details": details}
+                retained_native_budget = True
     raw_code = error.get("code")
     code = raw_code if isinstance(raw_code, str) and raw_code in _GATEWAY_ERROR_CODES else None
     details = error.get("details")
@@ -396,12 +477,15 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
     )
     rate_delay = (
         rate_limit_retry_delay(details)
-        if response.status_code == 502 and code == "model_unavailable"
+        if (response.status_code == 502 or retained_native_budget) and code == "model_unavailable"
         and len(response.content) <= 16_384
+        and not response.history
         and error.get("type", "model_unavailable") == "model_unavailable" else None
     )
     retry_safe = retry_safe or rate_delay is not None
-    if category == "funds":
+    if rate_delay is not None and upstream == 402:
+        message = "Временно занят резерв бюджета LLM-провайдера."
+    elif category == "funds":
         message = "Недостаточно средств у LLM-провайдера."
     elif category == "access":
         message = "LLM-провайдер отклонил доступ к запросу."
@@ -433,6 +517,7 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
         provider_charge_ambiguous=ambiguous, retry_safe=retry_safe,
         provider_refusal_category=category,
         retry_after_seconds=rate_delay,
+        retry_policy=_INFLIGHT_POLICY if rate_delay is not None and upstream == 402 else None,
         provider_scope=context.get("provider_scope"),
         transport_stage=context.get("transport_stage"),
         provider_call_id=context.get("provider_call_id"),
@@ -547,25 +632,30 @@ async def _chat_stream_data(
         try:
             retained = await require_recovered_response(identity)
         except LLMError as failure:
+            budget_delay = inflight_budget_delay(failure)
             resumed = await resume_generation_wire(identity, allow_provider_refusal=(
                 (failure.code == "model_unavailable" and failure.retry_safe is True
                 and failure.provider_charge_ambiguous is False
                 and failure.upstream_http_status is None)
                 or (failure.code == "upstream_refused" and failure.retry_safe is True
                 and failure.provider_charge_ambiguous is False)
+                or budget_delay is not None
             ))
             if resumed is None:
                 raise
             start_attempt, retry_parent = resumed
             overload_used = failure.code == "upstream_refused"
-            if (failure.code != "upstream_refused"
+            if (failure.code != "upstream_refused" and budget_delay is None
                     and start_attempt >= _chat_attempt_allowance(payload)):
                 raise
             remaining = provider_dispatch_remaining()
             if remaining is None or remaining <= 0.5:
                 raise
             deadline = asyncio.get_running_loop().time() + remaining
-            await asyncio.sleep(0.5)
+            if budget_delay is not None:
+                await _wait_for_inflight_budget(failure, deadline)
+            else:
+                await asyncio.sleep(0.5)
             if retry_parent:
                 identity = await prepare_generation_attempt(
                     payload, "/v1/chat/completions", parent=identity,
@@ -603,6 +693,7 @@ async def _chat_stream_data(
                 remaining = min(remaining, durable_remaining)
             attach_identity(payload, identity)
             retry_parent = False
+            budget_failure: LLMError | None = None
             try:
                 timeout = httpx.Timeout(remaining, connect=min(5.0, remaining), read=remaining)
                 async with httpx.AsyncClient(timeout=timeout) as client:
@@ -619,7 +710,15 @@ async def _chat_stream_data(
                         accepted_headers = True
                         if response.status_code >= 400:
                             await response.aread()
-                            if (
+                            http_failure = _gateway_failure(response)
+                            if (inflight_budget_delay(http_failure) is not None
+                                    and identity is not None):
+                                if attempt + 1 >= allowance:
+                                    http_failure.retry_safe = False
+                                    raise http_failure
+                                budget_failure = http_failure
+                                retry_parent = True
+                            elif (
                                 identity is not None
                                 and attempt + 1 < allowance
                                 and _http_child_refusal(
@@ -635,7 +734,7 @@ async def _chat_stream_data(
                                     raise LLMError(
                                         f"gateway {response.status_code}: {response.content!r}"
                                     )
-                                raise _gateway_failure(response)
+                                raise http_failure
                         else:
                             async for line in response.aiter_lines():
                                 if not line.startswith("data:"):
@@ -685,7 +784,10 @@ async def _chat_stream_data(
                 await confirm_generation_preconnect(wire, identity)
                 if attempt + 1 >= legacy_allowance:
                     raise
-            await asyncio.sleep(0.5)
+            if budget_failure is not None:
+                await _wait_for_inflight_budget(budget_failure, deadline)
+            else:
+                await asyncio.sleep(0.5)
             if retry_parent:
                 identity = await prepare_generation_attempt(
                     payload, "/v1/chat/completions", parent=identity
@@ -708,13 +810,16 @@ def _stream_child_refusal(
 
 
 def _chat_dispatch_allowance(payload: dict[str, Any]) -> int:
-    # The extra slot is refusal-only; ordinary retries keep their original cap.
+    # Extra slots require committed refusals; ordinary transport retries retain
+    # their old cap. Saved V3 plans never gain a new allowance after a rollout.
     from yleum_api.services.generation.recovery_reconciliation import (
         provider_dispatch_wire_allowance,
     )
     allowance = _chat_attempt_allowance(payload)
     if payload.get("model") == "claude-sonnet-5.5":
         allowance += 1
+    if payload.get("model") in _GENERATION_MODELS:
+        allowance += 2
     saved = provider_dispatch_wire_allowance()
     return min(allowance, saved) if saved is not None else allowance
 
@@ -722,14 +827,8 @@ def _chat_dispatch_allowance(payload: dict[str, Any]) -> int:
 def _chat_attempt_allowance(payload: dict[str, Any]) -> int:
     # Mirror only known existing llmgw adapter branches. Unknown models cannot
     # acquire a retry allowance by claiming an arbitrary metadata value.
-    known = {
-        "gemini-3.1-pro-preview-customtools",
-        "claude-sonnet-5",
-        "claude-sonnet-5.5",
-        "~anthropic/claude-sonnet-latest",
-    }
     model = payload.get("model")
-    if model not in known:
+    if model not in _GENERATION_MODELS:
         return 1
     if (
         not payload.get("stream")
@@ -796,25 +895,30 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
         try:
             retained = await require_recovered_response(identity)
         except LLMError as failure:
+            budget_delay = inflight_budget_delay(failure)
             resumed = await resume_generation_wire(identity, allow_provider_refusal=(
                 (failure.code == "model_unavailable" and failure.retry_safe is True
                 and failure.provider_charge_ambiguous is False
                 and failure.upstream_http_status is None)
                 or (failure.code == "upstream_refused" and failure.retry_safe is True
                 and failure.provider_charge_ambiguous is False)
+                or budget_delay is not None
             ))
             if resumed is None:
                 raise
             start_attempt, retry_parent = resumed
             overload_used = failure.code == "upstream_refused"
-            if (failure.code != "upstream_refused"
+            if (failure.code != "upstream_refused" and budget_delay is None
                     and start_attempt >= _chat_attempt_allowance(payload)):
                 raise
             remaining = provider_dispatch_remaining()
             if remaining is None or remaining <= 0.5:
                 raise
             deadline = loop.time() + remaining
-            await asyncio.sleep(0.5)
+            if budget_delay is not None:
+                await _wait_for_inflight_budget(failure, deadline)
+            else:
+                await asyncio.sleep(0.5)
             if retry_parent:
                 identity = await prepare_generation_attempt(
                     payload, "/v1/chat/completions", parent=identity,
@@ -883,6 +987,19 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
                     continue  # API-to-gateway transport: SAME committed identity.
                 if response.status_code < 400:
                     return response
+                http_failure = _gateway_failure(response)
+                if inflight_budget_delay(http_failure) is not None and identity is not None:
+                    if attempt + 1 >= allowance:
+                        http_failure.retry_safe = False
+                        raise http_failure
+                    await _wait_for_inflight_budget(http_failure, deadline)
+                    # Only SQL can grant this child after the refused receipt
+                    # commits. Keep the same payload, run, model and agent step.
+                    identity = await prepare_generation_attempt(
+                        payload, "/v1/chat/completions", parent=identity,
+                    )
+                    accepted_headers = False
+                    continue
                 if (
                     identity is not None
                     and attempt + 1 < allowance
@@ -897,7 +1014,7 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
                     )  # SQL independently verifies the linked committed receipt.
                     accepted_headers = False
                     continue
-                raise _gateway_failure(response)
+                raise http_failure
     except (httpx.HTTPError, TimeoutError) as exc:
         preconnect = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)) and (
             identity is None or not accepted_headers

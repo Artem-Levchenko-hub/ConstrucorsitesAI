@@ -197,6 +197,8 @@ async def test_native_identity_reuses_transport_but_not_definitively_closed_atte
 async def test_complete_transfers_only_existing_preconnect_allowance(
     monkeypatch, failure, default_output
 ):
+    import asyncio
+
     import httpx
 
     from yleum_api.services import llm_client
@@ -252,11 +254,19 @@ async def test_complete_transfers_only_existing_preconnect_allowance(
         httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(reply), **kw)
     )
     sleeps = []
+    real_loop = asyncio.get_running_loop()
+    elapsed = [0.0]
 
     async def sleep(delay):
         sleeps.append(delay)
+        elapsed[0] += delay
 
-    monkeypatch.setattr(llm_client.asyncio, "sleep", sleep)
+    # A mocked sleep must consume logical time. Windows' coarse loop clock can
+    # otherwise report identical I/O budgets for two immediate mock requests.
+    monkeypatch.setattr(llm_client, "asyncio", SimpleNamespace(
+        get_running_loop=lambda: SimpleNamespace(time=lambda: real_loop.time() + elapsed[0]),
+        sleep=sleep, timeout=asyncio.timeout, timeout_at=asyncio.timeout_at,
+    ))
     kwargs = {"max_tokens": None if default_output else 1024, "timeout_seconds": 30}
     expected_retry = not default_output and failure != "ambiguous"
     if expected_retry:
