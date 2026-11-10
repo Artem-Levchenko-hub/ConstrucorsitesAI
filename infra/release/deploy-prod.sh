@@ -19,6 +19,8 @@
 #     --repair-window N   окно починки адаптации (RESTORATION_ADAPTATION_REPAIR_SECONDS), по умолчанию 3600:
 #                         пишется в .env платформы и сверяется в отрендеренном compose (защита от отката к умолчанию)
 #                         (compose и api берут её из docker-compose.yml / config.py)
+#     --generation-window N обычная генерация (MAX_GENERATION_DEADLINE_SECONDS), 60–7200 секунд:
+#                         явное изменение .env под release drain; без флага текущее значение сохраняется
 #     --finalize-owned-release NONCE --control-revision SHA --no-web
 #                         завершить уже заменённый точный target под прежним владельцем;
 #                         только исправленный publication gate берётся из control SHA
@@ -43,12 +45,14 @@ FINALIZE_NONCE=""
 RESUME_NONCE=""
 CONTROL_SHA=""
 REPAIR_OVERRIDE=0
+GENERATION_WINDOW=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-web) WEB=0 ;;
     --web-only) API=0 ;;
     --legal-version) LEGAL="${2:?}"; shift ;;
     --repair-window) REPAIR="${2:?}"; REPAIR_OVERRIDE=1; shift ;;
+    --generation-window) GENERATION_WINDOW="${2:?}"; shift ;;
     --gateway) GW=1 ;;
     --bootstrap-admission) BOOTSTRAP=1 ;;
     --finalize-owned-release) FINALIZE_NONCE="${2:?}"; shift ;;
@@ -58,9 +62,19 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+if [ -n "$GENERATION_WINDOW" ]; then
+  # Only canonical decimal seconds may enter the remote shell command.
+  [[ "$GENERATION_WINDOW" != *[!0-9]* && "$GENERATION_WINDOW" =~ ^[1-9][0-9]{1,3}$ ]] \
+    && [ "$GENERATION_WINDOW" -ge 60 ] && [ "$GENERATION_WINDOW" -le 7200 ] || {
+    echo "--generation-window: нужно целое число секунд от 60 до 7200" >&2; exit 2;
+  }
+  [ "$API" = 1 ] || {
+    echo "--generation-window требует выкатку API, нельзя --web-only" >&2; exit 2;
+  }
+fi
 if [ -n "$FINALIZE_NONCE" ] || [ -n "$RESUME_NONCE" ] || [ -n "$CONTROL_SHA" ]; then
   if [ -z "$CONTROL_SHA" ] || [ "$API" != 1 ] || [ "$GW" != 0 ] || [ "$BOOTSTRAP" != 0 ] \
-    || [ -n "$LEGAL" ] || [ "$REPAIR_OVERRIDE" != 0 ]; then
+    || [ -n "$LEGAL" ] || [ "$REPAIR_OVERRIDE" != 0 ] || [ -n "$GENERATION_WINDOW" ]; then
     echo "owned continuation requires owner/control flags without rollout overrides" >&2
     exit 2
   fi
@@ -819,7 +833,7 @@ PY
   reader_control commerce clear --release "$SHA" --owner-nonce "$READER_NONCE"
 }
 
-say "выкатка $SHA api=$API web=$WEB gateway=$GW legal=${LEGAL:-по умолчанию образа} repair=$REPAIR"
+say "выкатка $SHA api=$API web=$WEB gateway=$GW legal=${LEGAL:-по умолчанию образа} repair=$REPAIR generation=${GENERATION_WINDOW:-сохранено}"
 git -C "$REPO" fetch -q origin
 git -C "$REPO" merge-base --is-ancestor "$SHA" origin/main || { echo "ревизия $SHORT не лежит в origin/main — выкатываем только то, что в main" >&2; exit 2; }
 if [ -n "$CONTROL_SHA" ]; then
@@ -880,6 +894,11 @@ ssh max-core "set -e; cd /opt/omnia; git fetch -q origin; git merge --ff-only $S
 say "core: окно починки адаптации в .env платформы"
 ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && printf '%s' '$REPAIR' | /opt/omnia/infra/release/update-env-value.sh .env RESTORATION_ADAPTATION_REPAIR_SECONDS - >/dev/null && grep -n '^RESTORATION_ADAPTATION_REPAIR_SECONDS=' .env"
 
+if [ -n "$GENERATION_WINDOW" ]; then
+  say "core: обычная генерация $GENERATION_WINDOW секунд в .env платформы"
+  ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && printf '%s' '$GENERATION_WINDOW' | /opt/omnia/infra/release/update-env-value.sh .env MAX_GENERATION_DEADLINE_SECONDS - >/dev/null && grep -n '^MAX_GENERATION_DEADLINE_SECONDS=' .env"
+fi
+
 if [ -n "$LEGAL" ]; then
   # Единственный источник — .env платформы: compose отдаёт его api, worker'ам и сборке web,
   # а шаг core-access воркера биллинга копирует его в /etc/max-studio/billing-worker.env
@@ -898,6 +917,10 @@ assert not gw.get(\"YANDEX_ID_CLIENT_SECRET\") and not wk.get(\"YANDEX_ID_CLIENT
 assert not gw.get(\"VK_ID_CLIENT_SECRET\") and not wk.get(\"VK_ID_CLIENT_SECRET\"), \"secret leaked to a worker\"
 assert api.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\") == \"$REPAIR\", api.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\")
 assert gw.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\") == \"$REPAIR\", gw.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\")
+generation_window = \"$GENERATION_WINDOW\"
+if generation_window:
+    for name, environment in ((\"api\", api), (\"worker\", wk), (\"generation-worker\", gw)):
+        assert environment.get(\"MAX_GENERATION_DEADLINE_SECONDS\") == generation_window, name
 if $API: assert d[\"api\"][\"image\"].endswith(\"$SHA\"), d[\"api\"][\"image\"]
 if $WEB: assert d[\"web\"][\"image\"].endswith(\"$SHA\"), d[\"web\"][\"image\"]
 if $WEB: assert d[\"web\"][\"environment\"].get(\"OMNIA_RELEASE_SHA\") == \"$SHA\", d[\"web\"][\"environment\"].get(\"OMNIA_RELEASE_SHA\")
@@ -905,7 +928,7 @@ legal = \"$LEGAL\"
 if legal:
     assert api.get(\"LEGAL_DOCUMENT_VERSION\") == legal, api.get(\"LEGAL_DOCUMENT_VERSION\")
     assert (d[\"web\"][\"build\"].get(\"args\") or {}).get(\"NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION\") == legal
-print(\"compose ok: yandex creds at api:\", bool(api.get(\"YANDEX_ID_CLIENT_SECRET\")), \"| repair window\", api.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\"), \"| legal\", api.get(\"LEGAL_DOCUMENT_VERSION\"))
+print(\"compose ok: yandex creds at api:\", bool(api.get(\"YANDEX_ID_CLIENT_SECRET\")), \"| repair window\", api.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\"), \"| generation window\", api.get(\"MAX_GENERATION_DEADLINE_SECONDS\"), \"| legal\", api.get(\"LEGAL_DOCUMENT_VERSION\"))
 '"
 
 TARGETS=""; [ $API = 1 ] && TARGETS="api"; [ $WEB = 1 ] && TARGETS="$TARGETS web"; TARGETS="${TARGETS# }"

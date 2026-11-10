@@ -70,6 +70,41 @@ def test_product_advisor_default_uses_a_current_gateway_model(
     assert get_settings().product_advisor_model == "claude-sonnet-5"
 
 
+def test_generation_window_override_adds_thirty_minutes_to_edit_and_repair(
+    isolated_settings_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime, timedelta
+    from uuid import uuid4
+
+    from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.services.generation_deadline import generation_deadline, source_edit_deadline
+
+    baseline = get_settings()
+    started = datetime(2026, 11, 10, tzinfo=UTC)
+    run = GenerationRun(id=uuid4(), status="running", created_at=started, started_at=started,
+                        agent_state={})
+    old_deadline = generation_deadline(run).at
+    assert old_deadline is not None
+    monkeypatch.setenv("MAX_GENERATION_DEADLINE_SECONDS", "3300")
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    settings = get_settings()
+    deadline = generation_deadline(run).at
+    assert settings.max_generation_deadline_seconds == 3300
+    assert deadline == old_deadline + timedelta(minutes=30)
+    assert source_edit_deadline(deadline, started_at=started, reserve_seconds=180) == (
+        source_edit_deadline(old_deadline, started_at=started, reserve_seconds=180)
+        + timedelta(minutes=30)
+    )
+    for name in (
+        "restoration_adaptation_edit_seconds",
+        "restoration_adaptation_repair_seconds",
+        "restoration_adaptation_activation_seconds",
+    ):
+        assert getattr(settings, name) == getattr(baseline, name)
+
+
 @pytest.mark.parametrize(
     ("field_name", "value"),
     [
