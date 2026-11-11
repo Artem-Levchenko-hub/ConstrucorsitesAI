@@ -220,6 +220,7 @@ async def stream_completion(
 
     async def settle(
         *, primary_failure: Literal["preconnect", "upstream_refused"] | None = None,
+        balance_refused: bool = False,
     ) -> None:
         nonlocal receipt_finished
         assert provider_call_id is not None
@@ -228,10 +229,13 @@ async def stream_completion(
             if primary_failure is not None:
                 assert upstream_error is not None
                 receipt_finished = True
+                if primary_failure == "preconnect":
+                    failure_type = provider_calls.classify_failure(upstream_error)
+                else:
+                    failure_type = provider_calls.LLMGW_BALANCE_REFUSED if balance_refused else "HTTPStatusError"
                 await generation_attempts.finish(
                     generation_identity, provider_call_id, status="failed", reason=primary_failure,
-                    error_type=provider_calls.classify_failure(upstream_error)
-                    if primary_failure == "preconnect" else "HTTPStatusError",
+                    error_type=failure_type,
                 )
                 return
             await settle_receipt()
@@ -275,6 +279,7 @@ async def stream_completion(
                     details={"provider_charge_ambiguous": True},
                 )
             overload = upstream_error.details.pop("_overload_retry_candidate", None) if upstream_error else None
+            balance_refused = upstream_error.details.pop("_primary_balance_refused", False) if upstream_error else False
             preconnect_fallback = (
                 generation_identity is None and upstream_error is not None
                 and upstream_error.details.get("provider_failure_kind") == "preconnect"
@@ -286,6 +291,7 @@ async def stream_completion(
                     and not accumulated and not receipt):
                 settlement_task = asyncio.create_task(settle(
                     primary_failure="preconnect" if preconnect_fallback else "upstream_refused",
+                    balance_refused=balance_refused,
                 ))
                 try:
                     await await_provider_receipt(settlement_task)

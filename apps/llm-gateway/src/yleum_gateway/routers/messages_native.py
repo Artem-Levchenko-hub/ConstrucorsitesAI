@@ -605,9 +605,13 @@ async def _dispatch_native_provider(
     provider_deadline: float,
 ) -> tuple[UUID, httpx.Response, str] | Response:
     """Commit each upstream attempt independently before its network dispatch."""
-    provider_scope = await text_failover.select_scope(identity, model)
-    backup_enabled = text_failover.enabled(model)
     run_id, project_id = dispatch_options["run_id"], dispatch_options["project_id"]
+    route = dispatch_options.get("route")
+    provider_scope = await text_failover.select_scope(
+        identity, model, run_id=run_id, project_id=project_id, user_id=dispatch_options.get("user_id"),
+        cell_route=route if route == "/v1/project-cell/messages" else None,
+    )
+    backup_enabled = text_failover.enabled(model)
     message_id, stage = dispatch_options["message_id"], dispatch_options["stage"]
     loop = asyncio.get_running_loop()
     while True:
@@ -717,14 +721,19 @@ async def _dispatch_native_provider(
         known_evidence = _known_response_evidence(upstream, provider_scope)
         if upstream.status_code >= 400:
             inflight = inflight_budget.retry_candidate(upstream, provider_scope=provider_scope)
+            category = "rate_limit" if inflight is not None else llmgw._refusal_category(upstream)
             overload = (
                 text_failover.primary_refusal_candidate(upstream, model)
                 if provider_scope == "llmgw" and inflight is None else None
             )
             if overload is not None:
+                failure_type = (
+                    provider_calls.LLMGW_BALANCE_REFUSED
+                    if text_failover.primary_balance_refused(upstream, category) else "HTTPStatusError"
+                )
                 recorded = await _finish_provider_call(
                     provider_call_id, identity=identity, status="failed", reason="upstream_refused",
-                    error_type="HTTPStatusError", **known_evidence,
+                    error_type=failure_type, **known_evidence,
                 )
                 if not recorded:
                     return _unconfirmed_provider_outcome(
@@ -765,7 +774,6 @@ async def _dispatch_native_provider(
                 )
 
                 confirm_response_accounting()
-            category = "rate_limit" if inflight is not None else llmgw._refusal_category(upstream)
             details: dict[str, Any] = {
                 "upstream_http_status": upstream.status_code,
                 "provider_charge_ambiguous": ambiguous,

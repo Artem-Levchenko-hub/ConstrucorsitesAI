@@ -151,6 +151,7 @@ def test_durable_native_refusal_wire_matches_api_strict_contract(client, monkeyp
                         "generation_provider_identity": identity.to_wire()}
     class Connection:
         async def fetchrow(self, *_): return None  # Root attempt has no parent.
+        async def fetchval(self, *_): return False  # Run has no balance refusal yet.
     class Acquire:
         async def __aenter__(self): return Connection()
         async def __aexit__(self, *_): return False

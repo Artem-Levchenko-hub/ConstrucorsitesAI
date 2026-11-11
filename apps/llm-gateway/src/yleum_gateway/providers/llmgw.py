@@ -281,8 +281,6 @@ def _http_failure_details(
     response: httpx.Response, *, model: str, provider_scope: str,
 ) -> dict[str, Any]:
     """Keep existing receipt/refusal policy separate from private diagnostics."""
-    from yleum_gateway.services.text_failover import primary_refusal_candidate
-
     details = _failure_details(
         bounded_error_body(response) or {}, _receipt_headers(response.headers),
         upstream_http_status=response.status_code, provider_scope=provider_scope,
@@ -295,14 +293,27 @@ def _http_failure_details(
     if candidate is not None:
         details["provider_charge_ambiguous"] = False
         details["_rate_limit_retry_candidate"] = candidate
-    overload = (
-        primary_refusal_candidate(response, model)
-        if provider_scope == "llmgw" and inflight is None else None
-    )
-    if overload is not None:
-        details["provider_charge_ambiguous"] = False
-        details["_overload_retry_candidate"] = overload
+    if provider_scope == "llmgw" and inflight is None:
+        details.update(_primary_refusal_details(response, model, category))
     return details
+
+
+def _primary_refusal_details(
+    response: httpx.Response, model: str, category: str | None,
+) -> dict[str, Any]:
+    from yleum_gateway.services.text_failover import (
+        primary_balance_refused,
+        primary_refusal_candidate,
+    )
+
+    refusal = primary_refusal_candidate(response, model)
+    if refusal is None:
+        return {}
+    return {
+        "provider_charge_ambiguous": False,
+        "_overload_retry_candidate": refusal,
+        "_primary_balance_refused": primary_balance_refused(response, category),
+    }
 
 
 def normalize_usage(
@@ -466,10 +477,7 @@ async def astream(
                 ):
                     transport_stage = "headers"
                     if r.status_code >= 400:
-                        from yleum_gateway.services.text_failover import (
-                            primary_refusal_candidate,
-                            read_refusal_body,
-                        )
+                        from yleum_gateway.services.text_failover import read_refusal_body
 
                         details = failure_details({}, r.headers, transport_stage=transport_stage,
                                                   upstream_http_status=r.status_code)
@@ -478,10 +486,8 @@ async def astream(
                             bounded if bounded is not None else r,
                             credential=key, provider_scope=provider_scope,
                         )
-                        candidate = primary_refusal_candidate(bounded, model) if provider_scope == "llmgw" and bounded is not None else None
-                        if candidate is not None:
-                            details["_overload_retry_candidate"] = candidate
-                            details["provider_charge_ambiguous"] = False
+                        if provider_scope == "llmgw" and bounded is not None:
+                            details.update(_primary_refusal_details(bounded, model, _refusal_category(bounded)))
                         enqueue(("err", UpstreamProviderError(f"{provider_scope} HTTP {r.status_code}", details=details)))
                         enqueue(_DONE)
                         return

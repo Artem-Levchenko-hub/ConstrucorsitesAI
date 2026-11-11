@@ -20,7 +20,7 @@ from yleum_api.services.usage_cost_summary import classify_cost, cost_classifica
 
 from yleum_gateway.core.errors import BillingReconciliationRequiredError
 from yleum_gateway.services import generation_attempts as attempts
-from yleum_gateway.services import provider_calls
+from yleum_gateway.services import provider_calls, text_failover
 
 database_url = fixture_source.database_url
 pool = fixture_source.pool
@@ -67,6 +67,34 @@ async def test_ai_dispatch_and_refusal_require_durable_receipt(pool, monkeypatch
                                      "WHERE attempt_id=$1", identity.attempt_id)
 
 
+@pytest.mark.parametrize("platform_owned", [False, True])
+async def test_primary_balance_receipt_scopes_new_attempts_to_its_run(pool, monkeypatch, platform_owned):
+    monkeypatch.setattr(text_failover, "enabled", lambda model: model == text_failover.MODEL)
+    identity = await intent(pool)
+    model = text_failover.MODEL
+    cell_route = "/v1/project-cell/messages" if platform_owned else None
+    scope = {
+        "run_id": identity.run_id,
+        "project_id": identity.project_id,
+        "user_id": None if platform_owned else identity.user_id,
+    }
+    call = await provider_calls.start_call(route=cell_route or "/v1/messages", model=model, **scope)
+    failure = {"status": "failed", "error_type": provider_calls.LLMGW_BALANCE_REFUSED}
+
+    with pytest.raises(BillingReconciliationRequiredError):
+        await provider_calls.finish_call(call, **failure, provider_cost_rub=Decimal("0.1"))
+    assert await text_failover.select_scope(identity, model, cell_route=cell_route, **scope) == "llmgw"
+
+    await provider_calls.finish_call(call, **failure)
+    assert await text_failover.select_scope(identity, model, cell_route=cell_route, **scope) == "aitunnel"
+    assert await text_failover.select_scope(None, model, cell_route=cell_route, **scope) == "aitunnel"
+    assert await text_failover.select_scope(
+        None, model, cell_route=cell_route, **{**scope, "run_id": uuid4()},
+    ) == "llmgw"
+    if platform_owned:
+        assert await text_failover.select_scope(None, model, **scope) == "llmgw"
+
+
 @pytest.mark.parametrize("changes,expected", [
     ({}, "confirmed"),
     ({"calculated_cost_rub": "0.4"}, "confirmed"),
@@ -98,7 +126,7 @@ async def test_retained_refusal_cold_read_and_sql_child_authority(
     pool, database_url, monkeypatch, scope,
 ):
     from yleum_gateway.core import db
-    from yleum_gateway.services import billing, text_failover
+    from yleum_gateway.services import billing
     from yleum_gateway.services import generation_response_ledger as ledger
     from yleum_gateway.services.generation_response_store import (
         ChunkWriter,

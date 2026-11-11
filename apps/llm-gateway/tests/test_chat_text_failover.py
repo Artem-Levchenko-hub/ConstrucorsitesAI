@@ -1,4 +1,6 @@
 import json
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -6,9 +8,12 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.test_inflight_budget_retry import wrapped
+from tests.test_messages_native import _install_runner_auth, _runner_token
 from yleum_gateway.core.errors import BillingReconciliationRequiredError, UpstreamProviderError
 from yleum_gateway.main import create_app
 from yleum_gateway.providers import llmgw
+from yleum_gateway.routers import messages_native
 from yleum_gateway.services import billing, provider_calls, text_failover
 
 
@@ -19,6 +24,123 @@ def client(neutralize_lifespan, neutralize_side_effects, monkeypatch):
     monkeypatch.setenv("AITUNNEL_TEXT_API_KEY", "synthetic-backup-key")
     with TestClient(create_app()) as client:
         yield client
+
+
+@pytest.mark.parametrize(
+    ("route", "stream"),
+    [
+        ("/v1/chat/completions", False), ("/v1/chat/completions", True),
+        ("/v1/messages", False), ("/v1/project-cell/messages", False),
+    ],
+)
+@pytest.mark.parametrize(
+    ("status", "error", "stays_on_backup"),
+    [
+        pytest.param(402, {"code": "insufficient_balance"}, True, id="payment"),
+        pytest.param(401, {"code": "insufficient_funds"}, True, id="structured-funds"),
+        pytest.param(402, None, True, id="bare-payment"),
+        pytest.param(401, {"code": "authentication_error"}, False, id="auth"),
+        pytest.param(402, {"code": "insufficient_balance", "type": "authentication_error"}, False,
+                     id="contradictory-payment"),
+        pytest.param(402, wrapped()["error"], False, id="inflight-without-valid-delay"),
+    ],
+)
+def test_confirmed_balance_refusal_routes_following_steps_of_the_same_generation(
+    client, monkeypatch, route, stream, status, error, stays_on_backup,
+):
+    calls = {}
+    hosts = []
+    user, project, run = uuid4(), uuid4(), uuid4()
+    is_cell = route == "/v1/project-cell/messages"
+    session, workspace = uuid4(), uuid4()
+    if is_cell:
+        _install_runner_auth(monkeypatch, redis_results=[True] * 3)
+    if error is not None and error.get("code") == "402":
+        error = {**error, "message": error["message"].replace('"120"', '"0"')}
+
+    async def start_call(**fields):
+        call_id = uuid4()
+        calls[call_id] = {"provider_scope": "llmgw", "status": "started", **fields}
+        return call_id
+
+    async def finish_call(call_id, **fields):
+        calls[call_id].update(fields)
+        calls[call_id]["receipt_hash"] = "committed"
+
+    async def balance_refused(_query, run_id, project_id, user_id, model, refusal, cell_route=None):
+        return any(
+            call["run_id"] == run_id
+            and call["project_id"] == project_id
+            and call["user_id"] == user_id
+            and (user_id is not None or call["route"] == cell_route)
+            and call["model"] == model
+            and call["provider_scope"] == "llmgw"
+            and call["status"] == "failed"
+            and call.get("error_type") == refusal
+            and call.get("receipt_hash")
+            for call in calls.values()
+        )
+
+    @asynccontextmanager
+    async def acquire():
+        yield SimpleNamespace(fetchval=balance_refused)
+
+    monkeypatch.setattr(text_failover, "get_pool", lambda: SimpleNamespace(acquire=acquire))
+    monkeypatch.setattr(provider_calls, "start_call", start_call)
+    monkeypatch.setattr(provider_calls, "finish_call", finish_call)
+
+    def upstream(request):
+        hosts.append(request.url.host)
+        if request.url.host == "api.llmgw.ru" and b"new generation" not in request.content:
+            return httpx.Response(status, json={"error": error} if error is not None else None)
+        identity = {"id": str(uuid4()), "model": "claude-sonnet-5.5"}
+        usage = {"prompt_tokens": 10, "completion_tokens": 2, "cost_rub": 0.2}
+        if json.loads(request.content).get("stream"):
+            data = [
+                {**identity, "choices": [{"finish_reason": None, "delta": {"content": "OK"}}]},
+                {**identity, "choices": [{"finish_reason": "stop", "delta": {}}], "usage": usage},
+            ]
+            content = "".join(f"data: {json.dumps(event)}\n\n" for event in data) + "data: [DONE]\n\n"
+            return httpx.Response(200, content=content, headers={"content-type": "text/event-stream"})
+        return httpx.Response(200, json={
+            **identity, "usage": usage,
+            "choices": [{"finish_reason": "stop", "message": {"content": "OK"}}],
+        })
+
+    def native_post(url, payload, _headers, **_options):
+        request = httpx.Request("POST", url, json=payload)
+        response = upstream(request)
+        response.request = request
+        return response
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda **_: httpx.MockTransport(upstream))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(upstream))
+    monkeypatch.setattr(messages_native, "_post_llmgw", native_post)
+
+    def send(run_id, content):
+        metadata = {"project_id": str(project), "run_id": str(run_id)}
+        headers = {}
+        if is_cell:
+            message_id = str(uuid4())
+            metadata.update(session_id=str(session), workspace_id=str(workspace),
+                            fencing_epoch=4, cancel_epoch=0, message_id=message_id)
+            token = _runner_token(overrides={**metadata, "jti": message_id})
+            headers["Authorization"] = f"Bearer {token}"
+        return client.post(route, headers=headers, json={
+            "model": "claude-sonnet-5.5", "max_tokens": 128, "user": str(user), "stream": stream,
+            "metadata": metadata,
+            "messages": [{"role": "user", "content": content}],
+        })
+
+    for run_id, content in [(run, "first step"), (run, "next step"), (uuid4(), "new generation")]:
+        response = send(run_id, content)
+        assert response.status_code == 200, response.text
+        if stream:
+            assert "[DONE]" in response.text, response.text
+
+    next_hosts = ["api.aitunnel.ru"] if stays_on_backup else ["api.llmgw.ru", "api.aitunnel.ru"]
+    assert hosts == ["api.llmgw.ru", "api.aitunnel.ru", *next_hosts, "api.llmgw.ru"]
+    assert billing.charge.await_count == (0 if is_cell else 3)
 
 
 @pytest.mark.parametrize("status", [500,502,503,504])

@@ -18,6 +18,7 @@ from yleum_gateway.services.pricing import validate_cost_provenance
 _ROUTES = {"/v1/chat/completions", "/v1/messages", "/v1/project-cell/messages"}
 _STAGES = {"build_plan", "native_agent", "verification", "source_repair", "runtime_ai",
            "product_advisor", "unknown"}
+LLMGW_BALANCE_REFUSED = "LLMGWBalanceRefused"
 
 
 class ReceiptFailure(StrEnum):
@@ -43,7 +44,8 @@ class ReceiptFailure(StrEnum):
 
 _ERRORS = {"ReadTimeout", "ConnectTimeout", "ConnectError", "RemoteProtocolError",
            "HTTPStatusError", "CancelledError", "TimeoutError", "UpstreamProviderError",
-           "ValidationFailedError", "BillingReconciliationRequiredError", "unknown", *ReceiptFailure}
+           "ValidationFailedError", "BillingReconciliationRequiredError", "unknown",
+           LLMGW_BALANCE_REFUSED, *ReceiptFailure}
 
 
 def classify_failure(error: BaseException) -> str:
@@ -187,6 +189,11 @@ async def finish_call(
                 raise _error(call_id)
             scope = row["provider_scope"]
             if scope not in {"llmgw", "aitunnel"}:
+                raise _error(call_id)
+            if safe_error == LLMGW_BALANCE_REFUSED and (
+                scope != "llmgw" or status != "failed" or provenance is not None
+                or any(value is not None for value in (*counters, *amounts))
+            ):
                 raise _error(call_id)
             if provenance is not None and provenance.get("provider_scope", "llmgw") != scope:
                 raise _error(call_id)

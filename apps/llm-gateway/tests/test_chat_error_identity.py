@@ -1,6 +1,7 @@
 """The terminal backup refusal remains attributable without provider body export."""
 
 import asyncio
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -15,6 +16,7 @@ async def test_legacy_backup_failure_keeps_scope_stage_and_local_call_identity(
     monkeypatch, neutralize_side_effects,
 ):
     calls, diagnostics = [], []
+    monkeypatch.setattr(chat.text_failover, "select_scope", AsyncMock(return_value="llmgw"))
     monkeypatch.setattr(chat.text_failover, "enabled", lambda model: True)
     monkeypatch.setattr(chat.text_failover, "credentials", lambda scope: ("private-key", "https://backup.test/v1"))
     async def complete(**kwargs):

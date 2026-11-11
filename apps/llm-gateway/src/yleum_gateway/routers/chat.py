@@ -172,7 +172,9 @@ async def _dispatch_chat_provider(
     filtered_messages: list[dict[str, Any]], received_at: float,
 ) -> tuple[dict[str, Any], UUID, str]:
     meta = req.metadata or ChatMetadata()
-    provider_scope = await text_failover.select_scope(identity, req.model)
+    provider_scope = await text_failover.select_scope(
+        identity, req.model, run_id=meta.run_id, project_id=meta.project_id, user_id=req.user,
+    )
     loop = asyncio.get_running_loop()
     while True:
         backup_deadline = None
@@ -229,8 +231,11 @@ async def _dispatch_chat_provider(
             details = exc.details if isinstance(exc, GatewayError) else {}
             retry_candidate = details.pop("_rate_limit_retry_candidate", None)
             overload = details.pop("_overload_retry_candidate", None) if provider_scope == "llmgw" else None
+            balance_refused = details.pop("_primary_balance_refused", False)
             status = "failed" if details.get("provider_charge_ambiguous") is False else "ambiguous"
-            failure_type = provider_calls.classify_failure(exc)
+            failure_type = (
+                provider_calls.LLMGW_BALANCE_REFUSED if balance_refused else provider_calls.classify_failure(exc)
+            )
             reason = ("upstream_refused" if isinstance(overload, dict)
                       else "rate_limit_refused" if isinstance(retry_candidate, dict)
                       else "preconnect" if details.get("provider_failure_kind") == "preconnect" and status == "failed"
@@ -339,7 +344,9 @@ async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -
         try:
             if not llmgw.is_llmgw_model(req.model):
                 raise ModelNotFoundError(f"Unknown model: {req.model}")
-            provider_scope = await text_failover.select_scope(identity, req.model)
+            provider_scope = await text_failover.select_scope(
+                identity, req.model, run_id=meta.run_id, project_id=meta.project_id, user_id=req.user,
+            )
             provider_deadline = None
             if text_failover.enabled(req.model):
                 provider_deadline = provider_request_deadline(

@@ -6,6 +6,7 @@ import json
 import re
 from http import HTTPStatus
 from typing import Any
+from uuid import UUID
 
 import httpx
 
@@ -13,6 +14,7 @@ from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.db import get_pool
 from yleum_gateway.core.errors import GatewayError, ModelUnavailableError
 from yleum_gateway.services.generation_identity import GenerationProviderIdentity
+from yleum_gateway.services.provider_calls import LLMGW_BALANCE_REFUSED
 
 PRIMARY_URL = "https://api.llmgw.ru/v1/chat/completions"
 MODEL = "claude-sonnet-5.5"
@@ -192,33 +194,67 @@ def primary_refusal_candidate(response: httpx.Response, model: str) -> dict[str,
     }
 
 
-async def select_scope(identity: GenerationProviderIdentity | None, model: str) -> str:
-    """Only a matching, committed SQL parent can route a retained child."""
-    if identity is None or model != MODEL:
+def primary_balance_refused(response: httpx.Response, category: str | None) -> bool:
+    """Recognize funds evidence in an already verified, uncharged refusal."""
+    if category == "funds":
+        return True
+    if response.status_code != HTTPStatus.PAYMENT_REQUIRED or "retry-after" in response.headers:
+        return False
+    # An unclassified structured 402 can describe a temporary reservation or
+    # contradict itself. Only a bare HTTP Payment Required is sufficient.
+    text = response.content.decode("utf-8").strip()
+    return not text or _canonical_refusal_document(text, response.status_code)
+
+
+async def select_scope(
+    identity: GenerationProviderIdentity | None, model: str, *,
+    run_id: UUID | None = None, project_id: UUID | None = None, user_id: UUID | None = None,
+    cell_route: str | None = None,
+) -> str:
+    """Route new steps using a committed balance refusal, and retries using their parent."""
+    if model != MODEL:
+        return "llmgw"
+    backup_enabled = enabled(model)
+    if identity is not None and cell_route is None:
+        run_id, project_id, user_id = identity.run_id, identity.project_id, identity.user_id
+    # Only the authenticated cell route may look up platform-owned receipts.
+    run_scoped = backup_enabled and run_id is not None and project_id is not None and (
+        user_id is not None or cell_route == "/v1/project-cell/messages"
+    )
+    if identity is None and not run_scoped:
         return "llmgw"
     try:
         async with get_pool().acquire() as conn:
-            parent = await conn.fetchrow(
-                "SELECT p.phase,p.terminal_reason,c.status,c.receipt_hash,c.provider_scope "
-                "FROM generation_provider_attempts a "
-                "JOIN generation_provider_attempts p ON p.attempt_id=a.parent_attempt_id "
-                "JOIN provider_calls c ON c.id=p.provider_call_id "
-                "WHERE a.attempt_id=$1 AND a.run_id=$2 AND a.project_id=$3 AND a.user_id=$4 "
-                "AND a.prompt_hash=$5 AND a.request_sha256=$6 "
-                "AND p.run_id=a.run_id AND p.project_id=a.project_id AND p.user_id=a.user_id "
-                "AND p.prompt_hash=a.prompt_hash AND p.request_sha256=a.request_sha256",
-                identity.attempt_id, identity.run_id, identity.project_id, identity.user_id,
-                identity.prompt_hash, identity.request_sha256,
-            )
+            parent = None
+            if identity is not None:
+                parent = await conn.fetchrow(
+                    "SELECT p.phase,p.terminal_reason,c.status,c.receipt_hash,c.provider_scope "
+                    "FROM generation_provider_attempts a "
+                    "JOIN generation_provider_attempts p ON p.attempt_id=a.parent_attempt_id "
+                    "JOIN provider_calls c ON c.id=p.provider_call_id "
+                    "WHERE a.attempt_id=$1 AND a.run_id=$2 AND a.project_id=$3 AND a.user_id=$4 "
+                    "AND a.prompt_hash=$5 AND a.request_sha256=$6 "
+                    "AND p.run_id=a.run_id AND p.project_id=a.project_id AND p.user_id=a.user_id "
+                    "AND p.prompt_hash=a.prompt_hash AND p.request_sha256=a.request_sha256",
+                    identity.attempt_id, identity.run_id, identity.project_id, identity.user_id,
+                    identity.prompt_hash, identity.request_sha256,
+                )
+            if parent is None:
+                balance_refused = run_scoped and await conn.fetchval(
+                    "SELECT EXISTS (SELECT 1 FROM provider_calls "
+                    "WHERE run_id=$1 AND project_id=$2 AND user_id IS NOT DISTINCT FROM $3::uuid "
+                    "AND requested_model=$4 AND ($3::uuid IS NOT NULL OR route=$6) "
+                    "AND provider_scope='llmgw' AND status='failed' AND receipt_hash IS NOT NULL "
+                    "AND error_type=$5)",
+                    run_id, project_id, user_id, model, LLMGW_BALANCE_REFUSED, cell_route,
+                )
+                return "aitunnel" if balance_refused else "llmgw"
     except Exception:
         from yleum_gateway.services.generation_attempts import AttemptConflict
 
         raise AttemptConflict("Provider routing could not be confirmed") from None
-    if parent is None:
-        return "llmgw"
     reason = parent["terminal_reason"]
     backup_parent = parent["provider_scope"] == "aitunnel"
-    backup_enabled = enabled(model)
     if not backup_parent and reason != "upstream_refused" and not (
         reason == "preconnect" and backup_enabled
     ):
