@@ -6,7 +6,11 @@ import LoginPage from "@/app/(auth)/login/page";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 
-const state = vi.hoisted(() => ({ target: "", token: undefined as string | undefined }));
+const state = vi.hoisted(() => ({ target: "", token: undefined as string | undefined, staffEnabled: false }));
+vi.mock("@/lib/max-staff-path", async importOriginal => ({
+  ...await importOriginal<typeof import("@/lib/max-staff-path")>(),
+  get maxStaffEnabled() { return state.staffEnabled; },
+}));
 vi.mock("next/headers", () => ({
   headers: async () => new Headers({ "x-omnia-return-to": state.target }),
   cookies: async () => ({ get: () => state.token ? { value: state.token } : undefined }),
@@ -15,7 +19,7 @@ vi.mock("next-intl", () => ({ useTranslations: () => (key: string) => key }));
 vi.mock("next-intl/server", () => ({ getTranslations: async () => (key: string) => key }));
 vi.mock("@/lib/oauth-login-server", () => ({ listOAuthProviders: async () => [] }));
 vi.mock("@/app/(auth)/actions", () => ({ loginAction: vi.fn() }));
-afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); state.target = ""; state.token = undefined; });
+afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); state.target = ""; state.token = undefined; state.staffEnabled = false; });
 
 it.each([undefined, "stale"])("preserves the exact owner preview destination through real layout admission with cookie %s", async token => {
   vi.stubEnv("NEXT_PUBLIC_USE_MOCKS", "false");
@@ -61,6 +65,7 @@ it("retains registration admission for other MAX routes", () => {
 });
 
 it("preserves a clean staff destination with a stale session cookie", async () => {
+  state.staffEnabled = true;
   vi.stubEnv("NEXT_PUBLIC_USE_MOCKS", "false");
   state.token = "stale";
   vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 401 })));
@@ -74,7 +79,27 @@ it("preserves a clean staff destination with a stale session cookie", async () =
   });
 });
 
+it.each(["/max/staff", "/max/staff/join", "/max/staff/00000000-0000-4000-8000-000000000001"])("redirects a disabled staff route %s without forwarding an invitation", path => {
+  vi.stubEnv("NEXT_PUBLIC_USE_MOCKS", "false");
+  vi.stubEnv("PUBLIC_ORIGIN", "https://example.test");
+  const response = middleware(new NextRequest(`http://localhost:3000${path}?token=discard#token=discard`));
+  expect(response.status).toBe(307);
+  expect(response.headers.get("location")).toBe("https://example.test/max#top");
+  expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+  expect(response.headers.get("cache-control")).toBe("no-store");
+});
+
+it("does not forward a POST body from a disabled staff route", () => {
+  const response = middleware(new NextRequest("https://example.test/max/staff/join", {
+    method: "POST",
+    body: "token=discard",
+  }));
+  expect(response.status).toBe(303);
+  expect(new URL(response.headers.get("location")!).pathname).toBe("/max");
+});
+
 it("keeps the staff join page through the real login form and registration link", async () => {
+  state.staffEnabled = true;
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const path = "/max/staff/join";
   const page = await LoginPage({ searchParams: Promise.resolve({ next: `${path}?token=discard#token=discard` }) });

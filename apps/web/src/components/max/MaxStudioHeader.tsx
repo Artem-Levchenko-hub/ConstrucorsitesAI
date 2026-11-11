@@ -8,7 +8,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import { LearningButton } from "@/components/learning/ProductLearning";
-import { MAX_STAFF_PATH } from "@/lib/max-staff-path";
+import { MAX_STAFF_PATH, maxStaffEnabled } from "@/lib/max-staff-path";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -95,7 +95,9 @@ export function MaxStudioHeader({
                 Мои MAX-приложения
               </Link>
             </DropdownMenuItem>
-            {accountLinks.map(([href, Icon, label]) => <DropdownMenuItem asChild key={href}><Link href={href}><Icon className="h-4 w-4" />{label}</Link></DropdownMenuItem>)}
+            {accountLinks.filter(([href]) => maxStaffEnabled || href !== MAX_STAFF_PATH).map(([href, Icon, label]) => (
+              <DropdownMenuItem asChild key={href}><Link href={href}><Icon className="h-4 w-4" />{label}</Link></DropdownMenuItem>
+            ))}
             <DropdownMenuSeparator />
             <form action={logoutAction} className="w-full">
               <DropdownMenuItem asChild onSelect={(event) => event.preventDefault()}>

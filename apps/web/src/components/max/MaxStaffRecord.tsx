@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import {
   getStaffHistory, staffRequestError, type StaffAccess, type StaffAction, type StaffRecord, type TeamMember,
 } from "@/lib/api/max-staff";
+import { maxStaffEnabled } from "@/lib/max-staff-path";
 
 export const staffStatus = {
   new: "Новый", in_progress: "В работе", ready: "Готов", completed: "Завершён", cancelled: "Отменён",
@@ -36,7 +37,9 @@ function availableAction(record: StaffRecord, access: StaffAccess): StaffAction 
   if (record.resource === "orders" && record.payment === "test") return null;
   if (record.status === "completed" || record.status === "cancelled") return null;
   if (!record.assignee_id) return "claim";
-  if (record.status === "new") return record.assignee_id === access.actor_id ? "claim" : null;
+  if (record.status === "new") {
+    return record.assignee_id === access.actor_id || (!maxStaffEnabled && access.is_owner) ? "claim" : null;
+  }
   if (record.assignee_id !== access.actor_id && !access.is_owner) return null;
   if (record.resource === "leads") return record.status === "in_progress" ? "close" : null;
   if (record.status === "in_progress") return "ready";
@@ -61,7 +64,7 @@ export function MaxStaffRecord({
   });
   const nextAction = availableAction(record, access);
   const action = nextAction === "claim" && !claimAvailable ? null : nextAction;
-  const canReassign = access.is_owner && record.status !== "completed" && record.status !== "cancelled"
+  const canReassign = maxStaffEnabled && access.is_owner && record.status !== "completed" && record.status !== "cancelled"
     && !(record.resource === "orders" && record.payment === "test");
   const selectedAssignee = assignee ?? record.assignee_id ?? "";
   const eligible = members.filter(member => member.permissions.includes(record.resource));

@@ -14,6 +14,10 @@ vi.mock("next/headers", () => ({
   cookies: async () => ({ get: (name: string) => name === "omnia_session" ? { value: "staff-session" } : undefined }),
 }));
 vi.mock("@/app/(auth)/actions", () => ({ logoutAction: vi.fn() }));
+vi.mock("@/lib/max-staff-path", async importOriginal => ({
+  ...await importOriginal<typeof import("@/lib/max-staff-path")>(),
+  maxStaffEnabled: true,
+}));
 
 const project = "00000000-0000-4000-8000-000000000001";
 const acceptedPath = `/max/staff/${project}`;

@@ -11,7 +11,7 @@ import {
   createMaxInvitation, revokeMaxInvitation, revokeMaxMember, saveMaxTeamSettings, staffRequestError, updateMaxMember,
   type StaffPermission, type TeamMember, type TeamSettings, type TeamView,
 } from "@/lib/api/max-staff";
-import { MAX_STAFF_JOIN_PATH, maxStaffProjectPath } from "@/lib/max-staff-path";
+import { MAX_STAFF_JOIN_PATH, maxStaffEnabled, maxStaffProjectPath } from "@/lib/max-staff-path";
 import { staffTime } from "./MaxStaffRecord";
 import "./max-staff.css";
 
@@ -84,12 +84,12 @@ export function MaxStaffTeam({ projectId, team, onDirtyChange }: {
     catch { linkField.current?.focus(); }
   }
 
-  return <section className="max-staff-team" aria-label="Команда">
-    <header className="max-staff-board-heading max-staff-team-intro"><div>
+  return <section className="max-staff-team" aria-label={maxStaffEnabled ? "Команда" : "Настройки очередей"}>
+    {maxStaffEnabled && <header className="max-staff-board-heading max-staff-team-intro"><div>
       <p>Пригласите сотрудников и выберите, с какими обращениями они будут работать.</p></div>
       <Button asChild variant="outline"><Link href={maxStaffProjectPath(projectId)}>Открыть рабочий кабинет <ArrowUpRight aria-hidden="true" /></Link></Button>
-    </header>
-    {team.isPending && <p role="status" className="max-staff-notice">Загружаем команду…</p>}
+    </header>}
+    {team.isPending && <p role="status" className="max-staff-notice">Загружаем настройки очередей…</p>}
     {team.isError && <div role="alert" className="max-staff-notice" data-tone="error"><p>{staffRequestError(team.error)}</p>
       <Button variant="outline" onClick={() => void team.refetch()}>Повторить загрузку</Button>
     </div>}
@@ -103,7 +103,7 @@ export function MaxStaffTeam({ projectId, team, onDirtyChange }: {
               disabled={team.data.settings.leads_enabled} onChange={event => { setSettingsDraft({ ...current, leads_enabled: event.target.checked }); settings.reset(); }} />
               <span>Принимать заявки</span>
             </label>
-            <p className="max-staff-field-help">{team.data.settings.leads_enabled ? "Рабочая очередь включена." : "Сотрудники смогут брать заявки и отмечать итог."}</p>
+            <p className="max-staff-field-help">{team.data.settings.leads_enabled ? "Рабочая очередь включена." : "Вы сможете брать заявки в работу и отмечать итог."}</p>
           </div>
           <div className="max-staff-queue-setting">
             <label className="max-staff-field">Оплата заказов<select value={current.orders_mode ?? ""} disabled={team.data.settings.orders_mode !== null}
@@ -135,7 +135,7 @@ export function MaxStaffTeam({ projectId, team, onDirtyChange }: {
           {settingsDraft && <Button type="button" variant="ghost" disabled={pending} onClick={() => { setSettingsDraft(null); settings.reset(); }}>Отменить</Button>}
         </div>
       </form>
-      <div className="max-staff-team-columns">
+      {maxStaffEnabled && <div className="max-staff-team-columns">
         <form className="max-staff-panel" onSubmit={event => {
           event.preventDefault();
           if (!pending && invite.email.trim() && invite.name.trim() && invite.permissions.length) invitation.mutate();
@@ -192,7 +192,7 @@ export function MaxStaffTeam({ projectId, team, onDirtyChange }: {
             </li>)}
           </ul>
         </section>
-      </div>
+      </div>}
     </>}
   </section>;
 }

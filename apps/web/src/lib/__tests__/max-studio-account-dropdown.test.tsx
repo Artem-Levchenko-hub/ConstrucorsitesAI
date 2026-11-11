@@ -8,6 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MaxStudioHeader } from "@/components/max/MaxStudioHeader";
 
 vi.mock("@/app/(auth)/actions", () => ({ logoutAction: vi.fn() }));
+vi.mock("@/lib/max-staff-path", async importOriginal => ({
+  ...await importOriginal<typeof import("@/lib/max-staff-path")>(),
+  maxStaffEnabled: false,
+}));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -60,8 +64,8 @@ describe("Yleum account dropdown", () => {
   it("uses one direct interactive menu-item surface for links and logout", () => {
     const items = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
 
-    expect(items).toHaveLength(8);
-    expect(items.filter(item => item.getAttribute("href") === "/max/staff")).toHaveLength(1);
+    expect(items).toHaveLength(7);
+    expect(items.some(item => item.getAttribute("href") === "/max/staff")).toBe(false);
     expect(items.slice(0, -1).every((item) => item.tagName === "A")).toBe(true);
     expect(items.at(-1)?.tagName).toBe("BUTTON");
     expect(items.every((item) => item.querySelector("button, a") === null)).toBe(true);

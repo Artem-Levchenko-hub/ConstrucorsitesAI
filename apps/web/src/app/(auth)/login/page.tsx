@@ -5,7 +5,7 @@ import { LoginForm } from "@/components/auth/LoginForm";
 import { OAuthButtons } from "@/components/auth/OAuthButtons";
 import { oauthErrorMessage } from "@/lib/oauth-login";
 import { listOAuthProviders } from "@/lib/oauth-login-server";
-import { maxStaffReturnPath } from "@/lib/max-staff-path";
+import { maxStaffEnabled, maxStaffReturnPath } from "@/lib/max-staff-path";
 
 export default async function LoginPage({
   searchParams,
@@ -13,8 +13,9 @@ export default async function LoginPage({
   searchParams: Promise<{ next?: string; oauth_error?: string }>;
 }) {
   const { next: requestedNext, oauth_error: oauthError } = await searchParams;
-  const staffReturn = maxStaffReturnPath(requestedNext);
-  const next = staffReturn ?? requestedNext;
+  const staffPath = maxStaffReturnPath(requestedNext);
+  const staffReturn = maxStaffEnabled ? staffPath : null;
+  const next = staffReturn ?? (staffPath ? "/max" : requestedNext);
   const maxFlow = next?.startsWith("/max") ?? false;
   const registerPath = maxFlow ? "/max/register" : "/register";
   const registerReturn = maxFlow ? staffReturn : next;

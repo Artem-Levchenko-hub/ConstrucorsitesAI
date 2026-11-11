@@ -928,6 +928,13 @@ class Settings(BaseSettings):
     # secretless disposable sandbox; the flag remains an instant kill switch.
     max_project_shell_enabled: bool = Field(default=True)
     max_code_restoration_enabled: bool = Field(default=False)
+    max_staff_enabled: bool = Field(default=False)
+
+    @field_validator("max_staff_enabled", mode="before")
+    @classmethod
+    def parse_max_staff_enabled(cls, value: object) -> object:
+        # The web build enables staff access only for this exact string.
+        return value == "true" if isinstance(value, str) else value
 
     # Edit auto-repair (owner 2026-06-28: «надо чтобы он ПРЯМ ЧИНИЛ, а не выдавал
     # „Не удалось завершить правку — нажми Починить“»). When a point-EDIT doesn't

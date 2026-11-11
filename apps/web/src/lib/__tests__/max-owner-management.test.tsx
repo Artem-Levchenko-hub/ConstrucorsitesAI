@@ -9,7 +9,13 @@ import { MaxOwnerRecords } from "@/components/max/MaxOwnerRecords";
 import { MaxProjectNav } from "@/components/max/MaxProjectNav";
 import type { ManagementOverview, OwnerRecord, ResourceDefinition } from "@/lib/api/max-management";
 import type { MaxProjectConfig } from "@/lib/api/types";
-import type { TeamView } from "@/lib/api/max-staff";
+import type { StaffLead, TeamView } from "@/lib/api/max-staff";
+
+const flags = vi.hoisted(() => ({ staffEnabled: true }));
+vi.mock("@/lib/max-staff-path", async importOriginal => ({
+  ...await importOriginal<typeof import("@/lib/max-staff-path")>(),
+  get maxStaffEnabled() { return flags.staffEnabled; },
+}));
 
 vi.mock("@/components/max/MaxSectionShell", () => ({ MaxSectionShell: ({ children, projectId, learningContext }: { children: React.ReactNode; projectId: string; learningContext?: string }) => (
   <div className="max-project-workspace" data-learning-context={learningContext}>
@@ -30,6 +36,7 @@ let enableMode: "ok" | "network" | "conflict";
 let resolveWrite: ((response: Response) => void) | undefined;
 let root: Root; let node: HTMLDivElement; let client: QueryClient;
 beforeEach(() => {
+  flags.staffEnabled = true;
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   overview = { state: "active", configured_modules: ["catalog", "orders"], active_modules: ["catalog", "orders"], resources: [resources[0]], publication_id: "published", contract_hash: contract.contract_hash, catalog_limit: 100 };
   team = { settings: { leads_enabled: false, orders_mode: null, prep_minutes: 7 }, members: [], invitations: [] };
@@ -104,6 +111,39 @@ async function mountRecords(resource = resources[0]) { await render(<MaxOwnerRec
 it("links to management from project navigation", async () => {
   await render(<MaxProjectNav projectId="owned" active="manage" showProgress={false} />);
   expect(node.querySelector('a[href="/max/owned/manage"]')?.textContent).toContain("Управление");
+});
+it("keeps owner queues and settings usable while staff access is paused", async () => {
+  flags.staffEnabled = false;
+  overview = { ...overview, active_modules: ["orders", "leads"], resources: resources.filter(item => item.id !== "bookings") };
+  team.settings = { ...team.settings, leads_enabled: true, orders_mode: "pickup" };
+  const lead: StaffLead = { id: first.id, resource: "leads", created_at: first.created_at, revision: first.revision,
+    status: "new", customer_name: "Заявка клиента", contact_phone: null, contact_email: first.contact_email ?? null,
+    comment: null, outcome: null, assignee_id: "staff", assignee_name: "Оператор" };
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (String(url).endsWith("/max/staff")) return Response.json({ project_id: "owned", project_name: "Проект", actor_id: "owner", is_owner: true, permissions: ["orders", "leads"] });
+    if (String(url).includes("/staff/records?resource=leads")) return Response.json({ records: [lead], next_cursor: null, server_time: first.created_at });
+    return original(url, init);
+  });
+  await render(<MaxOwnerConsole projectId="owned" projectName="Проект" />);
+  expect(button("Заказы")).toBeTruthy();
+  expect(button("Команда")).toBeUndefined();
+  await click("Заявки");
+  await act(async () => {
+    const row = await vi.waitFor(() => {
+      const match = node.querySelector<HTMLButtonElement>('[aria-label="Записи очереди"] button');
+      expect(match?.textContent).toContain("Заявка клиента");
+      return match!;
+    });
+    row.click();
+  });
+  expect(button("Взять в работу")).toBeTruthy();
+  expect(node.querySelector('[aria-label="Детали заявки"] select')).toBeNull();
+  await click("Настройки очередей");
+  expect(node.textContent).toContain("Оплата заказов");
+  expect(node.textContent).toContain("Принимать заявки");
+  expect(node.textContent).not.toMatch(/сотрудни|пригласить|команда/i);
+  expect(node.querySelector('a[href^="/max/staff"]')).toBeNull();
 });
 it("keeps Team reachable while waiting for the queue overview", async () => {
   const original = vi.mocked(fetch).getMockImplementation()!;

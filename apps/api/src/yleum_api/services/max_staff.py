@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from yleum_api.core.config import get_settings
 from yleum_api.core.errors import ApiError
 from yleum_api.models.max_staff import MaxStaffAudit, MaxStaffSettings, MaxStaffWork
 from yleum_api.models.user import User
@@ -70,16 +71,23 @@ def transition(
     actor: UUID,
     owner: bool,
     update: StaffRecordUpdate,
+    *,
+    staff_enabled: bool = True,
 ) -> tuple[StaffStatus, UUID | None]:
     if status in (StaffStatus.cancelled, StaffStatus.completed):
         raise _conflict()
     action = update.action
     if action == StaffAction.reassign:
+        if not staff_enabled:
+            raise ApiError("staff_access_denied", "Назначение ответственных недоступно", 403)
         if not owner:
             raise ApiError("staff_access_denied", "Переназначать может владелец", 403)
         return status, update.assignee_id
     if action == StaffAction.claim:
-        if assignee is not None and (assignee != actor or status != StaffStatus.new):
+        can_claim_assigned = status == StaffStatus.new and (
+            assignee == actor or (owner and not staff_enabled)
+        )
+        if assignee is not None and not can_claim_assigned:
             raise _conflict()
         return StaffStatus.ready if status == StaffStatus.ready else StaffStatus.in_progress, actor
     if assignee is None or (assignee != actor and not owner):
@@ -345,7 +353,12 @@ async def update_record(
     current = StaffStatus(row.status if row else record.status)
     current_assignee = row.assignee_id if row else None
     status, assignee = transition(
-        current, current_assignee, user.id, access.public.is_owner, update
+        current,
+        current_assignee,
+        user.id,
+        access.public.is_owner,
+        update,
+        staff_enabled=get_settings().max_staff_enabled,
     )
     name = row.assignee_name if row else None
     if update.action == StaffAction.claim:

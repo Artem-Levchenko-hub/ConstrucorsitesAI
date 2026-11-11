@@ -6,8 +6,10 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import httpx
+import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from yleum_api.core.config import Settings, get_settings
 from yleum_api.core.db import get_session
 from yleum_api.core.errors import ApiError
 from yleum_api.core.security import create_access_token
@@ -19,9 +21,23 @@ from yleum_api.schemas.max_management import OwnerRecordPublic, OwnerRecordsPage
 from yleum_api.services import max_staff_source
 
 
+@pytest.mark.parametrize(
+    ("value", "enabled"),
+    [("true", True), ("false", False), ("TRUE", False), ("1", False), ("", False)],
+)
+def test_staff_flag_uses_same_values_as_web(monkeypatch, value: str, enabled: bool) -> None:
+    monkeypatch.setenv("MAX_STAFF_ENABLED", value)
+    settings = Settings(
+        database_url="postgresql+asyncpg://localhost/unused",
+        jwt_secret="local-only-test-secret-at-least-32-bytes",
+    )
+    assert settings.max_staff_enabled is enabled
+
+
 async def test_staff_project_invite_payment_queue_claim_and_revoke(test_engine, monkeypatch):
     from yleum_api.main import create_app
 
+    monkeypatch.setattr(get_settings(), "max_staff_enabled", True)
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     now = datetime.now(UTC)
     async with factory() as db:
@@ -232,6 +248,74 @@ async def test_staff_project_invite_payment_queue_claim_and_revoke(test_engine, 
                 "operation_key": str(uuid4()),
                 **extra,
             }
+
+        lead_url = f"{staff}/records/{lead}"
+        assigned_lead = await client.patch(
+            lead_url,
+            headers=owner_header,
+            json=action("leads", "reassign", assignee_id=str(operator.id)),
+        )
+        assert assigned_lead.status_code == 200
+        leads_url = f"{staff}/records?resource=leads"
+        with monkeypatch.context() as paused:
+            paused.setattr(get_settings(), "max_staff_enabled", False)
+            projects = await client.get("/api/max/staff/projects", headers=operator_header)
+            assert projects.status_code == 404
+            accepted = await client.post(accept, json=invitation, headers=operator_header)
+            assert accepted.status_code == 404
+            assert (await client.get(staff, headers=operator_header)).status_code == 403
+            assert (await client.get(leads_url, headers=operator_header)).status_code == 403
+            assert (
+                await client.patch(
+                    f"{team}/members/{operator.id}",
+                    headers=owner_header,
+                    json={"permissions": ["leads"]},
+                )
+            ).status_code == 404
+            assert (
+                await client.post(
+                    f"{team}/invitations",
+                    headers=owner_header,
+                    json={"email": operator.email, "name": "Оператор", "permissions": ["leads"]},
+                )
+            ).status_code == 404
+            settings = (await client.get(team, headers=owner_header)).json()
+            assert settings == {
+                "members": [],
+                "invitations": [],
+                "settings": {"leads_enabled": True, "orders_mode": "yookassa", "prep_minutes": 7},
+            }
+            settings["settings"]["prep_minutes"] = 8
+            saved = await client.put(
+                f"{team}/settings", headers=owner_header, json=settings["settings"]
+            )
+            assert saved.status_code == 200 and saved.json() == settings
+            owner_orders = await client.get(
+                f"{staff}/records?resource=orders", headers=owner_header
+            )
+            assert owner_orders.status_code == 200
+            assert str(paid) in {record["id"] for record in owner_orders.json()["records"]}
+            owner_leads = await client.get(leads_url, headers=owner_header)
+            assert owner_leads.status_code == 200
+            assert owner_leads.json()["records"][0]["assignee_id"] == str(operator.id)
+            revision = assigned_lead.json()["revision"]
+            denied_assignment = await client.patch(
+                lead_url,
+                headers=owner_header,
+                json=action("leads", "reassign", revision, assignee_id=str(barista.id)),
+            )
+            assert denied_assignment.status_code == 403
+            taken = await client.patch(
+                lead_url, headers=owner_header, json=action("leads", "claim", revision)
+            )
+            assert taken.status_code == 200 and taken.json()["assignee_id"] == str(owner.id)
+            closed = await client.patch(
+                lead_url,
+                headers=owner_header,
+                json=action("leads", "close", taken.json()["revision"], outcome="Готово"),
+            )
+            assert closed.status_code == 200 and closed.json()["status"] == "completed"
+        assert (await client.get(leads_url, headers=operator_header)).status_code == 200
 
         assert (
             await client.patch(

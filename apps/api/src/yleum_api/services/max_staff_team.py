@@ -9,6 +9,7 @@ from uuid import UUID
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from yleum_api.core.config import get_settings
 from yleum_api.core.errors import ApiError
 from yleum_api.models.max_staff import MaxStaffInvitation, MaxStaffMember, MaxStaffSettings
 from yleum_api.models.project import Project
@@ -129,6 +130,10 @@ def _public_member(member: MaxStaffMember, user: User) -> StaffMember:
 
 
 async def _team(session: AsyncSession, project: Project) -> StaffTeam:
+    settings = _public_settings(await _settings(session, project))
+    if not get_settings().max_staff_enabled:
+        return StaffTeam(members=[], invitations=[], settings=settings)
+
     members = await session.execute(
         select(MaxStaffMember, User)
         .join(User, User.id == MaxStaffMember.user_id)
@@ -161,7 +166,7 @@ async def _team(session: AsyncSession, project: Project) -> StaffTeam:
             )
             for invite in invites
         ],
-        settings=_public_settings(await _settings(session, project)),
+        settings=settings,
     )
 
 
@@ -454,15 +459,17 @@ async def get_access(
     except ApiError:
         raise _denied() from None
     is_owner = project.owner_id == user.id and not user.is_anon
-    settings = await _settings(session, project)
     if is_owner:
         granted, actor_name = list(StaffResource), "Владелец"
     else:
+        if not get_settings().max_staff_enabled:
+            raise _denied()
         _verified_email(user)
         member = await _current_member(session, project, user.id)
         if member is None:
             raise _denied()
         granted, actor_name = _permissions(member.permissions), member.name
+    settings = await _settings(session, project)
     permissions = [entry for entry in granted if cutover(settings, entry) is not None]
     if resource is not None and resource not in permissions:
         raise _denied()

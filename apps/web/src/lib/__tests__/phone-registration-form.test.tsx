@@ -12,6 +12,10 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: mocks.replace }
 vi.mock("@/lib/auth-mock", () => ({ getSession: async () => ({ email: "owner@example.com", isAnon: false }) }));
 vi.mock("@/lib/oauth-login-server", () => ({ listOAuthProviders: async () => [] }));
 vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));
+vi.mock("@/lib/max-staff-path", async importOriginal => ({
+  ...await importOriginal<typeof import("@/lib/max-staff-path")>(),
+  maxStaffEnabled: true,
+}));
 beforeEach(() => { mocks.action.mockResolvedValue({ error: "Телефон уже зарегистрирован" }); });
 afterEach(() => { vi.clearAllMocks(); vi.unstubAllGlobals(); });
 

@@ -1,23 +1,27 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { isMaxOwnerPreviewPath } from "@/lib/max-owner-preview-path";
-import { MAX_STAFF_JOIN_PATH, maxStaffReturnPath } from "@/lib/max-staff-path";
+import { MAX_STAFF_DISABLED_REDIRECT, MAX_STAFF_JOIN_PATH, MAX_STAFF_PATH, maxStaffEnabled, maxStaffReturnPath } from "@/lib/max-staff-path";
 
 // Real api JWT cookie (api/auth sets this; middleware just checks presence —
 // the layout calls /api/auth/me to validate the token).
 const AUTH_COOKIE = "omnia_session";
 
-/** Host-only OAuth proofs must start and finish on the configured browser origin. */
-function canonicalAuthNavigation(req: NextRequest): NextResponse | null {
-  if (req.method !== "GET" && req.method !== "HEAD") return null;
+function canonicalPublicUrl(): URL | null {
   const raw = process.env.PUBLIC_ORIGIN?.trim();
   if (!raw) return null;
-  let canonical: URL;
   try {
-    canonical = new URL(raw);
+    const url = new URL(raw);
+    return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password ? url : null;
   } catch {
     return null;
   }
-  if (!['http:', 'https:'].includes(canonical.protocol) || canonical.username || canonical.password) return null;
+}
+
+/** Host-only OAuth proofs must start and finish on the configured browser origin. */
+function canonicalAuthNavigation(req: NextRequest): NextResponse | null {
+  if (req.method !== "GET" && req.method !== "HEAD") return null;
+  const canonical = canonicalPublicUrl();
+  if (!canonical) return null;
   // Standalone Next exposes its internal listen URL here (0.0.0.0:3000).
   // The edge preserves Host; redirect destinations still come only from config.
   const browserHost = (req.headers.get("host") || req.nextUrl.host).toLowerCase();
@@ -32,6 +36,15 @@ function canonicalAuthNavigation(req: NextRequest): NextResponse | null {
 }
 
 export function middleware(req: NextRequest) {
+  const path = req.nextUrl.pathname;
+  if (!maxStaffEnabled && (path === MAX_STAFF_PATH || path.startsWith(`${MAX_STAFF_PATH}/`))) {
+    const status = req.method === "GET" || req.method === "HEAD" ? 307 : 303;
+    const response = NextResponse.redirect(new URL(MAX_STAFF_DISABLED_REDIRECT, canonicalPublicUrl() ?? req.url), status);
+    response.headers.set("Cache-Control", "no-store");
+    response.headers.set("Referrer-Policy", "no-referrer");
+    return response;
+  }
+
   // Dev mock mode (NEXT_PUBLIC_USE_MOCKS !== "false"): no backend exists to set
   // the auth cookie, so let every route through — the layout's getSession()
   // returns a demo user in this mode. Prod builds with NEXT_PUBLIC_USE_MOCKS
@@ -41,7 +54,6 @@ export function middleware(req: NextRequest) {
   }
 
   const session = req.cookies.get(AUTH_COOKIE);
-  const path = req.nextUrl.pathname;
   const isGeneralAuthRoute = path === "/login" || path === "/register";
   if (isGeneralAuthRoute || path === "/max/register" || path === "/oauth/complete" || path === MAX_STAFF_JOIN_PATH) {
     const canonicalResponse = canonicalAuthNavigation(req);

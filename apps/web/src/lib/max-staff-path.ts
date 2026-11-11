@@ -1,5 +1,9 @@
+export const maxStaffEnabled = process.env.NEXT_PUBLIC_MAX_STAFF_ENABLED === "true";
+
 export const MAX_STAFF_PATH = "/max/staff";
 export const MAX_STAFF_JOIN_PATH = "/max/staff/join";
+// Next strips a bare "#"; a non-empty fragment overwrites the invitation token.
+export const MAX_STAFF_DISABLED_REDIRECT = "/max#top";
 
 export function maxStaffProjectPath(projectId: string): string {
   return `${MAX_STAFF_PATH}/${encodeURIComponent(projectId)}`;

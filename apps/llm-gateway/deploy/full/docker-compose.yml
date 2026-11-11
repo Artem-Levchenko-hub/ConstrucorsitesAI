@@ -314,6 +314,7 @@ services:
       PROJECT_CELL_PREVIEW_HOST_SUFFIX: ${PROJECT_CELL_PREVIEW_HOST_SUFFIX:-preview.lead-generator.ru}
       USE_MAX_FINALIZATION_COORDINATOR: ${USE_MAX_FINALIZATION_COORDINATOR:-false}
       MAX_CODE_RESTORATION_ENABLED: ${MAX_CODE_RESTORATION_ENABLED:-false}
+      MAX_STAFF_ENABLED: ${MAX_STAFF_ENABLED:-false}
       USE_PROJECT_CELL_ACTIVITY_WATCHDOG: ${USE_PROJECT_CELL_ACTIVITY_WATCHDOG:-false}
       USE_GENERATION_EVENT_REPLAY: ${USE_GENERATION_EVENT_REPLAY:-false}
       USE_CELL_RESOURCE_PROFILE_V2: ${USE_CELL_RESOURCE_PROFILE_V2:-false}
@@ -747,6 +748,7 @@ services:
         # the same image runs under any domain. Do not add URL build args here —
         # infra/release/test-compose-policy.sh rejects them.
         NEXT_PUBLIC_USE_MOCKS: "false"
+        NEXT_PUBLIC_MAX_STAFF_ENABLED: ${MAX_STAFF_ENABLED:-false}
         NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-10-27}
     image: ${WEB_IMAGE:-omnia-web:prod}
     container_name: yleum-prod-web

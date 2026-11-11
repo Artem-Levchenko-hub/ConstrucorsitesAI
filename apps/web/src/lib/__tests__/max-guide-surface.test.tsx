@@ -21,7 +21,7 @@ vi.mock("@/lib/auth-mock", () => ({ getSession: async () => null }));
 
 const chapterIds = [
   "start", "account", "project", "builder", "settings", "integrations",
-  "max-bot", "publish", "partner", "acceptance", "operations", "staff", "billing", "errors", "checklists",
+  "max-bot", "publish", "partner", "acceptance", "operations", "billing", "errors", "checklists",
 ];
 
 function renderScreenshot(id: string) {
@@ -65,6 +65,13 @@ describe("MAX guide screenshots", () => {
     for (const anchor of chapterIds) {
       expect(document.getElementById(anchor)).not.toBeNull();
     }
+    expect(document.getElementById("staff")).toBeNull();
+    expect(document.getElementById("video-staff")).toBeNull();
+    expect(document.querySelector('a[href="#staff"], a[href="/max/guide#staff"]')).toBeNull();
+    expect(document.getElementById("operations")?.textContent).toContain("Обрабатывайте обращения");
+    expect(document.getElementById("operations")?.textContent).toContain("«Настройки очередей»");
+    expect(document.getElementById("operations")?.textContent).toContain("«Принимать заявки»");
+    expect(document.getElementById("operations")?.textContent).toContain("«Оплата заказов»");
     const pictures = [...document.querySelectorAll<HTMLElement>("[data-guide-screenshot]")];
     expect(new Set(pictures.map((picture) => picture.dataset.guideScreenshot))).toEqual(new Set(Object.keys(guideScreenshots)));
     expect(document.getElementById("partner")?.textContent).toContain("Введите ссылку");
@@ -80,7 +87,7 @@ describe("MAX guide screenshots", () => {
     expect(existsSync(resolve(publicRoot, "guide/2026-10-30"))).toBe(false);
 
     for (const [id, screenshot] of Object.entries(guideScreenshots)) {
-      expect(screenshot.src).toMatch(/^\/guide\/2026-10-30-redacted\/[^/]+\.png$/);
+      expect(screenshot.src).toBe(`/guide/${screenshot.capturedAt.slice(0, 10)}-redacted/${id}.png`);
       const imagePath = resolve(publicRoot, screenshot.src.slice(1));
       const imageBytes = readFileSync(imagePath);
       expect(imageBytes.length).toBeGreaterThan(1_000);

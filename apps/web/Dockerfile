@@ -41,8 +41,10 @@ COPY . .
 # empty string is what gets inlined. CI greps the client bundle for the
 # production domain (.github/workflows/ci.yml, job image-build).
 ARG NEXT_PUBLIC_USE_MOCKS=false
+ARG NEXT_PUBLIC_MAX_STAFF_ENABLED=false
 ARG NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION=2026-10-27
 ENV NEXT_PUBLIC_USE_MOCKS=$NEXT_PUBLIC_USE_MOCKS \
+    NEXT_PUBLIC_MAX_STAFF_ENABLED=$NEXT_PUBLIC_MAX_STAFF_ENABLED \
     NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION=$NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION \
     NEXT_TELEMETRY_DISABLED=1
 # next/font downloads Google fonts at build time; a transient network hiccup fails the

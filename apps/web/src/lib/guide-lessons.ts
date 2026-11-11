@@ -1,4 +1,6 @@
-export const guideChapters = [
+import { maxStaffEnabled } from "@/lib/max-staff-path";
+
+const allGuideChapters = [
   { id: "start", number: "00", title: "Перед началом", description: "Определите задачу приложения и главный сценарий клиента." },
   { id: "account", number: "01", title: "Регистрация и вход", description: "Изучите порядок входа и подтверждения аккаунта." },
   { id: "project", number: "02", title: "Создание приложения", description: "Пройдите от описания идеи до подтверждения данных проекта." },
@@ -16,7 +18,9 @@ export const guideChapters = [
   { id: "checklists", number: "13", title: "Списки для запуска", description: "Используйте списки для самостоятельной проверки готовности." },
 ] as const;
 
-export type GuideLessonId = (typeof guideChapters)[number]["id"];
+export const guideChapters = allGuideChapters.filter(({ id }) => maxStaffEnabled || id !== "staff");
+
+export type GuideLessonId = (typeof allGuideChapters)[number]["id"];
 
 export function guideChapterHref(id: GuideLessonId) {
   return `/max/guide#${id}`;

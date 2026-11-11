@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth-mock";
 import { headers } from "next/headers";
 import { isMaxOwnerPreviewPath } from "@/lib/max-owner-preview-path";
-import { maxStaffReturnPath } from "@/lib/max-staff-path";
+import { maxStaffEnabled, maxStaffReturnPath } from "@/lib/max-staff-path";
 import { Suspense } from "react";
 import { ProductLearning } from "@/components/learning/ProductLearning";
 import { LearningProvider } from "@/components/learning/LearningProvider";
@@ -17,7 +17,8 @@ export default async function AppLayout({
     const target = (await headers()).get("x-omnia-return-to");
     const accountReturn = target && /^\/(account|billing)(?:[/?]|$)/.test(target);
     const ownerPreviewReturn = target && isMaxOwnerPreviewPath(target);
-    const returnPath = maxStaffReturnPath(target) ?? (accountReturn || ownerPreviewReturn ? target : null);
+    const staffReturn = maxStaffEnabled ? maxStaffReturnPath(target) : null;
+    const returnPath = staffReturn ?? (accountReturn || ownerPreviewReturn ? target : null);
     redirect(returnPath ? `/login?next=${encodeURIComponent(returnPath)}` : "/login");
   }
   const target = (await headers()).get("x-omnia-return-to");

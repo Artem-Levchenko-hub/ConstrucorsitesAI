@@ -3,11 +3,12 @@
 import { useCallback, useRef, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, CircleAlert, History, Inbox, Loader2, ShoppingBag, UsersRound } from "lucide-react";
+import { CalendarDays, CircleAlert, History, Inbox, Loader2, Settings, ShoppingBag, UsersRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { enableMaxManagement, getMaxManagement, ownerRequestError, type ResourceDefinition, type ResourceId } from "@/lib/api/max-management";
 import { getMaxTeam } from "@/lib/api/max-staff";
 import { getMaxProjectConfig } from "@/lib/api/max-studio";
+import { maxStaffEnabled } from "@/lib/max-staff-path";
 import { MaxSectionShell } from "./MaxSectionShell";
 import { MaxOwnerRecords } from "./MaxOwnerRecords";
 import { MaxStaffQueue } from "./MaxStaffQueue";
@@ -20,7 +21,7 @@ const sectionIcon = {
   orders: ShoppingBag,
   leads: Inbox,
   bookings: CalendarDays,
-  team: UsersRound,
+  team: maxStaffEnabled ? UsersRound : Settings,
 };
 const stateCopy = {
   not_published: "Обращения клиентов появятся после публикации приложения. Пока можно подготовить каталог и настройки.",
@@ -63,7 +64,7 @@ function OwnerConsole({ projectId, projectName, initialTeam }: OwnerConsoleProps
   const resources = data?.state === "active" ? data.resources.filter(resource => data.active_modules.includes(resource.id)) : [];
   const sections: { id: Section; label: string }[] = [
     ...resources.map(resource => ({ id: resource.id, label: resource.label })),
-    { id: "team", label: "Команда" },
+    { id: "team", label: maxStaffEnabled ? "Команда" : "Настройки очередей" },
   ];
   const active = sections.some(section => section.id === selected) ? selected : overview.isPending ? null : sections[0].id;
   const resource = resources.find(item => item.id === active);
@@ -85,7 +86,8 @@ function OwnerConsole({ projectId, projectName, initialTeam }: OwnerConsoleProps
     enable.mutate();
   }
   return <MaxSectionShell projectId={projectId} projectName={projectName} active="manage" eyebrow="Ежедневная работа" title="Управление"
-    lead="Работайте с обращениями и управляйте доступом сотрудников." learningContext={active === "team" || staffResource ? "staff-team" : undefined}>
+    lead={maxStaffEnabled ? "Работайте с обращениями и управляйте доступом сотрудников." : "Управляйте заказами и заявками."}
+    learningContext={maxStaffEnabled && (active === "team" || staffResource) ? "staff-team" : undefined}>
     <div className="max-owner-console">
       {overview.isError && <div role="alert" className="max-owner-notice" data-tone="error">
         <strong><CircleAlert aria-hidden="true" className="size-4" />Не удалось открыть управление</strong>
@@ -145,7 +147,7 @@ function OwnerConsole({ projectId, projectName, initialTeam }: OwnerConsoleProps
 function LegacyRecords({ projectId, resource }: { projectId: string; resource: ResourceDefinition }) {
   const [open, setOpen] = useState(false);
   return <details className="max-staff-history max-staff-legacy" onToggle={event => setOpen(event.currentTarget.open)}>
-    <summary><History aria-hidden="true" /> До подключения команды</summary>
+    <summary><History aria-hidden="true" /> До включения очереди</summary>
     {open && <MaxOwnerRecords projectId={projectId} resource={resource} readOnly />}
   </details>;
 }

@@ -3,6 +3,11 @@ import { NextRequest } from "next/server";
 
 import { config, middleware } from "./middleware";
 
+vi.mock("@/lib/max-staff-path", async importOriginal => ({
+  ...await importOriginal<typeof import("@/lib/max-staff-path")>(),
+  maxStaffEnabled: true,
+}));
+
 const originalMocksValue = process.env.NEXT_PUBLIC_USE_MOCKS;
 
 function request(path: string, withSession = false, method = "GET") {

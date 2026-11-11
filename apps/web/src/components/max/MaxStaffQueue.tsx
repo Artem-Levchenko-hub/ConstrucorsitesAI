@@ -11,7 +11,7 @@ import {
   type StaffAccess, type StaffAction, type StaffPermission, type StaffRecord, type StaffRecordUpdate,
   type StaffRecordsPage, type TeamMember,
 } from "@/lib/api/max-staff";
-import { maxStaffProjectPath } from "@/lib/max-staff-path";
+import { maxStaffEnabled, maxStaffProjectPath } from "@/lib/max-staff-path";
 import { MaxStaffRecord, staffRecordTitle, staffStatus, staffTime } from "./MaxStaffRecord";
 import "./max-staff.css";
 
@@ -69,6 +69,8 @@ export function MaxStaffQueue({ projectId, userId, resource, members, onDirtyCha
   useEffect(() => { onDirtyChange?.(boardBusy); return () => onDirtyChange?.(false); }, [boardBusy, onDirtyChange]);
   const selected = resource ?? (selectedResource && permissions.includes(selectedResource) ? selectedResource : permissions[0]);
   const allowed = selected && permissions.includes(selected);
+  const managePath = `/max/${encodeURIComponent(projectId)}/manage`;
+  const loginReturn = maxStaffEnabled ? maxStaffProjectPath(projectId) : managePath;
   return <section className="max-staff-queue" aria-label="Рабочая очередь">
     {!resource && <header className="max-staff-page-heading">
       <p className="max-staff-kicker">Рабочий кабинет</p>
@@ -78,14 +80,14 @@ export function MaxStaffQueue({ projectId, userId, resource, members, onDirtyCha
     {access.isPending && <p role="status" className="max-staff-notice">Проверяем доступ к очереди…</p>}
     {access.isError && <div role="alert" className="max-staff-notice" data-tone="error"><p>{staffRequestError(access.error)}</p>
       <div className="max-staff-actions"><Button variant="outline" onClick={() => void access.refetch()}>Проверить доступ</Button>
-        {access.error instanceof ApiError && access.error.status === 401 && <Button asChild variant="ghost"><Link href={`/login?next=${encodeURIComponent(maxStaffProjectPath(projectId))}`}>Войти</Link></Button>}
+        {access.error instanceof ApiError && access.error.status === 401 && <Button asChild variant="ghost"><Link href={`/login?next=${encodeURIComponent(loginReturn)}`}>Войти</Link></Button>}
       </div>
     </div>}
     {access.isSuccess && !allowed && <div className="max-staff-empty"><Inbox aria-hidden="true" />
       <h2>Рабочая очередь пока недоступна</h2><p>{access.data.is_owner
-        ? "Включите нужную очередь в разделе «Команда» и опубликуйте совместимую версию приложения."
+        ? `Включите нужную очередь в разделе «${maxStaffEnabled ? "Команда" : "Настройки очередей"}» и опубликуйте совместимую версию приложения.`
         : "Обратитесь к владельцу приложения, чтобы проверить доступ к заказам или заявкам."}</p>
-      {access.data.is_owner && !resource && <Button asChild variant="outline"><Link href={`/max/${encodeURIComponent(projectId)}/manage?section=team`}>Открыть команду</Link></Button>}
+      {maxStaffEnabled && access.data.is_owner && !resource && <Button asChild variant="outline"><Link href={`${managePath}?section=team`}>Открыть команду</Link></Button>}
     </div>}
     {!resource && permissions.length > 1 && <nav className="max-staff-resource" aria-label="Рабочие разделы">
       {permissions.map(value => <Button key={value} type="button" variant="ghost" aria-current={value === selected ? "page" : undefined}

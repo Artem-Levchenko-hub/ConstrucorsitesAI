@@ -7,14 +7,15 @@ import { MarketingEvents } from "@/components/marketing/MarketingEvents";
 import { getSession } from "@/lib/auth-mock";
 import { listOAuthProviders } from "@/lib/oauth-login-server";
 import { safeReturnPath } from "@/lib/auth-return";
-import { maxStaffReturnPath } from "@/lib/max-staff-path";
+import { maxStaffEnabled, maxStaffReturnPath } from "@/lib/max-staff-path";
 import "@/components/max/max-studio.css";
 import "@/components/marketing/max-public.css";
 
 export default async function MaxRegisterPage({ searchParams }: { searchParams?: Promise<{ next?: string }> }) {
   const requestedNext = (await searchParams)?.next;
-  const staffReturn = maxStaffReturnPath(requestedNext);
-  const next = staffReturn ?? safeReturnPath(requestedNext) ?? "/max";
+  const staffPath = maxStaffReturnPath(requestedNext);
+  const staffReturn = maxStaffEnabled ? staffPath : null;
+  const next = staffReturn ?? (staffPath ? "/max" : safeReturnPath(requestedNext)) ?? "/max";
   const session = await getSession();
   const providers = await listOAuthProviders();
 

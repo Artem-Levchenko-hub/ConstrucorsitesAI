@@ -12,6 +12,8 @@ infra/release/deploy-prod.sh <полный sha из origin/main> [--no-web] [--l
 
 Лимит обычной генерации меняется явным флагом `--generation-window N` (целые секунды, 60–7200). Например, `infra/release/deploy-prod.sh <полный-sha> --generation-window 3300` увеличивает текущие 1500 секунд до 3300: с 25 до 55 минут. Скрипт под своим замком и после drain записывает `MAX_GENERATION_DEADLINE_SECONDS` документированным `update-env-value.sh`, затем проверяет одинаковое значение у API, worker и generation-worker в отрендеренном production compose. Без флага существующая настройка сохраняется. Флаг запрещён для `--web-only` и продолжения уже начатого релиза. После выкатки сверить фактическую настройку в новых API и воркерах. Уже завершённое задание не возобновляется; отдельные окна адаптации и таймауты провайдера этим флагом не меняются.
 
+Кабинет сотрудников MAX выключен по умолчанию. Чтобы включить его, задайте `MAX_STAFF_ENABLED=true` в `apps/llm-gateway/deploy/full/.env` на production-хосте и выполните полный выпуск API и web через `deploy-prod.sh`. Compose использует то же значение при запуске API и сборке web. Для повторного отключения задайте `MAX_STAFF_ENABLED=false` и выпустите оба сервиса.
+
 С 25.09.2026 (окно 4.4/4.5): контейнеры платформы называются `yleum-prod-*`, чекаут на хостах — `/opt/yleum` (симлинк `/opt/omnia` остаётся навсегда, но скрипты уже ходят по новому пути через него), юнит оркестраторов — `yleum-orchestrator.service`. Остановленный `omnia-prod-postgres` — путь отката базы, не удалять. Если compose пересоздаёт сеть `full_yleum-prod`, сверить её подсеть с правилами ufw и pg_hba хостового PostgreSQL (см. runbook окна, §7).
 
 Правила: выкатывать только ревизию с зелёным CI (прогон именно этого sha; отменённый прогон — не вердикт); api всегда раньше оркестраторов (двусторонние поля контракта принимаются платформой раньше, чем оркестратор начинает их слать); `--no-web` только если `apps/web` не менялся; `--legal-version` когда поднята версия юридических документов (пишется в env воркера биллинга и сверяется в поде).
@@ -272,9 +274,10 @@ jq -e '(.services.web.build.args // {}) | (has("NEXT_PUBLIC_API_URL") or has("NE
 public_origin="$(jq -er '.services.web.environment.PUBLIC_ORIGIN' "$rendered_compose")"
 public_origin="${public_origin%/}"
 legal_version="$(jq -er '.services.web.build.args.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION' "$rendered_compose")"
+max_staff_enabled="$(jq -er '.services.web.build.args.NEXT_PUBLIC_MAX_STAFF_ENABLED' "$rendered_compose")"
 # Stack templates are baked into the api image (named build context).
 docker build --build-context templates=apps/orchestrator/templates -t "omnia-api:$RELEASE_SHA" apps/api
-docker build --build-arg NEXT_PUBLIC_USE_MOCKS=false --build-arg "NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION=$legal_version" -t "omnia-web:$RELEASE_SHA" apps/web
+docker build --build-arg NEXT_PUBLIC_USE_MOCKS=false --build-arg "NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION=$legal_version" --build-arg "NEXT_PUBLIC_MAX_STAFF_ENABLED=$max_staff_enabled" -t "omnia-web:$RELEASE_SHA" apps/web
 docker image inspect "omnia-api:$RELEASE_SHA" "omnia-web:$RELEASE_SHA" >/dev/null
 ~~~
 
