@@ -450,6 +450,7 @@ def load_generation_dispatch(run: GenerationRun) -> GenerationDispatch:
             raise ValueError('invalid font dispatch')
         for font in fonts:
             if (type(font) is not dict or set(font) != {'id', 'sha256', 'role'}
+                or type(font['id']) is not str
                 or not isinstance(font['sha256'], str)
                 or re.fullmatch(r'[a-f0-9]{64}', font['sha256']) is None):
                 raise ValueError('invalid font dispatch binding')
@@ -539,6 +540,22 @@ def capacity_dispatch_claim_token(run: GenerationRun) -> UUID | None:
         return UUID(str(raw["token"]))
     except (TypeError, ValueError):
         return None
+
+
+def read_capacity_dispatch_claim(run: GenerationRun) -> tuple[UUID, datetime] | None:
+    """Read the complete persisted queue claim for supervision and history checks."""
+    state = run.agent_state if isinstance(run.agent_state, dict) else {}
+    raw = state.get("capacity_dispatch_claim")
+    if not isinstance(raw, dict) or set(raw) != {"token", "expires_at"}:
+        return None
+    try:
+        token = UUID(str(raw["token"]))
+        expires_at = datetime.fromisoformat(str(raw["expires_at"]))
+        if expires_at.tzinfo is not None:
+            return token, expires_at.astimezone(UTC)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    return None
 
 
 def has_capacity_dispatch_claim(run: GenerationRun) -> bool:

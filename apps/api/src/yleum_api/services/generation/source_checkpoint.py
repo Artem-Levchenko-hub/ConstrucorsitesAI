@@ -23,7 +23,12 @@ from yleum_api.models.project import Project
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.services.generation.agent_messages import _is_retry_request
 from yleum_api.services.generation.contracts import GenerationIds, SourceBaseline
-from yleum_api.services.generation_runs import load_generation_dispatch
+from yleum_api.services.generation_runs import (
+    GenerationDispatch,
+    has_capacity_admitted_dispatch_token,
+    load_generation_dispatch,
+    read_capacity_dispatch_claim,
+)
 from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
 from yleum_api.services.repo import MAX_FILE_BYTES, MAX_FILES, MAX_REPO_BYTES
 
@@ -247,12 +252,8 @@ async def adjacent_checkpoint(
             or not checkpoint_resume_request(request.content)
         ):
             return None
-        previous = await _adjacent_run(session, current)
-        if (
-            not _owned_failed_source(previous, ids)
-            or previous is None or previous.created_at >= current.created_at
-            or await _ambiguous_run_order(session, previous)
-        ):
+        previous = await _checkpoint_predecessor(session, current, ids)
+        if previous is None or not _owned_failed_source(previous, ids):
             return None
         if _unmarked_checkpoint_state(previous):
             source = await _legacy_checkpoint_source(
@@ -329,7 +330,7 @@ async def _explicit_checkpoint_source(
     if inherited is None:
         return None
     message = await session.get(Message, previous.user_message_id)
-    parent = await _adjacent_run(session, previous)
+    parent = await _checkpoint_predecessor(session, previous, ids)
     source = await session.get(GenerationRun, UUID(inherited["source_run_id"]))
     if (
         message is None or message.project_id != ids.project_id or message.role != "user"
@@ -411,15 +412,83 @@ async def checkpoint_reference_message(
     raise ValueError("reference continuation chain exceeded")
 
 
-def _admitted_checkpoint_baseline(run: GenerationRun, baseline: SourceBaseline) -> bool:
+def _bound_checkpoint_dispatch(run: GenerationRun) -> GenerationDispatch | None:
     try:
         dispatch = load_generation_dispatch(run)
     except ValueError:
+        return None
+    if (
+        dispatch.user_message_id != run.user_message_id
+        or dispatch.assistant_message_id != run.assistant_message_id
+    ):
+        return None
+    return dispatch
+
+
+def _admitted_checkpoint_baseline(run: GenerationRun, baseline: SourceBaseline) -> bool:
+    dispatch = _bound_checkpoint_dispatch(run)
+    return dispatch is not None and dispatch.current_snapshot_id == baseline.snapshot_id
+
+
+async def _checkpoint_predecessor(
+    session: AsyncSession, newer: GenerationRun, ids: GenerationIds,
+) -> GenerationRun | None:
+    """Skip only a cancelled continuation that never reached source execution."""
+    for _ in range(20):
+        previous = await _adjacent_run(session, newer)
+        if (
+            previous is None or previous.created_at >= newer.created_at
+            or await _ambiguous_run_order(session, previous)
+        ):
+            return None
+        if previous.status != "cancelled":
+            if newer.status == "cancelled":
+                interrupted = _bound_checkpoint_dispatch(newer)
+                source = _bound_checkpoint_dispatch(previous)
+                if (
+                    interrupted is None or source is None
+                    or source.current_snapshot_id != interrupted.current_snapshot_id
+                ):
+                    return None
+            return previous
+        if not await _cancelled_before_admission(session, previous, newer, ids):
+            return None
+        newer = previous
+    return None
+
+
+async def _cancelled_before_admission(
+    session: AsyncSession, previous: GenerationRun, newer: GenerationRun, ids: GenerationIds,
+) -> bool:
+    # The worker can claim the dispatch while waiting for a cell. The promotion
+    # transaction sets started_at and the admitted token before source execution.
+    if (
+        previous.project_id != ids.project_id or previous.user_id != ids.user_id
+        or previous.execution_backend != "worker" or previous.response_mode not in {"build", "edit"}
+        or previous.started_at is not None or previous.finished_at is None
+        or not previous.created_at <= previous.finished_at < newer.created_at
+        or read_capacity_dispatch_claim(previous) is None
+        or has_capacity_admitted_dispatch_token(previous)
+        or not _unmarked_checkpoint_state(previous)
+    ):
         return False
+    cancelled = _bound_checkpoint_dispatch(previous)
+    current = _bound_checkpoint_dispatch(newer)
+    if (
+        cancelled is None or current is None or not cancelled.orchestrate or not current.orchestrate
+        or cancelled.current_snapshot_id != current.current_snapshot_id
+        or cancelled.reference_images or cancelled.font_selections or cancelled.selected_elements
+    ):
+        return False
+    request = await session.get(Message, cancelled.user_message_id)
+    response = await session.get(Message, cancelled.assistant_message_id)
     return (
-        dispatch.user_message_id == run.user_message_id
-        and dispatch.assistant_message_id == run.assistant_message_id
-        and dispatch.current_snapshot_id == baseline.snapshot_id
+        request is not None and request.project_id == ids.project_id and request.role == "user"
+        and not request.reference_images and not request.font_selections
+        and not request.resolved_fonts
+        and checkpoint_resume_request(request.content)
+        and response is not None and response.project_id == ids.project_id
+        and response.role == "assistant" and response.snapshot_id is None
     )
 
 

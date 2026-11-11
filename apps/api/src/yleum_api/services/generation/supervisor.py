@@ -37,6 +37,7 @@ from yleum_api.services.generation_runs import (
     apply_cancelled_generation_locked,
     finalize_generation_run,
     load_generation_dispatch,
+    read_capacity_dispatch_claim,
     set_generation_run_status,
     terminalize_generation_run_locked,
     write_capacity_dispatch_claim,
@@ -79,21 +80,6 @@ async def _try_claim_capacity_dispatch(session: AsyncSession, run_id: UUID) -> b
     return bool(result.scalar_one())
 
 
-def _capacity_dispatch_claim(run: GenerationRun) -> tuple[UUID, datetime] | None:
-    state = run.agent_state if isinstance(run.agent_state, dict) else {}
-    raw = state.get("capacity_dispatch_claim")
-    if not isinstance(raw, dict) or set(raw) != {"token", "expires_at"}:
-        return None
-    try:
-        token = UUID(str(raw["token"]))
-        expires_at = datetime.fromisoformat(str(raw["expires_at"]))
-    except (TypeError, ValueError):
-        return None
-    if expires_at.tzinfo is None:
-        return None
-    return token, expires_at.astimezone(UTC)
-
-
 def _write_capacity_dispatch_claim(
     run: GenerationRun,
     *,
@@ -124,7 +110,7 @@ async def _renew_capacity_dispatch_claim(run_id: UUID, token: UUID) -> str:
             return "prequeue"
         if run.status == "running":
             return "admitted"
-        claim = _capacity_dispatch_claim(run)
+        claim = read_capacity_dispatch_claim(run)
         if claim is None or claim[0] != token:
             return "lost"
         _write_capacity_dispatch_claim(run, token=token)
@@ -472,7 +458,7 @@ async def resume_capacity_queued_generations() -> int:
                 continue
             if not await _try_claim_capacity_dispatch(session, run.id):
                 continue
-            claim = _capacity_dispatch_claim(run)
+            claim = read_capacity_dispatch_claim(run)
             if claim is not None and claim[1] > now:
                 continue
             try:

@@ -80,6 +80,175 @@ async def test_repeated_resume_failures_before_private_copy_keep_exact_saved_sou
         _mark_failed(history, current)
 
 
+@pytest.fixture
+async def first_build_checkpoint(history, monkeypatch):  # noqa: F811 - pytest consumes fixture
+    from dataclasses import replace
+    from datetime import UTC, timedelta
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from uuid import uuid4
+
+    from yleum_api.services.generation import source_checkpoint as sc
+    from yleum_api.services.generation.contracts import SourceBaseline
+    from yleum_api.services.generation_runs import (
+        load_generation_dispatch,
+        store_generation_dispatch,
+        write_capacity_dispatch_claim,
+    )
+
+    project = history.ensure_project()
+    project.current_snapshot_id = None
+    history.session.commit()
+    baseline = SourceBaseline(None, None, {})
+
+    def add(prompt, *, status='running', **kwargs):
+        run = history.add(prompt, status=status, **kwargs)
+        store_generation_dispatch(
+            run, replace(load_generation_dispatch(run), current_snapshot_id=None),
+        )
+        if status == 'running':
+            run.started_at = run.created_at
+        history.session.commit()
+        return run
+
+    def finish(run, status):
+        run.status = status
+        run.finished_at = run.created_at + timedelta(milliseconds=500)
+        history.session.commit()
+
+    def cancelled(prompt='Продолжи сборку', *, worker_started=True, **kwargs):
+        run = add(prompt, status='cancelled', **kwargs)
+        run.execution_backend = 'worker'
+        if worker_started:
+            run.execution_started_at = run.created_at
+        write_capacity_dispatch_claim(
+            run, token=uuid4(), lease_seconds=60, now=run.created_at.replace(tzinfo=UTC),
+        )
+        finish(run, 'cancelled')
+        return run
+
+    async def resume(run):
+        return await sc.adjacent_checkpoint(
+            factory=history.factory, ids=history.ids(run), baseline=baseline,
+        )
+
+    prompt = 'Собери приложение для учёта КБЖУ'
+    files = {'src/app/page.tsx': 'export default () => "КБЖУ";\n', 'src/app/empty.ts': ''}
+    original = add(prompt)
+    await sc.persist_checkpoint(
+        factory=history.factory, ids=history.ids(original), baseline=baseline,
+        files=files, original_prompt=prompt,
+    )
+    finish(original, 'failed')
+    reads = Mock(wraps=sc._get_checkpoint)
+    monkeypatch.setattr(sc, '_get_checkpoint', reads)
+    return SimpleNamespace(
+        project=project, original=original, add=add, cancelled=cancelled, finish=finish,
+        resume=resume, reads=reads, expected=({'files': files, 'deleted_paths': []}, prompt),
+    )
+
+
+@pytest.mark.parametrize('worker_started', [False, True])
+async def test_first_build_source_survives_pre_admission_cancellation_and_failed_retry(
+    first_build_checkpoint, worker_started,
+):
+    first = first_build_checkpoint
+    cancelled = first.cancelled(worker_started=worker_started)
+    cancelled_state = dict(cancelled.agent_state)
+    digest = first.original.agent_state['source_checkpoint']['digest']
+    previous = first.original
+
+    for _ in range(2):
+        current = first.add('Продолжи')
+        assert await first.resume(current) == first.expected
+        assert current.agent_state['source_checkpoint_resume'] == {
+            'previous_run_id': str(previous.id), 'source_run_id': str(first.original.id),
+            'digest': digest, 'baseline_sha': None,
+        }
+        assert 'source_checkpoint' not in current.agent_state
+        first.finish(current, 'failed')
+        previous = current
+
+    assert first.reads.call_count == 2
+    assert cancelled.agent_state == cancelled_state
+    assert first.project.current_snapshot_id is None
+
+
+@pytest.mark.parametrize('intervening', [
+    'started_at', 'admitted_token', 'amended', 'foreign_owner', 'foreign_dispatch',
+    'dispatch_snapshot', 'attachment', 'selected_elements', 'malformed_font',
+    'missing_claim', 'broken_claim', 'overflowing_claim',
+    'assistant_snapshot', 'unfinished', 'finished_too_late',
+])
+async def test_first_build_source_does_not_cross_other_cancelled_attempts(
+    history, first_build_checkpoint, intervening,  # noqa: F811 - pytest consumes fixture
+):
+    from uuid import uuid4
+
+    from yleum_api.models.message import Message
+
+    first = first_build_checkpoint
+    prompt = 'Продолжи, но поменяй формулу' if intervening == 'amended' else 'Продолжи сборку'
+    references = [{'id': str(uuid4()), 'sha256': 'a' * 64}] if intervening == 'attachment' else None
+    cancelled = first.cancelled(
+        prompt, user=uuid4() if intervening == 'foreign_owner' else None,
+        references=references,
+    )
+    current = first.add('Продолжи')
+    state = dict(cancelled.agent_state)
+    dispatch = dict(state['dispatch'])
+    if intervening == 'started_at':
+        cancelled.started_at = cancelled.created_at
+    elif intervening == 'admitted_token':
+        state['capacity_admitted_dispatch_token'] = str(uuid4())
+    elif intervening == 'foreign_dispatch':
+        dispatch['user_id'] = str(uuid4())
+    elif intervening == 'dispatch_snapshot':
+        dispatch['current_snapshot_id'] = str(history.snapshot.id)
+    elif intervening == 'selected_elements':
+        dispatch['selected_elements'] = [{'path': 'src/app/page.tsx'}]
+    elif intervening == 'malformed_font':
+        dispatch['font_selections'] = [{'id': None, 'sha256': 'a' * 64, 'role': 'body'}]
+    elif intervening == 'missing_claim':
+        del state['capacity_dispatch_claim']
+    elif intervening == 'broken_claim':
+        state['capacity_dispatch_claim'] = {**state['capacity_dispatch_claim'], 'expires_at': 'bad'}
+    elif intervening == 'overflowing_claim':
+        state['capacity_dispatch_claim'] = {
+            **state['capacity_dispatch_claim'], 'expires_at': '9999-12-31T23:59:59-01:00',
+        }
+    elif intervening == 'assistant_snapshot':
+        assistant = history.session.get(Message, cancelled.assistant_message_id)
+        assistant.snapshot_id = history.snapshot.id
+    elif intervening == 'unfinished':
+        cancelled.finished_at = None
+    elif intervening == 'finished_too_late':
+        cancelled.finished_at = current.created_at
+    cancelled.agent_state = {**state, 'dispatch': dispatch}
+    history.session.commit()
+
+    assert await first.resume(current) is None
+    first.reads.assert_not_called()
+    assert 'source_checkpoint_resume' not in current.agent_state
+
+
+async def test_first_build_source_rechecks_cancelled_predecessor_after_failed_retry(
+    history, first_build_checkpoint,  # noqa: F811 - pytest consumes fixture
+):
+    first = first_build_checkpoint
+    cancelled = first.cancelled()
+    resumed = first.add('Продолжи')
+    assert await first.resume(resumed) == first.expected
+    first.finish(resumed, 'failed')
+    cancelled.started_at = cancelled.created_at
+    history.session.commit()
+
+    retry = first.add('Продолжи')
+    assert await first.resume(retry) is None
+    assert first.reads.call_count == 1
+    assert 'source_checkpoint_resume' not in retry.agent_state
+
+
 @pytest.mark.parametrize('intervening', ['unrelated', 'amended', 'completed', 'owner', 'baseline'])
 async def test_resume_provenance_never_crosses_a_newer_unrelated_turn(
     history, checkpoints, intervening,  # noqa: F811 - pytest consumes imported fixture
