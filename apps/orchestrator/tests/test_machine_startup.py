@@ -175,6 +175,129 @@ def test_proven_successful_legacy_request_does_not_block_new_admission():
     )
 
 
+def source_guard_setup(tmp_path):
+    from tests.test_cell_state import _mutation, _spec
+    from yleum_orchestrator.core.cell_resources import CellResourceNames
+    from yleum_orchestrator.services.cell_state import CellStateStore
+    from yleum_orchestrator.services.machine_identity import machine_identity_root
+    from yleum_orchestrator.services.machine_startup import (
+        SourceGuardRecoveryReceipt,
+        source_guard_operation_sha256,
+    )
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    store = CellStateStore(tmp_path / "cells")
+    spec = _spec(uuid4())
+    mutation = _mutation("a", 3)
+    names = CellResourceNames.for_workspace(spec.workspace_id, namespace="test")
+    store.begin(spec, mutation, kind="ensure", phase="planned", resource_names=names)
+    state = replace(
+        store.complete(spec.workspace_id, mutation, bundle_state="resources_ready"),
+        active_generation_run_id=None,
+        active_generation_fencing_epoch=None,
+    )
+    store._persist_state(state)
+    operation = uuid4()
+    row = {
+        "kind": "request",
+        "startup_role": "fast_check",
+        "source_guard_failure": True,
+        "state": "failed",
+        "epoch": 3,
+        "result": {
+            "operation_id": str(operation), "state": "completed", "exit_code": 1,
+            "timed_out": False,
+        },
+    }
+    machine_path = machine_identity_root(store.root, spec.workspace_id) / "machine.json"
+    write_controller_json(machine_path, {"operations": {str(operation): row}})
+    receipt = SourceGuardRecoveryReceipt(
+        workspace_id=spec.workspace_id,
+        project_id=spec.project_id,
+        owner_id=spec.owner_id,
+        operation_id=operation,
+        operation_sha256=source_guard_operation_sha256(operation, row),
+        fencing_epoch=state.fencing_epoch,
+        source_volume=names.workspace_volume,
+        database_volume=f"omnia-machine-{spec.workspace_id.hex}-app-postgres-data",
+        database_identity="a" * 64,
+        source_volume_identity="b" * 64,
+        database_volume_identity="c" * 64,
+        applied_sql_sha256="d" * 64,
+    )
+    return store, state, machine_path, row, receipt
+
+
+def test_exact_source_guard_receipt_reopens_startup_and_preserves_the_failed_row(tmp_path):
+    from yleum_orchestrator.services.machine_startup import (
+        require_startup_history_clear,
+        source_guard_recovery_path,
+        validate_source_guard_recovery,
+    )
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    store, state, machine_path, row, receipt = source_guard_setup(tmp_path)
+    original = machine_path.read_bytes()
+    path = source_guard_recovery_path(store.root, state.workspace_id, receipt.operation_id)
+    with pytest.raises(CellResourceError, match="protected source recovery"):
+        require_startup_history_clear(store.root, state.workspace_id)
+    validate_source_guard_recovery(store.root, state.workspace_id, receipt)
+    assert not path.exists()
+    write_controller_json(path, receipt.model_dump(mode="json"))
+    require_startup_history_clear(store.root, state.workspace_id)
+    assert machine_path.read_bytes() == original
+
+    # A later lease and an authorized restoration may advance the epoch and
+    # rotate volumes. The receipt covers the same historical failure only.
+    later = replace(state, fencing_epoch=4)
+    store._persist_state(later)
+    write_controller_json(machine_path.parent / "docker.json", {"active_code_volume": "new-source"})
+    require_startup_history_clear(store.root, state.workspace_id)
+
+    row["result"]["output"] = "different evidence"
+    write_controller_json(machine_path, {"operations": {str(receipt.operation_id): row}})
+    with pytest.raises(CellResourceError, match="protected source recovery"):
+        require_startup_history_clear(store.root, state.workspace_id)
+
+
+@pytest.mark.parametrize("mismatch", ["workspace", "owner", "fence", "volume", "active", "pending"])
+def test_source_guard_receipt_cannot_be_created_for_an_unverified_workspace(tmp_path, mismatch):
+    from yleum_orchestrator.services.machine_startup import validate_source_guard_recovery
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    store, state, machine_path, row, receipt = source_guard_setup(tmp_path)
+    if mismatch == "active":
+        store._persist_state(replace(
+            state,
+            active_generation_run_id=uuid4(),
+            active_generation_fencing_epoch=state.fencing_epoch,
+        ))
+    elif mismatch == "pending":
+        write_controller_json(machine_path, {"operations": {
+            str(receipt.operation_id): row,
+            str(uuid4()): {"kind": "request", "state": "running"},
+        }})
+    else:
+        update = {
+            "workspace": {"workspace_id": uuid4()}, "owner": {"owner_id": uuid4()},
+            "fence": {"fencing_epoch": state.fencing_epoch - 1},
+            "volume": {"source_volume": "another-volume"},
+        }[mismatch]
+        receipt = receipt.model_copy(update=update)
+    with pytest.raises(CellResourceError):
+        validate_source_guard_recovery(store.root, state.workspace_id, receipt)
+
+
+@pytest.mark.parametrize("role", ["shell", "full_build", "restore_runtime"])
+def test_source_guard_receipt_never_covers_other_command_roles(tmp_path, role):
+    from yleum_orchestrator.services.machine_startup import source_guard_operation_sha256
+
+    _, _, _, row, receipt = source_guard_setup(tmp_path)
+    row["startup_role"] = role
+    with pytest.raises(CellResourceError, match="protected source recovery"):
+        source_guard_operation_sha256(receipt.operation_id, row)
+
+
 def test_admission_is_original_ensure_not_mutable_source_or_current_epoch(tmp_path):
     from tests.test_cell_state import _mutation, _spec
     from yleum_orchestrator.core.cell_resources import CellResourceNames

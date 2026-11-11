@@ -203,6 +203,12 @@ _PORTABLE_QUIESCENCE_SOURCE_GUARD_RETRY_SOURCES = {
     "services.machine_adapter": "4c1d390e6519f8a95291308c6f0c5eabeaa552a5446067bd80b9e491c3ff806c",
     "services.docker_cell_resources": "bc59357b8c73c356303399e5a35f8f1c0c09a96f5917f0cd93a2bde4d2d173cc",
 }
+# The startup checker recognizes a receipt for one terminal fast_check only.
+# Operator proof uses the existing workspace lock and never writes guest state.
+_PORTABLE_QUIESCENCE_SOURCE_GUARD_RECOVERY_SOURCES = {
+    **_PORTABLE_QUIESCENCE_SOURCE_GUARD_RETRY_SOURCES,
+    "services.machine_startup": "fd2c1034948bd967907aee922862ac4f91ec2b3bd08ac040f61f21449489206b",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -220,6 +226,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_NEXT_TYPE_PREPARATION_SOURCES,
     _PORTABLE_QUIESCENCE_BOOTSTRAP_RECHECK_SOURCES,
     _PORTABLE_QUIESCENCE_SOURCE_GUARD_RETRY_SOURCES,
+    _PORTABLE_QUIESCENCE_SOURCE_GUARD_RECOVERY_SOURCES,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.
@@ -1675,7 +1682,7 @@ def require_publications_drained(root: Path) -> int:
     return count
 
 
-def live_publication_root() -> Path:
+def live_publication_root(*, expected_cwd: Path | None = None) -> Path:
     processes = set()
     for service in ("yleum-orchestrator", "omnia-orchestrator"):
         result = subprocess.run(
@@ -1690,9 +1697,12 @@ def live_publication_root() -> Path:
                 processes.add(pid)
     if len(processes) != 1:
         raise RuntimeError("expected exactly one live controller process")
-    proc = Path("/proc") / str(processes.pop())
+    proc = _PROC_ROOT / str(processes.pop())
     if b"yleum_orchestrator" not in (proc / "cmdline").read_bytes():
         raise RuntimeError("controller process identity is unconfirmed")
+    cwd = (proc / "cwd").resolve(strict=True)
+    if expected_cwd is not None and cwd != expected_cwd.resolve(strict=True):
+        raise RuntimeError("controller checkout identity is unconfirmed")
     environment = dict(
         item.decode().split("=", 1)
         for item in (proc / "environ").read_bytes().split(b"\0")
@@ -1702,7 +1712,7 @@ def live_publication_root() -> Path:
     # resolve the same environment/.env defaults as that controller; no secrets print.
     os.environ.clear()
     os.environ.update(environment)
-    os.chdir((proc / "cwd").resolve())
+    os.chdir(cwd)
     sys.path.insert(0, str(Path.cwd() / "src"))
     from yleum_orchestrator.core.config import get_settings
 

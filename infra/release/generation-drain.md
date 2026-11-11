@@ -399,6 +399,40 @@ lock. An in-flight check retains its own operation limits. The guest command is
 never replayed by that check. An existing protection hold
 returns a bound pre-effect conflict before starting a new ensure mutation.
 
+### Recovering a stopped fast check after source verification failed
+
+The source-guard recovery bundle changes only the startup checker. A receipt
+can cover one exact failed `fast_check` operation. The controller still checks
+pending writers, restoration, ownership and the original failed result. The
+next build verifies the current database and source through normal preparation.
+
+Use the command on the workspace's controller host after its release has
+finished. Supply the exact live revision, workspace and failed operation.
+
+~~~bash
+sudo -n /opt/omnia/apps/orchestrator/.venv/bin/python \
+  /opt/omnia/infra/release/record-source-guard-recovery.py \
+  --release-sha <live-40-character-sha> --workspace-id <workspace-uuid> \
+  --operation-id <failed-fast-check-uuid>
+~~~
+
+The default invocation verifies the database identity and hashes of applied
+migrations on an isolated temporary copy. The original PostgreSQL volume is
+mounted read-only for copying. The temporary resources are removed before the
+command returns. Repeat with `--record` to perform the same checks and write
+the receipt. Only a successful receipt allows a new normal generation attempt.
+Keep the failed operation, source and database intact. A mismatch, pending
+writer or unverified cleanup leaves the hold in place.
+
+The command prints the temporary resource label before creating it. If the
+operator process is killed, PostgreSQL receives a stop signal after 90 seconds
+and is force-stopped five seconds later if needed.
+Use `docker ps -a --filter label=yleum.scratch=<printed-stem>` and
+`docker volume ls --filter label=yleum.scratch=<printed-stem>` to find any
+remaining temporary resources. Check their labels and remove the exact
+temporary containers before the exact temporary volume. Confirm that the
+filtered lists are empty before rerunning the command.
+
 Quiescence attestations still bind the actual observed source bundle. After a
 controller source change, a retired workspace needs a fresh content-addressed
 attestation under closed ingress and durable admission, using the documented

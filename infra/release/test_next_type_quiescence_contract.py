@@ -21,7 +21,8 @@ class NextTypeSourceClosureTests(unittest.TestCase):
         self.old = self.checker._PORTABLE_QUIESCENCE_PLATFORM_BOOTSTRAP_V2_SOURCES
         self.next_type = self.checker._PORTABLE_QUIESCENCE_NEXT_TYPE_PREPARATION_SOURCES
         self.bootstrap_recheck = self.checker._PORTABLE_QUIESCENCE_BOOTSTRAP_RECHECK_SOURCES
-        self.current = self.checker._PORTABLE_QUIESCENCE_SOURCE_GUARD_RETRY_SOURCES
+        self.guard_retry = self.checker._PORTABLE_QUIESCENCE_SOURCE_GUARD_RETRY_SOURCES
+        self.current = self.checker._PORTABLE_QUIESCENCE_SOURCE_GUARD_RECOVERY_SOURCES
 
     def test_historical_complete_bundle_is_preserved_and_still_supported(self):
         old_fixture = json.loads((self.directory / "fixtures/platform-bootstrap-v2-quiescence-sources.json").read_bytes())
@@ -54,11 +55,20 @@ class NextTypeSourceClosureTests(unittest.TestCase):
 
     def test_guard_retry_updates_only_the_adapter_and_resource_manager(self):
         fixture = self.directory / "fixtures/source-guard-retry-quiescence-sources.json"
-        self.assertEqual(self.current, json.loads(fixture.read_bytes()))
-        self.assertEqual(set(self.current), set(self.bootstrap_recheck))
+        self.assertEqual(self.guard_retry, json.loads(fixture.read_bytes()))
+        self.assertEqual(set(self.guard_retry), set(self.bootstrap_recheck))
         self.assertEqual(
-            {key for key in self.current if self.current[key] != self.bootstrap_recheck[key]},
+            {key for key in self.guard_retry if self.guard_retry[key] != self.bootstrap_recheck[key]},
             {"services.machine_adapter", "services.docker_cell_resources"},
+        )
+
+    def test_guard_recovery_updates_only_the_startup_checker(self):
+        fixture = self.directory / "fixtures/source-guard-recovery-quiescence-sources.json"
+        self.assertEqual(self.current, json.loads(fixture.read_bytes()))
+        self.assertEqual(set(self.current), set(self.guard_retry))
+        self.assertEqual(
+            {key for key in self.current if self.current[key] != self.guard_retry[key]},
+            {"services.machine_startup"},
         )
 
     def test_current_committed_source_closure_matches_linux_git_bytes(self):

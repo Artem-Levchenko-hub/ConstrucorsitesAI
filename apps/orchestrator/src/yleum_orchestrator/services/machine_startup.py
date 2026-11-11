@@ -5,13 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from yleum_orchestrator.core.cell_resources import CellIdentityConflict, CellResourceError
 from yleum_orchestrator.services.cell_state import (
     CellOperationRecord,
+    CellStateStore,
     CellWorkspaceState,
     _read_plain_json_file,
     _require_regular_file_path,
@@ -30,6 +31,8 @@ _restoration: ContextVar[tuple[Path, str, int] | None] = ContextVar(
     default=None,
 )
 _NO_RECOVERY = object()
+_Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+_VolumeName = Annotated[str, Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")]
 
 
 @dataclass(frozen=True)
@@ -279,9 +282,72 @@ def startup_incarnation(container: Any) -> str:
     ).hexdigest()
 
 
+class SourceGuardRecoveryReceipt(BaseModel):
+    """Evidence that one stopped fast check left applied migration source intact."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    version: Literal[1] = 1
+    workspace_id: UUID
+    project_id: UUID
+    owner_id: UUID
+    operation_id: UUID
+    operation_sha256: _Sha256
+    fencing_epoch: int = Field(gt=0)
+    source_volume: _VolumeName
+    database_volume: _VolumeName
+    database_identity: _Sha256
+    source_volume_identity: _Sha256
+    database_volume_identity: _Sha256
+    applied_sql_sha256: _Sha256
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def exact_version(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("source recovery version must be an integer")
+        return value
+
+
+def source_guard_operation_sha256(operation_id: UUID, row: object) -> str:
+    result = row.get("result") if isinstance(row, dict) else None
+    if (
+        not isinstance(row, dict)
+        or row.get("source_guard_failure") is not True
+        or row.get("kind") != "request"
+        or row.get("startup_role") != "fast_check"
+        or row.get("state") != "failed"
+        or type(row.get("epoch")) is not int
+        or row["epoch"] < 1
+        or "compiled_asset_receipt" in row
+        or "transport_response" in row
+        or not isinstance(result, dict)
+        or result.get("operation_id") != str(operation_id)
+        or result.get("state") != "completed"
+        or type(result.get("exit_code")) is not int
+        or result["exit_code"] != 1
+        or result.get("timed_out") is not False
+    ):
+        raise CellResourceError("startup protected source recovery is required")
+    try:
+        encoded = json.dumps(row, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+        raise CellIdentityConflict("source guard operation evidence is invalid") from exc
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def source_guard_recovery_path(state_root: Path, workspace_id: UUID, operation_id: UUID) -> Path:
+    from yleum_orchestrator.services.machine_identity import machine_identity_root
+
+    root = machine_identity_root(state_root, workspace_id)
+    return root / f"source-guard-recovery-{operation_id}.json"
+
+
 def require_machine_effects_clear(
     saved: dict[str, Any],
     recovered: frozenset[str] = frozenset(),
+    *,
+    source_recovered: Mapping[str, str] | None = None,
 ) -> None:
     """A terminal failure is known; an unacknowledged physical writer is not."""
     operations = saved.get("operations")
@@ -291,7 +357,11 @@ def require_machine_effects_clear(
         if not isinstance(row, dict) or row.get("kind") not in {"request", "command"}:
             raise CellIdentityConflict("startup machine history is invalid")
         if "source_guard_failure" in row:
-            raise CellResourceError("startup protected source recovery is required")
+            proof = source_recovered.get(identifier) if source_recovered is not None else None
+            if (
+                proof is None or source_guard_operation_sha256(UUID(identifier), row) != proof
+            ):
+                raise CellResourceError("startup protected source recovery is required")
         if identifier in recovered and row.get("startup_role") == "restore_runtime":
             continue
         result = row.get("result")
@@ -550,6 +620,30 @@ def require_startup_history_clear(
     own: PrepareBinding | None = None,
 ) -> None:
     """Shared mint/activation guard; caller already owns the workspace lock."""
+    _require_startup_history_clear(state_root, workspace_id, own=own)
+
+
+def validate_source_guard_recovery(
+    state_root: Path, workspace_id: UUID, receipt: SourceGuardRecoveryReceipt,
+) -> None:
+    """Check a prospective receipt under the lock before the operator persists it."""
+    from yleum_orchestrator.services.adaptation_recovery_barrier import (
+        require_candidate_writers_allowed,
+    )
+    from yleum_orchestrator.services.cell_deletion import require_workspace_not_deleted
+
+    require_workspace_not_deleted(state_root, workspace_id)
+    require_candidate_writers_allowed(state_root, workspace_id)
+    _require_startup_history_clear(state_root, workspace_id, candidate=receipt)
+
+
+def _require_startup_history_clear(
+    state_root: Path,
+    workspace_id: UUID,
+    *,
+    own: PrepareBinding | None = None,
+    candidate: SourceGuardRecoveryReceipt | None = None,
+) -> None:
     from yleum_orchestrator.services.command_receipts import CommandJournal
     from yleum_orchestrator.services.machine_identity import machine_identity_root
     from yleum_orchestrator.services.source_write_journal import require_source_writes_clear
@@ -559,6 +653,7 @@ def require_startup_history_clear(
     root = machine_identity_root(state_root, workspace_id)
     StartupJournal(root.parent, workspace_id).require_clear(own)
     recovery: object = _NO_RECOVERY
+    metadata: dict[str, Any] = {}
     metadata_path = root / "docker.json"
     if _require_regular_file_path(metadata_path, missing_ok=True) is not None:
         metadata = _read_plain_json_file(metadata_path)
@@ -579,7 +674,84 @@ def require_startup_history_clear(
     machine_path = root / "machine.json"
     if _require_regular_file_path(machine_path, missing_ok=True) is not None:
         recovered = require_restoration_startup_clear(machine_path, recovery)
-        require_machine_effects_clear(_read_plain_json_file(machine_path), recovered)
+        machine = _read_plain_json_file(machine_path)
+        source_recovered = _source_guard_receipts(
+            state_root, workspace_id, machine, metadata, candidate=candidate,
+        )
+        require_machine_effects_clear(machine, recovered, source_recovered=source_recovered)
+    elif candidate is not None:
+        raise CellIdentityConflict("source guard operation is missing")
+
+
+def _source_guard_receipts(
+    state_root: Path,
+    workspace_id: UUID,
+    machine: dict[str, Any],
+    metadata: dict[str, Any],
+    *,
+    candidate: SourceGuardRecoveryReceipt | None,
+) -> dict[str, str]:
+    operations = machine.get("operations")
+    if not isinstance(operations, dict):
+        raise CellIdentityConflict("startup machine history is unavailable")
+    recovered: dict[str, str] = {}
+    state = None
+    for identifier, row in operations.items():
+        if not isinstance(row, dict) or "source_guard_failure" not in row:
+            continue
+        try:
+            operation_id = UUID(identifier)
+            if str(operation_id) != identifier:
+                raise ValueError("non-canonical operation ID")
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise CellIdentityConflict("source guard operation identity is invalid") from exc
+        if candidate is not None and candidate.operation_id == operation_id:
+            receipt = candidate
+        else:
+            path = source_guard_recovery_path(state_root, workspace_id, operation_id)
+            try:
+                if _require_regular_file_path(path, missing_ok=True) is None:
+                    continue
+                receipt = SourceGuardRecoveryReceipt.model_validate_json(
+                    json.dumps(_read_plain_json_file(path))
+                )
+            except (ValidationError, OSError, RuntimeError) as exc:
+                raise CellIdentityConflict("source guard recovery receipt is invalid") from exc
+        if state is None:
+            state = CellStateStore(state_root).load(workspace_id)
+        if (
+            state is None
+            or state.workspace_id != workspace_id
+            or (receipt.workspace_id, receipt.project_id, receipt.owner_id)
+            != (workspace_id, state.project_id, state.owner_id)
+            or receipt.operation_id != operation_id
+            or receipt.fencing_epoch > state.fencing_epoch
+            or type(row.get("epoch")) is not int
+            or row["epoch"] > receipt.fencing_epoch
+            or receipt.source_volume == receipt.database_volume
+        ):
+            raise CellIdentityConflict("source guard recovery identity changed")
+        if receipt is candidate:
+            if (
+                state.active_generation_run_id is not None
+                or state.active_generation_fencing_epoch is not None
+                or state.phase != "completed"
+                or any(item.status not in {"completed", "failed"} for item in state.operations)
+                or state.resource_names is None
+                or receipt.fencing_epoch != state.fencing_epoch
+                or receipt.source_volume != (
+                    metadata.get("active_code_volume") or state.resource_names.workspace_volume
+                )
+                or receipt.database_volume != (
+                    metadata.get("active_database_volume")
+                    or f"omnia-machine-{workspace_id.hex}-app-postgres-data"
+                )
+            ):
+                raise CellIdentityConflict("source guard recovery requires the stopped workspace")
+        recovered[identifier] = receipt.operation_sha256
+    if candidate is not None and str(candidate.operation_id) not in recovered:
+        raise CellIdentityConflict("source guard operation is missing")
+    return recovered
 
 
 def require_prepare_identity_clear(
