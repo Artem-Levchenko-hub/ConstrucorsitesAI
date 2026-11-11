@@ -143,12 +143,14 @@ def test_explicit_hydrated_local_json_writes_keep_managed_connections_proven():
         """
 const [cartDraft, setCartDraft] = useState({quantity: 0});
 const [favorite, setFavorite] = useState<string | null>(null);
+const [savedIds, setSavedIds] = useState<string[]>([]);
 const [hydrated, setHydrated] = useState(false);
 useEffect(() => {
   try {
     const storage = window.localStorage;
     const savedCart = storage.getItem("fixture-cart.v1");
     const savedFavorite = storage.getItem("fixture-favorite.v1");
+    const idsText = storage.getItem("fixture-ids.v1");
     if (savedCart) {
       try {
         const parsed = JSON.parse(savedCart);
@@ -163,6 +165,14 @@ useEffect(() => {
         if (typeof parsed === "string") setFavorite(parsed);
       } catch {}
     }
+    if (idsText) {
+      try {
+        const parsed = JSON.parse(idsText);
+        if (parsed instanceof Array && parsed.every(id => typeof id === "string")) {
+          setSavedIds(JSON.parse(idsText));
+        }
+      } catch {}
+    }
     setHydrated(true);
   } catch {}
 }, []);
@@ -172,8 +182,9 @@ useEffect(() => {
     const storage = window.localStorage;
     storage.setItem("fixture-cart.v1", JSON.stringify(cartDraft));
     storage.setItem("fixture-favorite.v1", JSON.stringify(favorite));
+    storage.setItem("fixture-ids.v1", JSON.stringify(savedIds));
   } catch {}
-}, [cartDraft, favorite, hydrated]);
+}, [cartDraft, favorite, savedIds, hydrated]);
 """,
         prefix='import {useState,useEffect} from "react";\n',
     )

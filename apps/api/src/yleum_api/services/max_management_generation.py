@@ -2354,6 +2354,8 @@ def _source_repair_guidance(diagnostic: str) -> str:
             "A cast or moving the generic helper leaves its input unproven. For localStorage, "
             "preserve existing keys, stored shapes and writes. Read and validate saved values "
             "before writing, wait for hydration, then serialize each local value directly. "
+            "For saved arrays, validate one parse with instanceof Array and every. After "
+            "that guard, pass a fresh parse of the same stored string to the state setter. "
             "For multiple keys, use one local storage handle in the writer. "
             "Keep pending managed intents in the business SDK."
         )

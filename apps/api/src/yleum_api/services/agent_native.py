@@ -317,6 +317,9 @@ class _NativeProviderBillingError(_NativeProviderServerError):
 # and the outer editing deadline may still end the turn earlier. This is not
 # a guarantee that every per-I/O gateway request completes within the window.
 _CALL_RETRY_WINDOW_S = 270.0
+# Targeted Sonnet repairs can use the gateway's full request ceiling when the
+# edit deadline has room for it.
+_SONNET_SOURCE_REPAIR_WINDOW_S = 1500.0
 # The first verified MAX production loop completed a five-screen product inside
 # one 40-turn transcript. Keep that headroom so callers do not need a second
 # provider pass with a fresh context merely because the old 30-turn clamp fired.
@@ -1185,7 +1188,9 @@ async def _call_messages(
         begin_provider_dispatch,
         provider_dispatch_remaining,
     )
-    initial_window = _CALL_RETRY_WINDOW_S
+    sonnet_source_repair = stage == "source_repair" and is_sonnet55_model(model)
+    retry_window = _SONNET_SOURCE_REPAIR_WINDOW_S if sonnet_source_repair else _CALL_RETRY_WINDOW_S
+    initial_window = retry_window
     if edit_deadline is not None:
         initial_window = min(initial_window, (edit_deadline - datetime.now(UTC)).total_seconds())
     begin_provider_dispatch("native", allowance=_CALL_RETRIES, seconds=initial_window)
@@ -1198,7 +1203,7 @@ async def _call_messages(
     )
     attempt = 0
     while attempt < _CALL_RETRIES:
-        if loop.time() - started_at >= _CALL_RETRY_WINDOW_S:
+        if loop.time() - started_at >= retry_window:
             break
         request_headers = dict(headers) if headers is not None else None
         metadata: dict[str, Any] = {
@@ -1255,7 +1260,7 @@ async def _call_messages(
                     delay = max(6.0 * attempt, failure.retry_after_seconds)
                 if remaining is None or delay >= remaining:
                     raise
-                started_at = loop.time() - (_CALL_RETRY_WINDOW_S - remaining)
+                started_at = loop.time() - (retry_window - remaining)
                 if provider_refusal:
                     retry_parent, generation_attempt = generation_attempt, None
                 await asyncio.sleep(delay)
@@ -1271,7 +1276,7 @@ async def _call_messages(
         # struggling, but never spend a whole minute inside one pause.
         delay = min(45.0, 4.0 * (2**attempt))
         try:
-            remaining = _CALL_RETRY_WINDOW_S - (loop.time() - started_at)
+            remaining = retry_window - (loop.time() - started_at)
             if edit_deadline is not None:
                 remaining = min(remaining, (edit_deadline - datetime.now(UTC)).total_seconds())
             durable_remaining = provider_dispatch_remaining()
@@ -1282,12 +1287,17 @@ async def _call_messages(
             request_headers = {
                 **(request_headers or {}), "x-yleum-provider-timeout-seconds": str(remaining),
             }
+            io_timeout = min(_HTTP_TIMEOUT_S, remaining)
+            timeout = (
+                httpx.Timeout(io_timeout, read=remaining)
+                if sonnet_source_repair and remaining > io_timeout else io_timeout
+            )
             # httpx's timeout is per I/O operation. The outer scope also bounds
             # an active request by total remaining wall time; no retry follows
             # an exhausted request whose upstream accounting may still settle.
             async with asyncio.timeout(remaining):
                 async with client.stream(
-                    "POST", url, json=payload, timeout=min(_HTTP_TIMEOUT_S, remaining),
+                    "POST", url, json=payload, timeout=timeout,
                     headers=request_headers,
                 ) as r:
                     accepted_headers = True
@@ -1435,9 +1445,9 @@ async def _call_messages(
             # Stop without forwarding transport details or replaying the POST.
             raise _terminal_provider_error("provider_request_failed") from None
         # A pause is only worth taking if another attempt follows it.
-        if attempt + 1 >= _CALL_RETRIES or loop.time() - started_at >= _CALL_RETRY_WINDOW_S:
+        if attempt + 1 >= _CALL_RETRIES or loop.time() - started_at >= retry_window:
             break
-        wait_budget = _CALL_RETRY_WINDOW_S - (loop.time() - started_at)
+        wait_budget = retry_window - (loop.time() - started_at)
         if edit_deadline is not None:
             wait_budget = min(wait_budget, (edit_deadline - datetime.now(UTC)).total_seconds())
         if delay >= wait_budget:

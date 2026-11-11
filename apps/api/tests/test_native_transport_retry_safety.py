@@ -2,6 +2,7 @@
 
 import json
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import httpx
@@ -92,6 +93,35 @@ async def test_late_native_connect_error_without_identity_does_not_retry(monkeyp
     result, calls, sleeps = await call(monkeypatch, httpx.Response(200, stream=BrokenBody()))
     assert isinstance(result, RuntimeError)
     assert len(calls) == 1 and sleeps == []
+
+
+@pytest.mark.parametrize(("stage", "model", "edit_seconds", "expected"), [
+    ("source_repair", "claude-sonnet-5.5", 2000, 1500),
+    ("source_repair", "anthropic/claude-sonnet-5.5", 600, 600),
+    ("source_repair", "claude-sonnet-5.5", 180, 180),
+    ("source_repair", "claude-sonnet-5", 600, 270),
+    ("native_agent", "claude-sonnet-5.5", 600, 270),
+])
+async def test_native_source_repair_forwards_the_remaining_sonnet_window(
+    stage, model, edit_seconds, expected,
+):
+    requests = []
+
+    def reply(request):
+        requests.append(request)
+        return httpx.Response(200, json=SUCCESS)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
+        result = await agent_native._call_messages(
+            client, URL, [], "s", model=model, stage=stage,
+            max_tokens=8192 if stage == "source_repair" else None,
+            edit_deadline=datetime.now(UTC) + timedelta(seconds=edit_seconds),
+        )
+    assert result == SUCCESS and len(requests) == 1
+    budget = float(requests[0].headers["x-yleum-provider-timeout-seconds"])
+    assert expected - 2 < budget <= expected
+    assert requests[0].extensions["timeout"]["read"] == budget
+    assert requests[0].extensions["timeout"]["connect"] <= 300
 
 
 @pytest.mark.parametrize("url", [URL, "https://gateway.test/v1/project-cell/messages"])

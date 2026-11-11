@@ -49,6 +49,7 @@ from yleum_gateway.providers.native_stream import (
     open_aitunnel_response,
     open_timed_response,
     provider_request_deadline,
+    transport_diagnostics,
 )
 from yleum_gateway.providers.rate_limit import bounded_error_body, refusal_retry_candidate
 from yleum_gateway.services import billing, file_logger, generation_attempts, text_failover
@@ -706,6 +707,7 @@ async def _dispatch_native_provider(
                 message_id=str(message_id) if message_id else None,
                 stage=stage if stage in {"build_plan", "native_agent", "verification", "source_repair"} else "unknown",
                 retry_count=retry_count,
+                **transport_diagnostics(transport_evidence),
             )
             safe_to_retry = (
                 isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))
