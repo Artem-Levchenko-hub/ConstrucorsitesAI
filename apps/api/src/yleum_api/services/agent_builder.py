@@ -1241,8 +1241,11 @@ async def _run_agent_segment(
                     done=False, summary="Время работы с исходниками завершилось.",
                     files=written, steps=step, transcript=convo, stop_reason="source_deadline",
                 )
+            use_edit_window = call_max_tokens is None or (
+                repair_max_tokens is not None and is_sonnet55_model(active_model)
+            )
             call_seconds = (
-                remaining if call_max_tokens is None
+                remaining if use_edit_window
                 else min(_AGENT_RESPONSE_TIMEOUT_SECONDS, remaining)
             ) if uses_gateway and remaining is not None and not restoring else (
                 _AGENT_RESPONSE_TIMEOUT_SECONDS
