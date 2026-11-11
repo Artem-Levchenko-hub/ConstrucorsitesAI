@@ -441,7 +441,7 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             .read_text()
         )
         current = json.loads(
-            (Path(__file__).parent / "fixtures/source-guard-recovery-quiescence-sources.json")
+            (Path(__file__).parent / "fixtures/source-guard-lease-quiescence-sources.json")
             .read_text()
         )
         self.checker._require_reviewed_portable_sources(previous)

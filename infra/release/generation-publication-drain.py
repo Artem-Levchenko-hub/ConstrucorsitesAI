@@ -209,6 +209,11 @@ _PORTABLE_QUIESCENCE_SOURCE_GUARD_RECOVERY_SOURCES = {
     **_PORTABLE_QUIESCENCE_SOURCE_GUARD_RETRY_SOURCES,
     "services.machine_startup": "fd2c1034948bd967907aee922862ac4f91ec2b3bd08ac040f61f21449489206b",
 }
+# Lease observation uses the same receipt check before sampling physical writers.
+_PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES = {
+    **_PORTABLE_QUIESCENCE_SOURCE_GUARD_RECOVERY_SOURCES,
+    "services.machine_adapter": "441c57fc35eaf1d4e7037c6b62687e8d680fe55969b518abaf84a89b496bd94d",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -227,6 +232,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_BOOTSTRAP_RECHECK_SOURCES,
     _PORTABLE_QUIESCENCE_SOURCE_GUARD_RETRY_SOURCES,
     _PORTABLE_QUIESCENCE_SOURCE_GUARD_RECOVERY_SOURCES,
+    _PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.

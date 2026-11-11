@@ -7,12 +7,14 @@ import io
 import json
 import logging
 import re
+from collections.abc import Iterator
 from pathlib import PurePosixPath
 from typing import Any, TypedDict, cast
 from uuid import UUID
 
 from minio.error import S3Error
-from sqlalchemy import select
+from pydantic import ValidationError
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
@@ -20,17 +22,30 @@ from yleum_api.core.minio import get_minio_client
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.project import Project
+from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from yleum_api.models.snapshot import Snapshot
+from yleum_api.schemas.message import PromptResponse
 from yleum_api.services.generation.agent_messages import _is_retry_request
 from yleum_api.services.generation.contracts import GenerationIds, SourceBaseline
+from yleum_api.services.generation.request_binding import bound_message_request
 from yleum_api.services.generation_runs import (
+    PREVIOUS_CELL_ENSURE_RECONCILIATION_REQUIRED,
+    PREVIOUS_CELL_RECONCILIATION_ATTEMPTS,
     GenerationDispatch,
     has_capacity_admitted_dispatch_token,
+    has_capacity_dispatch_claim,
     load_generation_dispatch,
     read_capacity_dispatch_claim,
 )
 from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
+from yleum_api.services.orchestrator_client import (
+    OrchestratorUnavailable,
+    ProjectCellResourceResponse,
+)
+from yleum_api.services.project_cells import ProjectCellValidationError, _stored_request_payload
 from yleum_api.services.repo import MAX_FILE_BYTES, MAX_FILES, MAX_REPO_BYTES
+
+_MAX_PREDECESSOR_HOPS = 20
 
 
 class SourceCheckpoint(TypedDict):
@@ -235,7 +250,7 @@ async def adjacent_checkpoint(
     """Persist explicit resume provenance before fallible draft setup begins.
 
     Explicit references retain their exact identity checks. Legacy unmarked retries
-    may cross at most twenty proven admissions on the same accepted snapshot;
+    may cross at most twenty historical turns on the same accepted snapshot;
     malformed markers and unrelated history are barriers, never skipped.
     """
     async with factory() as session:
@@ -252,12 +267,13 @@ async def adjacent_checkpoint(
             or not checkpoint_resume_request(request.content)
         ):
             return None
-        previous = await _checkpoint_predecessor(session, current, ids)
+        hops = iter(range(_MAX_PREDECESSOR_HOPS))
+        previous = await _checkpoint_predecessor(session, current, ids, baseline, hops)
         if previous is None or not _owned_failed_source(previous, ids):
             return None
         if _unmarked_checkpoint_state(previous):
             source = await _legacy_checkpoint_source(
-                session, newer=current, previous=previous, ids=ids, baseline=baseline,
+                session, newer=current, previous=previous, ids=ids, baseline=baseline, hops=hops,
             )
         else:
             source = await _explicit_checkpoint_source(
@@ -330,7 +346,8 @@ async def _explicit_checkpoint_source(
     if inherited is None:
         return None
     message = await session.get(Message, previous.user_message_id)
-    parent = await _checkpoint_predecessor(session, previous, ids)
+    hops = iter(range(_MAX_PREDECESSOR_HOPS))
+    parent = await _checkpoint_predecessor(session, previous, ids, baseline, hops)
     source = await session.get(GenerationRun, UUID(inherited["source_run_id"]))
     if (
         message is None or message.project_id != ids.project_id or message.role != "user"
@@ -348,7 +365,7 @@ async def _explicit_checkpoint_source(
             # A newly persisted marker may name a historical unmarked parent.
             # Re-prove that same bounded legacy segment; never rewrite the parent.
             legacy_source = await _legacy_checkpoint_source(
-                session, newer=previous, previous=parent, ids=ids, baseline=baseline,
+                session, newer=previous, previous=parent, ids=ids, baseline=baseline, hops=hops,
             )
             if legacy_source is None or legacy_source.id != source.id:
                 return None
@@ -430,35 +447,55 @@ def _admitted_checkpoint_baseline(run: GenerationRun, baseline: SourceBaseline) 
     return dispatch is not None and dispatch.current_snapshot_id == baseline.snapshot_id
 
 
+async def _project_checkpoint_baseline(
+    session: AsyncSession, ids: GenerationIds, baseline: SourceBaseline,
+) -> bool:
+    project = await session.get(Project, ids.project_id, populate_existing=True)
+    if (
+        project is None or project.owner_id != ids.user_id
+        or project.current_snapshot_id != baseline.snapshot_id
+    ):
+        return False
+    if baseline.snapshot_id is None:
+        return baseline.sha is None
+    snapshot = await session.get(Snapshot, baseline.snapshot_id, populate_existing=True)
+    return (
+        snapshot is not None and snapshot.project_id == ids.project_id
+        and baseline.sha is not None and snapshot.commit_sha == baseline.sha
+    )
+
+
 async def _checkpoint_predecessor(
-    session: AsyncSession, newer: GenerationRun, ids: GenerationIds,
+    session: AsyncSession, newer: GenerationRun, ids: GenerationIds, baseline: SourceBaseline,
+    hops: Iterator[int],
 ) -> GenerationRun | None:
-    """Skip only a cancelled continuation that never reached source execution."""
-    for _ in range(20):
+    """Skip only standalone continuations proven to have stopped before admission."""
+    skipped = False
+    for _ in hops:
         previous = await _adjacent_run(session, newer)
         if (
             previous is None or previous.created_at >= newer.created_at
             or await _ambiguous_run_order(session, previous)
         ):
             return None
-        if previous.status != "cancelled":
-            if newer.status == "cancelled":
-                interrupted = _bound_checkpoint_dispatch(newer)
-                source = _bound_checkpoint_dispatch(previous)
-                if (
-                    interrupted is None or source is None
-                    or source.current_snapshot_id != interrupted.current_snapshot_id
-                ):
-                    return None
+        reconciliation_failure = (
+            previous.status == "failed"
+            and previous.error == PREVIOUS_CELL_ENSURE_RECONCILIATION_REQUIRED
+        )
+        if previous.status != "cancelled" and not reconciliation_failure:
+            if skipped and not _admitted_checkpoint_baseline(previous, baseline):
+                return None
             return previous
-        if not await _cancelled_before_admission(session, previous, newer, ids):
+        if not await _interrupted_before_admission(session, previous, newer, ids, baseline):
             return None
+        skipped = True
         newer = previous
     return None
 
 
-async def _cancelled_before_admission(
+async def _interrupted_before_admission(
     session: AsyncSession, previous: GenerationRun, newer: GenerationRun, ids: GenerationIds,
+    baseline: SourceBaseline,
 ) -> bool:
     # The worker can claim the dispatch while waiting for a cell. The promotion
     # transaction sets started_at and the admitted token before source execution.
@@ -467,60 +504,161 @@ async def _cancelled_before_admission(
         or previous.execution_backend != "worker" or previous.response_mode not in {"build", "edit"}
         or previous.started_at is not None or previous.finished_at is None
         or not previous.created_at <= previous.finished_at < newer.created_at
-        or read_capacity_dispatch_claim(previous) is None
         or has_capacity_admitted_dispatch_token(previous)
         or not _unmarked_checkpoint_state(previous)
     ):
         return False
-    cancelled = _bound_checkpoint_dispatch(previous)
+    failed = previous.status == "failed"
+    if failed:
+        started = previous.execution_started_at
+        state = _checkpoint_state(previous)
+        if (
+            started is None or not previous.created_at <= started <= previous.finished_at
+            or has_capacity_dispatch_claim(previous)
+            or state is None
+            or set(state) - {"dispatch", "generation_billing", "recovery_requirements_v1"}
+        ):
+            return False
+    elif read_capacity_dispatch_claim(previous) is None:
+        return False
+
+    interrupted = _bound_checkpoint_dispatch(previous)
     current = _bound_checkpoint_dispatch(newer)
     if (
-        cancelled is None or current is None or not cancelled.orchestrate or not current.orchestrate
-        or cancelled.current_snapshot_id != current.current_snapshot_id
-        or cancelled.reference_images or cancelled.font_selections or cancelled.selected_elements
+        interrupted is None or current is None
+        or not interrupted.orchestrate or not current.orchestrate
+        or interrupted.current_snapshot_id != baseline.snapshot_id
+        or current.current_snapshot_id != baseline.snapshot_id
+        or interrupted.reference_images or interrupted.font_selections
+        or interrupted.selected_elements
     ):
         return False
-    request = await session.get(Message, cancelled.user_message_id)
-    response = await session.get(Message, cancelled.assistant_message_id)
-    return (
+    request = await session.get(Message, interrupted.user_message_id)
+    response = await session.get(Message, interrupted.assistant_message_id)
+    if not (
         request is not None and request.project_id == ids.project_id and request.role == "user"
         and not request.reference_images and not request.font_selections
         and not request.resolved_fonts
         and checkpoint_resume_request(request.content)
         and response is not None and response.project_id == ids.project_id
         and response.role == "assistant" and response.snapshot_id is None
+    ):
+        return False
+    if not failed:
+        return True
+    try:
+        bound_message_request(previous, request, project_id=ids.project_id, run_id=previous.id)
+    except (TypeError, ValueError):
+        return False
+    return (
+        _pre_admission_prompt_response(previous)
+        and await _project_checkpoint_baseline(session, ids, baseline)
+        and await _only_previous_cell_observations(session, previous)
     )
+
+
+def _pre_admission_prompt_response(run: GenerationRun) -> bool:
+    payload = run.response_payload
+    if payload is None:
+        return True
+    if type(payload) is not dict or not {"snapshot_id", "mode", "run_status"} <= payload.keys():
+        return False
+    try:
+        response = PromptResponse.model_validate(payload)
+    except ValidationError:
+        return False
+    return (
+        response.run_id == run.id and response.message_id == run.assistant_message_id
+        and response.mode == run.response_mode and response.snapshot_id is None
+        and response.run_status in {"pending", "queued_for_capacity", "failed"}
+    )
+
+
+async def _only_previous_cell_observations(session: AsyncSession, run: GenerationRun) -> bool:
+    """Require the entire observation series from the failed admission branch."""
+    started, finished = run.execution_started_at, run.finished_at
+    if started is None or finished is None:
+        return False
+    result = await session.execute(
+        select(ProjectCellOperation, ProjectCellWorkspace, GenerationRun)
+        .outerjoin(
+            ProjectCellWorkspace, ProjectCellWorkspace.id == ProjectCellOperation.workspace_id,
+        )
+        .outerjoin(GenerationRun, GenerationRun.id == ProjectCellOperation.generation_run_id)
+        .where(or_(
+            ProjectCellOperation.generation_run_id == run.id,
+            ProjectCellOperation.execution_run_id == run.id,
+        ))
+        .limit(PREVIOUS_CELL_RECONCILIATION_ATTEMPTS + 1)
+    )
+    rows = result.tuples().all()
+    # Replay can replace execution_run_id. An incomplete series is not evidence
+    # that the failed worker only observed its predecessor.
+    if len(rows) != PREVIOUS_CELL_RECONCILIATION_ATTEMPTS:
+        return False
+    fences: set[int] = set()
+    observed_run_id: UUID | None = None
+    for operation, workspace, observed in rows:
+        fence = operation.fencing_epoch
+        if (
+            operation.generation_run_id == run.id or operation.kind != "status"
+            or operation.status != "completed" or fence is None or fence < 1 or fence in fences
+            or operation.started_at is None or operation.finished_at is None
+            or not started <= operation.created_at <= operation.started_at
+            <= operation.finished_at <= finished
+            or workspace is None or workspace.project_id != run.project_id
+            or workspace.owner_id != run.user_id or workspace.fencing_epoch < fence
+            or observed is None or observed.project_id != run.project_id
+            or observed.user_id != run.user_id
+            or (observed_run_id is not None and observed.id != observed_run_id)
+            or observed.status not in {"completed", "failed", "cancelled"}
+            or observed.finished_at is None
+            or not observed.created_at <= observed.finished_at < run.created_at
+            or operation.idempotency_key
+            != f"capacity:lease-observe:{workspace.id}:{observed.id}:{fence - 1}"
+            or type(operation.result_payload) is not dict
+        ):
+            return False
+        observed_run_id = observed.id
+        fences.add(fence)
+        try:
+            if _stored_request_payload(operation):
+                return False
+            response = ProjectCellResourceResponse.from_json(operation.result_payload)
+        except (ProjectCellValidationError, OrchestratorUnavailable, ValueError):
+            return False
+        lease = response.lease_observation
+        if (
+            response.workspace_id != workspace.id or response.fencing_epoch != fence
+            or response.state != "resources_ready" or lease is None
+            or lease.workspace_id != workspace.id or lease.project_id != run.project_id
+            or lease.owner_id != run.user_id or lease.operation_id != operation.id
+            or lease.fencing_epoch != fence or lease.request_digest != operation.request_digest
+            # A quiescent response can clear the previous owner's durable lease.
+            or lease.quiescent or lease.active_generation_run_id is not None
+        ):
+            return False
+    return True
 
 
 async def _legacy_checkpoint_source(
     session: AsyncSession, *, newer: GenerationRun, previous: GenerationRun,
-    ids: GenerationIds, baseline: SourceBaseline,
+    ids: GenerationIds, baseline: SourceBaseline, hops: Iterator[int],
 ) -> GenerationRun | None:
     """Read only pre-marker standalone retries with one real admitted baseline."""
     if (
         baseline.snapshot_id is None or baseline.sha is None
         or re.fullmatch(r"[a-f0-9]{40}", baseline.sha) is None
         or not _admitted_checkpoint_baseline(newer, baseline)
-    ):
-        return None
-    project = await session.get(Project, ids.project_id, populate_existing=True)
-    snapshot = await session.get(Snapshot, baseline.snapshot_id, populate_existing=True)
-    if (
-        project is None or project.owner_id != ids.user_id
-        or project.current_snapshot_id != baseline.snapshot_id
-        or snapshot is None or snapshot.project_id != ids.project_id
-        or snapshot.commit_sha != baseline.sha
+        or not await _project_checkpoint_baseline(session, ids, baseline)
     ):
         return None
     candidate: GenerationRun | None = previous
-    for _hop in range(20):
+    while candidate is not None:
         if (
-            candidate is None or not _owned_failed_source(candidate, ids)
-            or candidate.created_at >= newer.created_at
+            not _owned_failed_source(candidate, ids)
             or not _admitted_checkpoint_baseline(candidate, baseline)
         ):
-            return None
-        if await _ambiguous_run_order(session, candidate):
             return None
         state = _checkpoint_state(candidate)
         if state is None:
@@ -535,10 +673,7 @@ async def _legacy_checkpoint_source(
             or not checkpoint_resume_request(message.content)
         ):
             return None
-        if _hop == 19:
-            return None
-        newer = candidate
-        candidate = await _adjacent_run(session, candidate)
+        candidate = await _checkpoint_predecessor(session, candidate, ids, baseline, hops)
     return None
 
 

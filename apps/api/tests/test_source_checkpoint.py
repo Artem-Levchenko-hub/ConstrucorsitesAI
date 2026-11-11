@@ -249,6 +249,216 @@ async def test_first_build_source_rechecks_cancelled_predecessor_after_failed_re
     assert 'source_checkpoint_resume' not in retry.agent_state
 
 
+@pytest.fixture
+def reconciliation_operations(history):  # noqa: F811
+    from datetime import timedelta
+    from uuid import uuid4
+
+    from sqlalchemy import JSON, Column, MetaData, Table
+    from sqlalchemy.dialects.postgresql import JSONB
+
+    from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+    from yleum_api.services.orchestrator_client import (
+        ProjectCellLeaseObservation,
+        ProjectCellResourceResponse,
+    )
+    from yleum_api.services.project_cells import _canonical_operation_envelope
+
+    metadata = MetaData()
+    for model in (ProjectCellOperation, ProjectCellWorkspace):
+        Table(model.__tablename__, metadata, *(Column(
+            column.name, JSON() if isinstance(column.type, JSONB) else column.type,
+            primary_key=column.primary_key,
+        ) for column in model.__table__.columns))
+    metadata.create_all(history.session.get_bind())
+
+    def for_project(project):
+        workspace = ProjectCellWorkspace(
+            id=uuid4(), project_id=project.id, owner_id=project.owner_id,
+            provider='fixture', state='ready', fencing_epoch=10,
+        )
+        history.session.add(workspace)
+        history.session.commit()
+        return workspace
+
+    def operation(workspace, *, generation_run_id, execution_run=None, kind='ensure', fence=7):
+        request, digest = _canonical_operation_envelope(workspace.id, generation_run_id, kind, {})
+        operation_id = uuid4()
+        key = str(uuid4())
+        result = None
+        if kind == 'status':
+            key = f'capacity:lease-observe:{workspace.id}:{generation_run_id}:{fence - 1}'
+            lease = ProjectCellLeaseObservation(
+                version=1, workspace_id=workspace.id, project_id=workspace.project_id,
+                owner_id=workspace.owner_id, operation_id=operation_id, request_digest=digest,
+                fencing_epoch=fence, active_generation_run_id=None,
+                active_generation_fencing_epoch=None, quiescent=False,
+            )
+            result = ProjectCellResourceResponse(
+                workspace_id=workspace.id, state='resources_ready', provider_ref='fixture',
+                fencing_epoch=fence, checkpoint_ref=None, has_workspace=True,
+                has_agent_home=True, has_postgres=True, has_redis=True, lease_observation=lease,
+            ).to_wire_json()
+        row = ProjectCellOperation(
+            id=operation_id, workspace_id=workspace.id, generation_run_id=generation_run_id,
+            execution_run_id=execution_run.id if execution_run else None,
+            kind=kind, status='completed', fencing_epoch=fence,
+            idempotency_key=key, request_digest=digest,
+            request_payload=request, result_payload=result,
+        )
+        if execution_run is not None:
+            started = execution_run.created_at + timedelta(milliseconds=10 * fence)
+            row.created_at = started
+            row.started_at = started
+            row.finished_at = started + timedelta(milliseconds=5)
+        history.session.add(row)
+        history.session.commit()
+        return row
+
+    def observations(workspace, observed, execution_run):
+        return [operation(workspace, generation_run_id=observed.id, execution_run=execution_run,
+                          kind='status', fence=fence) for fence in range(7, 11)]
+
+    return for_project, operation, observations
+
+
+def _mark_reconciliation_failure(history_fixture, run):
+    from datetime import timedelta
+
+    from yleum_api.schemas.message import PromptResponse
+
+    run.execution_backend = 'worker'
+    run.execution_started_at = run.created_at
+    run.error = 'Previous Project Cell ensure needs reconciliation'
+    run.agent_state = {**run.agent_state, 'generation_billing': {'outcome': 'waived'},
+                       'recovery_requirements_v1': {'version': 1}}
+    run.response_payload = PromptResponse(
+        run_id=run.id, message_id=run.assistant_message_id,
+    ).model_dump(mode='json')
+    run.finished_at = run.created_at + timedelta(milliseconds=500)
+    history_fixture.session.commit()
+    return run
+
+
+@pytest.fixture
+def reconciliation_failure_history(
+    history, first_build_checkpoint, reconciliation_operations,  # noqa: F811
+):
+    from functools import partial
+    from types import SimpleNamespace
+
+    for_project, operation, observations = reconciliation_operations
+    first = first_build_checkpoint
+    cancelled = first.cancelled()
+    workspace = for_project(first.project)
+    operation(workspace, generation_run_id=cancelled.id)
+
+    def fail(prompt='Продолжи сборку', **kwargs):
+        run = first.add(prompt, status='failed', **kwargs)
+        return _mark_reconciliation_failure(history, run)
+
+    return SimpleNamespace(
+        first=first, cancelled=cancelled, fail=fail, operation=partial(operation, workspace),
+        observations=partial(observations, workspace, cancelled),
+    )
+
+
+async def test_first_build_source_survives_cancelled_and_reconciliation_failed_attempts(
+    reconciliation_failure_history,
+):
+    sequence = reconciliation_failure_history
+    first = sequence.first
+    failed = sequence.fail()
+    # The failed worker can observe an older run's cell. Its own cell was never reserved.
+    sequence.observations(failed)
+    current = first.add('Продолжи')
+    states = (dict(sequence.cancelled.agent_state), dict(failed.agent_state))
+    digest = first.original.agent_state['source_checkpoint']['digest']
+
+    assert await first.resume(current) == first.expected
+    assert current.agent_state['source_checkpoint_resume'] == {
+        'previous_run_id': str(first.original.id), 'source_run_id': str(first.original.id),
+        'digest': digest, 'baseline_sha': None,
+    }
+    first.finish(current, 'failed')
+    retry = first.add('Продолжи')
+    assert await first.resume(retry) == first.expected
+    assert retry.agent_state['source_checkpoint_resume']['previous_run_id'] == str(current.id)
+    assert first.reads.call_count == 2
+    assert (sequence.cancelled.agent_state, failed.agent_state) == states
+    assert first.project.current_snapshot_id is None
+
+
+@pytest.mark.parametrize('change', [
+    'error', 'amended', 'owner', 'snapshot', 'admitted', 'admitted_token', 'claim',
+    'no_worker_execution', 'operation', 'operation_for_another_run', 'response',
+    'project_snapshot', 'malformed_observation', 'own_observation', 'active_observation',
+    'quiescent_observation', 'lost_alias_observation', 'late_observation',
+])
+async def test_first_build_source_does_not_cross_unproven_reconciliation_failure(
+    history, reconciliation_failure_history, change,  # noqa: F811
+):
+    from uuid import uuid4
+
+    sequence = reconciliation_failure_history
+    first = sequence.first
+    prompt = 'Продолжи, но поменяй формулу' if change == 'amended' else 'Продолжи сборку'
+    failed = sequence.fail(prompt, user=uuid4() if change == 'owner' else None)
+    first_observation = sequence.observations(failed)[0]
+    current = first.add('Продолжи')
+    if change == 'error':
+        failed.error += '.'
+    elif change == 'snapshot':
+        failed.agent_state = {**failed.agent_state, 'dispatch': {
+            **failed.agent_state['dispatch'], 'current_snapshot_id': str(history.snapshot.id),
+        }}
+    elif change == 'admitted':
+        failed.started_at = failed.created_at
+    elif change == 'admitted_token':
+        failed.agent_state = {**failed.agent_state, 'capacity_admitted_dispatch_token': None}
+    elif change == 'claim':
+        failed.agent_state = {**failed.agent_state, 'capacity_dispatch_claim': None}
+    elif change == 'no_worker_execution':
+        failed.execution_started_at = None
+    elif change == 'operation':
+        sequence.operation(generation_run_id=failed.id)
+    elif change == 'operation_for_another_run':
+        sequence.operation(generation_run_id=sequence.cancelled.id, execution_run=failed)
+    elif change == 'response':
+        failed.response_payload = {
+            **failed.response_payload, 'snapshot_id': str(history.snapshot.id),
+        }
+    elif change == 'project_snapshot':
+        first.project.current_snapshot_id = history.snapshot.id
+    elif change == 'lost_alias_observation':
+        first_observation.execution_run_id = current.id
+    elif change == 'late_observation':
+        first_observation.finished_at = current.created_at
+    elif change.endswith('_observation'):
+        operation = first_observation
+        observed = sequence.cancelled
+        if change == 'malformed_observation':
+            operation.request_payload = {}
+        elif change == 'own_observation':
+            operation.generation_run_id = failed.id
+        elif change == 'active_observation':
+            payload = operation.result_payload
+            operation.result_payload = {**payload, 'lease_observation': {
+                **payload['lease_observation'], 'active_generation_run_id': str(observed.id),
+                'active_generation_fencing_epoch': operation.fencing_epoch,
+            }}
+        elif change == 'quiescent_observation':
+            payload = operation.result_payload
+            operation.result_payload = {**payload, 'lease_observation': {
+                **payload['lease_observation'], 'quiescent': True,
+            }}
+    history.session.commit()
+
+    assert await first.resume(current) is None
+    first.reads.assert_not_called()
+    assert 'source_checkpoint_resume' not in current.agent_state
+
+
 @pytest.mark.parametrize('intervening', ['unrelated', 'amended', 'completed', 'owner', 'baseline'])
 async def test_resume_provenance_never_crosses_a_newer_unrelated_turn(
     history, checkpoints, intervening,  # noqa: F811 - pytest consumes imported fixture
@@ -721,22 +931,6 @@ async def legacy_checkpoints(history, monkeypatch):  # noqa: F811
             reads.append(key)
             return Response(objects[bucket, key])
 
-    class Session:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            pass
-
-        async def get(self, *args, **kwargs):
-            return history.session.get(*args, **kwargs)
-
-        async def scalar(self, statement):
-            return history.session.scalar(statement)
-
-        async def commit(self):
-            history.session.commit()
-
     def admit(run):
         assistant = Message(id=uuid4(), project_id=run.project_id, role='assistant',
                             content='', created_at=run.created_at)
@@ -758,7 +952,7 @@ async def legacy_checkpoints(history, monkeypatch):  # noqa: F811
 
     async def resume(run, value=baseline):
         return await sc.adjacent_checkpoint(
-            factory=Session,
+            factory=history.factory,
             ids=GenerationIds(run.id, run.project_id, run.user_id,
                               run.user_message_id, run.assistant_message_id), baseline=value,
         )
@@ -766,7 +960,7 @@ async def legacy_checkpoints(history, monkeypatch):  # noqa: F811
     monkeypatch.setattr(sc, 'get_minio_client', lambda: Storage())
     admit(original)
     await sc.persist_checkpoint(
-        factory=Session,
+        factory=history.factory,
         ids=GenerationIds(original.id, original.project_id, original.user_id,
                           original.user_message_id, original.assistant_message_id),
         baseline=baseline,
@@ -777,6 +971,43 @@ async def legacy_checkpoints(history, monkeypatch):  # noqa: F811
     history.session.commit()
     return SimpleNamespace(original=original, add=add, resume=resume, objects=objects,
                            reads=reads, snapshot=snapshot, project=project, baseline=baseline)
+
+
+@pytest.mark.parametrize(('interruption_valid', 'admitted_retries', 'allowed'), [
+    (True, 1, True), (False, 1, False), (True, 18, True), (True, 19, False),
+])
+async def test_legacy_resume_rechecks_reconciliation_failure_beneath_unmarked_admitted_retry(
+    history, legacy_checkpoints, reconciliation_operations, interruption_valid,  # noqa: F811
+    admitted_retries, allowed,
+):
+    from datetime import timedelta
+
+    legacy = legacy_checkpoints
+    for_project, _, observations = reconciliation_operations
+    workspace = for_project(legacy.project)
+    legacy.original.finished_at = legacy.original.created_at + timedelta(milliseconds=500)
+    failed = _mark_reconciliation_failure(history, legacy.add('Продолжи сборку'))
+    alias = observations(workspace, legacy.original, failed)[0]
+    if not interruption_valid:
+        alias.execution_run_id = None
+    for _ in range(admitted_retries):
+        admitted = legacy.add('Продолжи сборку')
+        admitted.started_at = admitted.created_at
+    current = legacy.add('Продолжи', status='running')
+
+    restored = await legacy.resume(current)
+    if allowed:
+        expected = ({'files': {'src/app/page.tsx': 'Cartel saved source', 'src/app/empty.ts': ''},
+                     'deleted_paths': ['src/app/old.ts']}, 'Original Cartel product with orders')
+        assert restored == expected
+        marker = current.agent_state['source_checkpoint_resume']
+        assert marker['previous_run_id'] == str(admitted.id)
+        assert marker['source_run_id'] == str(legacy.original.id)
+        _mark_failed(history, current)
+        assert await legacy.resume(legacy.add('Продолжи', status='running')) == expected
+    else:
+        assert restored is None
+        assert not legacy.reads and 'source_checkpoint_resume' not in current.agent_state
 
 
 async def test_unmarked_legacy_retry_recovers_nearest_checkpoint_without_mutating_history(

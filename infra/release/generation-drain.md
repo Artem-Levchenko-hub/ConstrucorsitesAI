@@ -424,6 +424,10 @@ the receipt. Only a successful receipt allows a new normal generation attempt.
 Keep the failed operation, source and database intact. A mismatch, pending
 writer or unverified cleanup leaves the hold in place.
 
+Lease observation validates the same history when it finds a settled
+`fast_check` failure. Releasing the old lease still requires stable physical
+observations of the retained image, volumes and processes.
+
 The command prints the temporary resource label before creating it. If the
 operator process is killed, PostgreSQL receives a stop signal after 90 seconds
 and is force-stopped five seconds later if needed.

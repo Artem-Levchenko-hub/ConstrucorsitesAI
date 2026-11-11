@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -5,11 +6,29 @@ from uuid import uuid4
 import pytest
 
 from tests.test_docker_cell_resources import _make_manager, _mutation, _spec
+from tests.test_machine_startup import source_guard_setup
 from tests.test_project_machine_manifest import payload
-from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+from yleum_orchestrator.core.cell_resources import CellIdentityConflict, CellResourceError
 from yleum_orchestrator.core.project_machine import MachineManifest
 from yleum_orchestrator.services.machine_adapter import MachineAdapter
 from yleum_orchestrator.services.machine_environment import MachineEnvironmentRef
+from yleum_orchestrator.services.machine_startup import source_guard_recovery_path
+from yleum_orchestrator.services.project_machine import write_controller_json
+
+
+def _preview_reference(workspace):
+    manifest = MachineManifest.model_validate(payload())
+    return MachineEnvironmentRef(
+        workspace_id=workspace,
+        image_id="sha256:" + "a" * 64,
+        artifact_ref="b" * 32 + ".tar",
+        sha256="c" * 64,
+        size=1,
+        base_image="base",
+        manifest_digest=manifest.digest(),
+        volumes=(),
+        manifest=manifest,
+    )
 
 
 @pytest.mark.parametrize("active", [False, True])
@@ -65,18 +84,7 @@ async def test_idle_physical_proof_denies_unknown_writers(tmp_path, fault):
         active_generation_run_id=(uuid4() if fault == "active" else None),
         resource_names=SimpleNamespace(postgres_container="pg", redis_container="redis"),
     )
-    manifest = MachineManifest.model_validate(payload())
-    reference = MachineEnvironmentRef(
-        workspace_id=workspace,
-        image_id="sha256:" + "a" * 64,
-        artifact_ref="b" * 32 + ".tar",
-        sha256="c" * 64,
-        size=1,
-        base_image="base",
-        manifest_digest=manifest.digest(),
-        volumes=(),
-        manifest=manifest,
-    )
+    reference = _preview_reference(workspace)
     saved = {"operations": {}}
     if fault == "pending":
         saved["operations"][str(uuid4())] = {"kind": "command", "state": "starting"}
@@ -135,3 +143,38 @@ async def test_idle_physical_proof_denies_unknown_writers(tmp_path, fault):
             await runtime.lease_quiescent(state)
     else:
         assert await runtime.lease_quiescent(state) is (fault is None)
+
+
+@pytest.mark.parametrize("history", ["ordinary", "recovered", "missing", "changed", "wrong_role"])
+async def test_retained_lease_checks_terminal_source_history(tmp_path, history):
+    store, state, machine_path, guarded, receipt = source_guard_setup(tmp_path)
+    ordinary_id = str(uuid4())
+    ordinary = {key: value for key, value in guarded.items() if key != "source_guard_failure"}
+    ordinary["result"] = {**guarded["result"], "operation_id": ordinary_id}
+    operations = {ordinary_id: ordinary}
+    if history in {"recovered", "missing", "changed"}:
+        operations[str(receipt.operation_id)] = guarded
+    if history == "wrong_role":
+        ordinary["startup_role"] = "full_build"
+    write_controller_json(machine_path, {"operations": operations})
+    if history in {"recovered", "changed"}:
+        path = source_guard_recovery_path(store.root, state.workspace_id, receipt.operation_id)
+        if history == "changed":
+            receipt = receipt.model_copy(update={"operation_sha256": "0" * 64})
+        write_controller_json(path, receipt.model_dump(mode="json"))
+
+    reference = _preview_reference(state.workspace_id)
+    backend = SimpleNamespace(
+        _metadata=lambda: {"epoch": 3, "environment_ref": reference.model_dump(mode="json")},
+        _retained_preview_proof=lambda *_, **__: {"trusted": {}},
+        client=SimpleNamespace(containers=SimpleNamespace(list=lambda **_: [])),
+    )
+    runtime = MachineAdapter(SimpleNamespace(state_store=store), SimpleNamespace())
+    runtime.parts = lambda _, **__: (
+        SimpleNamespace(state=lambda: json.loads(machine_path.read_bytes())), backend,
+    )
+    if history in {"missing", "changed"}:
+        with pytest.raises(CellResourceError, match="protected source recovery"):
+            await runtime.lease_quiescent(state)
+    else:
+        assert await runtime.lease_quiescent(state) is (history != "wrong_role")

@@ -1821,17 +1821,32 @@ class MachineAdapter:
             operations = saved.get("operations")
             if not isinstance(operations, dict):
                 return False
+            verify_startup_history = False
             for key, operation in operations.items():
                 if (
                     not isinstance(operation, dict)
                     or operation.get("kind") not in {"command", "request"}
-                    or operation.get("state") != "completed"
                     or operation.get("result") is None
                 ):
                     return False
+                operation_state = operation.get("state")
+                if operation_state != "completed" and (
+                    operation["kind"] != "request"
+                    or operation.get("startup_role") != "fast_check"
+                    or operation_state != "failed"
+                ):
+                    return False
+                verify_startup_history = (
+                    verify_startup_history or operation_state == "failed"
+                    or "source_guard_failure" in operation
+                )
                 result = MachineOperationResult.model_validate(operation["result"])
                 if result.operation_id != key or result.state != "completed":
                     return False
+            if verify_startup_history:
+                # A failed check can have a settled physical outcome. The same
+                # receipt-aware verifier still rejects an unproven source hold.
+                require_startup_history_clear(self.manager.state_store.root, state.workspace_id)
             metadata = backend._metadata()
             raw_reference = metadata.get("environment_ref")
             if raw_reference is None:

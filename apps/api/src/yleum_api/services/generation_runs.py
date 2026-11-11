@@ -29,6 +29,8 @@ ACTIVE_GENERATION_STATUSES = (
     "cancel_requested",
 )
 INTERRUPTED_GENERATION_STATUSES = ("pending", "running", "cancel_requested")
+PREVIOUS_CELL_RECONCILIATION_ATTEMPTS = 4
+PREVIOUS_CELL_ENSURE_RECONCILIATION_REQUIRED = "Previous Project Cell ensure needs reconciliation"
 
 
 def note_generation_release(run: GenerationRun) -> None:

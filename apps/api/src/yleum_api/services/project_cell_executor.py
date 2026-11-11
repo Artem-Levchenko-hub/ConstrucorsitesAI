@@ -28,6 +28,8 @@ from yleum_api.services.agent_builder import Action, Executor
 from yleum_api.services.exact_edit import validate_exact_edit
 from yleum_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
+    PREVIOUS_CELL_ENSURE_RECONCILIATION_REQUIRED,
+    PREVIOUS_CELL_RECONCILIATION_ATTEMPTS,
     promote_generation_after_admission,
 )
 from yleum_api.services.max_content_delivery import public_business_config
@@ -1008,7 +1010,7 @@ async def maybe_create_project_cell_executor(
                     # Recovery may need capacity before it can release the old
                     # lease. Reclaim another idle cell just as admission does;
                     # otherwise all retries fail before reaching that queue.
-                    for _attempt in range(4):
+                    for attempt in range(PREVIOUS_CELL_RECONCILIATION_ATTEMPTS):
                         await _wait_for_previous_cell_reconciliation(
                             session_factory,
                             project_id=project_id,
@@ -1023,7 +1025,7 @@ async def maybe_create_project_cell_executor(
                             requesting_run_id=run.id,
                             client=HttpProjectCellOrchestratorClient(),
                             workspace_id=workspace.id,
-                            reclaim_for_repair=_attempt < 3,
+                            reclaim_for_repair=attempt < PREVIOUS_CELL_RECONCILIATION_ATTEMPTS - 1,
                         ):
                             break
                     await lock_workspace_operations(session, project_id)
@@ -1059,7 +1061,7 @@ async def maybe_create_project_cell_executor(
                         )
                         if remaining_effect is not None:
                             raise ProjectCellStateConflict(
-                                "Previous Project Cell ensure needs reconciliation"
+                                PREVIOUS_CELL_ENSURE_RECONCILIATION_REQUIRED
                             )
                     await session.refresh(run)
             if run.status == "cancel_requested" or run.status not in ACTIVE_GENERATION_STATUSES:
