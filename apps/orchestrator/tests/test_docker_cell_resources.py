@@ -148,8 +148,42 @@ async def test_new_ensure_cannot_mint_startup_contract_over_unknown_machine_effe
         write_controller_json(root / "machine.json", {
             "workspace_id": str(spec.workspace_id), "operations": {identifier: row},
         })
-    with pytest.raises(CellResourceError, match=r"uncertain|recovery"):
+    with pytest.raises(CellIdentityConflict, match=r"uncertain|recovery"):
         await manager.ensure(spec, _mutation("a", 1))
+    assert not docker.containers
+    assert store.load(spec.workspace_id) is None
+
+
+@pytest.mark.parametrize("startup_role", ["fast_check", "restore_runtime"])
+async def test_protected_source_hold_rejects_ensure_before_any_workspace_effect(
+    tmp_path, startup_role,
+):
+    from yleum_orchestrator.services.machine_identity import machine_identity_root
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    manager, docker, store, _lock = _make_manager(tmp_path)
+    spec = replace(_spec(uuid4()), generation_run_id=uuid4())
+    root = machine_identity_root(store.root, spec.workspace_id)
+    identifier = str(uuid4())
+    write_controller_json(root / "machine.json", {
+        "workspace_id": str(spec.workspace_id),
+        "operations": {identifier: {
+            "kind": "request", "startup_role": startup_role, "state": "failed",
+            "source_guard_failure": True,
+            "result": {
+                "operation_id": identifier, "state": "completed", "exit_code": 1,
+                "timed_out": False,
+            },
+        }},
+    })
+    history = (root / "machine.json").read_bytes()
+
+    with pytest.raises(
+        CellIdentityConflict, match=r"protected source recovery|explicit complete restoration",
+    ):
+        await manager.ensure(spec, _mutation("a", 1))
+
+    assert (root / "machine.json").read_bytes() == history
     assert not docker.containers
     assert store.load(spec.workspace_id) is None
 

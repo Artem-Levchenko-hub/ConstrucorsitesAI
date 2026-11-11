@@ -826,7 +826,12 @@ class DockerCellResourceManager:
                 or any(row.status not in {"completed", "failed"} for row in state.operations)
             ):
                 raise CellIdentityConflict("startup predecessor remains unresolved")
-            require_startup_history_clear(self.state_store.root, spec.workspace_id)
+            try:
+                require_startup_history_clear(self.state_store.root, spec.workspace_id)
+            except CellResourceError as exc:
+                # This ensure has not started a mutation. A bound pre-effect
+                # conflict keeps the existing hold out of capacity reconciliation.
+                raise CellIdentityConflict(str(exc)) from exc
         await self._preflight_named_resources(spec, names)
         replay = None
         if state is not None:

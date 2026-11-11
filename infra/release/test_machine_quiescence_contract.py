@@ -434,12 +434,22 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
                     self.checker._require_reviewed_portable_sources(sources)
         self.assertEqual(len(accepted), len(self.reviewed))
 
-    def test_collection_binds_current_bootstrap_recheck_bytes_and_rejects_absence_or_tamper(self):
+    def test_collection_binds_current_source_guard_bytes_and_rejects_absence_or_tamper(self):
         root = Path(__file__).resolve().parents[2] / "apps/orchestrator/src/yleum_orchestrator"
-        current = json.loads(
+        previous = json.loads(
             (Path(__file__).parent / "fixtures/bootstrap-recheck-quiescence-sources.json")
             .read_text()
         )
+        current = json.loads(
+            (Path(__file__).parent / "fixtures/source-guard-retry-quiescence-sources.json")
+            .read_text()
+        )
+        self.checker._require_reviewed_portable_sources(previous)
+        for name in ("services.machine_adapter", "services.docker_cell_resources"):
+            with self.subTest(mixed=name), self.assertRaisesRegex(
+                self.checker.PhysicalDrainError, "quiescence_unsupported_source"
+            ):
+                self.checker._require_reviewed_portable_sources({**current, name: previous[name]})
         with tempfile.TemporaryDirectory() as temporary:
             origins = {}
             for name in current:

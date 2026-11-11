@@ -392,6 +392,13 @@ updates only the adapter. The fenced bootstrap verifies an already journaled
 platform migration without stopping the product. A first application still
 uses the existing quiesced SQL path and both paths retain their bound receipt.
 
+The source-guard retry successor binds the adapter, startup history checker and
+cell resource manager together. A temporary reader denial allows up to 30 seconds
+to start a retry of the applied migration post-check under the same workspace
+lock. An in-flight check retains its own operation limits. The guest command is
+never replayed by that check. An existing protection hold
+returns a bound pre-effect conflict before starting a new ensure mutation.
+
 Quiescence attestations still bind the actual observed source bundle. After a
 controller source change, a retired workspace needs a fresh content-addressed
 attestation under closed ingress and durable admission, using the documented

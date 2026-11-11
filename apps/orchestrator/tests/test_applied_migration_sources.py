@@ -155,6 +155,88 @@ async def test_shell_physical_corruption_is_restored_even_on_failure(source_guar
                                       SimpleNamespace(operation_id=operation_id))
 
 
+@pytest.mark.parametrize("denied_at", ["catalog", "source"])
+async def test_command_postcheck_recovers_from_a_reader_inventory_gap(
+    source_guard, monkeypatch, denied_at,
+):
+    from unittest.mock import AsyncMock
+    from uuid import uuid4
+
+    from yleum_orchestrator.services.docker_cell_resources import DockerCommandResult
+    from yleum_orchestrator.services.generation_reader_inventory import ReaderInventoryUnavailable
+    from yleum_orchestrator.services.machine_adapter import MachineAdapter
+
+    source_module, backend, catalog = source_guard
+    catalog["applied"] = {PATH: SHA}
+    command_finished = False
+    denied = False
+
+    def check_readiness(step):
+        nonlocal denied
+        if command_finished and step == denied_at and not denied:
+            denied = True
+            raise ReaderInventoryUnavailable("reader readiness is unavailable")
+
+    def query(*_args, **_kwargs):
+        check_readiness("catalog")
+        return json.dumps(catalog).encode()
+
+    async def read(_volume):
+        check_readiness("source")
+        return {PATH: SQL.encode()}
+
+    async def execute(*_args):
+        nonlocal command_finished
+        assert not command_finished
+        command_finished = True
+        return DockerCommandResult(exit_code=0, output="verified", timed_out=False)
+
+    def unexpected_stop():
+        pytest.fail("temporary reader denial must not stop the verified workspace")
+
+    monkeypatch.setattr(source_module, "admin_sql", query)
+    operation_id = uuid4()
+    record = {}
+    machine = SimpleNamespace(state=lambda: {"operations": {str(operation_id): record}})
+    backend.workspace_volume = "source"
+    backend.stop_machine = unexpected_stop
+    runtime = MachineAdapter(SimpleNamespace(docker=SimpleNamespace(
+        read_workspace_source_files=read,
+    )), SimpleNamespace())
+    runtime.parts = lambda _state: (machine, backend)
+    runtime.exists = lambda _workspace: True
+    runtime.execute = AsyncMock(side_effect=execute)
+    state = SimpleNamespace(workspace_id=uuid4(), active_generation_run_id=None, operations=())
+
+    result = await runtime.guarded_execute(state, None, SimpleNamespace(operation_id=operation_id))
+
+    assert result.exit_code == 0 and denied
+    runtime.execute.assert_awaited_once()
+    assert "source_guard_failure" not in record
+
+
+async def test_migration_postcheck_does_not_retry_after_oversleep(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from yleum_orchestrator.services import machine_adapter
+    from yleum_orchestrator.services.generation_reader_inventory import ReaderInventoryUnavailable
+
+    now = 0.0
+
+    async def sleep(_seconds):
+        nonlocal now
+        now = 31.0
+
+    monkeypatch.setattr(machine_adapter, "time", SimpleNamespace(monotonic=lambda: now))
+    monkeypatch.setattr(machine_adapter, "asyncio", SimpleNamespace(sleep=sleep))
+    verify = AsyncMock(side_effect=ReaderInventoryUnavailable("reader readiness is unavailable"))
+
+    with pytest.raises(ReaderInventoryUnavailable):
+        await machine_adapter.MachineAdapter._verify_after_reader_gap(verify, 30.0)
+
+    verify.assert_awaited_once()
+
+
 @pytest.mark.parametrize("role_failure", [False, True])
 async def test_apply_archives_exact_source_before_commit_even_if_postcommit_roles_fail(
     source_guard, monkeypatch, role_failure,

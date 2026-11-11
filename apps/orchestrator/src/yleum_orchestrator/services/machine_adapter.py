@@ -39,7 +39,10 @@ from yleum_orchestrator.services.cell_state import (
 )
 from yleum_orchestrator.services.docker_cell_resources import DockerCommandResult
 from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend
-from yleum_orchestrator.services.generation_reader_inventory import reader_dispatch
+from yleum_orchestrator.services.generation_reader_inventory import (
+    ReaderInventoryUnavailable,
+    reader_dispatch,
+)
 from yleum_orchestrator.services.machine_environment import (
     MachineEnvironmentRef,
     MachineEnvironmentStore,
@@ -93,6 +96,7 @@ _PROJECT_POSTGRES_MIN_MEMORY_BYTES = 128 * 1024**2
 _PROJECT_POSTGRES_TARGET_MEMORY_BYTES = 256 * 1024**2
 _PROJECT_POSTGRES_MIN_CPU_CORES = 0.1
 _PROJECT_POSTGRES_TARGET_CPU_CORES = 0.15
+_SOURCE_GUARD_READER_WAIT_SECONDS = 30.0
 # Gateway CPU: one full core while it starts, 5% of a core afterwards.
 _GATEWAY_CPU_PERIOD = 100_000
 _GATEWAY_BOOST_QUOTA = 100_000
@@ -614,6 +618,20 @@ class MachineAdapter:
         require_protected_sources(protected, files)
         return cast(dict[str, str], protected)
 
+    @staticmethod
+    async def _verify_after_reader_gap[Result](
+        check: Callable[[], Awaitable[Result]], deadline: float,
+    ) -> Result:
+        while True:
+            try:
+                return await check()
+            except ReaderInventoryUnavailable:
+                if time.monotonic() + 1 >= deadline:
+                    raise
+                await asyncio.sleep(1)
+                if time.monotonic() >= deadline:
+                    raise
+
     async def guarded_execute(
         self, state: Any, manifest: MachineManifest, request: Any,
     ) -> DockerCommandResult:
@@ -642,14 +660,21 @@ class MachineAdapter:
             # SQL may have committed before a failed build, role bootstrap or
             # cancellation. Recover its pre-submission witness from the journal.
             with machine_budget(None):
+                # A short observer gap is not evidence of changed SQL. Retry
+                # only the two checks under the lock, never the guest command.
+                deadline = time.monotonic() + _SOURCE_GUARD_READER_WAIT_SECONDS
                 try:
                     protected = {}  # Never restore a witness if the live DB cannot revalidate it.
-                    protected = await machine_effect(
-                        protected_sources, backend, before,
-                        verify_only=adaptation_database(state, machine.state()),
+                    protected = await self._verify_after_reader_gap(
+                        lambda: machine_effect(
+                            protected_sources, backend, before,
+                            verify_only=adaptation_database(state, machine.state()),
+                        ),
+                        deadline,
                     )
-                    after = await _read_agent_workspace_files(
-                        self.manager, backend.workspace_volume,
+                    after = await self._verify_after_reader_gap(
+                        lambda: _read_agent_workspace_files(self.manager, backend.workspace_volume),
+                        deadline,
                     )
                     require_protected_sources(protected, after)
                 except BaseException:

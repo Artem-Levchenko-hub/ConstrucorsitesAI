@@ -195,6 +195,14 @@ _PORTABLE_QUIESCENCE_BOOTSTRAP_RECHECK_SOURCES = {
     **_PORTABLE_QUIESCENCE_NEXT_TYPE_PREPARATION_SOURCES,
     "services.machine_adapter": "22f53409ddc90d47572ad5bb4e7e26d1d7c37a79023fc30e9cd371ca87b6686a",
 }
+# A reader gap retries the migration post-check under the existing workspace
+# lock. A protected-source startup rejection remains pre-effect. Neither
+# change admits a new physical writer or loosens the historical source proof.
+_PORTABLE_QUIESCENCE_SOURCE_GUARD_RETRY_SOURCES = {
+    **_PORTABLE_QUIESCENCE_BOOTSTRAP_RECHECK_SOURCES,
+    "services.machine_adapter": "4c1d390e6519f8a95291308c6f0c5eabeaa552a5446067bd80b9e491c3ff806c",
+    "services.docker_cell_resources": "bc59357b8c73c356303399e5a35f8f1c0c09a96f5917f0cd93a2bde4d2d173cc",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -211,6 +219,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_PLATFORM_BOOTSTRAP_V2_SOURCES,
     _PORTABLE_QUIESCENCE_NEXT_TYPE_PREPARATION_SOURCES,
     _PORTABLE_QUIESCENCE_BOOTSTRAP_RECHECK_SOURCES,
+    _PORTABLE_QUIESCENCE_SOURCE_GUARD_RETRY_SOURCES,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.
