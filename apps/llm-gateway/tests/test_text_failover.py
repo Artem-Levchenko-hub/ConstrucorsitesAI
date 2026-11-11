@@ -3,11 +3,17 @@
 import asyncio
 import gzip
 import time
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import httpx
 import pytest
 
+from yleum_gateway.core.errors import ModelUnavailableError
 from yleum_gateway.services import text_failover
+from yleum_gateway.services.generation_identity import GenerationProviderIdentity
 
 
 @pytest.fixture
@@ -18,6 +24,35 @@ def enabled(monkeypatch):
 
 def refusal(status=502, *, url=text_failover.PRIMARY_URL, **kwargs):
     return httpx.Response(status, request=httpx.Request("POST", url), **kwargs)
+
+
+@pytest.mark.parametrize(("scope", "reason", "tried", "complete", "expected"), [
+    ("aitunnel", "preconnect", ["aitunnel"], True, "llmgw"),
+    ("aitunnel", "preconnect", ["llmgw", "aitunnel"], True, None),
+    ("llmgw", "upstream_refused", ["aitunnel", "llmgw"], True, None),
+    ("aitunnel", "preconnect", ["aitunnel"], False, None),
+    ("aitunnel", "rate_limit_refused", ["aitunnel"], True, "aitunnel"),
+])
+async def test_durable_retry_cannot_revisit_provider_after_confirmed_alternate(
+    enabled, monkeypatch, scope, reason, tried, complete, expected,
+):
+    parent = {
+        "phase": "closed", "status": "failed", "receipt_hash": "verified",
+        "terminal_reason": reason, "provider_scope": scope,
+        "tried_scopes": tried, "chain_complete": complete,
+    }
+
+    @asynccontextmanager
+    async def acquire():
+        yield SimpleNamespace(fetchrow=AsyncMock(return_value=parent))
+
+    monkeypatch.setattr(text_failover, "get_pool", lambda: SimpleNamespace(acquire=acquire))
+    identity = GenerationProviderIdentity(uuid4(), uuid4(), uuid4(), uuid4(), "a" * 64, "b" * 64)
+    if expected is None:
+        with pytest.raises(ModelUnavailableError):
+            await text_failover.select_scope(identity, text_failover.MODEL)
+    else:
+        assert await text_failover.select_scope(identity, text_failover.MODEL) == expected
 
 
 @pytest.mark.parametrize("status", [500,502,503,504])

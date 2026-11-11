@@ -43,7 +43,11 @@ from yleum_gateway.core.runner_auth import (
 from yleum_gateway.providers import inflight_budget, llmgw
 from yleum_gateway.providers.native_stream import (
     RECEIPT_RESERVE_SECONDS,
+    StreamReceiptError,
+    collect_response,
+    collected_stream_payload,
     open_aitunnel_response,
+    open_timed_response,
     provider_request_deadline,
 )
 from yleum_gateway.providers.rate_limit import bounded_error_body, refusal_retry_candidate
@@ -114,23 +118,28 @@ def _unconfirmed_provider_outcome(
     provider_call_id: UUID | None = None, transport_stage: str | None = None,
 ) -> Response:
     """Known HTTP status is diagnostic evidence, never replay permission."""
-    details: dict[str, Any] | None = None
+    details: dict[str, Any] = {}
     if type(upstream_status) is int and 400 <= upstream_status <= 599:
-        details = {
-            "upstream_http_status": upstream_status,
-            "provider_charge_ambiguous": True,
-            "retry_safe": False,
-        }
-        if provider_scope in {"llmgw", "aitunnel"}:
-            details["provider_scope"] = provider_scope
-        if isinstance(provider_call_id, UUID):
-            details["provider_call_id"] = str(provider_call_id)
-        if transport_stage in {"connect", "headers", "body", "complete"}:
-            details["transport_stage"] = transport_stage
+        details["upstream_http_status"] = upstream_status
+    if provider_scope in {"llmgw", "aitunnel"}:
+        details["provider_scope"] = provider_scope
+    if isinstance(provider_call_id, UUID):
+        details["provider_call_id"] = str(provider_call_id)
+    if transport_stage in {"connect", "sending", "awaiting_headers", "headers", "body", "complete"}:
+        details["transport_stage"] = transport_stage
+    if details:
+        details["provider_charge_ambiguous"] = True
+        if "upstream_http_status" in details:
+            details["retry_safe"] = False
     return _err(
         503, "billing_unavailable", "Provider request outcome could not be confirmed",
-        details=details,
+        details=details or None,
     )
+
+
+def _exhausted_provider_response() -> Response:
+    error = text_failover.exhausted_error()
+    return _err(error.http_status, error.code, error.message, details=error.details)
 
 
 def _text(content: Any) -> str:
@@ -602,7 +611,7 @@ async def _settle_native_cost(
 async def _dispatch_native_provider(
     *, identity: GenerationProviderIdentity | None, model: str, payload: dict[str, Any],
     primary_route: tuple[str, str], dispatch_options: dict[str, Any], retry_count: int,
-    provider_deadline: float,
+    provider_deadline: float, timed_primary: bool = False,
 ) -> tuple[UUID, httpx.Response, str] | Response:
     """Commit each upstream attempt independently before its network dispatch."""
     run_id, project_id = dispatch_options["run_id"], dispatch_options["project_id"]
@@ -614,18 +623,24 @@ async def _dispatch_native_provider(
     backup_enabled = text_failover.enabled(model)
     message_id, stage = dispatch_options["message_id"], dispatch_options["stage"]
     loop = asyncio.get_running_loop()
+    attempted: set[str] = set()
     while True:
-        backup_deadline = provider_deadline if provider_scope == "aitunnel" else None
-        if backup_deadline is not None and loop.time() >= backup_deadline:
+        timed_deadline = (
+            provider_deadline
+            if provider_scope == "aitunnel" or attempted or (timed_primary and backup_enabled)
+            else None
+        )
+        if timed_deadline is not None and loop.time() >= timed_deadline:
             error = DispatchDeadlineError()
             return _err(error.http_status, error.code, error.message, details=error.details)
         api_key, api_base = primary_route if provider_scope == "llmgw" else text_failover.credentials(provider_scope)
         payload = {**payload, "model": llmgw.native_slug(model) if provider_scope == "llmgw" else model}
+        collect_repair = provider_scope == "aitunnel" and stage == "source_repair"
         from yleum_gateway.core.errors import ValidationFailedError
         from yleum_gateway.services.payload_limits import require_provider_payload_size
 
         try:
-            require_provider_payload_size(payload)
+            require_provider_payload_size(collected_stream_payload(payload) if collect_repair else payload)
         except ValidationFailedError:
             return _err(400, "invalid_request_error", "Provider request exceeds size limit")
         headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json", "accept": "application/json"}
@@ -636,6 +651,7 @@ async def _dispatch_native_provider(
         except Exception as exc:
             log.warning("native_messages.provider_admission_failed", error_type=type(exc).__name__)
             return _err(503, "billing_unavailable", "Provider accounting is temporarily unavailable")
+        attempted.add(provider_scope)
 
         transport_evidence: dict[str, Any] = {}
         post_options: dict[str, Any] = text_failover.scope_options(provider_scope)
@@ -643,14 +659,28 @@ async def _dispatch_native_provider(
             post_options["evidence"] = transport_evidence
         url = f"{api_base.rstrip('/')}/chat/completions"
         try:
-            if backup_deadline is None:
+            if timed_deadline is None:
                 upstream = await asyncio.to_thread(_post_llmgw, url, payload, headers, **post_options)
-            else:
+            elif collect_repair:
+                remaining = timed_deadline - loop.time()
+                if remaining <= 0:
+                    raise DispatchDeadlineError()
+                upstream = await collect_response(
+                    url, payload, headers, budget_seconds=remaining, evidence=transport_evidence,
+                    provider_scope=provider_scope, deadline=timed_deadline,
+                )
+            elif provider_scope == "aitunnel":
                 async with open_aitunnel_response(
-                    url, payload, headers, deadline=backup_deadline, evidence=transport_evidence,
+                    url, payload, headers, deadline=timed_deadline, evidence=transport_evidence,
                 ) as upstream:
                     await upstream.aread()
-        except (httpx.HTTPError, TimeoutError, DispatchDeadlineError) as exc:
+            else:
+                async with open_timed_response(
+                    url, payload, headers, deadline=timed_deadline, evidence=transport_evidence,
+                    provider_scope=provider_scope,
+                ) as upstream:
+                    await upstream.aread()
+        except (httpx.HTTPError, TimeoutError, DispatchDeadlineError, StreamReceiptError) as exc:
             partial = getattr(exc, "_native_transport_evidence", None)
             if isinstance(partial, dict):
                 transport_evidence.update(partial)
@@ -662,7 +692,7 @@ async def _dispatch_native_provider(
             transport_stage = transport_evidence.get("transport_stage")
             transport_stage = (
                 transport_stage if isinstance(transport_stage, str)
-                and transport_stage in {"connect", "headers", "body"} else "unknown"
+                and transport_stage in {"connect", "sending", "awaiting_headers", "headers", "body"} else "unknown"
             )
             log.warning(
                 "native_messages.transport_error",
@@ -674,12 +704,17 @@ async def _dispatch_native_provider(
                 run_id=str(run_id) if run_id else None,
                 project_id=str(project_id) if project_id else None,
                 message_id=str(message_id) if message_id else None,
-                stage=stage if stage in {"build_plan", "native_agent", "verification"} else "unknown",
+                stage=stage if stage in {"build_plan", "native_agent", "verification", "source_repair"} else "unknown",
                 retry_count=retry_count,
             )
-            safe_to_retry = (provider_scope == "llmgw" and isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))
-                             and transport_stage not in {"headers", "body"}
-                             and observed_status is None)
+            safe_to_retry = (
+                isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))
+                and observed_status is None
+                and (
+                    transport_stage == "connect"
+                    or (transport_stage == "unknown" and provider_scope == "llmgw" and timed_deadline is None)
+                )
+            )
             expired_before_dispatch = isinstance(exc, DispatchDeadlineError)
             recorded = await _finish_provider_call(
                 provider_call_id, identity=identity,
@@ -693,19 +728,24 @@ async def _dispatch_native_provider(
             if safe_to_retry and recorded:
                 # These failures occur before the request reaches the provider.
                 # Publish permission only after the failed attempt receipt commits.
-                if identity is None and backup_enabled:
-                    provider_scope = "aitunnel"
+                alternate = text_failover.alternate_scope(model, provider_scope, "preconnect", attempted)
+                if identity is None and alternate is not None:
+                    provider_scope = alternate
                     continue
+                if identity is None and len(attempted) == 2:
+                    return _exhausted_provider_response()
 
                 from yleum_gateway.services.generation_response_capture import (
                     confirm_response_accounting,
                 )
 
                 confirm_response_accounting()
-                return _err(502, "api_error", "Provider connection could not be established", details={
+                proof_details = {
                     "provider_failure_kind": "preconnect", "provider_charge_ambiguous": False,
-                    "retry_safe": True, "retry_policy": "llmgw_preconnect_v1",
-                })
+                }
+                if identity is not None or not backup_enabled:
+                    proof_details.update(text_failover.preconnect_proof(provider_scope, model, transport_stage))
+                return _err(502, "api_error", "Provider connection could not be established", details=proof_details)
             # Once a request may have been accepted, replay risks a second paid call.
             # Deployed API callers already stop on this terminal billing error.
             return _unconfirmed_provider_outcome(
@@ -740,34 +780,44 @@ async def _dispatch_native_provider(
                         upstream.status_code, provider_scope=provider_scope,
                         provider_call_id=provider_call_id, transport_stage="complete",
                     )
-                if identity is not None:
-                    from yleum_gateway.services.generation_response_capture import (
-                        confirm_response_accounting,
-                    )
+                alternate = text_failover.alternate_scope(model, provider_scope, "upstream_refused", attempted)
+                if identity is None and alternate is not None:
+                    provider_scope = alternate
+                    continue
+                if identity is None and len(attempted) == 2:
+                    return _exhausted_provider_response()
+                from yleum_gateway.services.generation_response_capture import (
+                    confirm_response_accounting,
+                )
 
-                    confirm_response_accounting()
-                    return Response(status_code=503, media_type="application/json", content=json.dumps({
-                        "type": "error", "error": {
-                            "type": "api_error", "code": "api_error",
-                            "message": "Primary provider refused the request", "details": overload,
-                        },
-                    }))
-                provider_scope = "aitunnel"
-                continue
+                confirm_response_accounting()
+                return Response(status_code=503, media_type="application/json", content=json.dumps({
+                    "type": "error", "error": {
+                        "type": "api_error", "code": "api_error",
+                        "message": "Primary provider refused the request", "details": overload,
+                    },
+                }))
             retry_candidate = inflight or refusal_retry_candidate(upstream)
-            ambiguous = upstream.status_code >= 500 or (upstream.status_code == 429 and retry_candidate is None)
+            ambiguous = (
+                upstream.status_code >= 500 or (upstream.status_code == 429 and retry_candidate is None)
+                or (provider_scope == "aitunnel" and upstream.status_code == 408)
+            )
             recorded = await _finish_provider_call(
                 provider_call_id, identity=identity, status="ambiguous" if ambiguous else "failed",
                 reason="rate_limit_refused" if retry_candidate is not None else None,
                 error_type="HTTPStatusError", **known_evidence,
             )
-            if upstream.status_code >= 500 or not recorded:
+            if upstream.status_code >= 500 or not recorded or (
+                provider_scope == "aitunnel" and upstream.status_code == 408
+            ):
                 # A failed journal commit does not erase the locally observed HTTP
                 # status, and cannot turn an ambiguous outcome into a safe retry.
                 return _unconfirmed_provider_outcome(
                     upstream.status_code, provider_scope=provider_scope,
                     provider_call_id=provider_call_id, transport_stage="complete",
                 )
+            if identity is None and len(attempted) == 2 and retry_candidate is not None and not ambiguous:
+                return _exhausted_provider_response()
             if not ambiguous and retry_candidate is not None:
                 from yleum_gateway.services.generation_response_capture import (
                     confirm_response_accounting,
@@ -911,6 +961,7 @@ async def _native_messages_execute(
 
     provider_result = await _dispatch_native_provider(
         identity=identity, model=model, payload=payload, primary_route=(api_key, api_base),
+        timed_primary=identity is not None or request.headers.get("x-yleum-provider-timeout-seconds") is not None,
         retry_count=retry_count, provider_deadline=provider_deadline, dispatch_options={
             "route": "/v1/project-cell/messages" if runner_claims is not None else "/v1/messages",
             "model": model, "user_id": user_id, "project_id": project_id, "run_id": run_id,

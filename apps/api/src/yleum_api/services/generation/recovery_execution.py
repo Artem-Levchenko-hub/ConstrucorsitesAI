@@ -625,6 +625,7 @@ def _frame_retry(frame: dict[str, Any], previous: object, *, reconcile: bool) ->
                     "step",
                     "active_model",
                     "call_messages",
+                    "repair_max_tokens",
                     "retry_started_at",
                 )
             )

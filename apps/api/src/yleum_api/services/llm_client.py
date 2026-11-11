@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 
 from yleum_api.core.config import get_settings
+from yleum_api.services.agent_output_budget import is_sonnet55_model
 from yleum_api.services.generation.provider_identity import GenerationProviderIdentity
 from yleum_api.services.generation.recovery_diagnostic import (
     diagnostic_output_budget as diagnostic_output_budget,
@@ -23,6 +24,7 @@ from yleum_api.services.generation.response_auth import record_headers
 log = logging.getLogger(__name__)
 
 _INFLIGHT_POLICY = "llmgw_inflight_budget_v1"
+_FAILOVER_PRECONNECT_POLICIES = ("llmgw_failover_preconnect_v1", "aitunnel_preconnect_v1")
 _GENERATION_MODELS = frozenset({
     "gemini-3.1-pro-preview-customtools", "claude-sonnet-5", "claude-sonnet-5.5",
     "~anthropic/claude-sonnet-latest",
@@ -405,10 +407,14 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
         candidate = body["detail"].get("error")
         if isinstance(candidate, dict):
             error = candidate
-    elif (response.status_code == 402 and isinstance(body, dict)
+    elif (response.status_code in {402, 502} and len(response.content) <= 16_384
+          and not response.history and isinstance(body, dict)
           and not set(body) - {"type", "error"} and body.get("type", "error") == "error"):
         candidate = body.get("error")
-        if (isinstance(candidate, dict)
+        if response.status_code == 502:
+            if (details := _native_preconnect_details(candidate)) is not None:
+                error = {"code": "model_unavailable", "details": details}
+        elif (isinstance(candidate, dict)
                 and not set(candidate) - {"type", "code", "message", "details"}
                 and candidate.get("type") == "api_error"
                 and candidate.get("code", "api_error") == "api_error"):
@@ -465,15 +471,26 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
     upstream = raw_status if type(raw_status) is int and 400 <= raw_status <= 599 else None
     raw_ambiguity = details.get("provider_charge_ambiguous")
     ambiguous = raw_ambiguity if type(raw_ambiguity) is bool else None
+    preconnect_claim = details.get("provider_failure_kind") == "preconnect"
+    stage = details.get("transport_stage")
+    if preconnect_claim and stage in ("sending", "awaiting_headers", "headers", "body", "complete"):
+        ambiguous = True
     category = details.get("provider_refusal_category")
     category = (
         category if isinstance(category, str) and category in {"access", "funds", "rate_limit"}
         and upstream is not None and 400 <= upstream < 500 else None
     )
+    preconnect_policy = _committed_preconnect_policy({"error": error})
+    requires_failover_proof = (
+        details.get("provider_scope") == "aitunnel"
+        or details.get("retry_policy") in _FAILOVER_PRECONNECT_POLICIES
+    )
     retry_safe = (
         response.status_code == 502 and code == "model_unavailable"
-        and ambiguous is False and details.get("provider_failure_kind") == "preconnect"
+        and ambiguous is False and preconnect_claim
+        and details.get("retry_safe") is not False
         and "upstream_http_status" not in details
+        and (not requires_failover_proof or preconnect_policy in _FAILOVER_PRECONNECT_POLICIES)
     )
     rate_delay = (
         rate_limit_retry_delay(details)
@@ -505,6 +522,9 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
         message = "Недостаточно средств на балансе Yleum для этого запроса."
     elif code == "billing_reconciliation_required":
         message = "Результат запроса к LLM-провайдеру требует сверки."
+    elif (code == "model_unavailable"
+          and details.get("provider_failure_kind") == "providers_exhausted"):
+        message = "LLMGW и AITunnel отклонили запрос. Автоматический повтор остановлен."
     elif retry_safe:
         message = "Не удалось установить соединение с LLM-провайдером."
     else:
@@ -517,7 +537,9 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
         provider_charge_ambiguous=ambiguous, retry_safe=retry_safe,
         provider_refusal_category=category,
         retry_after_seconds=rate_delay,
-        retry_policy=_INFLIGHT_POLICY if rate_delay is not None and upstream == 402 else None,
+        retry_policy=(
+            _INFLIGHT_POLICY if rate_delay is not None and upstream == 402 else preconnect_policy
+        ),
         provider_scope=context.get("provider_scope"),
         transport_stage=context.get("transport_stage"),
         provider_call_id=context.get("provider_call_id"),
@@ -645,8 +667,13 @@ async def _chat_stream_data(
                 raise
             start_attempt, retry_parent = resumed
             overload_used = failure.code == "upstream_refused"
+            failover_preconnect = (
+                retry_parent and start_attempt == 1
+                and failure.retry_policy in _FAILOVER_PRECONNECT_POLICIES
+            )
             if (failure.code != "upstream_refused" and budget_delay is None
-                    and start_attempt >= _chat_attempt_allowance(payload)):
+                    and start_attempt >= _chat_attempt_allowance(payload)
+                    and not failover_preconnect):
                 raise
             remaining = provider_dispatch_remaining()
             if remaining is None or remaining <= 0.5:
@@ -680,10 +707,11 @@ async def _chat_stream_data(
     legacy_allowance = _chat_attempt_allowance(payload) if identity is not None else 1
     outward_event = False
     accepted_headers = False
-    async with asyncio.timeout_at(deadline if identity is not None else None):
+    timed_request = identity is not None or is_sonnet55_model(payload["model"])
+    async with asyncio.timeout_at(deadline if timed_request else None):
         for attempt in range(start_attempt, allowance):
             remaining = (
-                deadline - asyncio.get_running_loop().time() if identity is not None else 300.0
+                deadline - asyncio.get_running_loop().time() if timed_request else 300.0
             )
             if remaining <= 0:
                 raise TimeoutError
@@ -703,7 +731,7 @@ async def _chat_stream_data(
                         json=payload,
                         headers=record_headers(identity, (
                             {"x-yleum-provider-timeout-seconds": str(remaining)}
-                            if identity is not None
+                            if timed_request
                             else None
                         )),
                     ) as response:
@@ -777,9 +805,7 @@ async def _chat_stream_data(
                             if not retry_parent:
                                 return
             except (httpx.ConnectError, httpx.ConnectTimeout):
-                if (
-                    outward_event or (identity is not None and accepted_headers)
-                ):
+                if outward_event or accepted_headers:
                     raise
                 await confirm_generation_preconnect(wire, identity)
                 if attempt + 1 >= legacy_allowance:
@@ -798,15 +824,27 @@ async def _chat_stream_data(
 def _http_child_refusal(
     response: httpx.Response, attempt: int, legacy_allowance: int, overload_used: bool,
 ) -> bool:
-    return ((_response_preconnect(response) and attempt + 1 < legacy_allowance)
-            or (_response_overload_refused(response) and not overload_used))
+    return (
+        _allow_preconnect_child(_response_preconnect_policy(response), attempt, legacy_allowance)
+        or (_response_overload_refused(response) and not overload_used)
+    )
 
 
 def _stream_child_refusal(
-    data: object, raw: str, attempt: int, legacy_allowance: int, overload_used: bool,
+    data: dict[str, Any], raw: str, attempt: int, legacy_allowance: int, overload_used: bool,
 ) -> bool:
-    return ((_committed_preconnect(data) and attempt + 1 < legacy_allowance)
+    if set(data) != {"error"} or len(raw.encode("utf-8")) > 16_384:
+        return False
+    policy = _committed_preconnect_policy(_refusal_document(raw))
+    return (_allow_preconnect_child(policy, attempt, legacy_allowance)
             or (_stream_overload_refused(raw) and not overload_used))
+
+
+def _allow_preconnect_child(policy: str | None, attempt: int, legacy_allowance: int) -> bool:
+    # An explicitly authorized alternate also works for the default-output collector.
+    return policy is not None and (
+        attempt + 1 < legacy_allowance or (policy in _FAILOVER_PRECONNECT_POLICIES and attempt == 0)
+    )
 
 
 def _chat_dispatch_allowance(payload: dict[str, Any]) -> int:
@@ -839,30 +877,64 @@ def _chat_attempt_allowance(payload: dict[str, Any]) -> int:
     return 2
 
 
-def _committed_preconnect(data: object) -> bool:
+def _committed_preconnect_policy(data: object) -> str | None:
     if not isinstance(data, dict):
-        return False
+        return None
     error = data.get("error")
     if not isinstance(error, dict) or error.get("code") != "model_unavailable":
-        return False
+        return None
     details = error.get("details")
-    return isinstance(details, dict) and (
+    if not isinstance(details, dict) or not (
         details.get("provider_failure_kind") == "preconnect"
         and details.get("provider_charge_ambiguous") is False
         and details.get("retry_safe") is True
-        and details.get("retry_policy") == "llmgw_preconnect_v1"
         and "upstream_http_status" not in details
-    )
+        and details.get("transport_stage") in (None, "connect")
+    ):
+        return None
+    policy = details.get("retry_policy")
+    if not isinstance(policy, str):
+        return None
+    if policy == "llmgw_preconnect_v1":
+        return policy if details.get("provider_scope") in (None, "llmgw") else None
+    if policy not in _FAILOVER_PRECONNECT_POLICIES:
+        return None
+    scope = "aitunnel" if policy == "aitunnel_preconnect_v1" else "llmgw"
+    if details.get("provider_scope") != scope or details.get("transport_stage") != "connect":
+        return None
+    if details.get("provider_transport_stage", "connect") != "connect":
+        return None
+    receipt = {"provider_request_id", "provider_cost_rub", "provider_cost_usd"}
+    expected = {
+        "provider_failure_kind", "provider_charge_ambiguous", "retry_safe", "retry_policy",
+        "provider_scope", "transport_stage", "provider_transport_stage", "provider_call_id",
+    }
+    if set(details) - expected - receipt or any(details.get(key) is not None for key in receipt):
+        return None
+    return policy
 
 
-def _response_preconnect(response: httpx.Response) -> bool:
+def _native_preconnect_details(error: object) -> dict[str, Any] | None:
+    if (not isinstance(error, dict) or set(error) - {"type", "code", "message", "details"}
+            or error.get("type") != "api_error" or error.get("code", "api_error") != "api_error"):
+        return None
+    details = error.get("details")
+    if not isinstance(details, dict):
+        return None
+    expected = {"provider_failure_kind", "provider_charge_ambiguous", "retry_safe", "retry_policy"}
+    policy = _committed_preconnect_policy({
+        "error": {"code": "model_unavailable", "details": details},
+    })
+    if policy in _FAILOVER_PRECONNECT_POLICIES:
+        expected.update(("provider_scope", "transport_stage"))
+    return details if policy is not None and set(details) == expected else None
+
+
+def _response_preconnect_policy(response: httpx.Response) -> str | None:
     if response.status_code != 502 or len(response.content) > 16_384 or response.history:
-        return False
-    try:
-        body = response.json()
-    except (ValueError, RecursionError):
-        return False
-    return isinstance(body, dict) and _committed_preconnect(body.get("detail"))
+        return None
+    body = _refusal_document(response.content)
+    return _committed_preconnect_policy(body.get("detail")) if isinstance(body, dict) else None
 
 
 async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.Response:
@@ -908,8 +980,13 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
                 raise
             start_attempt, retry_parent = resumed
             overload_used = failure.code == "upstream_refused"
+            failover_preconnect = (
+                retry_parent and start_attempt == 1
+                and failure.retry_policy in _FAILOVER_PRECONNECT_POLICIES
+            )
             if (failure.code != "upstream_refused" and budget_delay is None
-                    and start_attempt >= _chat_attempt_allowance(payload)):
+                    and start_attempt >= _chat_attempt_allowance(payload)
+                    and not failover_preconnect):
                 raise
             remaining = provider_dispatch_remaining()
             if remaining is None or remaining <= 0.5:
@@ -938,18 +1015,12 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
                        provider_charge_ambiguous=True)
     legacy_allowance = _chat_attempt_allowance(payload) if identity is not None else 1
     accepted_headers = False
-    omitted_default = payload.get("max_tokens") is None and payload["model"] in {
-        "claude-sonnet-5.5",
-        "anthropic/claude-sonnet-5.5",
-    }
+    timed_request = identity is not None or is_sonnet55_model(payload["model"])
     try:
-        # Preserve legacy per-I/O timing; the new two-cycle path shares one total
-        # deadline, including intent SQL, the existing backoff and second intent.
-        async with asyncio.timeout_at(
-            deadline if identity is not None or omitted_default else None
-        ):
+        # Use the same wall clock through SQL, both providers and any backoff.
+        async with asyncio.timeout_at(deadline if timed_request else None):
             for attempt in range(start_attempt, allowance):
-                remaining = deadline - loop.time() if identity is not None else budget
+                remaining = deadline - loop.time() if timed_request else budget
                 if remaining <= 0:
                     raise TimeoutError
                 wire = await reserve_generation_wire(identity, wire_attempt=attempt)
@@ -962,11 +1033,10 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
                     async with httpx.AsyncClient(timeout=timeout) as client:
                         headers = (
                             {"x-yleum-provider-timeout-seconds": str(remaining)}
-                            if omitted_default or identity is not None
-                            else None
+                            if timed_request else None
                         )
                         headers = record_headers(identity, headers)
-                        if identity is None:
+                        if not timed_request:
                             response = await client.post(url, json=payload, headers=headers)
                         else:
                             # Receiving headers proves this is no longer connection
@@ -1014,10 +1084,12 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
                     )  # SQL independently verifies the linked committed receipt.
                     accepted_headers = False
                     continue
+                if identity is not None:
+                    http_failure.retry_safe = False
                 raise http_failure
     except (httpx.HTTPError, TimeoutError) as exc:
-        preconnect = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)) and (
-            identity is None or not accepted_headers
+        preconnect = (
+            isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)) and not accepted_headers
         )
         raise LLMError(
             "Не удалось установить соединение с LLM-сервисом."

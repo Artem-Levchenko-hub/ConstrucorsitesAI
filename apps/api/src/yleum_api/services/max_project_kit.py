@@ -479,13 +479,17 @@ On ManagedBusinessError.code=quote_changed, show error.quote current prices and
 require a separate explicit confirmation; never automatically submit again.
 Keep the same operationKey and body after ambiguous failures, including a reload.
 On mount call loadPendingManagedIntent(resource) from business-client for each
-selected writable module. Wait for its verified-session lookup before enabling
-the form. Restore the saved frozen input and show an explicit recovery action;
-an order can be recovered even with an empty cart or a changed/hidden catalog.
+selected writable module, using the literal "orders", "leads" or "bookings".
+Wait for each resource's verified-session lookup before enabling its form.
+Keep submission disabled on lookup failure and show a way to retry the lookup.
+If an intent exists, show an explicit recovery action and pass its frozen input
+and original operationKey to the same createManaged* method. Check this branch
+before new-form or cart validation so an order can recover with an empty cart
+or a changed/hidden catalog. A lookup does not submit anything.
 Do not discard an unresolved intent after an authentication error or replace it
-with a new UUID. createManaged* persists the frozen intent before a browser POST;
-pending_intent means resolve the existing submission before starting another.
-Handle intent_storage_unavailable honestly: no submission was sent.
+with a new UUID. createManaged* persists the frozen intent before a browser POST.
+Resolve a pending_intent before starting another submission.
+If intent_storage_unavailable blocks an attempt, say that attempt was not sent.
 History reads
 getManagedRecords(resource,{limit,cursor}) and renders result.records; show only
 the current customer's records and the server-returned status.
@@ -531,13 +535,27 @@ direct records.map in visible JSX. For example, load orders in a useEffect:
 `const response = await getManagedRecords("orders", {limit: 50});`
 `setOrders(response.records);`
 then render `orders.map(record => <p key={record.id}>{record.customer_name} {record.status}</p>)`.
-Connect a real form onSubmit/button onClick to a handler that directly calls
-`await createManagedOrder({...orderInput, operationKey: orderInput.operationKey})`.
-orderInput means the typed, verified/frozen REAL form input described above:
-do not fabricate a name/items/key, drop optional fields or rebuild an ambiguous retry.
-Use `Parameters<typeof createManagedOrder>[0]` for its type. The same direct pattern
-for leads is createManagedLead + getManagedRecords("leads") + leads.map;
-for bookings it is createManagedBooking + getManagedRecords("bookings") + bookings.map.
+With Button from `@maxhub/max-ui`, put each submit handler on its native HTML
+form and use a Button with `type="submit"` inside that form. Include the existing
+fields inside the corresponding form. Reflect lookup, in-flight and recovery
+state in each form's button label and disabled state.
+```tsx
+<>
+<form onSubmit={submitOrder}>
+  <Button type="submit" disabled={orderSubmitDisabled}>Оформить заказ</Button>
+</form>
+<form onSubmit={submitLead}>
+  <Button type="submit" disabled={leadSubmitDisabled}>Отправить заявку</Button>
+</form>
+</>
+```
+Call event.preventDefault() in each handler, then directly await
+`createManagedOrder({...orderInput, operationKey: orderInput.operationKey})` or
+`createManagedLead({...leadInput, operationKey: leadInput.operationKey})`.
+Use the actual form input or the verified frozen input, preserving its optional
+fields and key. Use `Parameters<typeof createManagedOrder>[0]` and the equivalent
+for the other methods. For bookings, connect createManagedBooking the same way
+and render the live getManagedRecords("bookings").records history.
 Use each method's actual Parameters type. With multiple selected modules implement
 EVERY pair separately; with no selected modules in that manifest, the live
 rendered profile is still mandatory. Without that manifest, preserve the existing
@@ -549,6 +567,10 @@ Bookings take serviceId and requestedFor (timezone-bearing ISO); they are reques
 until the owner confirms them. Do not invent free slots, capacity or payment.
 Private/personal features outside these selected modules keep their existing
 user-scoped storage and must never become an owner-wide business registry.
+Keep existing browser storage keys, formats and writes for app-owned JSON such
+as cart quantities and favorite IDs. Read and validate the saved values before
+writing, wait for hydration, and serialize the typed local values directly.
+The business SDK alone handles storage for pending managed intents.
 Read `src/lib/omnia/max-config.ts` to understand the saved brief. Product catalog
 screens MUST use `useYleumCatalog()` from `@/lib/omnia/catalog-client`, which
 refreshes on mount/focus from the same mounted public business file as the server.

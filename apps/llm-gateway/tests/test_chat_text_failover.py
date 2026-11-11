@@ -189,6 +189,56 @@ def test_stream_partial_output_never_switches_provider(client, monkeypatch):
     assert scopes == ["llmgw"]
 
 
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("first_is_uncertain", [False, True])
+def test_sticky_chat_backup_switch_requires_confirmed_preconnect(
+    client, monkeypatch, stream, first_is_uncertain,
+):
+    scopes = []
+    use = {"prompt_tokens": 10, "completion_tokens": 1, "cost_rub": 0.2}
+
+    def before_completion(provider_scope):
+        scopes.append(provider_scope)
+        if provider_scope == "aitunnel":
+            raise UpstreamProviderError("synthetic reserve fault", details={
+                "provider_charge_ambiguous": first_is_uncertain,
+                "provider_failure_kind": "transport" if first_is_uncertain else "preconnect",
+                "transport_stage": "awaiting_headers" if first_is_uncertain else "connect",
+            })
+        assert provider_calls.finish_call.await_args.kwargs["status"] == "failed"
+
+    async def complete(*, provider_scope="llmgw", **kwargs):
+        before_completion(provider_scope)
+        return {
+            "id": "primary-receipt", "model": "claude-sonnet-5.5", "usage": use,
+            "choices": [{"finish_reason": "stop", "message": {"content": "resumed"}}],
+        }
+
+    async def stream_source(model, messages, *, receipt, provider_scope="llmgw", **kwargs):
+        before_completion(provider_scope)
+        receipt.update(id="primary-receipt", model=model, usage=use, complete=True, finish_reason="stop")
+        yield "resumed", model
+
+    monkeypatch.setattr(text_failover, "select_scope", AsyncMock(return_value="aitunnel"))
+    monkeypatch.setattr(llmgw, "acompletion", complete)
+    monkeypatch.setattr(llmgw, "astream", stream_source)
+    response = client.post("/v1/chat/completions", json={
+        "model": "claude-sonnet-5.5", "user": str(uuid4()), "stream": stream,
+        "messages": [{"role": "user", "content": "synthetic"}],
+    })
+
+    if first_is_uncertain:
+        assert scopes == ["aitunnel"]
+        assert billing.charge.await_count == 0
+        assert "resumed" not in response.text
+        assert provider_calls.finish_call.await_args.kwargs["status"] == "ambiguous"
+    else:
+        assert scopes == ["aitunnel", "llmgw"]
+        assert billing.charge.await_count == 1
+        assert response.status_code == 200
+        assert "resumed" in response.text
+
+
 @pytest.mark.parametrize("primary,backup", [("overload", "ok"), ("overload", "failed"),
     ("overload", "wrong_model"), ("money", "ok"), ("unknown", "ok")])
 @pytest.mark.parametrize("status", [500,502,503,504])
@@ -208,11 +258,12 @@ def test_nonstream_real_transport_fallback_and_fail_closed(client, monkeypatch, 
             return httpx.Response(status, json={"error": {500:"Internal Server Error",502:"Bad Gateway",503:"Service Unavailable",504:"Gateway Timeout"}[status]})
         if backup == "failed":
             return httpx.Response(status, json={"error": "Backup unavailable"})
-        return httpx.Response(200, json={
+        event = {
             "id": "backup-receipt", "model": "claude-sonnet-5" if backup == "wrong_model" else "claude-sonnet-5.5",
             "usage": {"prompt_tokens": 10, "completion_tokens": 2, "cost_rub": 0.2},
-            "choices": [{"finish_reason": "stop", "message": {"content": "5"}}],
-        })
+            "choices": [{"finish_reason": "stop", "delta": {"content": "5"}}],
+        }
+        return httpx.Response(200, text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n")
     monkeypatch.setattr(httpx, "HTTPTransport", lambda **_: httpx.MockTransport(reply))
     monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(reply))
     response = client.post("/v1/chat/completions", json={
@@ -227,10 +278,11 @@ def test_nonstream_real_transport_fallback_and_fail_closed(client, monkeypatch, 
     if primary == "overload":
         assert str(requests[0].url) == text_failover.PRIMARY_URL
         assert str(requests[1].url) == "https://api.aitunnel.ru/v1/chat/completions"
-        import json
         left, right = (json.loads(request.content) for request in requests)
         assert left["messages"] == right["messages"]
         assert right["model"] == "claude-sonnet-5.5"
+        assert left["stream"] is False and right["stream"] is True
+        assert left["max_tokens"] == right["max_tokens"] == 128
         assert provider_calls.finish_call.await_args_list[0].kwargs["status"] == "failed"
         assert provider_calls.start_call.await_args_list[1].kwargs["provider_scope"] == "aitunnel"
         assert events.index("receipt_failed") < events.index("post_backup")
@@ -313,11 +365,9 @@ def test_chat_reserves_backup_only_for_confirmed_preconnect(client, monkeypatch,
             "id": "backup-receipt",
             "model": "claude-sonnet-5.5",
             "usage": {"prompt_tokens": 10, "completion_tokens": 1, "cost_rub": 0.2},
-            "choices": [{"finish_reason": "stop", "delta" if stream else "message": {"content": "ok"}}],
+            "choices": [{"finish_reason": "stop", "delta": {"content": "ok"}}],
         }
-        if stream:
-            return httpx.Response(200, text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n")
-        return httpx.Response(200, json=event)
+        return httpx.Response(200, text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n")
 
     monkeypatch.setattr(httpx, "HTTPTransport", lambda **_: httpx.MockTransport(reply))
     monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(reply))

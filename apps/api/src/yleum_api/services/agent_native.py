@@ -35,7 +35,11 @@ from pydantic import BaseModel, ConfigDict, NonNegativeInt
 from yleum_api.core.config import get_settings
 from yleum_api.services.agent_build_feedback import render_model_observation
 from yleum_api.services.agent_builder import _KNOWN_ACTIONS, Action, AgentResult
-from yleum_api.services.agent_output_budget import agent_output_tokens, is_sonnet55_model
+from yleum_api.services.agent_output_budget import (
+    REPAIR_OUTPUT_TOKENS,
+    agent_output_tokens,
+    is_sonnet55_model,
+)
 from yleum_api.services.generation.continuation import (
     RecoveryBindingReader,
     RecoveryObserver,
@@ -57,7 +61,11 @@ from yleum_api.services.generation.recovery_contract import (
 from yleum_api.services.generation.recovery_trace import provider_error_context
 from yleum_api.services.generation_failure import failure_for_error
 from yleum_api.services.integration_providers import PROVIDER_MAP
-from yleum_api.services.llm_client import _overload_refusal_details, rate_limit_retry_delay
+from yleum_api.services.llm_client import (
+    _native_preconnect_details,
+    _overload_refusal_details,
+    rate_limit_retry_delay,
+)
 from yleum_api.services.max_management_generation import ManagedSourceGap
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 
@@ -198,25 +206,12 @@ def _gateway_native_error(response: httpx.Response, url: str) -> dict[str, Any] 
     return error
 
 
-def _gateway_preconnect_proven(response: httpx.Response, url: str) -> bool:
+def _gateway_preconnect_policy(response: httpx.Response, url: str) -> str | None:
     """Accept only the internal gateway's closed, post-journal refusal proof."""
     if response.status_code != 502:
-        return False
-    error = _gateway_native_error(response, url)
-    if (error is None or error.get("type") != "api_error"
-            or error.get("code", "api_error") != "api_error"):
-        return False
-    details = error.get("details")
-    return (
-        isinstance(details, dict)
-        and set(details) == {
-            "provider_failure_kind", "provider_charge_ambiguous", "retry_safe", "retry_policy",
-        }
-        and details["provider_failure_kind"] == "preconnect"
-        and details["provider_charge_ambiguous"] is False
-        and details["retry_safe"] is True
-        and details["retry_policy"] == "llmgw_preconnect_v1"
-    )
+        return None
+    details = _native_preconnect_details(_gateway_native_error(response, url))
+    return details["retry_policy"] if details is not None else None
 
 
 def _gateway_overload_refused(response: httpx.Response, url: str) -> bool:
@@ -237,18 +232,24 @@ def _gateway_ambiguous_billing_details(
             or error.get("code", "billing_unavailable") != "billing_unavailable"):
         return None
     details = error.get("details")
-    required = {"upstream_http_status", "provider_charge_ambiguous", "retry_safe"}
+    required = {"provider_charge_ambiguous"}
     optional = {"provider_scope", "transport_stage", "provider_call_id"}
     if (not isinstance(details, dict) or not required <= set(details)
-            or set(details) - required - optional):
+            or set(details) - required - optional - {"upstream_http_status", "retry_safe"}):
         return None
     context = {key: details[key] for key in optional if key in details}
     if provider_error_context(context) != context:
         return None
-    status = details["upstream_http_status"]
+    status = details.get("upstream_http_status")
+    valid_evidence = (
+        type(status) is int and 400 <= status <= 599 and details.get("retry_safe") is False
+        if "upstream_http_status" in details
+        else {"provider_scope", "provider_call_id"} <= set(context)
+    )
     return details if (
-        type(status) is int and 400 <= status <= 599
-        and details["provider_charge_ambiguous"] is True and details["retry_safe"] is False
+        valid_evidence
+        and details["provider_charge_ambiguous"] is True
+        and details.get("retry_safe", False) is False
     ) else None
 
 
@@ -256,7 +257,7 @@ def _gateway_ambiguous_server_status(response: httpx.Response, url: str) -> int 
     details = _gateway_ambiguous_billing_details(response, url)
     if details is None:
         return None
-    status = details["upstream_http_status"]
+    status = details.get("upstream_http_status")
     return status if type(status) is int and 500 <= status <= 599 else None
 
 
@@ -296,16 +297,17 @@ _BILLING_UNAVAILABLE_MESSAGE = (
 
 
 class _NativeProviderBillingError(_NativeProviderServerError):
-    """Observed 4xx is diagnostic only; the incomplete outcome stays unresolved."""
+    """Keep available local diagnostics without certifying the provider outcome."""
 
     def __init__(self, http_status: int, details: dict[str, Any]) -> None:
         super().__init__(http_status, context=details)
-        self.observed_status = details["upstream_http_status"]
+        self.observed_status = details.get("upstream_http_status")
         self.args = (_BILLING_UNAVAILABLE_MESSAGE,)
 
     def diagnostics(self) -> dict[str, Any]:
         result = super().diagnostics()
-        result.update(upstream_http_status=self.observed_status, error_origin="provider")
+        if self.observed_status is not None:
+            result.update(upstream_http_status=self.observed_status, error_origin="provider")
         return result
 
 
@@ -1139,6 +1141,7 @@ async def _call_messages(
     headers: Mapping[str, str] | None = None,
     auth_factory: NativeMessagesAuthFactory | None = None,
     edit_deadline: datetime | None = None,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     """One native /v1/messages call with proven safe refusal retries. Returns the parsed
     Anthropic response dict, or raises the last error."""
@@ -1146,7 +1149,9 @@ async def _call_messages(
 
     from yleum_api.services.generation.response_auth import record_headers
 
-    output_tokens = agent_output_tokens(model, fallback=_MAX_TOKENS)
+    output_tokens = (
+        max_tokens if max_tokens is not None else agent_output_tokens(model, fallback=_MAX_TOKENS)
+    )
     payload: dict[str, Any] = {
         "model": model,
         **({"max_tokens": output_tokens} if output_tokens is not None else {}),
@@ -1281,18 +1286,12 @@ async def _call_messages(
             # an active request by total remaining wall time; no retry follows
             # an exhausted request whose upstream accounting may still settle.
             async with asyncio.timeout(remaining):
-                if wire is None:
-                    r = await client.post(
-                        url, json=payload, timeout=min(_HTTP_TIMEOUT_S, remaining),
-                        headers=request_headers,
-                    )
-                else:
-                    async with client.stream(
-                        "POST", url, json=payload, timeout=min(_HTTP_TIMEOUT_S, remaining),
-                        headers=request_headers,
-                    ) as r:
-                        accepted_headers = True
-                        await r.aread()
+                async with client.stream(
+                    "POST", url, json=payload, timeout=min(_HTTP_TIMEOUT_S, remaining),
+                    headers=request_headers,
+                ) as r:
+                    accepted_headers = True
+                    await r.aread()
             if r.status_code >= 400:
                 try:
                     output_body = r.json()
@@ -1318,6 +1317,7 @@ async def _call_messages(
                     context=server_error.get("details") if server_error else None,
                 )
             category = _provider_refusal_category(r)
+            preconnect_policy = _gateway_preconnect_policy(r, url)
             budget_error = _gateway_native_error(r, url) if r.status_code == 402 else None
             budget_details = budget_error.get("details") if budget_error is not None else None
             budget_delay = (
@@ -1385,7 +1385,9 @@ async def _call_messages(
                 overload_used = True
                 last = _terminal_provider_error("provider_request_failed")
                 retry_parent, generation_attempt = generation_attempt, None
-            elif _gateway_preconnect_proven(r, url):
+            elif preconnect_policy is not None:
+                if preconnect_policy != "llmgw_preconnect_v1" and generation_attempt is None:
+                    raise _terminal_provider_error("provider_request_failed")
                 last = _terminal_provider_error("provider_request_failed")
                 retry_parent, generation_attempt = generation_attempt, None
             elif r.status_code == 429 or category == "rate_limit":
@@ -1468,6 +1470,7 @@ async def _run_native_segment(
     initial_files: Mapping[str, str] | None = None,
     edit_deadline: datetime | None = None,
     source_repair: bool = False,
+    bounded_repair: bool = False,
     edit_source_changed: Callable[[], bool] | None = None,
     response_recovery: ResponseRecovery | None = None,
     take_verified_progress: ProgressReader | None = None,
@@ -1890,7 +1893,8 @@ async def _run_native_segment(
                 edit_source_changed is not None and not edit_source_changed()
                 and no_write_turns >= _EDIT_DISCOVERY_TURNS
             )
-            call_stage = (
+            limited_output = is_sonnet55_model(model) and (source_repair or bounded_repair)
+            call_stage = "source_repair" if limited_output else (
                 "build_plan"
                 if step == 0
                 else "verification"
@@ -1900,7 +1904,7 @@ async def _run_native_segment(
             call_budget = asyncio.timeout(None if restoring else remaining)
             try:
                 async with call_budget:
-                    request = dict(
+                    request: dict[str, Any] = dict(
                         convo=convo, system=system, model=model, stage=call_stage,
                         tools=(
                             _SOURCE_REPAIR_TOOLS_CACHED
@@ -1928,11 +1932,26 @@ async def _run_native_segment(
                             else _MAX_ENTRY_WRITE_CHOICE if force_max_entry_write else None
                         ),
                     )
+                    if limited_output:
+                        request["max_tokens"] = REPAIR_OUTPUT_TOKENS
                     if restoring:
                         assert saved_frame is not None
                         request = saved_frame.request
                     async def invoke(request: dict[str, Any] = request) -> dict[str, Any]:
                         expected = {"convo", "system", "model", "stage", "tools", "tool_choice"}
+                        repair_budget = request.get("max_tokens")
+                        if "max_tokens" in request:
+                            if (
+                                type(repair_budget) is not int
+                                or repair_budget != REPAIR_OUTPUT_TOKENS
+                                or request.get("stage") != "source_repair"
+                                or not isinstance(request.get("model"), str)
+                                or not is_sonnet55_model(request["model"])
+                            ):
+                                raise RecoveryContractError(
+                                    "native continuation repair budget changed",
+                                )
+                            expected.add("max_tokens")
                         if set(request) != expected:
                             raise RecoveryContractError("native continuation request shape changed")
                         return await _call_messages(
@@ -1945,6 +1964,7 @@ async def _run_native_segment(
                             message_id=str(message_id) if message_id else None, free=free,
                             headers=messages_headers, auth_factory=messages_auth_factory,
                             edit_deadline=edit_deadline,
+                            **({"max_tokens": repair_budget} if repair_budget is not None else {}),
                         )
                     if continuation is None:
                         resp = await invoke()
@@ -2842,6 +2862,7 @@ async def run_native_build(
     snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None,
     edit_deadline: datetime | None = None,
     source_repair: bool = False,
+    bounded_repair: bool = False,
     edit_source_changed: Callable[[], bool] | None = None,
     response_recovery: ResponseRecovery | None = None,
     take_verified_progress: ProgressReader | None = None,
@@ -2886,6 +2907,7 @@ async def run_native_build(
             initial_files=initial_files,
             edit_deadline=edit_deadline,
             source_repair=source_repair,
+            bounded_repair=bounded_repair,
             edit_source_changed=edit_source_changed,
             response_recovery=response_recovery, take_verified_progress=take_verified_progress,
             pure_check=pure_check, continuation=continuation,

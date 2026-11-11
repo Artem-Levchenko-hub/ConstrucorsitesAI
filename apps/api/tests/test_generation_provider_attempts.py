@@ -192,7 +192,12 @@ async def test_native_identity_reuses_transport_but_not_definitively_closed_atte
         assert preparations[-1][1] == (root if failure == "closed_preconnect" else None)
 
 
-@pytest.mark.parametrize("failure", ["transport", "closed_preconnect", "ambiguous"])
+@pytest.mark.parametrize(
+    "failure", [
+        "transport", "closed_preconnect", "primary_failover_preconnect",
+        "backup_preconnect", "backup_after_send", "ambiguous",
+    ],
+)
 @pytest.mark.parametrize("default_output", [False, True])
 async def test_complete_transfers_only_existing_preconnect_allowance(
     monkeypatch, failure, default_output
@@ -221,20 +226,32 @@ async def test_complete_transfers_only_existing_preconnect_allowance(
         if len(sent) == 1:
             if failure == "transport":
                 raise httpx.ConnectError("synthetic", request=request)
+            details = {
+                "provider_failure_kind": "preconnect", "provider_charge_ambiguous": False,
+                "retry_safe": True, "retry_policy": "llmgw_preconnect_v1",
+            } if failure == "closed_preconnect" else {}
+            if failure == "primary_failover_preconnect":
+                details = {
+                    "provider_failure_kind": "preconnect", "provider_charge_ambiguous": False,
+                    "retry_safe": True, "retry_policy": "llmgw_failover_preconnect_v1",
+                    "provider_scope": "llmgw", "transport_stage": "connect",
+                }
+            elif failure.startswith("backup_"):
+                details = {
+                    "provider_failure_kind": "preconnect", "provider_charge_ambiguous": False,
+                    "retry_safe": True, "retry_policy": "aitunnel_preconnect_v1",
+                    "provider_scope": "aitunnel",
+                    "transport_stage": (
+                        "connect" if failure == "backup_preconnect" else "awaiting_headers"
+                    ),
+                }
             return httpx.Response(
                 502,
                 json={
                     "detail": {
                         "error": {
                             "code": "model_unavailable",
-                            "details": {
-                                "provider_failure_kind": "preconnect",
-                                "provider_charge_ambiguous": False,
-                                "retry_safe": True,
-                                "retry_policy": "llmgw_preconnect_v1",
-                            }
-                            if failure == "closed_preconnect"
-                            else {},
+                            "details": details,
                         }
                     }
                 },
@@ -268,7 +285,9 @@ async def test_complete_transfers_only_existing_preconnect_allowance(
         sleep=sleep, timeout=asyncio.timeout, timeout_at=asyncio.timeout_at,
     ))
     kwargs = {"max_tokens": None if default_output else 1024, "timeout_seconds": 30}
-    expected_retry = not default_output and failure != "ambiguous"
+    expected_retry = failure in {"primary_failover_preconnect", "backup_preconnect"} or (
+        not default_output and failure in {"transport", "closed_preconnect"}
+    )
     if expected_retry:
         assert await llm_client.complete_chat([], "claude-sonnet-5.5", **kwargs) == "ok"
     else:
@@ -277,12 +296,12 @@ async def test_complete_transfers_only_existing_preconnect_allowance(
     assert len(sent) == (2 if expected_retry else 1)
     assert sleeps == ([0.5] if expected_retry else [])
     if expected_retry:
-        identity = child if failure == "closed_preconnect" else root
+        identity = root if failure == "transport" else child
         assert sent[1][0]["metadata"]["generation_provider_identity"] == identity.to_wire()
         assert sent[1][1]["read"] < sent[0][1]["read"] <= 30
 
 
-@pytest.mark.parametrize("first_event", [None, "role", "usage", "text"])
+@pytest.mark.parametrize("first_event", [None, "role", "usage", "text", "mixed", "duplicate"])
 async def test_stream_retry_stops_after_any_outward_provider_event(monkeypatch, first_event):
     import httpx
 
@@ -323,6 +342,13 @@ async def test_stream_retry_stops_after_any_outward_provider_event(monkeypatch, 
                 events.append({"usage": {"prompt_tokens": 1}})
             if first_event == "text":
                 events.append({"choices": [{"delta": {"content": "partial"}}]})
+            if first_event == "mixed":
+                error["choices"] = [{"delta": {"content": "partial"}}]
+            if first_event == "duplicate":
+                raw = json.dumps(error).replace(
+                    '"retry_safe": true', '"retry_safe": false, "retry_safe": true',
+                )
+                return httpx.Response(200, text=f"data: {raw}\n\n")
             events.append(error)
         else:
             events.append({"choices": [{"delta": {"content": "ok"}}]})
@@ -444,8 +470,9 @@ async def test_cancellation_during_retry_backoff_never_prepares_or_sends_child(m
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("default_output", [False, True])
 @pytest.mark.parametrize("second_failure", ["body", "connect"])
+@pytest.mark.parametrize("durable", [True, False])
 async def test_accepted_gateway_headers_never_become_safe_preconnect(
-    monkeypatch, stream, default_output, second_failure
+    monkeypatch, stream, default_output, second_failure, durable,
 ):
     import httpx
 
@@ -455,7 +482,7 @@ async def test_accepted_gateway_headers_never_become_safe_preconnect(
     identity = protocol().GenerationProviderIdentity(
         *(UUID(int=i) for i in range(1, 5)), "a" * 64, "b" * 64
     )
-    prepare = AsyncMock(return_value=identity)
+    prepare = AsyncMock(return_value=identity if durable else None)
     calls = []
 
     class BrokenBody(httpx.AsyncByteStream):
@@ -487,7 +514,10 @@ async def test_accepted_gateway_headers_never_become_safe_preconnect(
                 [], "claude-sonnet-5.5", "u", "p", "m"
             )
         ]
-        assert result == [{"error": "LLM stream outcome could not be confirmed"}]
+        if durable:
+            assert result == [{"error": "LLM stream outcome could not be confirmed"}]
+        else:
+            assert len(result) == 1 and "error" in result[0]
     else:
         with pytest.raises(llm_client.LLMError) as caught:
             await llm_client.complete_chat(

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from yleum_gateway.main import create_app
 from yleum_gateway.routers import messages_native
-from yleum_gateway.services import billing, provider_calls
+from yleum_gateway.services import billing, provider_calls, text_failover
 
 
 @pytest.fixture
@@ -110,16 +110,78 @@ def test_legacy_native_connect_error_after_headers_cannot_use_backup(client, mon
     assert posts == ["api.llmgw.ru"]
     assert provider_calls.finish_call.await_args.kwargs["status"] == "ambiguous"
     assert billing.charge.await_count == 0
+    assert response.json()["error"]["details"]["transport_stage"] == "body"
 
 
-def test_legacy_native_skips_backup_when_shared_budget_is_exhausted(client, monkeypatch):
+@pytest.mark.parametrize("primary_refuses", [False, True])
+def test_native_sticky_backup_preconnect_can_return_to_primary_once(client, monkeypatch, primary_refuses):
+    sent = []
+
+    def wire(request):
+        sent.append(request.url.host)
+        if request.url.host == "api.aitunnel.ru":
+            raise httpx.ConnectTimeout("synthetic reserve connect failure", request=request)
+        assert provider_calls.finish_call.await_args.kwargs["status"] == "failed"
+        if primary_refuses:
+            return primary_error(502, request=request)
+        return httpx.Response(200, json={
+            "id": "primary-receipt", "model": "claude-sonnet-5.5",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2, "cost_rub": 0.2},
+            "choices": [{"finish_reason": "stop", "message": {"content": "result"}}],
+        }, request=request)
+
+    monkeypatch.setattr(text_failover, "select_scope", AsyncMock(return_value="aitunnel"))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(wire))
+    response = client.post("/v1/messages", json={
+        "model": "claude-sonnet-5.5", "user": str(uuid4()),
+        "messages": [{"role": "user", "content": "synthetic"}], "max_tokens": 128,
+    })
+    assert sent == ["api.aitunnel.ru", "api.llmgw.ru"]
+    assert provider_calls.start_call.await_count == 2
+    if primary_refuses:
+        assert response.status_code == 503
+        assert response.json()["error"]["details"]["retry_safe"] is False
+        assert billing.charge.await_count == 0
+    else:
+        assert response.status_code == 200, response.text
+        assert billing.charge.await_count == 1
+
+
+def test_native_source_repair_reads_capped_reserve_as_stream(client, monkeypatch):
+    sent = []
+
+    def reserve(request):
+        sent.append(json.loads(request.content))
+        common = {"id": "backup-receipt", "model": "claude-sonnet-5.5"}
+        chunks = [
+            {**common, "choices": [{"index": 0, "delta": {"content": "result"}, "finish_reason": None}]},
+            {**common, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            {**common, "choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 2, "cost_rub": 0.2}},
+        ]
+        return httpx.Response(200, headers={"content-type": "text/event-stream"},
+            text="".join("data: " + json.dumps(chunk) + "\n\n" for chunk in chunks) + "data: [DONE]\n\n")
+
+    monkeypatch.setattr(text_failover, "select_scope", AsyncMock(return_value="aitunnel"))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(reserve))
+    response = client.post("/v1/messages", json={
+        "model": "claude-sonnet-5.5", "user": str(uuid4()), "max_tokens": 8192,
+        "messages": [{"role": "user", "content": "synthetic"}], "metadata": {"stage": "source_repair"},
+    })
+    assert [(body["stream"], body["max_tokens"]) for body in sent] == [(True, 8192)]
+    assert response.status_code == 200, response.text
+    assert response.json()["content"][0]["text"] == "result"
+    assert billing.charge.await_count == 1
+
+
+def test_legacy_native_skips_both_providers_when_shared_budget_is_exhausted(client, monkeypatch):
     posts = []
 
     def post(url, *args, **kwargs):
         posts.append(url)
         raise httpx.ConnectTimeout("synthetic preconnect failure")
 
-    monkeypatch.setattr(messages_native, "_post_llmgw", post)
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda **_: httpx.MockTransport(post))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(post))
     response = client.post("/v1/messages", headers={"x-yleum-provider-timeout-seconds": "1"}, json={
         "model": "claude-sonnet-5.5",
         "messages": [{"role": "user", "content": "synthetic"}],
@@ -127,8 +189,8 @@ def test_legacy_native_skips_backup_when_shared_budget_is_exhausted(client, monk
 
     assert response.status_code == 504
     assert response.json()["error"]["type"] == "deadline_before_dispatch"
-    assert posts == ["https://api.llmgw.ru/v1/chat/completions"]
-    assert provider_calls.start_call.await_count == 1
+    assert posts == []
+    assert provider_calls.start_call.await_count == 0
     assert billing.charge.await_count == 0
 
 
@@ -165,7 +227,7 @@ def test_durable_native_refusal_wire_matches_api_strict_contract(client, monkeyp
     def reply(request):
         posts.append(request)
         return primary_error(status)
-    monkeypatch.setattr(httpx, "HTTPTransport", lambda **_: httpx.MockTransport(reply))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(reply))
     response = client.post("/v1/messages", json=body)
     assert response.status_code == 503, response.text
     wire = response.json()

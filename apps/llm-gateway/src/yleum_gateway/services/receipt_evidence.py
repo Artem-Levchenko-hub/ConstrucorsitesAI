@@ -1,9 +1,20 @@
 """Recover only safe provider identity and money before receipt validation."""
 
+import re
 from collections.abc import Mapping
 from typing import Any
 
 from yleum_gateway.services.pricing import read_reported_cost
+
+_AITUNNEL_CHAT_ID = re.compile(r"chat-[A-Za-z0-9]{22}")
+
+
+def aitunnel_request_id(headers: Mapping[str, Any]) -> str | None:
+    """Keep only AI Tunnel's documented Chat Completions receipt header."""
+    value = headers.get("x-request-id")
+    if isinstance(value, str) and _AITUNNEL_CHAT_ID.fullmatch(value):
+        return value
+    return None
 
 
 def receipt_evidence(
@@ -22,6 +33,7 @@ def receipt_evidence(
         safe_headers.get("x-llmgw-request-id") if provider_scope == "llmgw" else None,
         metadata.get("provider_request_id"),
         body.get("provider_request_id"), body_id,
+        aitunnel_request_id(safe_headers) if provider_scope == "aitunnel" else None,
     ) if isinstance(value, str) and value.strip() and len(value) <= 512 and value.isprintable()), None)
     reported = read_reported_cost(body, safe_headers, provider_scope=provider_scope)
     # GatewayError.details uses explicit provider_cost_* fields. Re-validate

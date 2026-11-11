@@ -12,12 +12,15 @@ import pytest
 from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.services import agent_builder, agent_native
 from yleum_api.services.max_data_evolution import build_max_agent_guide
+from yleum_api.services.max_management_generation import management_source_gap
 from yleum_api.services.max_project_kit import (
     MAX_MANAGED_SDK_GUIDANCE,
     MAX_MODEL_DIRECTIVE,
     _template_file,
     render_max_managed_files,
 )
+
+from .test_max_management_generation import connection_example, connection_files
 
 
 class ProviderRequestCaptured(BaseException):
@@ -73,6 +76,8 @@ async def test_provider_request_contains_one_managed_sdk_contract(monkeypatch, m
         "profile?.app_name", "item.title", "useYleumCatalogSelection(catalog.items)",
         "createManagedOrder", "createManagedLead", "createManagedBooking",
         "loadPendingManagedIntent(resource)", "getManagedRecords(resource,{limit,cursor})",
+        "<form onSubmit={submitOrder}>", "<form onSubmit={submitLead}>", '<Button type="submit"',
+        "explicit recovery action", "original operationKey", "empty cart",
         "quote_changed", "intent_storage_unavailable", "current customer's records",
     ):
         assert required in prompt, required
@@ -135,3 +140,30 @@ def test_supplied_sdk_example_typechecks_against_current_template_hooks(tmp_path
     assert "TS2339" in invalid.stdout
     assert "'name' does not exist on type 'YleumAppProfile'" in invalid.stdout
     assert "'name' does not exist on type 'YleumMaxContentItem'" in invalid.stdout
+
+
+def test_max_ui_form_recipe_connects_both_managed_submit_handlers():
+    recipe = re.search(
+        r"```tsx\n(<>\n<form onSubmit=.+?</>)\n```", MAX_MANAGED_SDK_GUIDANCE, re.DOTALL,
+    )
+    assert recipe is not None, "The SDK contract must show the native form and MAX UI button"
+    assert recipe[1].count('<Button type="submit"') == 2
+    modules = ("catalog", "orders", "leads")
+    source = 'import {Button} from "@maxhub/max-ui";\n' + connection_example(modules)
+    source = source.replace(
+        '<form onSubmit={submit_orders}><button>Send orders</button></form>', recipe[1],
+    ).replace(
+        '<form onSubmit={submit_leads}><button>Send leads</button></form>', "",
+    ).replace("submit_orders", "submitOrder").replace("submit_leads", "submitLead")
+    source = source.replace(
+        "return <main>",
+        "const orderSubmitDisabled = !inputs.orders.customerName;\n"
+        "const leadSubmitDisabled = !inputs.leads.customerName;\nreturn <main>",
+    )
+    assert management_source_gap(connection_files(source, modules)) is None
+    handlers = (("submitOrder", "createManagedOrder"), ("submitLead", "createManagedLead"))
+    for handler, method in handlers:
+        removed_form_event = source.replace(f"onSubmit={{{handler}}}", "")
+        gap = management_source_gap(connection_files(removed_form_event, modules))
+        assert gap and f"Connect {method}" in gap and "Missing mounted create event" in gap
+        assert "@maxhub/max-ui" in gap and 'type="submit"' in gap

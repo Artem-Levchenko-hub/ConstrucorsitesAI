@@ -2225,8 +2225,9 @@ def _create_history_diagnostic(name: str, connections: _Connections) -> str | No
     details = [f"Connect {_CREATE[name]} managed flow."]
     if not create_connected:
         details.append(
-            "Missing mounted create event. Attach the submit handler to a visible "
-            "form onSubmit or button onClick; the handler must call the SDK create "
+            "Missing mounted create event. Attach the submit handler to a visible native "
+            "form onSubmit or native button onClick. For @maxhub/max-ui, use a Button "
+            'with type="submit" inside the form. The handler must call the SDK create '
             "method with the real typed input object. An import or unmounted helper "
             "does not connect a create event."
         )
@@ -2338,12 +2339,24 @@ def _source_repair_guidance(diagnostic: str) -> str:
         "Managed source connection analysis cannot prove call or binding effects."
     ):
         return ""
-    reason = re.search(
+    match = re.search(
         r"; reason (unproven_native_intrinsic_effect|unsupported_loop_control|"
-        r"unproven_loop_iterable); fingerprint [a-f0-9]{16}\.", diagnostic,
+        r"unproven_loop_iterable|unproven_json_stringify); fingerprint [a-f0-9]{16}\.",
+        diagnostic,
     )
-    if reason is None:
+    if match is None:
         return ""
+    reason = match[1]
+    if reason == "unproven_json_stringify":
+        return (
+            "\nBuild the JSON.stringify input from explicit typed state holding validated "
+            "app-owned JSON, or construct a plain object or array of known scalar fields. "
+            "A cast or moving the generic helper leaves its input unproven. For localStorage, "
+            "preserve existing keys, stored shapes and writes. Read and validate saved values "
+            "before writing, wait for hydration, then serialize each local value directly. "
+            "For multiple keys, use one local storage handle in the writer. "
+            "Keep pending managed intents in the business SDK."
+        )
     explanation = {
         "unproven_native_intrinsic_effect": (
             "Object.entries/values/fromEntries and reflection are outside the supported "
@@ -2357,7 +2370,7 @@ def _source_repair_guidance(diagnostic: str) -> str:
             "for..of requires a source-owned passive JSON array; SDK collections and "
             "Object.values(cart) are not proven loop sources."
         ),
-    }[reason.group(1)]
+    }[reason]
     return (
         "\nSupported source repair: " + explanation
         + " For cart/catalog derivations, use Object.keys on an already proven local JSON "

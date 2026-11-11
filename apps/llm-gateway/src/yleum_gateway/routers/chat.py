@@ -29,7 +29,12 @@ from yleum_gateway.core.errors import (
     WalletEmptyError,
 )
 from yleum_gateway.providers import llmgw
-from yleum_gateway.providers.native_stream import RECEIPT_RESERVE_SECONDS, provider_request_deadline
+from yleum_gateway.providers.native_stream import (
+    RECEIPT_RESERVE_SECONDS,
+    TRANSPORT_STAGES,
+    provider_request_deadline,
+    transport_diagnostics,
+)
 from yleum_gateway.services import (
     billing,
     cache,
@@ -113,8 +118,8 @@ def _provider_error_context(
     provider_scope: str, call_id: UUID, evidence: dict[str, Any], details: dict[str, Any],
 ) -> dict[str, Any]:
     """Local dispatch identity and observed protocol scalars, never provider content."""
-    stage = details.get("transport_stage", evidence.get("transport_stage"))
-    stage = stage if isinstance(stage, str) and stage in {"connect", "headers", "body", "complete"} else "unknown"
+    stage = details.get("transport_stage", details.get("provider_transport_stage", evidence.get("transport_stage")))
+    stage = stage if isinstance(stage, str) and stage in TRANSPORT_STAGES else "unknown"
     status = details.get("upstream_http_status", evidence.get("upstream_http_status"))
     context: dict[str, Any] = {
         "provider_scope": provider_scope, "provider_call_id": str(call_id),
@@ -176,16 +181,20 @@ async def _dispatch_chat_provider(
         identity, req.model, run_id=meta.run_id, project_id=meta.project_id, user_id=req.user,
     )
     loop = asyncio.get_running_loop()
+    shared_deadline = provider_request_deadline(
+        request.headers.get("x-yleum-provider-timeout-seconds"), received_at,
+        reserve=RECEIPT_RESERVE_SECONDS,
+    )
+    tried_scopes: set[str] = set()
+    timed_generation = text_failover.enabled(req.model) and (
+        identity is not None or request.headers.get("x-yleum-provider-timeout-seconds") is not None
+    )
     while True:
-        backup_deadline = None
+        deadline = shared_deadline if provider_scope == "aitunnel" or tried_scopes or timed_generation else None
+        tried_scopes.add(provider_scope)
         try:
-            if provider_scope == "aitunnel":
-                backup_deadline = provider_request_deadline(
-                    request.headers.get("x-yleum-provider-timeout-seconds"), received_at,
-                    reserve=RECEIPT_RESERVE_SECONDS,
-                )
-                if loop.time() >= backup_deadline:
-                    raise DispatchDeadlineError()
+            if deadline is not None and loop.time() >= deadline:
+                raise DispatchDeadlineError()
             call_id = await generation_attempts.dispatch(identity,
                 route="/v1/chat/completions", model=req.model, user_id=req.user,
                 project_id=meta.project_id, run_id=meta.run_id, message_id=meta.message_id,
@@ -198,35 +207,34 @@ async def _dispatch_chat_provider(
         try:
             completion: Callable[..., Awaitable[dict[str, Any]]] = router_module.acompletion
             completion_options: dict[str, Any] = {}
-            if uses_provider_output_default(req.model, req.max_tokens):
+            provider_default = uses_provider_output_default(req.model, req.max_tokens)
+            if deadline is not None:
+                completion = llmgw.acompletion
+                completion_options = {
+                    **text_failover.scope_options(provider_scope),
+                    "retry_preconnect": False, "provider_deadline": deadline,
+                    "evidence": transport_evidence,
+                }
+            elif provider_default:
                 remaining = _remaining_provider_budget(request, received_at, reserve=RECEIPT_RESERVE_SECONDS)
                 completion = llmgw.acompletion
                 completion_options = {"response_budget": remaining, "evidence": transport_evidence}
             else:
                 completion_options = {"user": str(req.user) if req.user else None}
-            if identity is not None:
+            if identity is not None and deadline is None:
                 completion = llmgw.acompletion
                 completion_options.pop("user", None)
                 completion_options["retry_preconnect"] = False
-                if not uses_provider_output_default(req.model, req.max_tokens):
+                if not provider_default:
                     completion_options["timeout"] = min(240.0, _remaining_provider_budget(request, received_at, reserve=0))
-            if provider_scope == "aitunnel":
-                completion = llmgw.acompletion
-                completion_options.pop("user", None)
-                completion_options.update(
-                    provider_scope="aitunnel", retry_preconnect=False,
-                    provider_deadline=backup_deadline, evidence=transport_evidence,
+            with provider_validation_scope(project_id=meta.project_id, run_id=meta.run_id, call_id=call_id):
+                response = await completion(
+                    model=req.model,
+                    messages=filtered_messages,
+                    temperature=0.5 if req.temperature is None else req.temperature,
+                    max_tokens=req.max_tokens,
+                    **completion_options,
                 )
-            async with asyncio.timeout_at(backup_deadline):
-                with provider_validation_scope(project_id=meta.project_id, run_id=meta.run_id,
-                                               call_id=call_id):
-                    response = await completion(
-                        model=req.model,
-                        messages=filtered_messages,
-                        temperature=0.5 if req.temperature is None else req.temperature,
-                        max_tokens=req.max_tokens,
-                        **completion_options,
-                    )
         except BaseException as exc:
             details = exc.details if isinstance(exc, GatewayError) else {}
             retry_candidate = details.pop("_rate_limit_retry_candidate", None)
@@ -242,6 +250,7 @@ async def _dispatch_chat_provider(
                       else None)
             context = _provider_error_context(provider_scope, call_id, transport_evidence, details)
             log.warning("chat.provider_request_failed", **context,
+                        **transport_diagnostics(transport_evidence),
                         error_type=failure_type, provider_charge_ambiguous=status == "ambiguous",
                         run_id=str(meta.run_id) if meta.run_id else None,
                         project_id=str(meta.project_id) if meta.project_id else None,
@@ -251,11 +260,15 @@ async def _dispatch_chat_provider(
             await await_provider_receipt(_finish_failed_provider(
                 identity, call_id, reason=reason, status=status, error_type=failure_type, **failed_receipt,
             ))
-            if identity is None and provider_scope == "llmgw" and status == "failed" and (
-                isinstance(overload, dict) or (reason == "preconnect" and text_failover.enabled(req.model))
-            ):
-                provider_scope = "aitunnel"
-                continue
+            if identity is None and status == "failed":
+                alternate = text_failover.alternate_scope(req.model, provider_scope, reason, tried_scopes)
+                if alternate is not None:
+                    provider_scope = alternate
+                    continue
+                if len(tried_scopes) == 2 and reason is not None:
+                    exhausted = text_failover.exhausted_error()
+                    exhausted.details.update(context)
+                    raise _gateway_error_to_http(exhausted) from exc
             if isinstance(overload, dict) and status == "failed":
                 from yleum_gateway.services.generation_response_capture import (
                     confirm_response_accounting,
@@ -277,8 +290,11 @@ async def _dispatch_chat_provider(
                     confirm_response_accounting()
                 if status == "failed" and isinstance(retry_candidate, dict):
                     exc.details.update(retry_candidate)
-                if identity is not None and status == "failed" and details.get("provider_failure_kind") == "preconnect":
-                    exc.details.update(retry_safe=True, retry_policy="llmgw_preconnect_v1")
+                if identity is not None and status == "failed" and reason == "preconnect":
+                    proof = text_failover.preconnect_proof(
+                        provider_scope, req.model, context["transport_stage"],
+                    )
+                    exc.details.update(proof)
                 exc.details.setdefault("provider_charge_ambiguous", status == "ambiguous")
                 # The strict, closed safe-refusal payload above is unchanged.
                 # Terminal errors retain the scope of this dispatch, including
@@ -289,8 +305,12 @@ async def _dispatch_chat_provider(
                 raise
             raise _gateway_error_to_http(BillingReconciliationRequiredError(
                 "Provider response requires reconciliation",
-                details={"provider_charge_ambiguous": True},
+                details={"provider_charge_ambiguous": True, "retry_safe": False, **context},
             )) from None
+        if "response_completed_ms" in transport_evidence:
+            log.info("chat.provider_transport_completed",
+                     **_provider_error_context(provider_scope, call_id, transport_evidence, {}),
+                     **transport_diagnostics(transport_evidence))
         return response, call_id, provider_scope
 
 

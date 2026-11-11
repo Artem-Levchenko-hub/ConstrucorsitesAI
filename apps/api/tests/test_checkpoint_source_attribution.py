@@ -187,6 +187,7 @@ async def test_owned_valid_product_checkpoint_needs_no_new_model_write(monkeypat
     assert result.done and result.needs_finalization and result.stop_reason == "done"
     assert result.files == {} and result.evidence == {}  # No fabricated write/proof.
     assert failure is None and saves == [PRODUCT] and len(calls) == 1
+    assert calls[0]["bounded_repair"] is True
     assert not any(payload.get("action") == "no_ai_write" for _, payload in events)
     _same, final_files, _steps = await agent_generation.complete_empty_legacy_build(
         _agent_res=result,

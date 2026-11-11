@@ -32,7 +32,9 @@ _ENUMS = {
         "max_tokens", "refusal", "pause_turn", "stop_sequence", "unknown",
     },
     "max_tokens_mode": {"sent", "omitted"},
-    "transport_stage": {"connect", "headers", "body", "complete", "unknown"},
+    "transport_stage": {
+        "connect", "sending", "awaiting_headers", "headers", "body", "complete", "unknown",
+    },
     "retry_decision": {"retry", "stop", "wait", "reconcile", "unknown"},
     "error_code": {
         "model_unavailable", "model_not_found", "validation_failed", "wallet_empty",

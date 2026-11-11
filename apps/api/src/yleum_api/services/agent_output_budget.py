@@ -1,5 +1,7 @@
 """Per-response defaults; None leaves the output limit to the provider."""
 
+REPAIR_OUTPUT_TOKENS = 8192
+
 
 def is_sonnet55_model(model: str) -> bool:
     return model.removeprefix("anthropic/") == "claude-sonnet-5.5"

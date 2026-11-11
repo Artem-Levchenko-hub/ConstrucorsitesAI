@@ -1,6 +1,7 @@
 """An uncertain native POST outcome must never create a second paid request."""
 
 import json
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock
 
 import httpx
@@ -16,6 +17,10 @@ PROOF = {
     "provider_charge_ambiguous": False,
     "retry_safe": True,
     "retry_policy": "llmgw_preconnect_v1",
+}
+BACKUP_PROOF = {
+    **PROOF, "retry_policy": "aitunnel_preconnect_v1",
+    "provider_scope": "aitunnel", "transport_stage": "connect",
 }
 
 
@@ -37,8 +42,9 @@ async def call(monkeypatch, first, *, url=URL, raw_response=False):
     # MockTransport normalizes response history and request identity itself.
     # A direct client stub preserves those fields for the boundary checks.
     class RawClient:
-        async def post(self, request_url, **kwargs):
-            return reply(httpx.Request("POST", request_url))
+        @asynccontextmanager
+        async def stream(self, method, request_url, **kwargs):
+            yield reply(httpx.Request(method, request_url))
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
         try:
@@ -77,12 +83,62 @@ async def test_direct_preconnect_failure_can_retry(monkeypatch, kind):
     assert result == SUCCESS and len(calls) == 2 and sleeps == [4.0]
 
 
+async def test_late_native_connect_error_without_identity_does_not_retry(monkeypatch):
+    class BrokenBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            raise httpx.ConnectError("synthetic fault after accepted headers")
+            yield b""
+
+    result, calls, sleeps = await call(monkeypatch, httpx.Response(200, stream=BrokenBody()))
+    assert isinstance(result, RuntimeError)
+    assert len(calls) == 1 and sleeps == []
+
+
 @pytest.mark.parametrize("url", [URL, "https://gateway.test/v1/project-cell/messages"])
 async def test_closed_gateway_preconnect_receipt_can_retry(monkeypatch, url):
     result, calls, sleeps = await call(monkeypatch, httpx.Response(502, json={
         "type": "error", "error": {"type": "api_error", "details": PROOF},
     }), url=url)
     assert result == SUCCESS and len(calls) == 2 and sleeps == [4.0]
+
+
+@pytest.mark.parametrize(
+    "details", [BACKUP_PROOF, {**PROOF, "retry_policy": "aitunnel_preconnect_v1"}],
+)
+async def test_native_backup_preconnect_without_a_durable_attempt_stops(monkeypatch, details):
+    result, calls, sleeps = await call(monkeypatch, httpx.Response(502, json={
+        "type": "error", "error": {"type": "api_error", "details": details},
+    }))
+    assert isinstance(result, RuntimeError)
+    assert len(calls) == 1 and sleeps == []
+
+
+@pytest.mark.parametrize("stage", ["connect", "awaiting_headers", "unknown"])
+def test_retained_native_preconnect_uses_the_same_closed_proof(stage):
+    from yleum_api.services.llm_client import _gateway_failure
+
+    response = httpx.Response(502, json={"type": "error", "error": {
+        "type": "api_error", "details": {**BACKUP_PROOF, "transport_stage": stage},
+    }})
+    failure = _gateway_failure(response)
+    assert failure.retry_safe is (stage == "connect")
+    if failure.retry_safe:
+        assert failure.code == "model_unavailable" and failure.provider_scope == "aitunnel"
+
+
+async def test_native_unknown_http_status_preserves_dispatch_diagnostics(monkeypatch):
+    result, calls, sleeps = await call(monkeypatch, httpx.Response(503, json={
+        "type": "error", "error": {"type": "billing_unavailable", "details": {
+            "provider_charge_ambiguous": True,
+            "provider_scope": "aitunnel", "transport_stage": "awaiting_headers",
+            "provider_call_id": "00000000-0000-0000-0000-000000000001",
+        }},
+    }))
+    assert isinstance(result, agent_native._NativeProviderBillingError)
+    diagnostic = result.diagnostics()
+    assert diagnostic["transport_stage"] == "awaiting_headers"
+    assert diagnostic["provider_scope"] == "aitunnel" and "upstream_http_status" not in diagnostic
+    assert diagnostic["retry_safe"] is False and len(calls) == 1 and sleeps == []
 
 
 @pytest.mark.parametrize("changes", [

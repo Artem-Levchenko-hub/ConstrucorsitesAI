@@ -18,7 +18,7 @@ from test_generation_response_retention_postgres import Objects
 from yleum_api.services.generation.provider_attempts import require_closed_provider_parent
 from yleum_api.services.usage_cost_summary import classify_cost, cost_classification
 
-from yleum_gateway.core.errors import BillingReconciliationRequiredError
+from yleum_gateway.core.errors import BillingReconciliationRequiredError, ModelUnavailableError
 from yleum_gateway.services import generation_attempts as attempts
 from yleum_gateway.services import provider_calls, text_failover
 
@@ -93,6 +93,46 @@ async def test_primary_balance_receipt_scopes_new_attempts_to_its_run(pool, monk
     ) == "llmgw"
     if platform_owned:
         assert await text_failover.select_scope(None, model, **scope) == "llmgw"
+
+    recovered = await provider_calls.start_call(route=cell_route or "/v1/messages", model=model, **scope)
+    await provider_calls.finish_call(
+        recovered, actual_model=model, provider_request_id="recovered-" + uuid4().hex,
+        provider_cost_rub=Decimal("0.1"),
+    )
+    assert await text_failover.select_scope(identity, model, cell_route=cell_route, **scope) == "llmgw"
+
+
+async def test_durable_aitunnel_preconnect_allows_one_return_without_ping_pong(pool, monkeypatch):
+    monkeypatch.setattr(text_failover, "enabled", lambda model: model == text_failover.MODEL)
+    monkeypatch.setattr(attempts, "get_pool", lambda: pool)
+    root = await intent(pool)
+    model = text_failover.MODEL
+
+    async def finish(parent, scope, reason):
+        admitted = await attempts.reserve_generation_attempt(parent)
+        call = await attempts.mark_attempt_dispatching(
+            parent.attempt_id, dispatch_token=admitted.dispatch_token, route="/v1/chat/completions",
+            model=model, run_id=parent.run_id, project_id=parent.project_id, user_id=parent.user_id,
+            provider_scope=scope,
+        )
+        await provider_calls.finish_call(call, status="failed", error_type="synthetic confirmed refusal")
+        await attempts.close_attempt(call, reason=reason)
+        child = replace(parent, attempt_id=uuid4())
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO generation_provider_attempts "
+                "(attempt_id,run_id,project_id,user_id,prompt_hash,request_sha256,dispatch_token,parent_attempt_id) "
+                "VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+                child.attempt_id, child.run_id, child.project_id, child.user_id,
+                child.prompt_hash, child.request_sha256, uuid4(), parent.attempt_id,
+            )
+        return child
+
+    primary = await finish(root, "aitunnel", "preconnect")
+    assert await text_failover.select_scope(primary, model) == "llmgw"
+    third = await finish(primary, "llmgw", "upstream_refused")
+    with pytest.raises(ModelUnavailableError, match="No untried provider"):
+        await text_failover.select_scope(third, model)
 
 
 @pytest.mark.parametrize("changes,expected", [

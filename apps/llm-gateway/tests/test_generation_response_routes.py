@@ -283,6 +283,58 @@ async def test_complete_http_error_keeps_original_semantics_and_owned_body(monke
     assert ledger.committed is not None and ledger.reconciled_count == 1
 
 
+async def test_aitunnel_sse_preconnect_proof_is_retained_for_recovery(
+    monkeypatch, neutralize_side_effects,
+):
+    import time
+
+    import httpx
+
+    from yleum_gateway.core.config import reset_settings_cache
+    from yleum_gateway.services import generation_attempts, streaming
+
+    objects, ledger = Objects(), SettledLedger()
+    ledger.capacity_expires_at = int(time.time()) + 15
+    monkeypatch.setenv("AITUNNEL_TEXT_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("AITUNNEL_TEXT_API_KEY", "synthetic-backup-key")
+    reset_settings_cache()
+    monkeypatch.setattr(capture, "preflight_response_store", AsyncMock(return_value=(objects, ledger)))
+    closed = AsyncMock()
+    monkeypatch.setattr(generation_attempts, "finish", closed)
+    sent = []
+
+    def connect_failed(request):
+        sent.append(request.url.host)
+        raise httpx.ConnectTimeout("synthetic provider connect failure", request=request)
+
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(connect_failed))
+
+    async def operation():
+        await capture.before_dispatch(IDENTITY)
+        return EventSourceResponse(streaming.stream_completion(
+            request=None, model="claude-sonnet-5.5",
+            messages=[{"role": "user", "content": "synthetic"}],
+            user_id=IDENTITY.user_id, project_id=IDENTITY.project_id, message_id=None,
+            temperature=None, max_tokens=8192, run_id=IDENTITY.run_id,
+            provider_call_id=UUID(int=5), generation_identity=IDENTITY, provider_scope="aitunnel",
+            provider_deadline=asyncio.get_running_loop().time() + 10,
+        ))
+
+    response = await capture.run_retained(IDENTITY, "/v1/chat/completions", operation)
+    events = [json.loads(event) async for event in response.body_iterator]
+    await capture.drain_captures()
+    assert sent == ["api.aitunnel.ru"]
+    error = events[0]["error"]
+    assert error["code"] == "model_unavailable"
+    assert error["details"]["provider_scope"] == "aitunnel"
+    assert error["details"]["transport_stage"] == "connect"
+    assert error["details"]["retry_policy"] == "aitunnel_preconnect_v1"
+    assert error["details"]["retry_safe"] is True
+    assert closed.await_args.kwargs["status"] == "failed"
+    assert closed.await_args.kwargs["reason"] == "preconnect"
+    assert ledger.committed is not None and ledger.reconciled_count == 1
+
+
 @pytest.mark.parametrize(
     "raw", ["{}", '{"metadata":{"generation_provider_identity":null},"metadata":{}}']
 )

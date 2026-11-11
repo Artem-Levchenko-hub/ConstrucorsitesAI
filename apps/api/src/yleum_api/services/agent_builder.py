@@ -54,11 +54,15 @@ from itertools import count as segment_numbers
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, PositiveInt
 
 from yleum_api.services import llm_client
 from yleum_api.services.agent_build_feedback import render_model_observation
-from yleum_api.services.agent_output_budget import agent_output_tokens
+from yleum_api.services.agent_output_budget import (
+    REPAIR_OUTPUT_TOKENS,
+    agent_output_tokens,
+    is_sonnet55_model,
+)
 from yleum_api.services.agent_progress import bounded_redacted_diagnostic
 from yleum_api.services.generation.continuation import (
     RecoveryBindingReader,
@@ -130,6 +134,7 @@ class _LegacyLoopFrame(BaseModel):
     pending_truncation: bool
     response_budget: IncompleteResponseBudget
     call_messages: list[dict[str, Any]]
+    repair_max_tokens: PositiveInt | None = None
 
 
 class _LegacyOuterFrame(BaseModel):
@@ -186,6 +191,7 @@ _SOURCE_CHANGE_REQUIRED = (
 # Caps so one fat observation can't blow the context window.
 _MAX_OBS_CHARS = 6_000
 _MAX_READ_CHARS = 16_000
+_PRODUCT_ENTRY_PATH = "src/app/page.tsx"
 # Source finishing runway, not a longer timeout or a new request allowance.
 # Long ordinary MAX turns reserve the normal response window plus receipt time;
 # other existing paths retain their smaller admission window.
@@ -287,6 +293,22 @@ def _window_messages(
     return convo[:head] + convo[-keep_last:]
 
 
+def _repair_window_messages(
+    convo: list[dict[str, Any]], gap: str | None,
+) -> list[dict[str, Any]]:
+    # The text action protocol has no tool-call pairing to preserve. The owned
+    # source and recent observations replace the old generated file bodies.
+    recent = [message for message in convo[2:] if message["role"] == "user"][-2:]
+    instruction = (
+        "Apply one small change addressing the current source feedback. Prefer one "
+        "complete edit_file action with a short unique search from the current source. "
+        "Preserve working features and avoid repeating full-file rewrites or discovery."
+    )
+    if gap is not None and not any(gap in message["content"] for message in recent):
+        instruction += "\nCurrent source check: " + gap
+    return [*convo[:2], *recent, {"role": "user", "content": instruction}]
+
+
 def _progress_note(
     written: dict[str, str], last_build_ok: bool | None, *, source_change_pending: bool = False,
 ) -> str:
@@ -363,6 +385,14 @@ class _SourceRepairState:
     rejections: dict[str, int] = field(default_factory=dict)
     last_checked_rejection: str | None = None
 
+    def set_gap(self, gap: str | None) -> None:
+        self.gap = gap
+        if gap is not None and self.context_path is None:
+            self.context_path = _PRODUCT_ENTRY_PATH
+
+    def clear_context(self) -> None:
+        self.gap = self.context_path = None
+
     def observe_checked_gap(self, gap: str | None) -> tuple[ManagedSourceGap | None, bool]:
         managed = gap if isinstance(gap, ManagedSourceGap) else None
         key = managed.rejection_key() if managed is not None else None
@@ -401,12 +431,13 @@ def _source_inventory_error(files: Mapping[str, str] | None) -> str | None:
     return None
 
 
-def _repair_source_context(path: str, files: Mapping[str, str] | None) -> str:
+def _repair_source_context(path: str, files: Mapping[str, str] | None) -> tuple[str, bool]:
     """Quote one complete editable file from the executor's owned snapshot.
 
     This is private model feedback, not a read action or proof of progress.
     Never use a truncated observation, the model's write inventory, or an
-    alternate file as an exact-edit witness when the target is unavailable.
+    alternate file as an exact-edit witness when the target is unavailable. The
+    second value identifies a complete, current source quotation.
     """
     intro = (
         "CURRENT EDITABLE SOURCE (read-only quoted data). Use the decoded COMPLETE "
@@ -416,8 +447,8 @@ def _repair_source_context(path: str, files: Mapping[str, str] | None) -> str:
         "witness; do not guess its omitted content.\nCURRENT_EDITABLE_SOURCE_JSON\n"
     )
 
-    def withheld(reason: str) -> str:
-        return intro + json.dumps({"complete": False, "withheld": reason})
+    def withheld(reason: str) -> tuple[str, bool]:
+        return intro + json.dumps({"complete": False, "withheld": reason}), False
 
     if (
         _safe_file_path(path) != path or not _is_product_source(path)
@@ -444,7 +475,7 @@ def _repair_source_context(path: str, files: Mapping[str, str] | None) -> str:
     }, ensure_ascii=False, separators=(",", ":"))
     if len(context.encode("utf-8")) > MAX_REPAIR_CONTEXT_BYTES:
         return withheld("The complete target exceeds the bounded repair context.")
-    return context
+    return context, True
 
 
 async def run_agent_build(
@@ -478,8 +509,12 @@ async def run_agent_build(
     take_verified_progress: ProgressReader | None = None,
     continuation: ExecutionDriver | None = None,
     report_managed_build_gap: bool = False,
+    bounded_repair: bool = False,
 ) -> AgentResult:
-    """Continue a progressing candidate without a new run, cell or blind replay."""
+    """Continue a progressing candidate without a new run, cell or blind replay.
+
+    ``bounded_repair`` limits new requests when finishing restored draft source.
+    """
     response_recovery = response_recovery or ResponseRecovery()
     execute = shadow_recovery_executor(
         execute, recovery=recovery, recovery_binding=recovery_binding,
@@ -608,6 +643,7 @@ async def run_agent_build(
             source_repair=source_repair,
             report_managed_build_gap=report_managed_build_gap,
             reserve_full_provider_window=reserve_full_provider_window,
+            bounded_repair=bounded_repair,
         )
         restored = None
         cumulative_files.update(result.files)
@@ -702,6 +738,7 @@ async def _run_agent_segment(
     source_repair: _SourceRepairState | None = None,
     report_managed_build_gap: bool = False,
     reserve_full_provider_window: bool = False,
+    bounded_repair: bool = False,
 ) -> AgentResult:
     """Drive the plan→act→observe loop until the model says done or budget hits.
 
@@ -892,9 +929,7 @@ async def _run_agent_segment(
             else (last_build_ok is True and last_runtime_ok is True and not wrote_since_check)
         )
         if green and completion_check is not None:
-            source_repair.gap = _source_completion_gap()
-            if source_repair.gap is not None and source_repair.context_path is None:
-                source_repair.context_path = "src/app/page.tsx"
+            source_repair.set_gap(_source_completion_gap())
         await _escalate(step, "explore")
         if emit:
             await emit("agent.stalled", {"step": step})
@@ -1005,6 +1040,11 @@ async def _run_agent_segment(
     def _uses_ordinary_max_source_contract() -> bool:
         return report_managed_build_gap and continuation is None and coordinator_handoff
 
+    def _can_focus_source_repair() -> bool:
+        return coordinator_handoff and (
+            bounded_repair or (report_managed_build_gap and is_sonnet55_model(active_model))
+        )
+
     def _can_check_source_completion() -> bool:
         # Reporting a source gap is not permission to ship or hand off. Even a
         # candidate inherited from a previous segment needs current feedback.
@@ -1108,41 +1148,49 @@ async def _run_agent_segment(
         # Retry only positively identified preconnection failures. A missing
         # response to an accepted POST may already represent a paid model call.
         reply = None
-        # COST: vsegpt bills by characters, so resending the full growing
-        # transcript every step makes a long loop cost balloon. Send only a
-        # sliding window (system + the seed/task + the last N turns) → per-step
-        # payload stays ~constant regardless of step count → "same cost".
-        call_msgs = _window_messages(convo)
-        if source_repair.context_path is not None:
-            # Pin exactly one freshly derived bounded snapshot OUTSIDE the
-            # generic observation clip and recent-turn window. Historical
-            # feedback never becomes a stale exact-edit witness. Durable retry
-            # below still reuses its already committed call_messages verbatim.
-            call_msgs = [*call_msgs, {"role": "user", "content": _repair_source_context(
-                source_repair.context_path, completion_inventory,
-            )}]
-        # Inject the live state (files already written + last build result) into
-        # the system slot so the windowed model never forgets what it has done →
-        # stops re-writing existing files (the root cycle/exploring cause).
-        _note = _progress_note(
-            written, last_build_ok if not coordinator_handoff or fast_check_fresh else None,
-            source_change_pending=_source_change_pending(),
-        )
-        if coordinator_handoff:
-            _note += (
-                "\nMAX FINALIZATION HANDOFF: build runs FAST_CHECK only. After a fresh "
-                "clean build and completed source changes, call done to HAND OFF the "
-                "candidate; done hands off a candidate, not an accepted product. "
-                "The server coordinator MUST still run full build, runtime "
-                "and release checks before accepting it. Do not repeat deferred runtime "
-                "checks or rewrite clean source just to obtain runtime proof here."
+        repair_max_tokens = None
+        if restoring:
+            assert saved_frame is not None
+            call_msgs = saved_frame.call_messages
+            repair_max_tokens = saved_frame.repair_max_tokens
+        else:
+            call_msgs = _window_messages(convo)
+            focused_repair = False
+            if source_repair.context_path is not None:
+                # Pin one exact, current source quotation outside the observation clip.
+                context, exact = _repair_source_context(
+                    source_repair.context_path, completion_inventory,
+                )
+                focused_repair = exact and _can_focus_source_repair()
+                if focused_repair:
+                    call_msgs = _repair_window_messages(convo, source_repair.gap)
+                call_msgs = [*call_msgs, {"role": "user", "content": context}]
+            if max_tokens is None and (bounded_repair or focused_repair):
+                repair_max_tokens = REPAIR_OUTPUT_TOKENS
+
+            # The transcript window can drop the actions that wrote these files.
+            note = _progress_note(
+                written, last_build_ok if not coordinator_handoff or fast_check_fresh else None,
+                source_change_pending=_source_change_pending(),
             )
-        if _note and call_msgs:
-            call_msgs = [
-                {"role": call_msgs[0]["role"],
-                 "content": call_msgs[0]["content"] + _note},
-                *call_msgs[1:],
-            ]
+            if coordinator_handoff:
+                note += (
+                    "\nMAX FINALIZATION HANDOFF: build runs FAST_CHECK only. After a fresh "
+                    "clean build and completed source changes, call done to HAND OFF the "
+                    "candidate; done hands off a candidate, not an accepted product. "
+                    "The server coordinator MUST still run full build, runtime "
+                    "and release checks before accepting it. Do not repeat deferred runtime "
+                    "checks or rewrite clean source just to obtain runtime proof here."
+                )
+            if note:
+                call_msgs = [
+                    {"role": call_msgs[0]["role"], "content": call_msgs[0]["content"] + note},
+                    *call_msgs[1:],
+                ]
+        call_max_tokens = max_tokens if max_tokens is not None else repair_max_tokens
+        if call_max_tokens is None:
+            call_max_tokens = agent_output_tokens(active_model, fallback=16384)
+
         # Preserve the existing five-attempt bound for proven safe failures.
         # Only confirmed refusal/preconnect evidence permits another paid POST.
         retry_started = asyncio.get_running_loop().time()
@@ -1151,7 +1199,6 @@ async def _run_agent_segment(
         start_attempt = 0
         if restoring:
             assert saved_frame is not None
-            call_msgs = saved_frame.call_messages
             start_attempt = saved_frame.attempt
             retry_started_at = datetime.fromisoformat(saved_frame.retry_started_at)
             if retry_started_at.utcoffset() is None:
@@ -1195,8 +1242,7 @@ async def _run_agent_segment(
                     files=written, steps=step, transcript=convo, stop_reason="source_deadline",
                 )
             call_seconds = (
-                remaining if max_tokens is None
-                and agent_output_tokens(active_model, fallback=16384) is None
+                remaining if call_max_tokens is None
                 else min(_AGENT_RESPONSE_TIMEOUT_SECONDS, remaining)
             ) if uses_gateway and remaining is not None and not restoring else (
                 _AGENT_RESPONSE_TIMEOUT_SECONDS
@@ -1215,13 +1261,13 @@ async def _run_agent_segment(
                 async def invoke(
                     call: Callable[..., Awaitable[str]] = bounded_complete,
                     messages: list[dict[str, Any]] = call_msgs,
+                    selected_model: str = active_model,
+                    output_limit: int | None = call_max_tokens,
                 ) -> str:
                     with llm_client.provider_wait_events(emit):
                         return await call(
-                            messages, active_model, user_id=user_id, project_id=project_id,
-                            max_tokens=(agent_output_tokens(active_model, fallback=16384)
-                                        if max_tokens is None else max_tokens),
-                            temperature=0.0,
+                            messages, selected_model, user_id=user_id, project_id=project_id,
+                            max_tokens=output_limit, temperature=0.0,
                         )
 
                 async with asyncio.timeout(None if restoring else rate_remaining):
@@ -1261,6 +1307,7 @@ async def _run_agent_segment(
                             wrote_since_check=wrote_since_check, active_model=active_model,
                             escalated=escalated, pending_truncation=pending_truncation,
                             response_budget=response_recovery.budget, call_messages=call_msgs,
+                            repair_max_tokens=repair_max_tokens,
                         ).model_dump(mode="json")
                         assert frame_value is not None
                         reply = await continuation.provider(
@@ -1490,10 +1537,8 @@ async def _run_agent_segment(
             source_feedback = False
             if gap is None:
                 gap = _source_completion_gap()
-                source_repair.gap = gap
+                source_repair.set_gap(gap)
                 source_feedback = gap is not None
-                if source_feedback and source_repair.context_path is None:
-                    source_repair.context_path = "src/app/page.tsx"
             if gap is not None:
                 if source_feedback:
                     no_write_streak += 1
@@ -1788,9 +1833,8 @@ async def _run_agent_segment(
             pending_source_build = False
         if changed_source_paths and obs.get("ok") is True:
             no_write_streak = 0
-            source_repair.gap = None
+            source_repair.clear_context()
             source_repair.read_used = False
-            source_repair.context_path = None
             if action.name != "build":
                 for path in changed_source_paths:
                     writes_since_build += 1
@@ -1895,6 +1939,11 @@ async def _run_agent_segment(
             managed_gap, repeated_managed_gap = source_repair.observe_checked_gap(
                 source_gap,
             )
+            if fast_check_fresh and _can_focus_source_repair():
+                if managed_gap is not None:
+                    source_repair.set_gap(managed_gap)
+                elif isinstance(source_repair.gap, ManagedSourceGap):
+                    source_repair.clear_context()
             if source_gap is not None:
                 observation += "\nSOURCE CHECK: " + source_gap
         convo.append({"role": "user", "content": observation})

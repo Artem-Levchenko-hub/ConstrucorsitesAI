@@ -51,15 +51,19 @@ from yleum_gateway.providers.rate_limit import bounded_error_body, refusal_retry
 from yleum_gateway.services.output_budget import output_tokens, uses_provider_output_default
 from yleum_gateway.services.provider_calls import ReceiptFailure
 from yleum_gateway.services.provider_failure_diagnostics import record_provider_failure
-from yleum_gateway.services.receipt_evidence import receipt_evidence
+from yleum_gateway.services.receipt_evidence import aitunnel_request_id, receipt_evidence
 
 # Retry only failures before the POST can be accepted. A missing response can
 # still mean a paid generation; replaying it may create a second provider bill.
 _SAFE_TO_RETRY = (httpx.ConnectError, httpx.ConnectTimeout)
 
 
-def _is_preconnect_failure(exc: httpx.HTTPError, transport_stage: str | None) -> bool:
+def _is_preconnect_failure(
+    exc: httpx.HTTPError, transport_stage: str | None, *, provider_scope: str = "llmgw",
+) -> bool:
     """Exception type alone cannot prove that a paid POST was never accepted."""
+    if provider_scope == "aitunnel":
+        return isinstance(exc, (*_SAFE_TO_RETRY, httpx.PoolTimeout)) and transport_stage == "connect"
     return isinstance(exc, _SAFE_TO_RETRY) and transport_stage in {None, "connect"}
 
 
@@ -230,7 +234,10 @@ def _key_and_url(provider_scope: str = "llmgw") -> tuple[str, str]:
     return key, url
 
 
-def _receipt_headers(headers: Mapping[str, str]) -> dict[str, str]:
+def _receipt_headers(headers: Mapping[str, str], *, provider_scope: str = "llmgw") -> dict[str, str]:
+    if provider_scope == "aitunnel":
+        request_id = aitunnel_request_id(headers)
+        return {"x-request-id": request_id} if request_id is not None else {}
     return {key: headers[key] for key in (
         "x-llmgw-cost-rub", "x-cost-rub", "x-cost-usd", "x-llmgw-request-id",
     ) if key in headers}
@@ -251,11 +258,25 @@ def _failure_details(
     if receipt_failure is not None:
         details["provider_receipt_failure"] = receipt_failure.value
     # Only the local transport supplies this argument; never accept a body field.
-    if isinstance(transport_stage, str) and transport_stage in {"connect", "headers", "body", "complete"}:
+    if isinstance(transport_stage, str) and transport_stage in native_stream.TRANSPORT_STAGES:
         details["provider_transport_stage"] = transport_stage
     if type(upstream_http_status) is int and 400 <= upstream_http_status <= 599:
         details["upstream_http_status"] = upstream_http_status
     return details
+
+
+def _transport_failure(
+    error: httpx.HTTPError, evidence: dict[str, Any], *, provider_scope: str,
+) -> UpstreamProviderError:
+    stage = evidence.get("transport_stage")
+    safe = _is_preconnect_failure(error, stage, provider_scope=provider_scope)
+    return UpstreamProviderError(f"{provider_scope} transport error: {type(error).__name__}", details={
+        **_failure_details(evidence, transport_stage=stage,
+                           upstream_http_status=evidence.get("upstream_http_status"),
+                           provider_scope=provider_scope),
+        "provider_charge_ambiguous": not safe,
+        "provider_failure_kind": "preconnect" if safe else "transport",
+    })
 
 
 def _refusal_category(response: httpx.Response) -> str | None:
@@ -291,7 +312,7 @@ def _http_failure_details(
 ) -> dict[str, Any]:
     """Keep existing receipt/refusal policy separate from private diagnostics."""
     details = _failure_details(
-        bounded_error_body(response) or {}, _receipt_headers(response.headers),
+        bounded_error_body(response) or {}, _receipt_headers(response.headers, provider_scope=provider_scope),
         upstream_http_status=response.status_code, provider_scope=provider_scope,
     )
     category = _refusal_category(response)
@@ -407,7 +428,7 @@ async def astream(
     }
 
     loop = asyncio.get_running_loop()
-    backup_deadline = deadline if deadline is not None else loop.time() + timeout
+    timed_deadline = deadline if deadline is not None else loop.time() + timeout
     from yleum_gateway.services import generation_response_capture as response_capture
 
     retained = response_capture.retention_active()
@@ -537,21 +558,36 @@ async def astream(
                 enqueue(_DONE)
                 return
 
-    async def _produce_backup() -> None:
+    async def _produce_timed() -> None:
         evidence: dict[str, Any] = {}
         try:
-            async with native_stream.open_aitunnel_response(
-                url, payload, headers, deadline=backup_deadline, evidence=evidence,
+            async with native_stream.open_timed_response(
+                url, payload, headers, deadline=timed_deadline, evidence=evidence,
+                provider_scope=provider_scope,
             ) as response:
                 if response.status_code >= 400:
-                    raise UpstreamProviderError("aitunnel stream rejected", details=failure_details(
+                    details = failure_details(
                         evidence, response.headers, transport_stage="headers",
                         upstream_http_status=response.status_code,
-                    ))
+                    )
+                    if provider_scope == "llmgw":
+                        from yleum_gateway.services.text_failover import read_async_refusal_body
+
+                        evidence["transport_stage"] = "body"
+                        bounded = await read_async_refusal_body(response)
+                        record_provider_failure(
+                            bounded if bounded is not None else response,
+                            credential=key, provider_scope=provider_scope,
+                        )
+                        if bounded is not None:
+                            details.update(_primary_refusal_details(bounded, model, _refusal_category(bounded)))
+                    raise UpstreamProviderError("Provider stream rejected", details=details)
                 await queue.put(("begin", None))
                 await queue.put(("receipt", {
-                    "headers": _receipt_headers(response.headers),
-                    "provider_request_id": evidence.get("provider_request_id"),
+                    "headers": _receipt_headers(response.headers, provider_scope=provider_scope),
+                    "provider_request_id": receipt_evidence(
+                        evidence, provider_scope=provider_scope,
+                    )["provider_request_id"],
                 }))
                 async for raw in response.aiter_lines():
                     evidence["transport_stage"] = "body"
@@ -559,23 +595,30 @@ async def astream(
                         await queue.put(event)
                         if event is _DONE:
                             return
-                raise UpstreamProviderError("aitunnel stream ended without completion", details=failure_details(
+                raise UpstreamProviderError("Provider stream ended without completion", details=failure_details(
                     evidence, receipt_failure=ReceiptFailure.MISSING_COMPLETION,
                     transport_stage=evidence["transport_stage"],
                 ))
         except TimeoutError:
-            await queue.put(("err", ProviderResponseDeadlineError(details=failure_details(evidence))))
+            await queue.put(("err", ProviderResponseDeadlineError(details=failure_details(
+                evidence, transport_stage=evidence.get("transport_stage"),
+                upstream_http_status=evidence.get("upstream_http_status"),
+            ))))
         except GatewayError as exc:
             await queue.put(("err", exc))
+        except httpx.HTTPError as exc:
+            error = _transport_failure(exc, evidence, provider_scope=provider_scope)
+            error.__cause__ = exc
+            await queue.put(("err", error))
         except Exception as exc:  # noqa: BLE001 — preserve a terminal SSE error on transport loss
             await queue.put(("err", UpstreamProviderError(
-                f"aitunnel stream failed: {type(exc).__name__}", details=failure_details(evidence),
+                f"Provider stream failed: {type(exc).__name__}", details=failure_details(evidence),
             )))
 
     backup_task = None
     producer = None
-    if provider_scope == "aitunnel":
-        backup_task = asyncio.create_task(_produce_backup())
+    if provider_scope == "aitunnel" or deadline is not None:
+        backup_task = asyncio.create_task(_produce_timed())
     else:
         context = contextvars.copy_context()
         producer = threading.Thread(target=context.run, args=(_produce,), daemon=True)
@@ -646,10 +689,9 @@ async def acompletion(
         ValidationFailedError on bad input (unknown model / role).
         UpstreamProviderError on transport, 4xx/5xx, or empty response.
     """
-    backup_deadline = (
-        provider_deadline if provider_deadline is not None
-        else asyncio.get_running_loop().time() + (response_budget or timeout)
-    )
+    deadline = provider_deadline
+    if provider_scope == "aitunnel" and deadline is None:
+        deadline = asyncio.get_running_loop().time() + (response_budget or timeout)
     slug = _MODEL_SLUG.get(model)
     if slug is None:
         raise ValidationFailedError(f"unsupported llmgw model: {model}")
@@ -732,20 +774,20 @@ async def acompletion(
         raise last  # type: ignore[misc]  # unreachable — loop returns or raises
 
     try:
-        if uses_provider_output_default(model, max_tokens):
+        if provider_scope == "aitunnel" or uses_provider_output_default(model, max_tokens):
             stream_options: dict[str, Any] = {}
-            if provider_scope == "aitunnel":
-                stream_options.update(provider_scope=provider_scope, deadline=backup_deadline)
+            if provider_scope == "aitunnel" or deadline is not None:
+                stream_options.update(provider_scope=provider_scope, deadline=deadline)
             response = await native_stream.collect_response(
                 url, payload, headers, budget_seconds=response_budget or timeout, evidence=evidence,
                 **stream_options,
             )
             response.raise_for_status()
             data = response.json()
-            data["_provider_headers"] = _receipt_headers(response.headers)
-        elif provider_scope == "aitunnel":
-            async with native_stream.open_aitunnel_response(
-                url, payload, headers, deadline=backup_deadline, evidence=evidence,
+            data["_provider_headers"] = _receipt_headers(response.headers, provider_scope=provider_scope)
+        elif deadline is not None:
+            async with native_stream.open_timed_response(
+                url, payload, headers, deadline=deadline, evidence=evidence, provider_scope=provider_scope,
             ) as response:
                 await response.aread()
             data = _decode_response(response)
@@ -762,17 +804,7 @@ async def acompletion(
             details=_http_failure_details(exc.response, model=model, provider_scope=provider_scope),
         ) from exc
     except httpx.HTTPError as exc:
-        safe = _is_preconnect_failure(exc, evidence.get("transport_stage"))
-        raise UpstreamProviderError(
-            f"llmgw transport error: {type(exc).__name__}",
-            details={
-                **failure_details(evidence, transport_stage=evidence.get("transport_stage"),
-                    upstream_http_status=evidence.get("upstream_http_status")),
-                "provider_charge_ambiguous": not safe,
-                "provider_failure_kind": "preconnect" if safe
-                else "transport",
-            },
-        ) from exc
+        raise _transport_failure(exc, evidence, provider_scope=provider_scope) from exc
     except TimeoutError as exc:
         status = evidence.get("upstream_http_status")
         if type(status) is int and 400 <= status <= 599:

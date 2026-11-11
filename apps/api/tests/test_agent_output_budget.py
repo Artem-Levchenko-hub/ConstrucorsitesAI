@@ -1,6 +1,7 @@
 """Model-specific provider defaults reach the real agent request boundaries."""
 
 import json
+from contextlib import asynccontextmanager
 
 import httpx
 import pytest
@@ -100,6 +101,30 @@ async def test_legacy_escalation_uses_active_model_budget_unless_overridden(over
     assert calls == expected
 
 
+@pytest.mark.parametrize("override,expected", [(None, 8192), (4096, 4096)])
+async def test_checkpoint_repair_sends_an_explicit_output_budget(monkeypatch, override, expected):
+    payloads = []
+
+    def gateway(request):
+        payloads.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{
+            "finish_reason": "stop",
+            "message": {"content": '<omnia:action name="done">{}</omnia:action>'},
+        }]})
+
+    async def execute(action):
+        pytest.fail("done must not execute a workspace tool")
+
+    install_transport(monkeypatch, gateway)
+    result = await agent_builder.run_agent_build(
+        system_prompt="s", user_prompt="Finish the saved application", model="claude-sonnet-5.5",
+        execute=execute, max_steps=1, bounded_repair=True, max_tokens=override,
+    )
+
+    assert result.done
+    assert [payload["max_tokens"] for payload in payloads] == [expected]
+
+
 @pytest.mark.parametrize("model,expected", [
     ("claude-sonnet-5.5", None),
     ("anthropic/claude-sonnet-5.5", None),
@@ -111,9 +136,10 @@ async def test_native_request_uses_provider_default_and_matching_request_profile
     reply = {"stop_reason": "end_turn", "content": [{"type": "text", "text": "ready"}]}
 
     class Gateway:
-        async def post(self, url, **kwargs):
+        @asynccontextmanager
+        async def stream(self, method, url, **kwargs):
             payloads.append(kwargs["json"])
-            return httpx.Response(200, request=httpx.Request("POST", url), json=reply)
+            yield httpx.Response(200, request=httpx.Request(method, url), json=reply)
 
     result = await agent_native._call_messages(
         Gateway(), "https://gateway.test/v1/messages", [], "s", model=model,
@@ -134,10 +160,12 @@ async def test_native_request_uses_provider_default_and_matching_request_profile
         assert payloads[0]["tool_choice"] == {"type": "any"}
 
 
-@pytest.mark.parametrize("source_repair", [False, True])
+@pytest.mark.parametrize(
+    ("source_repair", "bounded_repair"), [(False, False), (True, False), (False, True)],
+)
 @pytest.mark.parametrize("model", ["claude-sonnet-5.5", "anthropic/claude-sonnet-5.5"])
-async def test_native_build_and_source_repair_omit_automatic_budget(
-    monkeypatch, source_repair, model,
+async def test_native_build_limits_only_source_repair_requests(
+    monkeypatch, source_repair, bounded_repair, model,
 ):
     payloads = []
 
@@ -157,10 +185,14 @@ async def test_native_build_and_source_repair_omit_automatic_budget(
 
     result = await agent_native.run_native_build(
         model=model, system="s", task="Repair source", execute=execute,
-        source_repair=source_repair, max_steps=1,
+        source_repair=source_repair, bounded_repair=bounded_repair, max_steps=1,
         messages_url="https://gateway.test/v1/messages",
     )
 
     assert result.stop_reason == "provider_error"
     assert len(payloads) == 1
-    assert "max_tokens" not in payloads[0]
+    if source_repair or bounded_repair:
+        assert payloads[0]["max_tokens"] == 8192
+        assert payloads[0]["metadata"]["stage"] == "source_repair"
+    else:
+        assert "max_tokens" not in payloads[0]

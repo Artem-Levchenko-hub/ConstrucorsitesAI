@@ -7,6 +7,7 @@ transport errors and cancellation, even when no complete response can be used.
 import asyncio
 import json
 import math
+import time
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, aclosing, asynccontextmanager
 from typing import Any
@@ -16,7 +17,7 @@ import httpx
 from yleum_gateway.core.errors import DispatchDeadlineError
 from yleum_gateway.services.pricing import read_reported_cost
 from yleum_gateway.services.provider_calls import ReceiptFailure
-from yleum_gateway.services.receipt_evidence import receipt_evidence
+from yleum_gateway.services.receipt_evidence import aitunnel_request_id, receipt_evidence
 from yleum_gateway.services.text_failover import decoded_body_headers
 
 IDLE_TIMEOUT_SECONDS = 240.0
@@ -26,6 +27,11 @@ MAX_WIRE_BYTES = 16 * 1024 * 1024
 MAX_EVENT_BYTES = 2 * 1024 * 1024
 MAX_EVENTS = 100_000
 MAX_TOOLS = 256
+TRANSPORT_STAGES = frozenset({"connect", "sending", "awaiting_headers", "headers", "body", "complete"})
+_MILLISECONDS = (
+    "response_budget_ms", "connect_timeout_ms", "read_timeout_ms", "write_timeout_ms", "pool_timeout_ms",
+    "request_sent_ms", "headers_received_ms", "first_sse_data_ms", "response_completed_ms",
+)
 _FINISH_REASONS = {
     "stop", "tool_calls", "length", "content_filter", "end_turn", "tool_use",
     "max_tokens", "refusal", "pause_turn", "stop_sequence",
@@ -53,32 +59,104 @@ def _transport_timeout(io_timeout: float, *, provider_scope: str) -> httpx.Timeo
     )
 
 
-@asynccontextmanager
-async def open_aitunnel_response(
+def transport_diagnostics(evidence: dict[str, Any]) -> dict[str, int | str | None]:
+    """Keep provider transport logs separate from private payload and accounting fields."""
+    fields: dict[str, int | str | None] = {
+        field: value for field in _MILLISECONDS
+        if type(value := evidence.get(field)) is int and 0 <= value <= 2**31 - 1
+    }
+    started_at = evidence.get("transport_started_unix_ms")
+    if type(started_at) is int and 0 < started_at <= 2**53 - 1:
+        fields["transport_started_unix_ms"] = started_at
+    if "read_timeout_ms" in evidence and evidence["read_timeout_ms"] is None:
+        fields["read_timeout_ms"] = None
+    mode = evidence.get("transport_mode")
+    if mode in ("sse", "json"):
+        fields["transport_mode"] = mode
+    tokens_mode = evidence.get("max_tokens_mode")
+    if tokens_mode in ("sent", "omitted"):
+        fields["max_tokens_mode"] = tokens_mode
+    maximum = evidence.get("requested_max_tokens")
+    if type(maximum) is int and 1 <= maximum <= 2_000_000:
+        fields["requested_max_tokens"] = maximum
+    return fields
+
+
+class _ResponseProgress:
+    def __init__(
+        self, evidence: dict[str, Any], payload: dict[str, Any], *,
+        mode: str, budget_seconds: float, timeout: httpx.Timeout,
+    ) -> None:
+        self.evidence = evidence
+        self.started_at = time.monotonic()
+        evidence.update(
+            transport_stage="connect", transport_mode=mode,
+            transport_started_unix_ms=time.time_ns() // 1_000_000,
+            response_budget_ms=round(budget_seconds * 1000),
+            max_tokens_mode="sent" if "max_tokens" in payload else "omitted",
+        )
+        for field, seconds in timeout.as_dict().items():
+            evidence[f"{field}_timeout_ms"] = round(seconds * 1000) if seconds is not None else None
+        maximum = payload.get("max_tokens")
+        if type(maximum) is int and 1 <= maximum <= 2_000_000:
+            evidence["requested_max_tokens"] = maximum
+
+    def record(self, stage: str, milestone: str) -> None:
+        self.evidence["transport_stage"] = stage
+        if milestone not in self.evidence:
+            self.evidence[milestone] = round((time.monotonic() - self.started_at) * 1000)
+
+    async def trace(self, event: str, _info: dict[str, Any]) -> None:
+        # httpcore's event names are observed facts. Its event data may include
+        # credentials or prompts, so ignore it completely.
+        protocol, _, phase = event.partition(".")
+        if protocol not in {"http11", "http2"}:
+            return
+        if phase == "send_request_headers.started":
+            self.evidence["transport_stage"] = "sending"
+        elif phase == "send_request_body.complete":
+            self.record("awaiting_headers", "request_sent_ms")
+
+
+def open_aitunnel_response(
     url: str, payload: dict[str, Any], headers: dict[str, str], *,
     deadline: float, evidence: dict[str, Any],
+) -> AbstractAsyncContextManager[httpx.Response]:
+    return open_timed_response(url, payload, headers, deadline=deadline, evidence=evidence,
+                               provider_scope="aitunnel")
+
+
+@asynccontextmanager
+async def open_timed_response(
+    url: str, payload: dict[str, Any], headers: dict[str, str], *,
+    deadline: float, evidence: dict[str, Any], provider_scope: str,
 ) -> AsyncIterator[httpx.Response]:
-    """Keep the reserve socket within the original request's absolute window."""
+    """Keep the socket within the original request's absolute window."""
     from yleum_gateway.services.generation_response_capture import verify_dispatch_capacity
 
     loop = asyncio.get_running_loop()
-    timeout = min(IDLE_TIMEOUT_SECONDS, deadline - loop.time())
-    if timeout <= 0:
+    remaining = deadline - loop.time()
+    if remaining <= 0:
         raise DispatchDeadlineError()
-    evidence["transport_stage"] = "connect"
+    timeout = _transport_timeout(min(IDLE_TIMEOUT_SECONDS, remaining), provider_scope=provider_scope)
+    progress = _ResponseProgress(
+        evidence, payload, mode="sse" if payload.get("stream") is True else "json",
+        budget_seconds=remaining, timeout=timeout,
+    )
     async with asyncio.timeout_at(deadline), httpx.AsyncClient(
-        timeout=_transport_timeout(timeout, provider_scope="aitunnel"),
-        trust_env=False, transport=httpx.AsyncHTTPTransport(retries=0),
+        timeout=timeout, trust_env=False, transport=httpx.AsyncHTTPTransport(retries=0),
     ) as client:
-        request = client.build_request("POST", url, json=payload, headers=headers)
+        request = client.build_request(
+            "POST", url, json=payload, headers=headers, extensions={"trace": progress.trace},
+        )
         verify_dispatch_capacity()
         if loop.time() >= deadline:
             raise DispatchDeadlineError()
         async with aclosing(await client.send(request, stream=True)) as response:
-            evidence["transport_stage"] = "headers"
+            progress.record("headers", "headers_received_ms")
             if 400 <= response.status_code <= 599:
                 evidence["upstream_http_status"] = response.status_code
-            evidence.update(receipt_evidence({}, response.headers, provider_scope="aitunnel"))
+            evidence.update(receipt_evidence({}, response.headers, provider_scope=provider_scope))
             yield response
 
 
@@ -251,6 +329,10 @@ class _Collector:
                 "finish_reason": self.finish}], "usage": self.usage, "metadata": self.metadata}
 
 
+def collected_stream_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {**payload, "stream": True, "stream_options": {"include_usage": True}}
+
+
 async def collect_response(
     url: str, payload: dict[str, Any], headers: dict[str, str], *,
     budget_seconds: float, evidence: dict[str, Any], provider_scope: str = "llmgw",
@@ -260,46 +342,53 @@ async def collect_response(
     evidence.pop("upstream_http_status", None)
     if not math.isfinite(budget_seconds) or budget_seconds <= 0:
         raise TimeoutError("Provider response budget exhausted")
-    evidence["transport_stage"] = "connect"
-    evidence["max_tokens_mode"] = "sent" if "max_tokens" in payload else "omitted"
-    maximum = payload.get("max_tokens")
-    if type(maximum) is int and 1 <= maximum <= 2_000_000:
-        evidence["requested_max_tokens"] = maximum
     collector = _Collector(evidence, provider_scope=provider_scope)
     request_headers = httpx.Headers(headers)
     request_headers["accept"] = "text/event-stream"
     from yleum_gateway.services.payload_limits import require_provider_payload_size
 
-    wire_payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
+    wire_payload = collected_stream_payload(payload)
     require_provider_payload_size(wire_payload)
+    remaining = budget_seconds if deadline is None else deadline - asyncio.get_running_loop().time()
+    if remaining <= 0:
+        raise DispatchDeadlineError()
+    io_timeout = min(IDLE_TIMEOUT_SECONDS, remaining) if provider_scope == "aitunnel" else IDLE_TIMEOUT_SECONDS
+    timeout = _transport_timeout(io_timeout, provider_scope=provider_scope)
+    progress = _ResponseProgress(evidence, payload, mode="sse", budget_seconds=remaining, timeout=timeout)
+    extensions = {"trace": progress.trace}
     budget = asyncio.timeout(budget_seconds) if deadline is None else asyncio.timeout_at(deadline)
     async with budget, httpx.AsyncClient(
-        timeout=_transport_timeout(IDLE_TIMEOUT_SECONDS, provider_scope=provider_scope),
-        trust_env=False, transport=httpx.AsyncHTTPTransport(retries=0),
+        timeout=timeout, trust_env=False, transport=httpx.AsyncHTTPTransport(retries=0),
     ) as client:
         from yleum_gateway.services.generation_response_capture import verify_dispatch_capacity
 
         response_scope: AbstractAsyncContextManager[httpx.Response]
         if deadline is None:
             verify_dispatch_capacity()
-            response_scope = client.stream("POST", url, json=wire_payload, headers=request_headers)
+            response_scope = client.stream(
+                "POST", url, json=wire_payload, headers=request_headers, extensions=extensions,
+            )
         else:
-            request = client.build_request("POST", url, json=wire_payload, headers=request_headers)
+            request = client.build_request(
+                "POST", url, json=wire_payload, headers=request_headers, extensions=extensions,
+            )
             verify_dispatch_capacity()
             if asyncio.get_running_loop().time() >= deadline:
                 raise DispatchDeadlineError()
             response_scope = aclosing(await client.send(request, stream=True))
         async with response_scope as response:
-            evidence["transport_stage"] = "headers"
+            progress.record("headers", "headers_received_ms")
             if type(response.status_code) is int and 400 <= response.status_code <= 599:
                 evidence["upstream_http_status"] = response.status_code
-            provider_header_id = response.headers.get("x-llmgw-request-id")
-            collector.provider_header_id = _identity(provider_header_id) if provider_header_id else None
-            raw_id = collector.provider_header_id or response.headers.get("x-request-id")
+            if provider_scope == "llmgw":
+                provider_header_id = response.headers.get("x-llmgw-request-id")
+                collector.provider_header_id = _identity(provider_header_id) if provider_header_id else None
+                raw_id = collector.provider_header_id or response.headers.get("x-request-id")
+            else:
+                raw_id = aitunnel_request_id(response.headers)
             if raw_id:
-                # Generic x-request-id can identify a proxy hop. Keep it only until
-                # the completion supplies its canonical body ID; LLMGW's own header
-                # retains the existing chat receipt precedence.
+                # The completion can replace a provisional header ID. LLMGW's
+                # own header retains the existing chat receipt precedence.
                 evidence["provider_request_id"] = _identity(raw_id)
             reported = read_reported_cost({}, response.headers, provider_scope=provider_scope)
             evidence.update(provider_cost_rub=reported.cost_rub, provider_cost_usd=reported.cost_usd)
@@ -331,14 +420,16 @@ async def collect_response(
                         event_lines, event_bytes = [], 0
                         if collector.done:
                             result = collector.result()
-                            evidence["transport_stage"] = "complete"
+                            progress.record("complete", "response_completed_ms")
                             return httpx.Response(response.status_code, headers=decoded_body_headers(response),
                                                   json=result, request=response.request)
                     elif line.startswith(b"data:"):
+                        progress.record("body", "first_sse_data_ms")
                         event_lines.append(bytes(line[5:].lstrip(b" ")))
                 if len(raw) + event_bytes > MAX_EVENT_BYTES:
                     raise StreamReceiptError(ReceiptFailure.SIZE_LIMIT)
             if response.status_code >= 400:
+                progress.record("complete", "response_completed_ms")
                 return httpx.Response(response.status_code, headers=decoded_body_headers(response),
                                       content=bytes(raw), request=response.request, history=response.history)
             raise StreamReceiptError(ReceiptFailure.MISSING_COMPLETION)

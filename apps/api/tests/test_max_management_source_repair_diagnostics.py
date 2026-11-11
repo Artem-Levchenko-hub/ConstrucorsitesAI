@@ -22,11 +22,12 @@ export default function Page(){
 """
 
 
-def source_gap(extra: str, *, prefix: str = ""):
+def source_gap(extra: str, *, prefix: str = "", **files: str):
     source = prefix + BASE.replace("EXTRA", extra)
     return source, management.management_source_gap({
         ".omnia/management.json": build_management_contract(["catalog"]).model_dump_json(),
         "src/app/page.tsx": source,
+        **files,
     })
 
 
@@ -103,6 +104,79 @@ def test_known_shape_feedback_keeps_identity_and_gives_a_bounded_supported_refer
 
 def test_published_scalar_quantity_cart_reference_passes_the_unchanged_oracle():
     _, gap = source_gap(management._SUPPORTED_CART_REPAIR_EXAMPLE)
+    assert gap is None
+
+
+@pytest.mark.parametrize("move_hook", [False, True])
+def test_unproven_generic_storage_writer_gets_a_data_preserving_repair(move_hook):
+    react = 'import {useState,useEffect} from "react";\n'
+    hook = """
+function useStored<T>(key: string, initial: T) {
+  const [value, setValue] = useState<T>(initial);
+  useEffect(() => {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  }, [key, value]);
+  return [value, setValue] as const;
+}
+"""
+    files = {"src/lib/use-stored.ts": react + "export " + hook} if move_hook else {}
+    prefix = 'import {useStored} from "@/lib/use-stored";\n' if move_hook else react + hook
+    _, gap = source_gap(
+        'const [draft, setDraft] = useStored("fixture-cart.v1", unknownInitial());',
+        prefix=prefix, **files,
+    )
+    assert gap
+    expected_path = "src/lib/use-stored.ts" if move_hook else "src/app/page.tsx"
+    path, _, _, _, reason = location(gap)
+    assert (path, reason) == (expected_path, "unproven_json_stringify")
+    base, _, guidance = gap.partition("\n")
+    assert gap.rejection_key() == management.ManagedSourceGap(base).rejection_key()
+    assert "explicit typed state" in guidance
+    assert "existing keys, stored shapes and writes" in guidance
+    assert "wait for hydration" in guidance
+    assert "moving the generic helper" in guidance
+    assert "fixture-cart.v1" not in gap and len(gap.encode("utf-8")) < 1200
+
+
+def test_explicit_hydrated_local_json_writes_keep_managed_connections_proven():
+    _, gap = source_gap(
+        """
+const [cartDraft, setCartDraft] = useState({quantity: 0});
+const [favorite, setFavorite] = useState<string | null>(null);
+const [hydrated, setHydrated] = useState(false);
+useEffect(() => {
+  try {
+    const storage = window.localStorage;
+    const savedCart = storage.getItem("fixture-cart.v1");
+    const savedFavorite = storage.getItem("fixture-favorite.v1");
+    if (savedCart) {
+      try {
+        const parsed = JSON.parse(savedCart);
+        if (parsed !== null && typeof parsed.quantity === "number") {
+          setCartDraft({quantity: parsed.quantity});
+        }
+      } catch {}
+    }
+    if (savedFavorite) {
+      try {
+        const parsed = JSON.parse(savedFavorite);
+        if (typeof parsed === "string") setFavorite(parsed);
+      } catch {}
+    }
+    setHydrated(true);
+  } catch {}
+}, []);
+useEffect(() => {
+  if (!hydrated) return;
+  try {
+    const storage = window.localStorage;
+    storage.setItem("fixture-cart.v1", JSON.stringify(cartDraft));
+    storage.setItem("fixture-favorite.v1", JSON.stringify(favorite));
+  } catch {}
+}, [cartDraft, favorite, hydrated]);
+""",
+        prefix='import {useState,useEffect} from "react";\n',
+    )
     assert gap is None
 
 

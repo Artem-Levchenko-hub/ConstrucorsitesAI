@@ -6,10 +6,21 @@ import asyncio
 import hashlib
 import json
 from copy import deepcopy
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from uuid import uuid4
 
+import httpx
 import pytest
 
 from yleum_api.services import agent_builder as ab
+from yleum_api.services import llm_client
+from yleum_api.services.generation.recovery_contract import RecoveryContractError
+from yleum_api.services.generation.recovery_execution import GenerationYielded, _frame_retry
+
+from .test_agent_builder import _ok_executor
+from .test_agent_builder_completion_feedback import managed_gap
+from .test_legacy_provider_error_policy import install_transport
 
 ENTRY = "src/app/page.tsx"
 SDK = "src/lib/omnia/catalog-client.ts"
@@ -33,6 +44,135 @@ def context_from(messages):
                 if isinstance(message.get("content"), str) and MARKER in message["content"]]
     assert len(contexts) == 1
     return json.loads(contexts[0])
+
+
+@pytest.mark.parametrize(("exact_target", "repair_by_write"), [
+    (True, True), (False, True), (True, False),
+], ids=["exact-edit", "withheld-source", "gap-clears-on-build"])
+async def test_current_max_repair_compacts_the_request_only_with_exact_source(
+    monkeypatch, exact_target, repair_by_write,
+):
+    source = (
+        "// Existing source fixture\n" * (400 if exact_target else 2800)
+        + "export const selection = 'not connected';\n"
+    )
+    state, payloads = {}, []
+    obsolete = "OLD GENERATION REASONING"
+    replies = [
+        obsolete + "\n" + action("write_file", path=ENTRY, content=source),
+        action("build"),
+        action("build"),
+        action("done"),
+    ]
+    if repair_by_write:
+        replies.insert(2, action("edit_file", path=ENTRY, search="'not connected'",
+                                 replace="'connected'"))
+
+    def gateway(request):
+        reply = replies[len(payloads)]
+        payloads.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{
+            "finish_reason": "stop", "message": {"content": reply},
+        }]})
+
+    async def snapshot():
+        return dict(state)
+
+    checked = 0
+
+    def completion(files, _evidence):
+        nonlocal checked
+        checked += 1
+        if "'connected'" in files[ENTRY] or (not repair_by_write and checked > 1):
+            return None
+        return managed_gap()
+
+    install_transport(monkeypatch, gateway)
+    result = await ab.run_agent_build(
+        system_prompt="system fixture", user_prompt="task fixture", model="claude-sonnet-5.5",
+        execute=_ok_executor([], state), snapshot_files=snapshot,
+        completion_check=completion, report_managed_build_gap=True, coordinator_handoff=True,
+        max_steps=len(replies),
+    )
+
+    assert result.done and result.needs_finalization
+    assert [payload.get("max_tokens") for payload in payloads] == (
+        [None, None, 8192 if exact_target else None] + [None] * (len(replies) - 3)
+    )
+    messages = payloads[2]["messages"]
+    assert "task fixture" in str(messages) and str(managed_gap()) in str(messages)
+    context = context_from(messages)
+    assert context["complete"] is exact_target
+    if exact_target:
+        assert context["content"] == source
+        assert obsolete not in str(messages)
+    else:
+        assert obsolete in str(messages)
+        assert "content" not in context
+
+
+@pytest.mark.parametrize("historical", [False, True])
+async def test_cold_repair_keeps_original_output_budget_through_a_safe_retry(
+    monkeypatch, historical,
+):
+    monkeypatch.setattr(ab.asyncio, "sleep", AsyncMock())
+    frames, requests = [], []
+    saved = None
+    cold = False
+
+    async def provider(frame, invoke):
+        nonlocal saved
+        if not cold:
+            saved = deepcopy(frame["value"])
+            if historical:
+                saved.pop("repair_max_tokens", None)
+            raise GenerationYielded(
+                run_id=uuid4(), checkpoint=None, attempt_seq=1, phase="waiting_dependency",
+            )
+        if not frames:
+            assert frame == {"version": 1, "kind": "legacy", "value": saved}
+        else:
+            _frame_retry(frame, frames[-1], reconcile=False)
+        frames.append(deepcopy(frame))
+        return await invoke()
+
+    async def complete(messages, _model, *, max_tokens, **_kwargs):
+        requests.append((deepcopy(messages), max_tokens))
+        if len(requests) == 1:
+            raise llm_client.LLMError(
+                "safe refusal", retry_safe=True, provider_charge_ambiguous=False,
+            )
+        return action("done")
+
+    async def execute(_current):
+        pytest.fail("done must not execute a workspace tool")
+
+    driver = SimpleNamespace(
+        context={}, restore_frame=lambda _: deepcopy(saved) if cold else None, provider=provider,
+    )
+
+    async def run(*, bounded_repair):
+        return await ab.run_agent_build(
+            system_prompt="fixture", user_prompt="repair", model="claude-sonnet-5.5",
+            execute=execute, complete=complete, max_steps=1, continuation=driver,
+            bounded_repair=bounded_repair,
+        )
+
+    with pytest.raises(GenerationYielded):
+        await run(bounded_repair=not historical)
+    assert saved is not None
+    assert saved.get("repair_max_tokens") == (None if historical else 8192)
+    cold = True
+    assert (await run(bounded_repair=historical)).done
+    assert requests == [(saved["call_messages"], None if historical else 8192)] * 2
+
+
+def test_safe_retry_rejects_a_changed_repair_output_budget():
+    before = {"version": 1, "kind": "legacy", "value": {"attempt": 0, "repair_max_tokens": 8192}}
+    after = {"version": 1, "kind": "legacy", "value": {"attempt": 1, "repair_max_tokens": 4096}}
+
+    with pytest.raises(RecoveryContractError, match="retry changed its original model step"):
+        _frame_retry(after, before, reconcile=False)
 
 
 def run_loop(
@@ -134,9 +274,9 @@ def test_inline_gap_and_exact_mismatch_keep_full_current_source_after_read_credi
     (ENTRY, None),
 ])
 def test_repair_context_honestly_withholds_forbidden_unavailable_or_unbounded_source(path, files):
-    rendered = ab._repair_source_context(path, files)
+    rendered, exact = ab._repair_source_context(path, files)
     context = json.loads(rendered.split(MARKER, 1)[1])
-    assert context["complete"] is False
+    assert not exact and context["complete"] is False
     assert context["withheld"]
     assert "content" not in context and "sha256" not in context
     assert "DO_NOT_DISCLOSE" not in rendered
@@ -146,9 +286,9 @@ def test_repair_context_honestly_withholds_forbidden_unavailable_or_unbounded_so
 
 def test_full_utf8_context_is_exact_and_does_not_use_observation_clipping():
     source = "export const title = 'Сохранить';\n" + "/*я*/\n" * 1500
-    rendered = ab._repair_source_context(ENTRY, {ENTRY: source})
+    rendered, exact = ab._repair_source_context(ENTRY, {ENTRY: source})
     context = json.loads(rendered.split(MARKER, 1)[1])
-    assert context["content"] == source and context["complete"] is True
+    assert exact and context["content"] == source and context["complete"] is True
     assert context["utf8_bytes"] == len(source.encode("utf-8"))
     assert context["sha256"] == hashlib.sha256(source.encode("utf-8")).hexdigest()
     assert len(rendered) > ab._MAX_OBS_CHARS
@@ -227,7 +367,9 @@ export default function Page() {
              build_management_contract(["catalog"]).model_dump_json()}
     gap = management_source_gap(files)
     assert gap and "useYleumCatalogSelection" in gap
-    context = json.loads(ab._repair_source_context(ENTRY, files).split(MARKER, 1)[1])
+    rendered, exact = ab._repair_source_context(ENTRY, files)
+    context = json.loads(rendered.split(MARKER, 1)[1])
+    assert exact
     assert context["content"] == source
     assert management_source_gap(files) == gap  # Feedback grants no source/proof witness.
     wired = source.replace("  return <main>", """
@@ -239,11 +381,6 @@ export default function Page() {
 
 
 def test_cold_resume_preserves_exact_context_call_and_consumed_read_without_extra_progress():
-    from types import SimpleNamespace
-    from uuid import uuid4
-
-    from yleum_api.services.generation.recovery_execution import GenerationYielded
-
     state = {ENTRY: page_source(), SDK: "locked SDK fixture"}
     saved, requests, executed = {}, [], []
     cold = False

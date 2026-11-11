@@ -290,7 +290,7 @@ def test_native_server_diagnostic_requires_closed_internal_gateway_contract(muta
     response = httpx.Response(503, content=content.encode(), request=request,
                              history=[httpx.Response(307)] if mutation == "redirect" else [])
     assert agent_native._gateway_ambiguous_server_status(response, URL) is None
-    assert not agent_native._gateway_preconnect_proven(response, URL)
+    assert agent_native._gateway_preconnect_policy(response, URL) is None
 
 
 @pytest.mark.parametrize("trace_fails", [False, True])

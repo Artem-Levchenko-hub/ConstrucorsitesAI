@@ -47,6 +47,41 @@ def enabled(model: str) -> bool:
                 and settings.aitunnel_text_api_key)
 
 
+def alternate_scope(model: str, scope: str, reason: str | None, attempted: set[str]) -> str | None:
+    """Choose the other provider only after a committed, uncharged refusal."""
+    if scope not in {"llmgw", "aitunnel"} or not enabled(model):
+        return None
+    if reason != "preconnect" and (scope, reason) != ("llmgw", "upstream_refused"):
+        return None
+    other = "aitunnel" if scope == "llmgw" else "llmgw"
+    return None if other in attempted else other
+
+
+def preconnect_proof(scope: str, model: str, stage: str | None) -> dict[str, Any]:
+    """Publish retry permission for the exact local failure after its receipt commits."""
+    failover = enabled(model)
+    if (scope == "aitunnel" or failover) and stage != "connect":
+        return {}
+    proof: dict[str, Any] = {
+        "provider_failure_kind": "preconnect", "provider_charge_ambiguous": False,
+        "retry_safe": True, "retry_policy": "llmgw_preconnect_v1",
+    }
+    if scope == "aitunnel" or failover:
+        proof.update(
+            retry_policy="aitunnel_preconnect_v1" if scope == "aitunnel" else "llmgw_failover_preconnect_v1",
+            provider_scope=scope, transport_stage="connect",
+        )
+    return proof
+
+
+def exhausted_error() -> ModelUnavailableError:
+    return ModelUnavailableError("Both configured providers refused this request", details={
+        "provider_failure_kind": "providers_exhausted",
+        "provider_charge_ambiguous": False,
+        "retry_safe": False,
+    })
+
+
 def credentials(scope: str) -> tuple[str, str]:
     settings = get_settings()
     key = settings.aitunnel_text_api_key
@@ -68,6 +103,18 @@ def read_refusal_body(response: httpx.Response) -> httpx.Response | None:
             return None
     return httpx.Response(response.status_code, headers=decoded_body_headers(response), content=bytes(body),
                           request=response.request, history=response.history)
+
+
+async def read_async_refusal_body(response: httpx.Response) -> httpx.Response | None:
+    body = bytearray()
+    async for chunk in response.aiter_bytes(chunk_size=4096):
+        body.extend(chunk)
+        if len(body) > 16_384:
+            return None
+    return httpx.Response(
+        response.status_code, headers=decoded_body_headers(response), content=bytes(body),
+        request=response.request, history=response.history,
+    )
 
 
 def decoded_body_headers(response: httpx.Response) -> httpx.Headers:
@@ -228,24 +275,43 @@ async def select_scope(
             parent = None
             if identity is not None:
                 parent = await conn.fetchrow(
-                    "SELECT p.phase,p.terminal_reason,c.status,c.receipt_hash,c.provider_scope "
-                    "FROM generation_provider_attempts a "
-                    "JOIN generation_provider_attempts p ON p.attempt_id=a.parent_attempt_id "
-                    "JOIN provider_calls c ON c.id=p.provider_call_id "
-                    "WHERE a.attempt_id=$1 AND a.run_id=$2 AND a.project_id=$3 AND a.user_id=$4 "
-                    "AND a.prompt_hash=$5 AND a.request_sha256=$6 "
-                    "AND p.run_id=a.run_id AND p.project_id=a.project_id AND p.user_id=a.user_id "
-                    "AND p.prompt_hash=a.prompt_hash AND p.request_sha256=a.request_sha256",
+                    """
+                    WITH RECURSIVE chain AS (
+                        SELECT p.attempt_id,p.parent_attempt_id,p.provider_call_id,0 AS depth
+                        FROM generation_provider_attempts a
+                        JOIN generation_provider_attempts p ON p.attempt_id=a.parent_attempt_id
+                        WHERE a.attempt_id=$1 AND a.run_id=$2 AND a.project_id=$3 AND a.user_id=$4
+                        AND a.prompt_hash=$5 AND a.request_sha256=$6
+                        AND p.run_id=$2 AND p.project_id=$3 AND p.user_id=$4
+                        AND p.prompt_hash=$5 AND p.request_sha256=$6
+                        UNION ALL
+                        SELECT p.attempt_id,p.parent_attempt_id,p.provider_call_id,chain.depth+1
+                        FROM chain
+                        JOIN generation_provider_attempts p ON p.attempt_id=chain.parent_attempt_id
+                        WHERE chain.depth<8 AND p.run_id=$2 AND p.project_id=$3 AND p.user_id=$4
+                        AND p.prompt_hash=$5 AND p.request_sha256=$6
+                    )
+                    SELECT p.phase,p.terminal_reason,c.status,c.receipt_hash,c.provider_scope,
+                        (SELECT array_agg(DISTINCT pc.provider_scope) FROM chain AS history
+                         JOIN provider_calls pc ON pc.id=history.provider_call_id) AS tried_scopes,
+                        EXISTS (SELECT 1 FROM chain WHERE parent_attempt_id IS NULL)
+                        AND NOT EXISTS (SELECT 1 FROM chain WHERE provider_call_id IS NULL) AS chain_complete
+                    FROM chain
+                    JOIN generation_provider_attempts p ON p.attempt_id=chain.attempt_id
+                    JOIN provider_calls c ON c.id=chain.provider_call_id
+                    WHERE chain.depth=0
+                    """,
                     identity.attempt_id, identity.run_id, identity.project_id, identity.user_id,
                     identity.prompt_hash, identity.request_sha256,
                 )
             if parent is None:
                 balance_refused = run_scoped and await conn.fetchval(
-                    "SELECT EXISTS (SELECT 1 FROM provider_calls "
+                    "SELECT status='failed' FROM provider_calls "
                     "WHERE run_id=$1 AND project_id=$2 AND user_id IS NOT DISTINCT FROM $3::uuid "
                     "AND requested_model=$4 AND ($3::uuid IS NOT NULL OR route=$6) "
-                    "AND provider_scope='llmgw' AND status='failed' AND receipt_hash IS NOT NULL "
-                    "AND error_type=$5)",
+                    "AND provider_scope='llmgw' AND receipt_hash IS NOT NULL "
+                    "AND (status='completed' OR (status='failed' AND error_type=$5)) "
+                    "ORDER BY finished_at DESC,created_at DESC,id DESC LIMIT 1",
                     run_id, project_id, user_id, model, LLMGW_BALANCE_REFUSED, cell_route,
                 )
                 return "aitunnel" if balance_refused else "llmgw"
@@ -254,7 +320,8 @@ async def select_scope(
 
         raise AttemptConflict("Provider routing could not be confirmed") from None
     reason = parent["terminal_reason"]
-    backup_parent = parent["provider_scope"] == "aitunnel"
+    scope = parent["provider_scope"]
+    backup_parent = scope == "aitunnel"
     if not backup_parent and reason != "upstream_refused" and not (
         reason == "preconnect" and backup_enabled
     ):
@@ -262,6 +329,12 @@ async def select_scope(
     if (parent["phase"] != "closed" or parent["status"] != "failed"
             or not parent["receipt_hash"] or not backup_enabled
             or reason not in {"upstream_refused", "preconnect", "rate_limit_refused"}
-            or (reason == "upstream_refused" and parent["provider_scope"] != "llmgw")):
+            or (reason == "upstream_refused" and scope != "llmgw")):
         raise ModelUnavailableError("Backup continuation is unconfirmed")
-    return "aitunnel"
+    if reason == "rate_limit_refused":
+        return "aitunnel"
+    if parent["chain_complete"]:
+        alternate = alternate_scope(model, scope, reason, set(parent["tried_scopes"]))
+        if alternate is not None:
+            return alternate
+    raise ModelUnavailableError("No untried provider is confirmed for this attempt")

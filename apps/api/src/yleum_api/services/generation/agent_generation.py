@@ -380,6 +380,7 @@ async def execute_agent_turn(
     edit_source_changed: Callable[[], bool] | None = None
     restored_source: dict[str, str] | None = None
     current_source = baseline.files if workspace_context_files is None else workspace_context_files
+    bounded_repair = workspace_context_files is not None and project_info.template == "max_miniapp"
     resume_instruction = (
         "RESUME SAVED PRODUCT. Continue the existing restored source below; "
         "it takes precedence over starter/from-scratch instructions in the original brief. "
@@ -404,6 +405,20 @@ async def execute_agent_turn(
             candidate.stop_reason = "checkpoint_error"
             candidate.summary = _SOURCE_CHECKPOINT_FAILURE
             _agent_res = candidate
+        else:
+            from yleum_api.services.max_management_generation import management_source_gap
+
+            managed_gap = management_source_gap(restored_source)
+            if managed_gap is not None:
+                resume_instruction += (
+                    "CURRENT SOURCE CHECK: " + str(managed_gap) + "\n"
+                    "Apply one targeted change to the restored source, then check it again.\n\n"
+                )
+            resume_instruction += (
+                "If the owner's brief asks for a downloadable PDF, generate a valid PDF "
+                "from the current report. In MAX use window.WebApp.downloadFile with an authorized "
+                "HTTPS file URL. Use a browser download when the bridge is unavailable.\n\n"
+            )
     if _agent_res is None:
         observed_execute = operations.execute
         if ((_is_edit or _max_has_generated_snapshot) and runtime.handle is not None
@@ -545,6 +560,7 @@ async def execute_agent_turn(
                 max_segments=_native_max_segments,
                 snapshot_files=snapshot_reader if callable(snapshot_reader) else None,
                 allow_max_bash=_max_shell_enabled,
+                bounded_repair=bounded_repair,
                 portable_cell=bool(runtime.handle is not None and runtime.handle.is_portable()),
                 initial_files=(
                     current_source
@@ -599,6 +615,7 @@ async def execute_agent_turn(
             coordinator_handoff=runtime.legacy_coordinator_handoff(),
             completion_check=_completion_check,
             report_managed_build_gap=uses_single_max_source_repair(runtime),
+            bounded_repair=bounded_repair,
             ship_green_on_abort=get_settings().agent_ship_green_on_abort,
             edit_mode=_is_edit,
             bare_mode=plan.bare_stack,

@@ -78,6 +78,7 @@ async def test_native_admitted_fallback_preserves_private_bytes_and_tools(monkey
     payload = {"messages": messages, "tools": [{"type": "function", "function": {"name": "read_file"}}]}
     sent = []
     monkeypatch.setattr(native.text_failover, "select_scope", AsyncMock(return_value="llmgw"))
+    monkeypatch.setattr(native.text_failover, "enabled", lambda model: model == "claude-sonnet-5.5")
     monkeypatch.setattr(native.text_failover, "credentials", lambda scope: ("synthetic", "https://backup.test/v1"))
     monkeypatch.setattr(native.text_failover, "primary_refusal_candidate", lambda response, model: {"confirmed": True})
     monkeypatch.setattr(native.generation_attempts, "dispatch", AsyncMock(return_value=uuid4()))

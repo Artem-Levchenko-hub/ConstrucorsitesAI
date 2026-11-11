@@ -115,12 +115,18 @@ async def stream_completion(
         source_options["max_tokens"] = max_tokens
     if generation_identity is not None:
         source_options["retry_preconnect"] = False
+    attempted = {provider_scope}
+    timed_generation = text_failover.enabled(model) and (
+        generation_identity is not None
+        or (request is not None and request.headers.get("x-yleum-provider-timeout-seconds") is not None)
+    )
+
     def stream_source() -> AsyncGenerator[tuple[str, str], None]:
         if provider_deadline is not None:
             source_options["timeout"] = min(
                 IDLE_TIMEOUT_SECONDS, provider_deadline - asyncio.get_running_loop().time(),
             )
-            if provider_scope == "aitunnel":
+            if provider_scope == "aitunnel" or timed_generation or len(attempted) > 1:
                 source_options["deadline"] = provider_deadline
         return llmgw.astream(
             model, messages, temperature=0.5 if temperature is None else temperature,
@@ -149,8 +155,22 @@ async def stream_completion(
                 **receipt_evidence({**receipt, **(upstream_error.details if upstream_error else {})}, **text_failover.scope_options(provider_scope)),
                 error_type=failure_type,
             )
-            if generation_identity is not None and upstream_error and upstream_error.details.get("provider_failure_kind") == "preconnect":
-                upstream_error.details.update(retry_safe=True, retry_policy="llmgw_preconnect_v1")
+            if generation_identity is not None and upstream_error and (
+                upstream_error.details.get("provider_failure_kind") == "preconnect"
+                and upstream_error.details.get("provider_charge_ambiguous") is False
+            ):
+                from yleum_gateway.services.generation_response_capture import (
+                    remember_provider_refusal,
+                )
+
+                proof = text_failover.preconnect_proof(
+                    provider_scope, model, upstream_error.details.get("provider_transport_stage"),
+                )
+                if proof:
+                    upstream_error.details.update(proof)
+                    remember_provider_refusal({
+                        "detail": {"error": {"code": upstream_error.code, "details": proof}},
+                    }, status=upstream_error.http_status)
             return
         provider_request_id = receipt_evidence(receipt, **text_failover.scope_options(provider_scope))["provider_request_id"]
         actual_model = llmgw.resolve_response_model(
@@ -219,22 +239,22 @@ async def stream_completion(
                 ) from exc
 
     async def settle(
-        *, primary_failure: Literal["preconnect", "upstream_refused"] | None = None,
+        *, confirmed_failure: Literal["preconnect", "upstream_refused"] | None = None,
         balance_refused: bool = False,
     ) -> None:
         nonlocal receipt_finished
         assert provider_call_id is not None
         known_receipt = receipt_evidence(receipt, **text_failover.scope_options(provider_scope))
         try:
-            if primary_failure is not None:
+            if confirmed_failure is not None:
                 assert upstream_error is not None
                 receipt_finished = True
-                if primary_failure == "preconnect":
+                if confirmed_failure == "preconnect":
                     failure_type = provider_calls.classify_failure(upstream_error)
                 else:
                     failure_type = provider_calls.LLMGW_BALANCE_REFUSED if balance_refused else "HTTPStatusError"
                 await generation_attempts.finish(
-                    generation_identity, provider_call_id, status="failed", reason=primary_failure,
+                    generation_identity, provider_call_id, status="failed", reason=confirmed_failure,
                     error_type=failure_type,
                 )
                 return
@@ -280,17 +300,24 @@ async def stream_completion(
                 )
             overload = upstream_error.details.pop("_overload_retry_candidate", None) if upstream_error else None
             balance_refused = upstream_error.details.pop("_primary_balance_refused", False) if upstream_error else False
-            preconnect_fallback = (
-                generation_identity is None and upstream_error is not None
+            preconnect = (
+                upstream_error is not None
                 and upstream_error.details.get("provider_failure_kind") == "preconnect"
                 and upstream_error.details.get("provider_charge_ambiguous") is False
-                and text_failover.enabled(model)
             )
-            if (provider_scope == "llmgw" and upstream_error is not None
-                    and (isinstance(overload, dict) or preconnect_fallback)
+            primary_refusal = provider_scope == "llmgw" and isinstance(overload, dict)
+            reason: Literal["preconnect", "upstream_refused"] | None = (
+                "upstream_refused" if primary_refusal else "preconnect" if preconnect else None
+            )
+            alternate = (
+                text_failover.alternate_scope(model, provider_scope, reason, attempted)
+                if generation_identity is None else None
+            )
+            exhausted = generation_identity is None and len(attempted) == 2
+            if (reason is not None and (primary_refusal or alternate is not None or exhausted)
                     and not accumulated and not receipt):
                 settlement_task = asyncio.create_task(settle(
-                    primary_failure="preconnect" if preconnect_fallback else "upstream_refused",
+                    confirmed_failure=reason,
                     balance_refused=balance_refused,
                 ))
                 try:
@@ -298,7 +325,9 @@ async def stream_completion(
                 except GatewayError as exc:
                     settlement_error = exc
                     break
-                if generation_identity is not None and isinstance(overload, dict):
+                if exhausted:
+                    upstream_error = text_failover.exhausted_error()
+                elif alternate is None and primary_refusal:
                     from yleum_gateway.services.generation_response_capture import (
                         confirm_response_accounting,
                         remember_provider_refusal,
@@ -307,21 +336,22 @@ async def stream_completion(
                     upstream_error = text_failover.ProviderRefusedError("Primary provider refused the request", details=overload)
                     remember_provider_refusal({"error": {"code": "api_error", "details": overload}})
                     confirm_response_accounting()
-                else:
+                elif alternate is not None:
                     await source.aclose()
                     if provider_deadline is not None and asyncio.get_running_loop().time() >= provider_deadline:
                         upstream_error = DispatchDeadlineError()
                         break
                     try:
-                        backup_call_id = await provider_calls.start_call(
+                        next_call_id = await provider_calls.start_call(
                             route="/v1/chat/completions", model=model, user_id=user_id,
                             project_id=project_id, message_id=message_id, run_id=run_id,
-                            stage=stage, free=free, provider_scope="aitunnel",
+                            stage=stage, free=free, **text_failover.scope_options(alternate),
                         )
                     except GatewayError as exc:
                         settlement_error = exc
                         break
-                    provider_scope, provider_call_id = "aitunnel", backup_call_id
+                    provider_scope, provider_call_id = alternate, next_call_id
+                    attempted.add(provider_scope)
                     source_options["retry_preconnect"] = False
                     source = stream_source()
                     receipt_finished, settlement_task, upstream_error = False, None, None

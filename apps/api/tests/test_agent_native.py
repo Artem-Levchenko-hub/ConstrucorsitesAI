@@ -12,6 +12,7 @@ import asyncio
 import importlib
 import sys
 from collections.abc import Mapping
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -2235,11 +2236,12 @@ async def test_active_provider_request_cannot_outlive_shared_retry_budget(monkey
     calls = []
 
     class SlowClient:
-        async def post(self, *args, **kwargs):
+        @asynccontextmanager
+        async def stream(self, *args, **kwargs):
             calls.append(kwargs["timeout"])
             await asyncio.sleep(0.1)
-            return httpx.Response(200, request=httpx.Request("POST", "https://gateway.test"),
-                                  json={"content": []})
+            yield httpx.Response(200, request=httpx.Request("POST", "https://gateway.test"),
+                                 json={"content": []})
 
     with pytest.raises(RuntimeError, match="PROVIDER_TIMEOUT"):
         await agent_native._call_messages(SlowClient(), "https://gateway.test", [], "s")
@@ -2395,13 +2397,15 @@ async def test_call_messages_auth_factory_wires_exact_runner_metadata_and_header
         _ = seconds
 
     class FakeClient:
-        async def post(
+        @asynccontextmanager
+        async def stream(
             self,
+            method: str,
             url: str,
             *,
             json: dict[str, Any],
             **kwargs: Any,
-        ) -> httpx.Response:
+        ) -> Any:
             calls.append(
                 {
                     "url": url,
@@ -2413,9 +2417,9 @@ async def test_call_messages_auth_factory_wires_exact_runner_metadata_and_header
                     ),
                 }
             )
-            return httpx.Response(
+            yield httpx.Response(
                 200,
-                request=httpx.Request("POST", url),
+                request=httpx.Request(method, url),
                 json={"content": [], "stop_reason": "end_turn"},
             )
 
@@ -2486,13 +2490,15 @@ async def test_call_messages_retry_gets_fresh_token_from_auth_factory(
         def __init__(self) -> None:
             self.count = 0
 
-        async def post(
+        @asynccontextmanager
+        async def stream(
             self,
+            method: str,
             url: str,
             *,
             json: dict[str, Any],
             **kwargs: Any,
-        ) -> httpx.Response:
+        ) -> Any:
             calls.append(
                 {
                     "url": url,
@@ -2504,16 +2510,17 @@ async def test_call_messages_retry_gets_fresh_token_from_auth_factory(
             )
             self.count += 1
             if self.count == 1:
-                return httpx.Response(429, request=httpx.Request("POST", url), json={
+                yield httpx.Response(429, request=httpx.Request(method, url), json={
                     "error": {"type": "api_error", "details": {
                         "upstream_http_status": 429, "provider_refusal_category": "rate_limit",
                         "provider_charge_ambiguous": False, "retry_safe": True,
                         "retry_policy": "llmgw_key_rate_limit_v1",
                     }},
                 })
-            return httpx.Response(
+                return
+            yield httpx.Response(
                 200,
-                request=httpx.Request("POST", url),
+                request=httpx.Request(method, url),
                 json={"content": [], "stop_reason": "end_turn"},
             )
 
@@ -2626,13 +2633,15 @@ async def test_runner_attempt_auth_contract_matches_gateway_validation_and_repla
     calls: list[dict[str, Any]] = []
 
     class FakeClient:
-        async def post(
+        @asynccontextmanager
+        async def stream(
             self,
+            method: str,
             url: str,
             *,
             json: dict[str, Any],
             **kwargs: Any,
-        ) -> httpx.Response:
+        ) -> Any:
             calls.append(
                 {
                     "url": url,
@@ -2640,9 +2649,9 @@ async def test_runner_attempt_auth_contract_matches_gateway_validation_and_repla
                     "headers": dict(kwargs["headers"]),
                 }
             )
-            return httpx.Response(
+            yield httpx.Response(
                 200,
-                request=httpx.Request("POST", url),
+                request=httpx.Request(method, url),
                 json={"content": [], "stop_reason": "end_turn"},
             )
 
@@ -3041,10 +3050,11 @@ async def test_native_accepts_reply_within_gateway_deadline_without_paid_replay(
     }
 
     class DelayedGateway:
-        async def post(self, url, **kwargs):
+        @asynccontextmanager
+        async def stream(self, method, url, **kwargs):
             calls.append(kwargs["json"]["metadata"]["retry_count"])
             await asyncio.sleep((upstream_seconds - 5) * scale)
-            return httpx.Response(200, request=httpx.Request("POST", url), json=reply)
+            yield httpx.Response(200, request=httpx.Request(method, url), json=reply)
 
     result = await agent_native._call_messages(
         DelayedGateway(), "https://gateway.test/v1/messages", [], "s"
@@ -3058,10 +3068,10 @@ async def test_native_read_timeout_is_not_replayed_when_accounting_may_settle(mo
     calls = []
 
     class AmbiguousGateway:
-        async def post(self, url, **kwargs):
+        def stream(self, method, url, **kwargs):
             calls.append(kwargs["json"]["metadata"]["retry_count"])
             raise httpx.ReadTimeout(
-                "synthetic-private-upstream-detail", request=httpx.Request("POST", url)
+                "synthetic-private-upstream-detail", request=httpx.Request(method, url)
             )
 
     async def no_sleep(delay):
@@ -3083,9 +3093,10 @@ async def test_native_named_model_request_profile_preserves_legacy(model, choice
     reply = _turn(("qa_probe", {}))
 
     class Gateway:
-        async def post(self, url, **kwargs):
+        @asynccontextmanager
+        async def stream(self, method, url, **kwargs):
             captured.append(kwargs["json"])
-            return httpx.Response(200, request=httpx.Request("POST", url), json=reply)
+            yield httpx.Response(200, request=httpx.Request(method, url), json=reply)
 
     result = await agent_native._call_messages(
         Gateway(), "https://gateway.test/v1/messages", [], "s", model=model,
@@ -3112,10 +3123,12 @@ async def test_native_deterministic_http_refusal_is_not_replayed(monkeypatch,sta
     calls = []
 
     class Gateway:
-        async def post(self,url,**kwargs):
+        @asynccontextmanager
+        async def stream(self, method, url, **kwargs):
             calls.append(kwargs["json"]["metadata"]["retry_count"])
-            return httpx.Response(status, request=httpx.Request("POST",url),
-                                  text="PRIVATE_BODY_NOT_FOR_LOGS")
+            yield httpx.Response(
+                status, request=httpx.Request(method, url), text="PRIVATE_BODY_NOT_FOR_LOGS",
+            )
 
     sleep = AsyncMock()
     monkeypatch.setattr(agent_native.asyncio,"sleep",sleep)
