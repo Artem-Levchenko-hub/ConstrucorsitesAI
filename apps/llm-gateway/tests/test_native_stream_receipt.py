@@ -13,7 +13,7 @@ from starlette.requests import Request
 
 from yleum_gateway.core.config import reset_settings_cache
 from yleum_gateway.main import create_app
-from yleum_gateway.providers import native_stream
+from yleum_gateway.providers import llmgw, native_stream
 from yleum_gateway.routers import chat
 
 
@@ -58,6 +58,39 @@ async def test_complete_response_has_usage_and_no_240_second_total_cap(monkeypat
     assert body["usage"]["completion_tokens"] == 3
     assert evidence["provider_request_id"] == "completion-id"
     assert request.extensions["timeout"]["read"] == 240
+
+
+@pytest.mark.parametrize("max_tokens", [None, 128], ids=["collected-sse", "buffered-json"])
+async def test_aitunnel_can_receive_late_headers_within_the_request_deadline(monkeypatch, max_tokens):
+    monkeypatch.setenv("AITUNNEL_TEXT_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("AITUNNEL_TEXT_API_KEY", "synthetic-backup-key")
+    calls = []
+
+    def reply(request):
+        calls.append(request)
+        timeouts = request.extensions["timeout"]
+        assert timeouts["connect"] == 30
+        read_timeout = timeouts["read"]
+        # Simulate the long first-byte delay without sleeping through it.
+        if read_timeout is not None and read_timeout < 550:
+            raise httpx.ReadTimeout("provider headers have not arrived", request=request)
+        assert json.loads(request.content)["stream"] is (max_tokens is None)
+        if max_tokens is None:
+            return httpx.Response(200, content=encode(completed()))
+        return httpx.Response(200, json={
+            "id": "completion-id", "model": "claude-sonnet-5.5",
+            "choices": [{"message": {"content": "hello"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 3},
+        })
+
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(reply))
+    response = await llmgw.acompletion(
+        model="claude-sonnet-5.5", messages=[], max_tokens=max_tokens,
+        provider_scope="aitunnel", provider_deadline=asyncio.get_running_loop().time() + 600,
+        response_budget=600,
+    )
+    assert response["choices"][0]["message"]["content"] == "hello"
+    assert len(calls) == 1
 
 
 async def test_complete_receipt_records_protocol_trace_without_body(monkeypatch):
@@ -330,7 +363,8 @@ async def test_unbounded_line_or_event_is_rejected(monkeypatch, partial):
         await collect(monkeypatch, [], stream=Chunks([partial]))
 
 
-async def test_total_deadline_cancels_body_and_closes_transport(monkeypatch):
+@pytest.mark.parametrize("provider_scope", ["llmgw", "aitunnel"])
+async def test_total_deadline_cancels_body_and_closes_transport(monkeypatch, provider_scope):
     class Hung(Chunks):
         async def __aiter__(self):
             await asyncio.Event().wait()
@@ -339,9 +373,11 @@ async def test_total_deadline_cancels_body_and_closes_transport(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **kw: httpx.MockTransport(
         lambda request: httpx.Response(200, stream=stream, headers={"x-llmgw-request-id": "header"})))
     evidence = {}
+    deadline = asyncio.get_running_loop().time() + 0.03 if provider_scope == "aitunnel" else None
     with pytest.raises(TimeoutError):
         await native_stream.collect_response("https://provider.test", {}, {},
-                                             budget_seconds=0.01, evidence=evidence)
+                                             budget_seconds=0.03, evidence=evidence,
+                                             provider_scope=provider_scope, deadline=deadline)
     assert stream.closed and evidence["provider_request_id"] == "header"
 
 

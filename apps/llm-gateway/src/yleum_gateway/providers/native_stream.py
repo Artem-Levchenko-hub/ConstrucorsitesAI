@@ -43,6 +43,16 @@ def provider_request_deadline(value: str | None, started_at: float, *, reserve: 
     return started_at + min(seconds, 1500.0) - reserve
 
 
+def _transport_timeout(io_timeout: float, *, provider_scope: str) -> httpx.Timeout:
+    # AITunnel can stay silent until it has a result. The enclosing asyncio
+    # deadline bounds reads; a separate idle timer would cut that budget short.
+    return httpx.Timeout(
+        io_timeout,
+        connect=min(CONNECT_TIMEOUT_SECONDS, io_timeout),
+        read=None if provider_scope == "aitunnel" else io_timeout,
+    )
+
+
 @asynccontextmanager
 async def open_aitunnel_response(
     url: str, payload: dict[str, Any], headers: dict[str, str], *,
@@ -57,7 +67,7 @@ async def open_aitunnel_response(
         raise DispatchDeadlineError()
     evidence["transport_stage"] = "connect"
     async with asyncio.timeout_at(deadline), httpx.AsyncClient(
-        timeout=httpx.Timeout(timeout, connect=min(CONNECT_TIMEOUT_SECONDS, timeout)),
+        timeout=_transport_timeout(timeout, provider_scope="aitunnel"),
         trust_env=False, transport=httpx.AsyncHTTPTransport(retries=0),
     ) as client:
         request = client.build_request("POST", url, json=payload, headers=headers)
@@ -246,7 +256,7 @@ async def collect_response(
     budget_seconds: float, evidence: dict[str, Any], provider_scope: str = "llmgw",
     deadline: float | None = None,
 ) -> httpx.Response:
-    """One POST, bounded by wall time and idle time; never retries internally."""
+    """One POST within the request deadline; never retries internally."""
     evidence.pop("upstream_http_status", None)
     if not math.isfinite(budget_seconds) or budget_seconds <= 0:
         raise TimeoutError("Provider response budget exhausted")
@@ -264,7 +274,7 @@ async def collect_response(
     require_provider_payload_size(wire_payload)
     budget = asyncio.timeout(budget_seconds) if deadline is None else asyncio.timeout_at(deadline)
     async with budget, httpx.AsyncClient(
-        timeout=httpx.Timeout(IDLE_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS),
+        timeout=_transport_timeout(IDLE_TIMEOUT_SECONDS, provider_scope=provider_scope),
         trust_env=False, transport=httpx.AsyncHTTPTransport(retries=0),
     ) as client:
         from yleum_gateway.services.generation_response_capture import verify_dispatch_capacity
