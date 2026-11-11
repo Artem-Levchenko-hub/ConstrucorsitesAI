@@ -32,6 +32,7 @@ import threading
 import time
 from collections.abc import AsyncGenerator, Iterator, Mapping
 from contextlib import suppress
+from http import HTTPStatus
 from typing import Any
 from uuid import uuid4
 
@@ -62,8 +63,8 @@ def _is_preconnect_failure(exc: httpx.HTTPError, transport_stage: str | None) ->
     return isinstance(exc, _SAFE_TO_RETRY) and transport_stage in {None, "connect"}
 
 
-# Only explicit structured refusal codes become public diagnostics. HTTP 401
-# alone and free-form messages cannot distinguish access from provider funds.
+# Explicit refusal codes and the verified LLMGW balance envelope map to a
+# fixed diagnostic category. A bare HTTP 401 cannot identify a funds refusal.
 _REFUSAL_CATEGORIES = {
     "invalid_api_key": "access",
     "authentication_error": "access",
@@ -268,6 +269,14 @@ def _refusal_category(response: httpx.Response) -> str | None:
     error = body.get("error") if isinstance(body, dict) else None
     if not isinstance(error, dict):
         return None
+    # LLMGW sends this balance refusal inside the same envelope as auth errors.
+    if (
+        response.status_code == HTTPStatus.UNAUTHORIZED
+        and error.get("type") == "auth_error" and error.get("code") == "401"
+        and isinstance(message := error.get("message"), str)
+        and re.match(r"Недостаточно средств на балансе\. Пополните баланс\b", message)
+    ):
+        return "funds"
     categories = {
         _REFUSAL_CATEGORIES[value]
         for key in ("code", "type")

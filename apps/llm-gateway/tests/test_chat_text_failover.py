@@ -38,8 +38,15 @@ def client(neutralize_lifespan, neutralize_side_effects, monkeypatch):
     [
         pytest.param(402, {"code": "insufficient_balance"}, True, id="payment"),
         pytest.param(401, {"code": "insufficient_funds"}, True, id="structured-funds"),
+        pytest.param(401, {
+            "type": "auth_error", "code": "401", "param": "balance",
+            "message": "Недостаточно средств на балансе. Пополните баланс для продолжения.",
+        }, True, id="llmgw-balance-401"),
         pytest.param(402, None, True, id="bare-payment"),
         pytest.param(401, {"code": "authentication_error"}, False, id="auth"),
+        pytest.param(401, {
+            "type": "auth_error", "code": "401", "param": "api_key", "message": "Invalid API key.",
+        }, False, id="llmgw-auth-401"),
         pytest.param(402, {"code": "insufficient_balance", "type": "authentication_error"}, False,
                      id="contradictory-payment"),
         pytest.param(402, wrapped()["error"], False, id="inflight-without-valid-delay"),
