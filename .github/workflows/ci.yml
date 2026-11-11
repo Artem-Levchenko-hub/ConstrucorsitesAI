@@ -76,6 +76,8 @@ jobs:
       - name: Install the locked API environment
         working-directory: apps/api
         run: uv sync --frozen
+      - name: Verify access to the signed Ubuntu package archive
+        run: bash infra/release/prepare-ci-ubuntu-archive.sh
       - name: Install the font sanitizer used in production
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends opentype-sanitizer
       - name: Verify typography and private font delivery
@@ -269,6 +271,8 @@ jobs:
       - name: Install the locked API environment
         working-directory: apps/api
         run: uv sync --frozen
+      - name: Verify access to the signed Ubuntu package archive
+        run: bash infra/release/prepare-ci-ubuntu-archive.sh
       - name: Install the locked Playwright Chromium runtime
         working-directory: apps/api
         run: uv run --frozen playwright install --with-deps chromium
