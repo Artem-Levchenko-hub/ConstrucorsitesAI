@@ -33,6 +33,7 @@ from yleum_api.schemas.app_integration import (
     IntegrationPackApplyPublic,
     IntegrationPackPublic,
     IntegrationProviderPublic,
+    NutritionAIKeyUpdate,
     PlatformAIState,
 )
 from yleum_api.schemas.max_studio import MaxProjectConfigPayload
@@ -40,6 +41,7 @@ from yleum_api.services import integration_oauth, integration_providers
 from yleum_api.services.entitlements import assert_integrations_allowed
 from yleum_api.services.integration_credentials import load_credentials, lock_account_provider
 from yleum_api.services.max_access import require_existing_max_account_access
+from yleum_api.services.runtime_nutrition_ai import verify_nutrition_key
 
 router = APIRouter(tags=["app-integrations"])
 
@@ -391,6 +393,7 @@ async def get_integration_catalog(
         recommended_pack=await _recommended_pack(
             session, project, connections, bindings
         ),
+        nutrition_ai_enabled=bool(project.runtime_nutrition_ai_key_enc),
     )
 
 
@@ -404,6 +407,27 @@ async def set_platform_ai(
     project.runtime_ai_enabled = payload.enabled
     await session.commit()
     return PlatformAIState(enabled=project.runtime_ai_enabled)
+
+
+@router.put("/api/projects/{project_id}/nutrition-ai", response_model=PlatformAIState)
+async def set_nutrition_ai(
+    project_id: UUID, payload: NutritionAIKeyUpdate,
+    session: SessionDep, current_user: CurrentUserDep,
+) -> PlatformAIState:
+    project = await _owned_max_project(session, project_id, current_user.id)
+    require_existing_max_account_access(current_user)
+    if payload.api_key is None:
+        project.runtime_nutrition_ai_key_enc = None
+    else:
+        owner_id = current_user.id
+        await assert_integrations_allowed(session, owner_id)
+        key = payload.api_key.get_secret_value().strip()
+        await session.rollback()
+        await verify_nutrition_key(key)
+        project = await _owned_max_project(session, project_id, owner_id)
+        project.runtime_nutrition_ai_key_enc = encrypt_strong(key)
+    await session.commit()
+    return PlatformAIState(enabled=bool(project.runtime_nutrition_ai_key_enc))
 
 
 @router.put(

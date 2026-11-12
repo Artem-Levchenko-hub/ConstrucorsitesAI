@@ -65,6 +65,11 @@ from yleum_api.services.integration_responses import (
     payment_response,
     response_object,
 )
+from yleum_api.services.runtime_nutrition_ai import (
+    NUTRITION_TASK,
+    estimate_nutrition,
+    validate_nutrition_request,
+)
 from yleum_api.services.secret_safety import redact_provider_secrets
 
 router = APIRouter(prefix="/api/runtime/projects", tags=["integration-runtime"])
@@ -329,6 +334,9 @@ async def runtime_integration_status(
     if project.runtime_ai_enabled:
         providers.add("llmgw")
         capabilities.update(integration_providers.get_provider("llmgw").capabilities)
+    if project.runtime_nutrition_ai_key_enc:
+        providers.add("aitunnel")
+        capabilities.add("Оценка КБЖУ")
     return RuntimeIntegrationStatus(
         providers=sorted(providers),
         capabilities=sorted(capabilities),
@@ -340,13 +348,16 @@ async def runtime_integration_status(
     )
 
 
-async def _enforce_runtime_ai_limits(project_id: UUID, max_user_id: int) -> None:
-    """Fail closed before spending the project owner's wallet balance."""
-
+async def _enforce_runtime_ai_limits(
+    project_id: UUID, max_user_id: int, *, nutrition: bool = False,
+) -> None:
+    """Fail closed before sending a billed request."""
+    prefix = "omnia:runtime-nutrition-ai" if nutrition else "omnia:runtime-ai"
+    minute, day, project_day = (3, 20, 100) if nutrition else (8, 120, 2_000)
     buckets = (
-        (f"omnia:runtime-ai:minute:{project_id}:{max_user_id}", 8, 60),
-        (f"omnia:runtime-ai:day:{project_id}:{max_user_id}", 120, 86_400),
-        (f"omnia:runtime-ai:project-day:{project_id}", 2_000, 86_400),
+        (f"{prefix}:minute:{project_id}:{max_user_id}", minute, 60),
+        (f"{prefix}:day:{project_id}:{max_user_id}", day, 86_400),
+        (f"{prefix}:project-day:{project_id}", project_day, 86_400),
     )
     try:
         redis = get_redis()
@@ -466,12 +477,36 @@ async def request_runtime_ai(
     request: Request,
     x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")] = "",
 ) -> RuntimeAIPublic:
-    """Run owner-billed inference through the internal LLM gateway."""
+    """Run a project-enabled AI operation for an authenticated MAX visitor."""
 
     context = await _runtime_context(session, project_id, x_max_init_data, request)
     project = await session.get(Project, project_id)
     if project is None:
         raise ApiError("not_found", "Проект не найден", status.HTTP_404_NOT_FOUND)
+    if payload.context.get("task") == NUTRITION_TASK:
+        if not request.headers.get("X-Omnia-Integration-Assertion"):
+            raise ApiError(
+                "max_init_data_invalid", "Откройте приложение из чата MAX.",
+                status.HTTP_401_UNAUTHORIZED,
+            )
+        encrypted_key = project.runtime_nutrition_ai_key_enc
+        if not encrypted_key:
+            raise ApiError(
+                "ai_integration_required", "AITunnel не подключён к этому приложению.",
+                status.HTTP_409_CONFLICT,
+            )
+        dish, portion_g = validate_nutrition_request(payload)
+        try:
+            key = decrypt_strong(encrypted_key)
+        except (InvalidToken, ValueError):
+            raise ApiError(
+                "integration_credentials_corrupted", "Переподключите AITunnel в настройках.",
+                status.HTTP_409_CONFLICT,
+            ) from None
+        # Do not tie up the shared database pool while a provider call is pending.
+        await session.rollback()
+        await _enforce_runtime_ai_limits(project_id, context.max_user_id, nutrition=True)
+        return await estimate_nutrition(key, dish, portion_g)
     if not project.runtime_ai_enabled:
         raise ApiError(
             "ai_integration_required",

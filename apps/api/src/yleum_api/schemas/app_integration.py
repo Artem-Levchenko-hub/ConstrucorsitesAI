@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, StrictBool, field_validator
 
 
 class IntegrationFieldPublic(BaseModel):
@@ -65,6 +65,7 @@ class IntegrationCatalogPublic(BaseModel):
     providers: list[IntegrationProviderPublic]
     connections: list[AppIntegrationPublic]
     recommended_pack: IntegrationPackPublic
+    nutrition_ai_enabled: bool = False
 
 
 class IntegrationPackApplyPublic(BaseModel):
@@ -99,3 +100,8 @@ class IntegrationConnectRequest(BaseModel):
 class PlatformAIState(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: StrictBool
+
+
+class NutritionAIKeyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    api_key: SecretStr | None = Field(max_length=220)

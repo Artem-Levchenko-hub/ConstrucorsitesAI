@@ -673,6 +673,7 @@ export type AppIntegration = {
 export type IntegrationCatalog = {
   providers: IntegrationProvider[];
   connections: AppIntegration[];
+  nutrition_ai_enabled?: boolean;
   recommended_pack: {
     key: string;
     title: string;

@@ -84,6 +84,7 @@ class Project(Base):
     runtime_ai_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false", default=False,
     )
+    runtime_nutrition_ai_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     current_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("snapshots.id", ondelete="SET NULL", use_alter=True),
