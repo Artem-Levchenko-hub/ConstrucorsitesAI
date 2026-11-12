@@ -276,13 +276,17 @@ async def test_native_fallback_deferred_until_accepted_then_one_generation_charg
     user, project, messages, run = owner
     sent = []
 
-    def post(url, payload, headers, **kwargs):
-        sent.append((url, payload))
-        assert url == "https://api.llmgw.ru/v1/chat/completions"
-        return httpx.Response(502, json={"error": "Bad gateway"}, request=httpx.Request("POST", url))
-
-    def backup(request):
+    async def reply(request):
+        if sent:
+            async with pool.acquire() as conn:
+                failed_receipts = await conn.fetchval(
+                    "SELECT count(*) FROM provider_calls WHERE run_id=$1 AND provider_scope='llmgw' "
+                    "AND status='failed' AND receipt_hash IS NOT NULL", run,
+                )
+            assert failed_receipts == len(sent)
         sent.append((str(request.url), json.loads(request.content)))
+        if request.url.host == "api.llmgw.ru":
+            return httpx.Response(502, json={"error": "Bad gateway"})
         assert str(request.url) == "https://api.aitunnel.ru/v1/chat/completions"
         assert request.headers["Authorization"] == "Bearer synthetic-backup"
         return httpx.Response(200, json={
@@ -292,8 +296,7 @@ async def test_native_fallback_deferred_until_accepted_then_one_generation_charg
                 {"id": "add-1", "type": "function", "function": {"name": "add", "arguments": '{"a":2,"b":3}'}}
             ]}}]})
 
-    monkeypatch.setattr(messages_native, "_post_llmgw", post)
-    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(backup))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(reply))
     monkeypatch.setattr(messages_native.file_logger, "log_request", lambda *args, **kwargs: None)
     app = FastAPI()
     app.include_router(messages_native.router)
@@ -306,14 +309,18 @@ async def test_native_fallback_deferred_until_accepted_then_one_generation_charg
     assert response.status_code == 200 and response.json()["stop_reason"] == "tool_use"
     assert response.json()["content"][0]["input"] == {"a": 2, "b": 3}
     assert response.json()["metadata"]["provider_scope"] == "aitunnel"
-    assert len(sent) == 2 and sent[1][1]["model"] == "claude-sonnet-5.5"
-    assert {k: v for k, v in sent[0][1].items() if k != "model"} == {
-        k: v for k, v in sent[1][1].items() if k != "model"}
+    assert [url for url, _ in sent] == [text_failover.PRIMARY_URL, text_failover.PRIMARY_URL,
+                                        "https://api.aitunnel.ru/v1/chat/completions"]
+    primary, primary_retry, backup = (body for _, body in sent)
+    assert primary == primary_retry and backup["model"] == "claude-sonnet-5.5"
+    assert {k: v for k, v in primary.items() if k != "model"} == {
+        k: v for k, v in backup.items() if k != "model"}
     async with pool.acquire() as conn:
         rows = await conn.fetch("SELECT provider_scope,status,provider_cost_rub,provider_cost_usd,receipt_hash "
                                 "FROM provider_calls WHERE run_id=$1 ORDER BY created_at", run)
         assert [(r["provider_scope"], r["status"], r["provider_cost_rub"], r["provider_cost_usd"]) for r in rows] == [
-            ("llmgw", "failed", None, None), ("aitunnel", "completed", Decimal("0.3"), None)]
+            ("llmgw", "failed", None, None), ("llmgw", "failed", None, None),
+            ("aitunnel", "completed", Decimal("0.3"), None)]
         assert all(r["receipt_hash"] for r in rows)
         assert await conn.fetchval("SELECT count(*) FROM usage WHERE run_id=$1", run) == 1
         assert await conn.fetchval("SELECT count(*) FROM usage_settlements WHERE user_id=$1 "
