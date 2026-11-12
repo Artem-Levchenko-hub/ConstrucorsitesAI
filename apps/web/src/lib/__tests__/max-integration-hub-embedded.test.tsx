@@ -78,8 +78,11 @@ describe("Integration Hub inside the editor modal", () => {
     container.remove();
     vi.restoreAllMocks();
   });
-  async function render(connections: AppIntegration[], onExit?: () => void, onBusyChange?: (busy: boolean) => void) {
-    const data = catalog(connections);
+  async function render(
+    connections: AppIntegration[], onExit?: () => void,
+    onBusyChange?: (busy: boolean) => void, nutritionAiEnabled?: boolean,
+  ) {
+    const data = { ...catalog(connections), nutrition_ai_enabled: nutritionAiEnabled };
     client.setQueryData(["app-integrations", "project-1"], data);
     boundary.catalog.mockResolvedValue(data);
     await act(async () => root.render(
@@ -103,6 +106,12 @@ describe("Integration Hub inside the editor modal", () => {
     expect(dialog.querySelector('nav[aria-label="Разделы проекта MAX"]')).toBeNull();
     expect(dialog.querySelector('a[aria-label="Все проекты"]')).toBeNull();
     expect(dialog.querySelector('input[aria-label="Найти сервис"]')).not.toBeNull();
+  });
+
+  it("offers the project's masked AITunnel setup inside the services panel", async () => {
+    const dialog = await render([], undefined, undefined, false);
+    expect(dialog.querySelector('input[name="api_key"][type="password"]')).not.toBeNull();
+    expect(button("Подключить AITunnel")).toBeDefined();
   });
 
   it("replaces the catalog with credentials and restores the filters when going back", async () => {

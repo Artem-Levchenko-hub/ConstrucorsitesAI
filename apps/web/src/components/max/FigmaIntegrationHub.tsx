@@ -665,7 +665,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
           <p>Подключение даёт приложению доступ к сервису. Если нужны новые экраны или действия, выберите «Сценарий оплаты» или «Добавить в приложение». После доработки опубликуйте изменения.</p>
         </details>
       </div>
-      {!embedded && catalog.data?.nutrition_ai_enabled !== undefined && (
+      {catalog.data?.nutrition_ai_enabled !== undefined && (
         <MaxNutritionAiConnection
           key={projectId}
           projectId={projectId}
