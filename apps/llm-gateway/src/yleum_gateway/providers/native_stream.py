@@ -22,6 +22,7 @@ from yleum_gateway.services.text_failover import decoded_body_headers
 
 IDLE_TIMEOUT_SECONDS = 240.0
 CONNECT_TIMEOUT_SECONDS = 30.0
+AITUNNEL_STREAM_HEADERS_TIMEOUT_SECONDS = 120.0
 RECEIPT_RESERVE_SECONDS = 15.0
 MAX_WIRE_BYTES = 16 * 1024 * 1024
 MAX_EVENT_BYTES = 2 * 1024 * 1024
@@ -30,7 +31,8 @@ MAX_TOOLS = 256
 TRANSPORT_STAGES = frozenset({"connect", "sending", "awaiting_headers", "headers", "body", "complete"})
 _MILLISECONDS = (
     "response_budget_ms", "connect_timeout_ms", "read_timeout_ms", "write_timeout_ms", "pool_timeout_ms",
-    "request_sent_ms", "headers_received_ms", "first_sse_data_ms", "response_completed_ms",
+    "request_sent_ms", "headers_timeout_ms", "headers_received_ms", "first_sse_data_ms",
+    "response_completed_ms",
 )
 _FINISH_REASONS = {
     "stop", "tool_calls", "length", "content_filter", "end_turn", "tool_use",
@@ -50,8 +52,8 @@ def provider_request_deadline(value: str | None, started_at: float, *, reserve: 
 
 
 def _transport_timeout(io_timeout: float, *, provider_scope: str) -> httpx.Timeout:
-    # AITunnel can stay silent until it has a result. The enclosing asyncio
-    # deadline bounds reads; a separate idle timer would cut that budget short.
+    # AITunnel streams have a separate header deadline. The overall request
+    # deadline bounds the open stream and non-streaming responses.
     return httpx.Timeout(
         io_timeout,
         connect=min(CONNECT_TIMEOUT_SECONDS, io_timeout),
@@ -85,10 +87,12 @@ def transport_diagnostics(evidence: dict[str, Any]) -> dict[str, int | str | Non
 class _ResponseProgress:
     def __init__(
         self, evidence: dict[str, Any], payload: dict[str, Any], *,
-        mode: str, budget_seconds: float, timeout: httpx.Timeout,
+        mode: str, budget_seconds: float, timeout: httpx.Timeout, provider_scope: str,
     ) -> None:
         self.evidence = evidence
         self.started_at = time.monotonic()
+        self._limit_headers = provider_scope == "aitunnel" and mode == "sse"
+        self._headers_timer: asyncio.Timeout | None = None
         evidence.update(
             transport_stage="connect", transport_mode=mode,
             transport_started_unix_ms=time.time_ns() // 1_000_000,
@@ -106,6 +110,18 @@ class _ResponseProgress:
         if milestone not in self.evidence:
             self.evidence[milestone] = round((time.monotonic() - self.started_at) * 1000)
 
+    async def send(self, client: httpx.AsyncClient, request: httpx.Request) -> httpx.Response:
+        if not self._limit_headers:
+            return await client.send(request, stream=True)
+        # Start counting when the request body has been sent. Leaving this
+        # context on receipt of headers gives the body its full remaining budget.
+        async with asyncio.timeout(None) as timer:
+            self._headers_timer = timer
+            try:
+                return await client.send(request, stream=True)
+            finally:
+                self._headers_timer = None
+
     async def trace(self, event: str, _info: dict[str, Any]) -> None:
         # httpcore's event names are observed facts. Its event data may include
         # credentials or prompts, so ignore it completely.
@@ -116,6 +132,11 @@ class _ResponseProgress:
             self.evidence["transport_stage"] = "sending"
         elif phase == "send_request_body.complete":
             self.record("awaiting_headers", "request_sent_ms")
+            timer = self._headers_timer
+            if timer is not None and timer.when() is None:
+                seconds = AITUNNEL_STREAM_HEADERS_TIMEOUT_SECONDS
+                timer.reschedule(asyncio.get_running_loop().time() + seconds)
+                self.evidence["headers_timeout_ms"] = round(seconds * 1000)
 
 
 def open_aitunnel_response(
@@ -141,7 +162,7 @@ async def open_timed_response(
     timeout = _transport_timeout(min(IDLE_TIMEOUT_SECONDS, remaining), provider_scope=provider_scope)
     progress = _ResponseProgress(
         evidence, payload, mode="sse" if payload.get("stream") is True else "json",
-        budget_seconds=remaining, timeout=timeout,
+        budget_seconds=remaining, timeout=timeout, provider_scope=provider_scope,
     )
     async with asyncio.timeout_at(deadline), httpx.AsyncClient(
         timeout=timeout, trust_env=False, transport=httpx.AsyncHTTPTransport(retries=0),
@@ -152,7 +173,7 @@ async def open_timed_response(
         verify_dispatch_capacity()
         if loop.time() >= deadline:
             raise DispatchDeadlineError()
-        async with aclosing(await client.send(request, stream=True)) as response:
+        async with aclosing(await progress.send(client, request)) as response:
             progress.record("headers", "headers_received_ms")
             if 400 <= response.status_code <= 599:
                 evidence["upstream_http_status"] = response.status_code
@@ -354,7 +375,10 @@ async def collect_response(
         raise DispatchDeadlineError()
     io_timeout = min(IDLE_TIMEOUT_SECONDS, remaining) if provider_scope == "aitunnel" else IDLE_TIMEOUT_SECONDS
     timeout = _transport_timeout(io_timeout, provider_scope=provider_scope)
-    progress = _ResponseProgress(evidence, payload, mode="sse", budget_seconds=remaining, timeout=timeout)
+    progress = _ResponseProgress(
+        evidence, payload, mode="sse", budget_seconds=remaining, timeout=timeout,
+        provider_scope=provider_scope,
+    )
     extensions = {"trace": progress.trace}
     budget = asyncio.timeout(budget_seconds) if deadline is None else asyncio.timeout_at(deadline)
     async with budget, httpx.AsyncClient(
@@ -363,7 +387,7 @@ async def collect_response(
         from yleum_gateway.services.generation_response_capture import verify_dispatch_capacity
 
         response_scope: AbstractAsyncContextManager[httpx.Response]
-        if deadline is None:
+        if deadline is None and provider_scope != "aitunnel":
             verify_dispatch_capacity()
             response_scope = client.stream(
                 "POST", url, json=wire_payload, headers=request_headers, extensions=extensions,
@@ -373,9 +397,9 @@ async def collect_response(
                 "POST", url, json=wire_payload, headers=request_headers, extensions=extensions,
             )
             verify_dispatch_capacity()
-            if asyncio.get_running_loop().time() >= deadline:
+            if deadline is not None and asyncio.get_running_loop().time() >= deadline:
                 raise DispatchDeadlineError()
-            response_scope = aclosing(await client.send(request, stream=True))
+            response_scope = aclosing(await progress.send(client, request))
         async with response_scope as response:
             progress.record("headers", "headers_received_ms")
             if type(response.status_code) is int and 400 <= response.status_code <= 599:

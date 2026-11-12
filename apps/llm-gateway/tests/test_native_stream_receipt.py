@@ -66,7 +66,7 @@ async def test_complete_response_has_usage_and_no_240_second_total_cap(monkeypat
 
 
 @pytest.mark.parametrize("max_tokens", [None, 128], ids=["provider-default", "explicit-cap"])
-async def test_aitunnel_can_receive_late_headers_within_the_request_deadline(monkeypatch, max_tokens):
+async def test_aitunnel_does_not_apply_an_http_read_timeout_to_the_stream(monkeypatch, max_tokens):
     monkeypatch.setenv("AITUNNEL_TEXT_FALLBACK_ENABLED", "true")
     monkeypatch.setenv("AITUNNEL_TEXT_API_KEY", "synthetic-backup-key")
     calls = []
@@ -75,10 +75,7 @@ async def test_aitunnel_can_receive_late_headers_within_the_request_deadline(mon
         calls.append(request)
         timeouts = request.extensions["timeout"]
         assert timeouts["connect"] == 30
-        read_timeout = timeouts["read"]
-        # Simulate the long first-byte delay without sleeping through it.
-        if read_timeout is not None and read_timeout < 550:
-            raise httpx.ReadTimeout("provider headers have not arrived", request=request)
+        assert timeouts["read"] is None
         payload = json.loads(request.content)
         assert payload["stream"] is True
         assert payload["stream_options"] == {"include_usage": True}
@@ -481,8 +478,13 @@ async def test_real_route_one_post_one_settlement_and_receipt_budget(monkeypatch
     assert receipt["provider_cost_rub"] == Decimal("1.23")
 
 
+@pytest.mark.parametrize(
+    ("request_window", "headers_timeout", "response_budget_ms"),
+    [(b"15.5", 120.0, 500), (b"600", 0.2, 585_000)],
+    ids=["overall-deadline-first", "headers-deadline-first"],
+)
 async def test_aitunnel_sent_request_without_headers_keeps_typed_deadline(
-    monkeypatch, neutralize_side_effects,
+    monkeypatch, neutralize_side_effects, request_window, headers_timeout, response_budget_ms,
 ):
     posts, diagnostics = [], []
     disconnected = asyncio.Event()
@@ -508,6 +510,7 @@ async def test_aitunnel_sent_request_without_headers_keeps_typed_deadline(
             return await _HANDLE_ASYNC_REQUEST(self, request)
 
     monkeypatch.setattr(httpx, "AsyncHTTPTransport", LoopbackTransport)
+    monkeypatch.setattr(native_stream, "AITUNNEL_STREAM_HEADERS_TIMEOUT_SECONDS", headers_timeout, raising=False)
     monkeypatch.setenv("AITUNNEL_TEXT_FALLBACK_ENABLED", "true")
     monkeypatch.setenv("AITUNNEL_TEXT_API_KEY", "synthetic-backup-key")
     monkeypatch.setattr(chat.text_failover, "select_scope", AsyncMock(return_value="aitunnel"))
@@ -517,7 +520,7 @@ async def test_aitunnel_sent_request_without_headers_keeps_typed_deadline(
                                      messages=[{"role": "user", "content": "synthetic"}])
     async with server:
         with pytest.raises(HTTPException) as raised:
-            await asyncio.wait_for(chat.chat_completions(req, _route_request(req, b"15.5")), timeout=2)
+            await asyncio.wait_for(chat.chat_completions(req, _route_request(req, request_window)), timeout=2)
         await asyncio.wait_for(disconnected.wait(), timeout=1)
 
     assert len(posts) == 1 and posts[0]["max_tokens"] == 128
@@ -535,10 +538,39 @@ async def test_aitunnel_sent_request_without_headers_keeps_typed_deadline(
     chat.billing.charge.assert_not_awaited()
     record, = diagnostics
     assert record["provider_call_id"] == details["provider_call_id"]
-    assert 0 <= record["request_sent_ms"] <= record["response_budget_ms"] <= 500
+    assert 0 <= record["request_sent_ms"] <= record["response_budget_ms"] <= response_budget_ms
+    assert record["headers_timeout_ms"] == round(headers_timeout * 1000)
     assert record["transport_mode"] == "sse" and record["requested_max_tokens"] == 128
     assert record["read_timeout_ms"] is None
     assert "headers_received_ms" not in record and "first_sse_data_ms" not in record
+
+
+async def test_aitunnel_open_stream_can_answer_after_the_headers_timeout(monkeypatch):
+    headers_timeout = 0.2
+    monkeypatch.setattr(native_stream, "AITUNNEL_STREAM_HEADERS_TIMEOUT_SECONDS", headers_timeout, raising=False)
+
+    class SlowBody(Chunks):
+        async def __aiter__(self):
+            yield b": AITUNNEL PROCESSING\n\n"
+            await asyncio.sleep(headers_timeout * 2)
+            yield encode(completed())
+
+    stream = SlowBody([])
+
+    async def reply(request):
+        await request.extensions["trace"]("http11.send_request_body.complete", {})
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=stream)
+
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(reply))
+    evidence = {}
+    response = await native_stream.collect_response(
+        "https://provider.test/chat/completions", {"model": "claude-sonnet-5.5"}, {},
+        budget_seconds=2, deadline=asyncio.get_running_loop().time() + 2,
+        evidence=evidence, provider_scope="aitunnel",
+    )
+    assert response.json()["choices"][0]["message"]["content"] == "hello"
+    assert evidence["headers_received_ms"] < evidence["headers_timeout_ms"] <= evidence["first_sse_data_ms"]
+    assert stream.closed
 
 
 @pytest.mark.parametrize("value,ceiling", [("nan", 255), ("inf", 255), ("-1", 255),
