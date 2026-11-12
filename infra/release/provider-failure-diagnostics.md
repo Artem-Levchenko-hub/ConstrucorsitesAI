@@ -32,6 +32,16 @@ results followed by user feedback remain supported. The validator does not
 rewrite transcripts, invent tool results or change model parameters to guess
 away an unknown provider error.
 
+Search the Gateway container log for `native_messages.request_rejected` and
+the generation's `run_id` to locate a local HTTP 400. Each record includes
+`error_origin: gateway`, the route, stage, retry count, and a fixed validation
+phase, reason and field path. For example, `unresolved_tool_calls` at
+`messages[12].role` means a new message arrived before pending tool results.
+The `transcript_validation` phase indexes the converted provider request.
+Provider configuration failures have a null field path. These records contain
+structural metadata and UUIDs. The preceding provider receipt, when available,
+is in the daily request log for the same run.
+
 ## Fields and boundaries
 
 Each private record contains:

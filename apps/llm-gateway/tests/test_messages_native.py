@@ -1179,6 +1179,106 @@ def test_transport_failure_logs_safe_class_and_correlation(client, monkeypatch, 
     assert "synthetic-private" not in str(logs) + response.text
 
 
+@pytest.mark.parametrize(("patch", "phase", "reason", "field"), [
+    (
+        {"messages": [
+            {"role": "assistant", "content": [{
+                "type": "tool_use", "id": "synthetic-private-id", "name": "read_file", "input": {},
+            }]},
+            {"role": "user", "content": "synthetic-private-feedback"},
+        ]},
+        "transcript_validation", "unresolved_tool_calls", "messages[1].role",
+    ),
+    (
+        {"messages": [{"role": "synthetic-private-role", "content": "synthetic-private-prompt"}]},
+        "message_conversion", "unsupported_message_role", "messages[0].role",
+    ),
+    ({"model": ""}, "request_validation", "missing_model", "model"),
+])
+def test_local_bad_request_logs_safe_reason_before_provider_admission(
+    client, monkeypatch, native_journal, patch, phase, reason, field,
+):
+    from structlog.testing import capture_logs
+
+    monkeypatch.setattr(messages_native, "native_messages_route",
+                        lambda: ("synthetic", "https://gateway.test/v1"))
+    request = {
+        "model": "claude-sonnet-5.5",
+        "messages": [{"role": "user", "content": "synthetic-private-prompt"}],
+        "metadata": {"project_id": _RUNNER_PROJECT_ID, "run_id": _RUNNER_RUN_ID,
+                     "message_id": _RUNNER_MESSAGE_ID, "stage": "source_repair", "retry_count": 1},
+        **patch,
+    }
+    with capture_logs() as logs:
+        response = client.post("/v1/messages", json=request)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "invalid_request_error"
+    assert [event for event in logs if event["event"] == "native_messages.request_rejected"] == [{
+        "event": "native_messages.request_rejected", "log_level": "warning",
+        "http_status": 400, "error_origin": "gateway", "route": "/v1/messages",
+        "phase": phase, "reason": reason, "field": field,
+        "project_id": _RUNNER_PROJECT_ID, "run_id": _RUNNER_RUN_ID,
+        "message_id": _RUNNER_MESSAGE_ID, "stage": "source_repair", "retry_count": 1,
+    }]
+    assert "synthetic-private" not in str(logs)
+    native_journal.start.assert_not_awaited()
+
+
+def test_native_non_object_body_logs_reason_without_body(app, native_journal):
+    from structlog.testing import capture_logs
+
+    with TestClient(app, raise_server_exceptions=False) as client, capture_logs() as logs:
+        response = client.post("/v1/messages", content=b'["synthetic-private-array"]')
+
+    assert response.status_code == 400
+    event = next(event for event in logs if event["event"] == "native_messages.request_rejected")
+    assert event["phase"] == "request_validation" and event["reason"] == "invalid_request_body"
+    assert event["run_id"] is None
+    assert "synthetic-private" not in str(logs)
+    native_journal.start.assert_not_awaited()
+
+
+def test_native_missing_model_rejection_ignores_nonfinite_retry_count(client, native_journal):
+    from structlog.testing import capture_logs
+
+    with capture_logs() as logs:
+        response = client.post("/v1/messages", content=b'{"metadata":{"retry_count":1e999}}')
+
+    assert response.status_code == 400
+    event = next(event for event in logs if event["event"] == "native_messages.request_rejected")
+    assert event["reason"] == "missing_model" and event["retry_count"] == 0
+    native_journal.start.assert_not_awaited()
+
+
+@pytest.mark.parametrize(("limit", "temperature", "reason"), [
+    (32, 0.2, "provider_payload_too_large"),
+    (32_000_000, float("nan"), "invalid_provider_payload_encoding"),
+])
+def test_native_payload_rejections_log_distinct_reasons(client, monkeypatch, native_journal, limit, temperature, reason):
+    from structlog.testing import capture_logs
+
+    from yleum_gateway.services import payload_limits
+
+    monkeypatch.setattr(payload_limits, "MAX_PROVIDER_REQUEST_BYTES", limit)
+    monkeypatch.setattr(messages_native, "native_messages_route",
+                        lambda: ("synthetic", "https://gateway.test/v1"))
+    with capture_logs() as logs:
+        response = client.post("/v1/messages", content=json.dumps({
+            "model": "claude-sonnet-5.5", "temperature": temperature,
+            "messages": [{"role": "user", "content": "synthetic-private-prompt"}],
+            "metadata": {"project_id": _RUNNER_PROJECT_ID, "run_id": _RUNNER_RUN_ID,
+                         "stage": "synthetic-private-stage"},
+        }))
+
+    assert response.status_code == 400
+    rejection = next(event for event in logs if event["event"] == "native_messages.request_rejected")
+    assert rejection["phase"] == "payload_validation" and rejection["reason"] == reason
+    assert rejection["run_id"] == _RUNNER_RUN_ID and rejection["stage"] == "unknown"
+    assert "synthetic-private" not in str(logs)
+    native_journal.start.assert_not_awaited()
+
+
 @pytest.mark.parametrize("error_class,status,error_type", [
     (httpx.ConnectError, 502, "api_error"),
     (httpx.ConnectTimeout, 502, "api_error"),

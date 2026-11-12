@@ -8,13 +8,22 @@ from yleum_gateway.core.errors import ValidationFailedError
 MAX_PROVIDER_REQUEST_BYTES = 32_000_000
 
 
-def require_provider_payload_size(payload: dict[str, Any]) -> None:
+def provider_payload_rejection(payload: dict[str, Any]) -> str | None:
     size = 0
     try:
         for piece in json.JSONEncoder(ensure_ascii=False, separators=(",", ":"),
                                       allow_nan=False).iterencode(payload):
             size += len(piece.encode("utf-8"))
             if size > MAX_PROVIDER_REQUEST_BYTES:
-                raise ValidationFailedError("Provider request exceeds size limit")
+                return "provider_payload_too_large"
     except (ValueError, TypeError):
-        raise ValidationFailedError("Invalid provider request encoding") from None
+        return "invalid_provider_payload_encoding"
+    return None
+
+
+def require_provider_payload_size(payload: dict[str, Any]) -> None:
+    rejection = provider_payload_rejection(payload)
+    if rejection == "provider_payload_too_large":
+        raise ValidationFailedError("Provider request exceeds size limit")
+    if rejection == "invalid_provider_payload_encoding":
+        raise ValidationFailedError("Invalid provider request encoding")

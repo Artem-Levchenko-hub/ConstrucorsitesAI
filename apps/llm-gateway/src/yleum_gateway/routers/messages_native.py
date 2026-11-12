@@ -57,9 +57,13 @@ from yleum_gateway.services import provider_calls as provider_calls
 from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
 from yleum_gateway.services.generation_identity import GenerationProviderIdentity
 from yleum_gateway.services.model_router import is_supported, native_messages_route, slug_to_omnia
-from yleum_gateway.services.native_request_validation import validate_native_chat_request
+from yleum_gateway.services.native_request_validation import (
+    NativeRequestValidationError,
+    validate_native_chat_request,
+)
 from yleum_gateway.services.output_budget import output_tokens, uses_provider_output_default
 from yleum_gateway.services.output_stop import output_stop_error
+from yleum_gateway.services.payload_limits import provider_payload_rejection
 from yleum_gateway.services.pricing import (
     ReportedCost,
     calculate_cost_rub,
@@ -81,6 +85,7 @@ _REQUEST_ERROR_MESSAGES = {
     "invalid_request_error": "Provider rejected an invalid request",
     "request_too_large": "Provider rejected an oversized request",
 }
+_NATIVE_LOG_STAGES = {"build_plan", "native_agent", "verification", "source_repair"}
 
 
 def _request_error_type(response: httpx.Response) -> str | None:
@@ -112,6 +117,29 @@ def _err(
         status_code=status,
         media_type="application/json",
     )
+
+
+def _native_log_fields(scope: dict[str, Any], retry_count: int) -> dict[str, str | int | None]:
+    stage = scope.get("stage")
+    route = scope.get("route")
+    return {
+        "route": route if route in ("/v1/messages", "/v1/project-cell/messages") else None,
+        **{field: str(value) if isinstance(value := scope.get(field), UUID) else None
+           for field in ("project_id", "run_id", "message_id")},
+        "stage": stage if isinstance(stage, str) and stage in _NATIVE_LOG_STAGES else "unknown",
+        "retry_count": retry_count,
+    }
+
+
+def _native_request_rejected(
+    message: str, *, phase: str, reason: str, scope: dict[str, Any],
+    field: str | None = None, retry_count: int = 0,
+) -> Response:
+    log.warning(
+        "native_messages.request_rejected", http_status=400, error_origin="gateway",
+        phase=phase, reason=reason, field=field, **_native_log_fields(scope, retry_count),
+    )
+    return _err(400, "invalid_request_error", message)
 
 
 def _unconfirmed_provider_outcome(
@@ -155,7 +183,7 @@ def _text(content: Any) -> str:
     )
 
 
-def _openai_text_content(content: Any) -> str | list[dict[str, Any]]:
+def _openai_text_content(content: Any, *, field: str) -> str | list[dict[str, Any]]:
     """Keep Anthropic cache breakpoints while adapting text blocks.
 
     llmgw accepts OpenAI content arrays. LiteLLM-compatible Anthropic routes read
@@ -169,7 +197,7 @@ def _openai_text_content(content: Any) -> str | list[dict[str, Any]]:
     if not isinstance(content, list):
         return ""
     blocks: list[dict[str, Any]] = []
-    for block in content:
+    for index, block in enumerate(content):
         if isinstance(block, dict) and block.get("type") == "image":
             import base64
             import binascii
@@ -179,13 +207,22 @@ def _openai_text_content(content: Any) -> str | list[dict[str, Any]]:
                     or source.get("media_type") not in {"image/png", "image/jpeg", "image/webp"}
                     or not isinstance(source.get("data"), str)
                     or not 0 < len(source["data"]) <= 6_990_508):
-                raise ValueError("invalid reference image source")
+                raise NativeRequestValidationError(
+                    "invalid_reference_image_source", f"{field}[{index}].source",
+                    message="invalid reference image source",
+                )
             try:
                 decoded = base64.b64decode(source["data"], validate=True)
             except (ValueError, binascii.Error):
-                raise ValueError("invalid reference image encoding") from None
+                raise NativeRequestValidationError(
+                    "invalid_reference_image_encoding", f"{field}[{index}].source.data",
+                    message="invalid reference image encoding",
+                ) from None
             if not 0 < len(decoded) <= 5 * 1024 * 1024:
-                raise ValueError("reference image exceeds size limit")
+                raise NativeRequestValidationError(
+                    "reference_image_too_large", f"{field}[{index}].source.data",
+                    message="reference image exceeds size limit",
+                )
             adapted_image: dict[str, Any] = {"type": "image_url", "image_url": {
                 "url": f"data:{source['media_type']};base64,{source['data']}",
             }}
@@ -211,22 +248,27 @@ def _openai_text_content(content: Any) -> str | list[dict[str, Any]]:
 
 def _openai_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    system = _openai_text_content(body.get("system"))
+    system = _openai_text_content(body.get("system"), field="system")
     if system:
         out.append({"role": "system", "content": system})
 
     raw_messages = body.get("messages")
     if not isinstance(raw_messages, list):
-        raise ValueError("messages must be an array")
+        raise NativeRequestValidationError(
+            "invalid_message_list", "messages", message="messages must be an array",
+        )
 
-    for message in raw_messages:
+    for index, message in enumerate(raw_messages):
+        field = f"messages[{index}]"
         if not isinstance(message, dict):
-            raise ValueError("each message must be an object")
+            raise NativeRequestValidationError(
+                "invalid_message", field, message="each message must be an object",
+            )
         role = message.get("role")
         content = message.get("content", "")
 
         if role == "assistant":
-            text = _openai_text_content(content)
+            text = _openai_text_content(content, field=f"{field}.content")
             tool_calls: list[dict[str, Any]] = []
             if isinstance(content, list):
                 for block in content:
@@ -254,15 +296,20 @@ def _openai_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
             continue
 
         if role != "user":
-            raise ValueError(f"unsupported role: {role}")
+            raise NativeRequestValidationError(
+                "unsupported_message_role", f"{field}.role", message=f"unsupported role: {role}",
+            )
 
         if isinstance(content, str):
             out.append({"role": "user", "content": content})
             continue
         if not isinstance(content, list):
-            raise ValueError("message content must be text or an array")
+            raise NativeRequestValidationError(
+                "invalid_message_content", f"{field}.content",
+                message="message content must be text or an array",
+            )
 
-        text = _openai_text_content(content)
+        text = _openai_text_content(content, field=f"{field}.content")
         for block in content:
             if not isinstance(block, dict) or block.get("type") != "tool_result":
                 continue
@@ -434,7 +481,7 @@ def _decimal(value: Any) -> Decimal | None:
 def _non_negative_int(value: Any) -> int:
     try:
         return max(0, int(value or 0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -622,7 +669,7 @@ async def _dispatch_native_provider(
         cell_route=route if route == "/v1/project-cell/messages" else None,
     )
     backup_enabled = text_failover.enabled(model)
-    message_id, stage = dispatch_options["message_id"], dispatch_options["stage"]
+    stage = dispatch_options["stage"]
     loop = asyncio.get_running_loop()
     attempted: set[str] = set()
     while True:
@@ -637,13 +684,12 @@ async def _dispatch_native_provider(
         api_key, api_base = primary_route if provider_scope == "llmgw" else text_failover.credentials(provider_scope)
         payload = {**payload, "model": llmgw.native_slug(model) if provider_scope == "llmgw" else model}
         collect_repair = provider_scope == "aitunnel" and stage == "source_repair"
-        from yleum_gateway.core.errors import ValidationFailedError
-        from yleum_gateway.services.payload_limits import require_provider_payload_size
-
-        try:
-            require_provider_payload_size(collected_stream_payload(payload) if collect_repair else payload)
-        except ValidationFailedError:
-            return _err(400, "invalid_request_error", "Provider request exceeds size limit")
+        rejection = provider_payload_rejection(collected_stream_payload(payload) if collect_repair else payload)
+        if rejection is not None:
+            return _native_request_rejected(
+                "Provider request exceeds size limit", phase="payload_validation", reason=rejection,
+                field="payload", scope=dispatch_options, retry_count=retry_count,
+            )
         headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json", "accept": "application/json"}
         try:
             provider_call_id = await generation_attempts.dispatch(
@@ -702,11 +748,7 @@ async def _dispatch_native_provider(
                 provider_call_id=str(provider_call_id),
                 upstream_http_status=observed_status,
                 transport_stage=transport_stage,
-                run_id=str(run_id) if run_id else None,
-                project_id=str(project_id) if project_id else None,
-                message_id=str(message_id) if message_id else None,
-                stage=stage if stage in {"build_plan", "native_agent", "verification", "source_repair"} else "unknown",
-                retry_count=retry_count,
+                **_native_log_fields(dispatch_options, retry_count),
                 **transport_diagnostics(transport_evidence),
             )
             safe_to_retry = (
@@ -855,21 +897,32 @@ async def _native_messages_execute(
     *,
     runner_claims: RunnerClaims | None = None,
 ) -> Response:
+    route_path = "/v1/project-cell/messages" if runner_claims is not None else "/v1/messages"
+    dispatch_options: dict[str, Any] = {
+        "route": route_path,
+        "project_id": runner_claims.project_id if runner_claims is not None else None,
+        "run_id": runner_claims.run_id if runner_claims is not None else None,
+    }
     provider_deadline = provider_request_deadline(
         request.headers.get("x-yleum-provider-timeout-seconds"),
         asyncio.get_running_loop().time(), reserve=RECEIPT_RESERVE_SECONDS,
     )
     try:
-        body: dict[str, Any] = await request.json()
+        body = await request.json()
     except Exception:
-        return _err(400, "invalid_request_error", "body is not valid JSON")
+        return _native_request_rejected(
+            "body is not valid JSON", phase="request_validation", reason="invalid_json",
+            field="body", scope=dispatch_options,
+        )
+    if not isinstance(body, dict):
+        return _native_request_rejected(
+            "body must be an object", phase="request_validation", reason="invalid_request_body",
+            field="body", scope=dispatch_options,
+        )
 
     raw_metadata = body.get("metadata")
     try:
-        identity = generation_attempts.parse_attempt(
-            await request.body(),
-            "/v1/project-cell/messages" if runner_claims is not None else "/v1/messages",
-        )
+        identity = generation_attempts.parse_attempt(await request.body(), route_path)
     except generation_attempts.AttemptConflict as exc:
         return _err(exc.http_status, exc.code, exc.message)
 
@@ -892,19 +945,9 @@ async def _native_messages_execute(
             return _err(503, "api_error", str(exc))
 
     model = str(body.get("model") or "")
-    if not model:
-        return _err(400, "invalid_request_error", "model is required")
     if model == "anthropic/claude-sonnet-5.5":
         model = "claude-sonnet-5.5"
 
-    route = native_messages_route()
-    if route is None:
-        return _err(
-            400,
-            "invalid_request_error",
-            "LLMGW_API_KEY is not configured for the native agent",
-        )
-    api_key, api_base = route
     user_id = (
         None if runner_claims is not None else _uuid(body.get("user") or metadata.get("user_id"))
     )
@@ -916,11 +959,35 @@ async def _native_messages_execute(
     stage = str(metadata.get("stage") or "native_agent")[:80]
     retry_count = _non_negative_int(metadata.get("retry_count"))
     free = True if runner_claims is not None else bool(metadata.get("free", False))
+    dispatch_options.update(
+        model=model, user_id=user_id, project_id=project_id, run_id=run_id,
+        message_id=message_id, stage=stage, free=free,
+    )
+
+    if not model:
+        return _native_request_rejected(
+            "model is required", phase="request_validation", reason="missing_model",
+            field="model", scope=dispatch_options, retry_count=retry_count,
+        )
+    primary_route = native_messages_route()
+    if primary_route is None:
+        return _native_request_rejected(
+            "LLMGW_API_KEY is not configured for the native agent",
+            phase="provider_configuration", reason="native_provider_not_configured",
+            scope=dispatch_options, retry_count=retry_count,
+        )
 
     try:
         messages = _openai_messages(body)
     except ValueError as exc:
-        return _err(400, "invalid_request_error", str(exc))
+        reason, field = (
+            (exc.reason, exc.field) if isinstance(exc, NativeRequestValidationError)
+            else ("message_conversion_failed", "messages")
+        )
+        return _native_request_rejected(
+            str(exc), phase="message_conversion", reason=reason,
+            field=field, scope=dispatch_options, retry_count=retry_count,
+        )
 
     requested_budget = body.get("max_tokens")
     budget = output_tokens(
@@ -942,9 +1009,12 @@ async def _native_messages_execute(
 
     try:
         validate_native_chat_request(payload)
-    except ValueError:
+    except NativeRequestValidationError as exc:
         # Invalid converted transcripts must fail before admission or a paid POST.
-        return _err(400, "invalid_request_error", "Invalid native provider request")
+        return _native_request_rejected(
+            "Invalid native provider request", phase="transcript_validation", reason=exc.reason,
+            field=exc.field, scope=dispatch_options, retry_count=retry_count,
+        )
 
     # Fail closed before the provider call. A native build must never keep
     # spending after the user's wallet floor or when accounting is unavailable.
@@ -962,13 +1032,9 @@ async def _native_messages_execute(
             return _err(503, "billing_unavailable", "usage accounting is temporarily unavailable")
 
     provider_result = await _dispatch_native_provider(
-        identity=identity, model=model, payload=payload, primary_route=(api_key, api_base),
+        identity=identity, model=model, payload=payload, primary_route=primary_route,
         timed_primary=identity is not None or request.headers.get("x-yleum-provider-timeout-seconds") is not None,
-        retry_count=retry_count, provider_deadline=provider_deadline, dispatch_options={
-            "route": "/v1/project-cell/messages" if runner_claims is not None else "/v1/messages",
-            "model": model, "user_id": user_id, "project_id": project_id, "run_id": run_id,
-            "message_id": message_id, "stage": stage, "free": free,
-        },
+        retry_count=retry_count, provider_deadline=provider_deadline, dispatch_options=dispatch_options,
     )
     if isinstance(provider_result, Response):
         return provider_result
