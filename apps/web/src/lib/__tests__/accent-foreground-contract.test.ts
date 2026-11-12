@@ -27,7 +27,7 @@ describe("semantic foreground contracts", () => {
   });
 
   it("keeps the landing-page application example readable in the light palette", () => {
-    const landing = renderToStaticMarkup(YleumLanding());
+    const landing = renderToStaticMarkup(YleumLanding({ now: 0 }));
 
     // data-max-studio включает светлый набор токенов для встроенных демо-блоков,
     // которые витрина переиспользует из кабинета.

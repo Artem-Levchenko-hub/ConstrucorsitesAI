@@ -18,7 +18,7 @@ describe("поле запроса на первом экране", () => {
   });
 
   it("это настоящее поле ввода, а не надпись", () => {
-    const html = renderToStaticMarkup(<HeroStage />);
+    const html = renderToStaticMarkup(<HeroStage initialNow={0} />);
 
     expect(html).toContain("<textarea");
     expect(html).toContain('id="yl-hero-prompt"');
@@ -27,7 +27,7 @@ describe("поле запроса на первом экране", () => {
   });
 
   it("рядом есть кнопка отправки, а не украшение", () => {
-    const html = renderToStaticMarkup(<HeroStage />);
+    const html = renderToStaticMarkup(<HeroStage initialNow={0} />);
 
     expect(html).toContain('type="submit"');
     expect(html).toContain('class="ys-stage-prompt"');

@@ -20,10 +20,12 @@ export type ArtKind =
   | "flatwhite"
   | "croissant"
   | "cheesecake"
+  | "tea"
   | "monstera"
   | "ficus"
   | "zamioculcas"
-  | "calathea";
+  | "calathea"
+  | "planter";
 
 /** Мягкая подложка под предметом — своя у каждого, чтобы ряд не выглядел одинаковым. */
 const TINT: Record<ArtKind, string> = {
@@ -31,10 +33,12 @@ const TINT: Record<ArtKind, string> = {
   flatwhite: "#f3ede4",
   croissant: "#f7eeda",
   cheesecake: "#f5efe5",
+  tea: "#f4eddf",
   monstera: "#e7f0e5",
   ficus: "#ebf1e7",
   zamioculcas: "#e6eeeb",
   calathea: "#eff2e5",
+  planter: "#f5ede3",
 };
 
 /**
@@ -86,6 +90,15 @@ const ART: Record<ArtKind, React.JSX.Element> = {
       <path d="M41 10.8v-2.2" stroke="#6f8f63" strokeWidth="1.6" strokeLinecap="round" />
     </>
   ),
+  tea: (
+    <>
+      <path d="M44 23h2a5 5 0 0 1 0 10h-5" fill="none" stroke="#8d795e" strokeWidth="2.5" />
+      <path d="M16 20h28v8a14 12 0 0 1-28 0Z" fill="#f9f6ea" />
+      <ellipse cx="30" cy="20" rx="14" ry="3.2" fill="#b98043" />
+      <path d="M24 21v7l-4 2" fill="none" stroke="#89775e" strokeWidth="1.5" />
+      <rect x="16.5" y="28" width="5" height="6" rx="1" fill="#789368" />
+    </>
+  ),
   monstera: (
     <>
       <Pot />
@@ -132,6 +145,7 @@ const ART: Record<ArtKind, React.JSX.Element> = {
       <path d="M32 3.4v20M27.4 10.6c2 1 3.4 2.2 4.6 3.8M36.6 10.6c-2 1-3.4 2.2-4.6 3.8M28 17.2c1.8.8 3 1.8 4 3M36 17.2c-1.8.8-3 1.8-4 3" stroke="#dbe8c6" strokeWidth="1.5" fill="none" strokeLinecap="round" />
     </>
   ),
+  planter: <g transform="translate(-12 -28) scale(1.375)"><Pot /></g>,
 };
 
 export function ProductArt({ kind }: { kind: ArtKind }) {

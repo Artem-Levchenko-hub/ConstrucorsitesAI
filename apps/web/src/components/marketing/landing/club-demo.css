@@ -1,0 +1,121 @@
+.ys-club-demo {
+  --ys-club-ink: #33407d;
+  --ys-club-muted: #626475;
+  --ys-club-rule: #e7e4ec;
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.ys-club-demo .ys-kicker { color: var(--ys-club-muted); }
+
+.ys-club-dates {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.ys-club-dates button {
+  display: grid;
+  align-content: start;
+  min-height: 44px;
+  gap: 3px;
+  padding: 7px 5px;
+  border: 1px solid var(--ys-club-rule);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ys-club-muted);
+  line-height: 1.2;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.ys-club-dates time { color: #272737; font-size: 11px; font-weight: 650; }
+.ys-club-dates button span { font-size: 9px; }
+.ys-club-dates button:hover { border-color: #9da7cf; }
+.ys-club-dates button[aria-pressed="true"] { border-color: #7988bd; background: #eff1fb; color: var(--ys-club-ink); }
+.ys-club-dates button[aria-pressed="true"] time { color: inherit; }
+
+.ys-club-demo .ys-club-meeting {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 13px 11px;
+  text-align: start;
+}
+
+.ys-club-meeting > div { display: grid; gap: 4px; }
+.ys-club-meeting .ys-club-topic { font-size: 11px; font-weight: 600; }
+
+.ys-club-summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  gap: 7px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  color: #272737;
+  font-size: 11px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.ys-club-summary::-webkit-details-marker { display: none; }
+.ys-club-summary:hover { background: #f7f6f9; }
+.ys-club-summary svg { flex: none; }
+.ys-club-chevron { margin-inline-start: auto; color: var(--ys-club-muted); }
+.ys-club-disclosure[open] > .ys-club-summary .ys-club-chevron { transform: rotate(180deg); }
+.ys-club-demo .ys-club-attendees { padding: 5px 8px 10px; }
+
+.ys-club-archive .ys-club-disclosure { border-bottom: 1px solid var(--ys-club-rule); }
+.ys-club-archive time { margin-inline-start: auto; color: var(--ys-club-muted); white-space: nowrap; }
+.ys-club-archive .ys-club-chevron { margin-inline-start: 0; }
+.ys-club-past-title { display: grid; gap: 2px; }
+.ys-club-past-title small { color: var(--ys-club-muted); font-size: 10px; }
+
+.ys-club-vote { border-radius: 9px; background: #f1eef9; }
+.ys-club-vote .ys-club-summary { padding-inline: 9px; color: #403367; }
+.ys-club-vote .ys-club-summary:hover { background: #e9e4f5; }
+
+.ys-club-ballot { display: grid; gap: 8px; padding: 0 9px 9px; }
+.ys-club-ballot fieldset { display: grid; min-width: 0; gap: 4px; }
+.ys-club-choice {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  gap: 8px;
+  padding: 5px 7px;
+  border: 1px solid var(--ys-club-rule);
+  border-radius: 7px;
+  background: #fff;
+  color: #272737;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ys-club-choice input { flex: none; width: 15px; height: 15px; accent-color: #524482; }
+.ys-club-choice:has(:checked) { border-color: #7988bd; background: #f8f7fc; }
+.ys-club-book-title { display: grid; min-width: 0; gap: 3px; color: #403367; font-size: 11px; }
+.ys-club-book-title input {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 5px 7px;
+  border: 1px solid #7988bd;
+  border-radius: 7px;
+  background: #fff;
+  color: #272737;
+  font-size: 16px;
+}
+
+.ys-club-ballot .ys-action,
+.ys-club-signup { min-height: 44px; }
+.ys-club-ballot .ys-action:disabled { color: var(--ys-club-muted); cursor: default; }
+.ys-club-vote-result { margin: 0 9px 9px; color: #403367; font-size: 11px; overflow-wrap: anywhere; }
+.ys-club-signup-status:empty { position: absolute; }
+
+.ys-club-demo :is(button, summary, input, .ys-club-vote-result):focus-visible,
+.ys-club-signup:focus-visible {
+  outline: 2px solid var(--color-brand-blue, #0062ee);
+  outline-offset: 2px;
+}

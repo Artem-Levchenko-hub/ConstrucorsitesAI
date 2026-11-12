@@ -254,6 +254,42 @@ button.ys-action { cursor: pointer; }
 }
 .ys-chips span.is-on { border-color: transparent; background: #14141a; color: #fff; }
 
+.ys-catalog-content { display: grid; gap: 9px; min-width: 0; }
+.ys-catalog-content:focus { outline: none; }
+.ys-catalog-content h3 { margin: 0; font-size: 15px; font-weight: 650; }
+.ys-catalog-content .ys-row-text { overflow-wrap: anywhere; }
+.ys-catalog-content .ys-price { display: block; margin-top: 4px; }
+.ys-catalog-content .ys-search:focus-within { border-color: var(--color-brand-blue, #0062ee); }
+.ys-catalog-content .ys-search input { width: 100%; min-width: 0; background: transparent; color: #14141a; font: inherit; outline: none; }
+.ys-catalog-content .ys-search input::placeholder { color: #686872; }
+.ys-catalog-categories { flex-wrap: wrap; overflow: visible; }
+.ys-catalog-categories button {
+  min-height: 40px;
+  padding: 5px 9px;
+  border: 1px solid #e6e3df;
+  border-radius: 999px;
+  background: #fff;
+  color: #55555f;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+.ys-catalog-categories button:hover { border-color: #b9b5af; }
+.ys-catalog-categories button[aria-pressed="true"] { background: #14141a; border-color: #14141a; color: #fff; }
+.ys-catalog-hint { margin: 8px 0; color: #55555f; font-size: 11px; }
+.ys-catalog-cart-total { display: grid; gap: 2px; min-width: 68px; }
+.ys-catalog-cart-total strong { color: #14141a; font-size: 12px; }
+.ys-catalog-receipt { display: grid; gap: 8px; padding-top: 8px; }
+.ys-catalog-receipt > span { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: #e9f5ec; color: #1d7a45; }
+.ys-catalog-receipt > p { color: #55555f; }
+.ys-screen-back { display: grid; place-items: center; width: 36px; height: 36px; margin: -8px -10px; border: 0; border-radius: 9px; background: transparent; color: #55555f; cursor: pointer; }
+.ys-screen-back:hover { background: #f5f3f0; }
+.ys-screen-back:focus-visible,
+.ys-catalog-categories button:focus-visible,
+.ys-stepper button:focus-visible,
+.ys-bar-button:focus-visible { outline: 2px solid var(--color-brand-blue, #0062ee); outline-offset: 2px; }
+
 /* ── неделя в записи ─────────────────────────────────────────────────────── */
 .ys-week { display: flex; gap: 4px; }
 .ys-week span {
@@ -333,6 +369,7 @@ button.ys-action { cursor: pointer; }
 }
 .ys-bar-button.is-on { background: var(--color-brand-blue, #0062ee); }
 .ys-bar-button.is-done { background: color-mix(in srgb, #1d7a45 12%, #fff); color: #1d7a45; }
+.ys-bar-button:disabled { background: #f3f1ee; color: #62616a; cursor: default; }
 
 .ys-steps { display: grid; gap: 9px; }
 .ys-step { display: flex; align-items: center; gap: 9px; font-size: 11px; color: #9a9aa3; }
@@ -649,5 +686,6 @@ button.ys-action { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   .ys-coverflow-slide,
   .ys-coverflow-slide[data-position="hidden"],
-  .ys-coverflow-navigation button { transition: none; }
+  .ys-coverflow-navigation button,
+  .ys-catalog-categories button { transition: none; }
 }

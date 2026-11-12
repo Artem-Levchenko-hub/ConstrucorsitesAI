@@ -5,7 +5,7 @@ import { YleumLanding } from "@/components/marketing/YleumLanding";
 
 function landing() {
   const host = document.createElement("div");
-  host.innerHTML = renderToStaticMarkup(<YleumLanding />);
+  host.innerHTML = renderToStaticMarkup(<YleumLanding now={0} />);
   return host;
 }
 

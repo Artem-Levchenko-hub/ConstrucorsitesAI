@@ -8,13 +8,14 @@ describe("Yleum landing conversion", () => {
   let root: Root;
   const events: unknown[] = [];
   const capture = (event: Event) => events.push((event as CustomEvent).detail);
+  const now = Date.parse("2026-11-12T06:41:00Z");
   beforeEach(async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     events.length = 0;
     host = document.createElement("div"); document.body.append(host);
     root = createRoot(host);
     window.addEventListener("omnia:marketing", capture);
-    await act(async () => root.render(<YleumLanding />));
+    await act(async () => root.render(<YleumLanding now={now} />));
   });
   afterEach(() => { act(() => root.unmount()); host.remove(); window.removeEventListener("omnia:marketing", capture); });
   it("sends the signup placement without user data and keeps a real registration link", () => {
@@ -31,28 +32,29 @@ describe("Yleum landing conversion", () => {
     await act(async () => tab?.click());
     const pressed = Array.from(host.querySelectorAll("button")).find(el => el.textContent === "Услуги");
     expect(pressed?.getAttribute("aria-pressed")).toBe("true");
-    expect(host.querySelector('[data-testid="landing-example"]')?.textContent).toContain("Записаться на");
+    expect(host.querySelector('[data-position="active"]')?.textContent).toContain("Студия красоты «Линия»");
     expect(events).toContainEqual({ event: "max_scenario_select", page: "landing", placement: "services" });
   });
   it("preserves independent cafe and shop carts while the coverflow loops", async () => {
     const example = host.querySelector('[data-testid="landing-example"]')!;
     const button = (name: string) => {
-      const control = Array.from(example.querySelectorAll("button")).find(el => el.textContent === name || el.getAttribute("aria-label") === name);
+      const control = Array.from(example.querySelectorAll("button")).find(el => !el.closest("[inert]") && (el.textContent?.trim() === name || el.getAttribute("aria-label") === name));
       expect(control, `Missing control: ${name}`).toBeDefined();
       return control!;
     };
     await act(async () => button("Добавить Капучино")?.click());
+    await act(async () => button("Выпечка").click());
     await act(async () => button("Добавить Круассан с миндалём").click());
     for (let index = 0; index < 3; index++) await act(async () => button("Следующий экран").click());
     await act(async () => button("Добавить Фикус").click());
     await act(async () => button("Следующий экран").click());
     const cafe = example.querySelector('[data-position="active"]');
     expect(cafe?.textContent).toContain("Корзина · 2");
-    expect(cafe?.textContent).toContain("Оформить · 430");
+    expect(cafe?.textContent).toContain("430 ₽");
     await act(async () => button("Предыдущий экран").click());
     const shop = example.querySelector('[data-position="active"]');
     expect(shop?.textContent).toContain("Корзина · 1");
-    expect(shop?.textContent).toContain("Оформить · 980");
+    expect(shop?.textContent).toContain("980 ₽");
   });
   it("retains the selected appointment time after leaving and returning", async () => {
     const example = host.querySelector('[data-testid="landing-example"]')!;
@@ -62,26 +64,26 @@ describe("Yleum landing conversion", () => {
       await act(async () => button?.click());
     };
     await click("Услуги");
-    await click("16:30");
+    await click("17:30");
     await click("Клуб");
     await click("Услуги");
     const active = example.querySelector('[data-position="active"]');
-    expect(active?.textContent).toContain("Записаться на 16:30");
-    expect(active?.querySelector('button[aria-pressed="true"]')?.textContent).toBe("16:30");
+    expect(active?.textContent).toContain("Сегодня в 10:00");
+    expect(active?.querySelector('.ys-slots button[aria-pressed="true"]')?.textContent).toBe("17:30");
   });
   it("keeps the same participant count after joining and switching scenarios", async () => {
     const example = host.querySelector('[data-testid="landing-example"]')!;
     const click = async (name: string) => {
-      const button = Array.from(example.querySelectorAll("button")).find(el => el.textContent === name);
+      const button = Array.from(example.querySelectorAll("button")).find(el => el.textContent?.trim() === name);
       expect(button).toBeDefined();
       await act(async () => button?.click());
     };
     await click("Клуб");
-    await click("Участвовать");
+    await click("Записаться на встречу");
     await click("Магазин");
     await click("Клуб");
     const active = example.querySelector('[data-position="active"]');
-    expect(active?.textContent).toContain("идут 15 человек");
+    expect(active?.textContent).toContain("15 участников");
     expect(active?.textContent).toContain("Вы записаны");
   });
   it("preserves an authored prompt and the shop selection across scenario changes", async () => {

@@ -17,74 +17,20 @@
  * — предмет узнаётся. Градиентное пятно читалось как заглушка и обесценивало всё
  * вокруг себя, даже когда остальной экран был честным.
  */
-import {
-  Check,
-  ArrowRight,
-  ChevronLeft,
-  Clock,
-  MapPin,
-  MoreHorizontal,
-  Search,
-  Users,
-} from "lucide-react";
+import { ArrowRight, MapPin, Search } from "lucide-react";
 
+import { ClubDemo } from "./ClubDemo";
+import { CAFE_DEMO, SHOP_DEMO } from "./demo-content";
+import { demoClock } from "./demo-date";
 import { ProductArt, type ArtKind } from "./ProductArt";
-import { CAFE_DEMO } from "./demo-content";
+import { SalonDemo } from "./SalonDemo";
+import { PhoneFrame, Promo, ScreenChrome, Strip } from "./ScreenChrome";
 
-export type ScreenKind =
-  | "cafe"
-  | "cafe-after"
-  | "salon"
-  | "club"
-  | "shop"
-  | "status"
-  | "loyalty";
-
-export function ScreenChrome({
-  name,
-  section,
-  children,
-  bar,
-  compact = false,
-}: {
-  name: string;
-  section: string;
-  children: React.ReactNode;
-  /** Полоса главного действия, закреплённая у нижнего края экрана. */
-  bar?: React.ReactNode;
-  compact?: boolean;
-}) {
-  return (
-    <div className={`ys-screen${compact ? " ys-screen--compact" : ""}`}>
-      <div className="ys-screen-top">
-        <ChevronLeft size={15} />
-        <div>
-          <strong>{name}</strong>
-          <span>{section}</span>
-        </div>
-        <MoreHorizontal size={16} />
-      </div>
-      <div className="ys-screen-body">{children}</div>
-      {bar && <div className="ys-bar">{bar}</div>}
-    </div>
-  );
-}
-
-/** Заметная плашка сверху: то, ради чего клиент открыл приложение сейчас. */
-export function Promo({ kicker, title, pill, tone }: { kicker: string; title: string; pill?: string; tone: string }) {
-  return (
-    <div className={`ys-promo ys-promo--${tone}`}>
-      <div>
-        <span>{kicker}</span>
-        <strong>{title}</strong>
-      </div>
-      {pill && <em>{pill}</em>}
-    </div>
-  );
-}
+type StaticScreenKind = "cafe" | "cafe-after" | "shop" | "status" | "loyalty";
+type CollageScreenKind = StaticScreenKind | "salon" | "club";
 
 /** Строка категорий — первое, чем человек пользуется в каталоге. */
-export function Chips({ items }: { items: readonly string[] }) {
+function Chips({ items }: { items: readonly string[] }) {
   return (
     <div className="ys-chips">
       {items.map((label, i) => (
@@ -125,19 +71,6 @@ function PickRow({ art, title, note, price }: { art: ArtKind; title: string; not
         <small>{note}</small>
       </div>
       <b>{price}</b>
-    </div>
-  );
-}
-
-/** Полоска-итог внизу раздела: бонусы, статус, голосование. */
-export function Strip({ title, note, value }: { title: string; note: string; value: string }) {
-  return (
-    <div className="ys-strip">
-      <div>
-        <strong>{title}</strong>
-        <small>{note}</small>
-      </div>
-      <b>{value}</b>
     </div>
   );
 }
@@ -188,99 +121,12 @@ export function CafeAfterScreen() {
   return <CafePreview enhanced />;
 }
 
-/** Запись на услугу: мастер, день, время, подтверждение. */
-export function SalonScreen() {
-  return (
-    <ScreenChrome
-      name="Форма"
-      section="Студия красоты"
-      bar={<b className="is-on">Записаться на 12:30</b>}
-    >
-      <Promo kicker="Ближайшее окно" title="Сегодня в 12:30" pill="60 мин" tone="salon" />
-      <div className="ys-line">
-        <span>Услуга</span>
-        <strong>Стрижка · 60 мин</strong>
-      </div>
-      <div className="ys-line">
-        <span>Мастер</span>
-        <strong>
-          Анна <Check size={13} />
-        </strong>
-      </div>
-      <p className="ys-kicker">Сентябрь</p>
-      <div className="ys-week">
-        {[
-          ["Пн", "22"],
-          ["Вт", "23"],
-          ["Ср", "24"],
-          ["Чт", "25"],
-          ["Пт", "26"],
-        ].map(([day, date], i) => (
-          <span key={day} className={i === 2 ? "is-on" : undefined}>
-            <em>{day}</em>
-            {date}
-          </span>
-        ))}
-      </div>
-      <div className="ys-slots">
-        <span>10:00</span>
-        <span className="is-on">12:30</span>
-        <span>14:00</span>
-        <span>17:30</span>
-      </div>
-      <p className="ys-note">
-        <Clock size={12} />
-        Подтверждение придёт в MAX
-      </p>
-      <p className="ys-kicker">Другие услуги</p>
-      <div className="ys-line"><span>Окрашивание · 2 ч</span><strong>3 500 ₽</strong></div>
-      <div className="ys-line"><span>Укладка · 40 мин</span><strong>1 200 ₽</strong></div>
-      <div className="ys-line"><span>Уход для волос · 30 мин</span><strong>900 ₽</strong></div>
-      <Strip title="Анна Соколова" note="Мастер · 6 лет в студии" value="4,9" />
-    </ScreenChrome>
-  );
-}
-
-/** Сообщество: встречи и материалы для своих. */
-export function ClubScreen() {
-  return (
-    <ScreenChrome name="Между строк" section="Книжный клуб" bar={<b className="is-on">Участвовать</b>}>
-      <div className="ys-hero-card ys-hero-card--club">
-        <Users size={26} />
-        <strong>
-          Обсуждаем
-          <br />
-          «Маленького принца»
-        </strong>
-        <span>20 сентября · 19:00 · онлайн</span>
-      </div>
-      <div className="ys-faces">
-        <span />
-        <span />
-        <span />
-        <small>идут 14 человек</small>
-      </div>
-      <p className="ys-kicker">Что будет на встрече</p>
-      <ul className="ys-list">
-        <li>Обсудим героев и любимые цитаты</li>
-        <li>Выберем книгу на следующий месяц</li>
-        <li>Разыграем два бумажных издания</li>
-      </ul>
-      <p className="ys-kicker">Прошлые встречи</p>
-      <div className="ys-line"><span>«Мартин Иден»</span><strong>6 сентября</strong></div>
-      <div className="ys-line"><span>«Три товарища»</span><strong>23 августа</strong></div>
-      <div className="ys-line"><span>«Вино из одуванчиков»</span><strong>9 августа</strong></div>
-      <Strip title="Книга на октябрь" note="Голосование открыто до 28 сентября" value="5 книг" />
-    </ScreenChrome>
-  );
-}
-
 /** Витрина товаров. */
 export function ShopScreen() {
   return (
     <ScreenChrome
-      name="Сад"
-      section="Магазин растений"
+      name={SHOP_DEMO.name}
+      section={SHOP_DEMO.section}
       bar={
         <>
           <span>Корзина · 1</span>
@@ -379,50 +225,15 @@ export function LoyaltyScreen() {
   );
 }
 
-/**
- * Рамка телефона вокруг экрана приложения.
- *
- * Мы продаём мини-приложение ВНУТРИ мессенджера, то есть вещь, которую человек
- * открывает в телефоне. Плоская карточка читается как сайт и заставляет
- * додумывать; телефон читается за полсекунды и без единого слова объяснений.
- *
- * Рамка намеренно скромная: тонкая грань, один мягкий свет снизу, никаких
- * бликов и отражений. Её работа — задать контекст, а не соревноваться с
- * содержимым за внимание.
- *
- * Строка состояния и полоска жеста нарисованы, а не взяты картинкой: так они
- * остаются чёткими на любом экране и не добавляют ни одного запроса к сети.
- * Для экранного диктора рамка невидима — она декорация вокруг уже описанного
- * содержимого.
- */
-export function PhoneFrame({ children, time = "9:41" }: { children: React.ReactNode; time?: string }) {
-  return (
-    <div className="ys-phone-frame">
-      <div className="ys-phone-status" aria-hidden="true">
-        <span className="ys-phone-time">{time}</span>
-        <span className="ys-phone-island" />
-        <span className="ys-phone-meters">
-          <i className="ys-phone-signal" />
-          <i className="ys-phone-battery" />
-        </span>
-      </div>
-      <div className="ys-phone-viewport">{children}</div>
-      <span className="ys-phone-home" aria-hidden="true" />
-    </div>
-  );
-}
-
-const registry: Record<ScreenKind, () => React.JSX.Element> = {
+const registry: Record<StaticScreenKind, () => React.JSX.Element> = {
   cafe: CafeScreen,
   "cafe-after": CafeAfterScreen,
-  salon: SalonScreen,
-  club: ClubScreen,
   shop: ShopScreen,
   status: StatusScreen,
   loyalty: LoyaltyScreen,
 };
 
-export function AppScreen({ kind, framed = true }: { kind: ScreenKind; framed?: boolean }) {
+export function AppScreen({ kind, framed = true }: { kind: StaticScreenKind; framed?: boolean }) {
   const Screen = registry[kind];
   // Рамка по умолчанию: все превью на витрине — это мини-приложения в телефоне.
   // Отключается там, где телефон уже нарисован снаружи.
@@ -439,9 +250,11 @@ export function AppScreen({ kind, framed = true }: { kind: ScreenKind; framed?: 
 export function ScreenCollage({
   screens,
   caption,
+  now,
 }: {
-  screens: { kind: ScreenKind; description: string }[];
+  screens: { kind: CollageScreenKind; description: string }[];
   caption?: string;
+  now: number;
 }) {
   return (
     <figure className="ys-collage" tabIndex={0} aria-label="Примеры функций приложения">
@@ -449,7 +262,11 @@ export function ScreenCollage({
         {screens.map(({ kind, description }, i) => (
           <div className="ys-collage-item" key={`${kind}-${i}`}>
             <p className="ys-collage-description">{description}</p>
-            <div aria-hidden="true"><AppScreen kind={kind} /></div>
+            <div aria-hidden="true" inert>
+              {kind === "salon" ? <PhoneFrame time={demoClock(now)}><SalonDemo now={now} /></PhoneFrame>
+                : kind === "club" ? <PhoneFrame><ClubDemo now={now} /></PhoneFrame>
+                : <AppScreen kind={kind} />}
+            </div>
           </div>
         ))}
       </div>

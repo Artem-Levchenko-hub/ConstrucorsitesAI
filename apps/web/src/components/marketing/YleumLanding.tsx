@@ -47,7 +47,7 @@ function Brand() {
   );
 }
 
-export function YleumLanding({ plans = null, signedIn = false }: { plans?: BillingPlan[] | null; signedIn?: boolean } = {}) {
+export function YleumLanding({ plans = null, signedIn = false, now }: { plans?: BillingPlan[] | null; signedIn?: boolean; now: number }) {
   return (
     <main data-max-studio className="yl">
       <MarketingEvents page="landing" />
@@ -74,7 +74,7 @@ export function YleumLanding({ plans = null, signedIn = false }: { plans?: Billi
       <section id="main-content" className="yl-hero" data-marketing-section="hero">
         <div className="yl-wrap yl-hero-copy">
           <h1>Опишите словами<br /><em className="yl-grad-text">Получите приложение</em></h1>
-          <p className="yl-lead">Приложение для вашего бизнеса в MAX.<br />Клиенты открывают его в мессенджере — без отдельной установки.</p>
+          <p className="yl-lead">Приложение для вашего бизнеса в MAX<br />Клиенты открывают его в мессенджере — без отдельной установки</p>
           <ul className="yl-niches" aria-label="Для какого бизнеса">
             {["Кофейня", "Кафе", "Ресторан", "Салон красоты", "Барбершоп", "Магазин", "Студия", "Школа", "Клуб"].map((niche) => (
               <li className="yl-niche" key={niche}>{niche}</li>
@@ -87,7 +87,7 @@ export function YleumLanding({ plans = null, signedIn = false }: { plans?: Billi
             <span className="yl-note">Бесплатный тариф</span>
           </div>}
         </div>
-        <div className="yl-wrap"><HeroStage /></div>
+        <div className="yl-wrap"><HeroStage initialNow={now} /></div>
       </section>
 
       {/* 2 — что отсюда выходит */}
@@ -96,6 +96,7 @@ export function YleumLanding({ plans = null, signedIn = false }: { plans?: Billi
           <h2>Функции, которые вас ждут</h2>
         </div>
         <ScreenCollage
+          now={now}
           screens={[
             { kind: "status", description: "Клиент следит за статусом и временем выдачи заказа" },
             { kind: "cafe", description: "Гость выбирает товары из меню и собирает корзину" },
