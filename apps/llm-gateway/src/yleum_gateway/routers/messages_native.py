@@ -669,13 +669,15 @@ async def _dispatch_native_provider(
         cell_route=route if route == "/v1/project-cell/messages" else None,
     )
     backup_enabled = text_failover.enabled(model)
+    generation_retries = backup_enabled and run_id is not None and project_id is not None
+    timed_generation = generation_retries or (timed_primary and backup_enabled)
     stage = dispatch_options["stage"]
     loop = asyncio.get_running_loop()
-    attempted: set[str] = set()
+    attempts: dict[str, int] = {}
     while True:
         timed_deadline = (
             provider_deadline
-            if provider_scope == "aitunnel" or attempted or (timed_primary and backup_enabled)
+            if provider_scope == "aitunnel" or attempts or timed_generation
             else None
         )
         if timed_deadline is not None and loop.time() >= timed_deadline:
@@ -698,7 +700,7 @@ async def _dispatch_native_provider(
         except Exception as exc:
             log.warning("native_messages.provider_admission_failed", error_type=type(exc).__name__)
             return _err(503, "billing_unavailable", "Provider accounting is temporarily unavailable")
-        attempted.add(provider_scope)
+        attempts[provider_scope] = attempts.get(provider_scope, 0) + 1
 
         transport_evidence: dict[str, Any] = {}
         post_options: dict[str, Any] = text_failover.scope_options(provider_scope)
@@ -772,12 +774,14 @@ async def _dispatch_native_provider(
             if safe_to_retry and recorded:
                 # These failures occur before the request reaches the provider.
                 # Publish permission only after the failed attempt receipt commits.
-                alternate = text_failover.alternate_scope(model, provider_scope, "preconnect", attempted)
-                if identity is None and alternate is not None:
-                    provider_scope = alternate
+                if identity is None and backup_enabled:
+                    next_scope = text_failover.next_retry_scope(
+                        model, provider_scope, "preconnect", attempts, generation_retries=generation_retries,
+                    )
+                    if next_scope is None:
+                        return _exhausted_provider_response()
+                    provider_scope = next_scope
                     continue
-                if identity is None and len(attempted) == 2:
-                    return _exhausted_provider_response()
 
                 from yleum_gateway.services.generation_response_capture import (
                     confirm_response_accounting,
@@ -824,12 +828,20 @@ async def _dispatch_native_provider(
                         upstream.status_code, provider_scope=provider_scope,
                         provider_call_id=provider_call_id, transport_stage="complete",
                     )
-                alternate = text_failover.alternate_scope(model, provider_scope, "upstream_refused", attempted)
-                if identity is None and alternate is not None:
-                    provider_scope = alternate
+                if identity is None and backup_enabled:
+                    next_scope = text_failover.next_retry_scope(
+                        model, provider_scope, "upstream_refused", attempts,
+                        generation_retries=generation_retries,
+                        refusal=overload,
+                        defer_primary=(
+                            failure_type == provider_calls.LLMGW_BALANCE_REFUSED
+                            or "retry-after" in upstream.headers
+                        ),
+                    )
+                    if next_scope is None:
+                        return _exhausted_provider_response()
+                    provider_scope = next_scope
                     continue
-                if identity is None and len(attempted) == 2:
-                    return _exhausted_provider_response()
                 from yleum_gateway.services.generation_response_capture import (
                     confirm_response_accounting,
                 )
@@ -860,7 +872,7 @@ async def _dispatch_native_provider(
                     upstream.status_code, provider_scope=provider_scope,
                     provider_call_id=provider_call_id, transport_stage="complete",
                 )
-            if identity is None and len(attempted) == 2 and retry_candidate is not None and not ambiguous:
+            if identity is None and len(attempts) == 2 and retry_candidate is not None and not ambiguous:
                 return _exhausted_provider_response()
             if not ambiguous and retry_candidate is not None:
                 from yleum_gateway.services.generation_response_capture import (

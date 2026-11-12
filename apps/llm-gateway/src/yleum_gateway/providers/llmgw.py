@@ -343,6 +343,7 @@ def _primary_refusal_details(
         "provider_charge_ambiguous": False,
         "_overload_retry_candidate": refusal,
         "_primary_balance_refused": primary_balance_refused(response, category),
+        **({"_primary_retry_deferred": True} if "retry-after" in response.headers else {}),
     }
 
 

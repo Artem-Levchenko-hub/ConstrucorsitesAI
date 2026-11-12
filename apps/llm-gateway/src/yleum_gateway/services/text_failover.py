@@ -20,6 +20,7 @@ PRIMARY_URL = "https://api.llmgw.ru/v1/chat/completions"
 MODEL = "claude-sonnet-5.5"
 POLICY = "llmgw_unavailable_v1"
 HTTP_REFUSAL_POLICY = "llmgw_http_refused_v1"
+_GENERATION_ATTEMPT_LIMITS = {"llmgw": 2, "aitunnel": 3}
 _REFUSAL_TITLES = {
     500: ("Internal Server Error",), 502: ("Bad Gateway",),
     503: ("Service Unavailable", "Service Temporarily Unavailable"),
@@ -55,6 +56,22 @@ def alternate_scope(model: str, scope: str, reason: str | None, attempted: set[s
         return None
     other = "aitunnel" if scope == "llmgw" else "llmgw"
     return None if other in attempted else other
+
+
+def next_retry_scope(
+    model: str, scope: str, reason: str | None, attempts: dict[str, int], *,
+    generation_retries: bool,
+    refusal: dict[str, Any] | None = None, defer_primary: bool = False,
+) -> str | None:
+    """Select a route after the failed attempt's receipt commits."""
+    repeat_primary_refusal = (
+        reason == "upstream_refused" and refusal is not None
+        and refusal.get("retry_policy") == POLICY and not defer_primary
+    )
+    if (generation_retries and (reason == "preconnect" or repeat_primary_refusal)
+            and attempts[scope] < _GENERATION_ATTEMPT_LIMITS[scope]):
+        return scope
+    return alternate_scope(model, scope, reason, set(attempts))
 
 
 def preconnect_proof(scope: str, model: str, stage: str | None) -> dict[str, Any]:

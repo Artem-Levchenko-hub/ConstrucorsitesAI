@@ -1,5 +1,6 @@
 import json
 from contextlib import asynccontextmanager
+from http import HTTPStatus
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -388,6 +389,55 @@ def test_chat_reserves_backup_only_for_confirmed_preconnect(client, monkeypatch,
         assert hosts == ["api.llmgw.ru"]
         assert provider_calls.finish_call.await_args.kwargs["status"] == "ambiguous"
         assert billing.charge.await_count == 0
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(("primary_status", "retry_after", "primary_attempts", "backup_completes"), [
+    (None, None, 2, False), (None, None, 2, True), (503, None, 2, True),
+    (503, "30", 1, True), (501, None, 1, True),
+])
+def test_chat_generation_bounds_attempts_per_provider(
+    client, monkeypatch, stream, primary_status, retry_after, primary_attempts, backup_completes,
+):
+    hosts = []
+
+    def reply(request):
+        hosts.append(request.url.host)
+        if request.url.host == "api.llmgw.ru" and primary_status is not None:
+            response = httpx.Response(primary_status, json={"error": HTTPStatus(primary_status).phrase})
+            if retry_after is not None:
+                response.headers["retry-after"] = retry_after
+            return response
+        if hosts.count("api.aitunnel.ru") < 3 or not backup_completes:
+            raise httpx.ConnectTimeout("synthetic connection failure before send", request=request)
+        event = {
+            "id": "backup-receipt",
+            "model": "claude-sonnet-5.5",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "cost_rub": 0.2},
+            "choices": [{"finish_reason": "stop", "delta": {"content": "ok"}}],
+        }
+        return httpx.Response(200, text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n")
+
+    monkeypatch.setattr(text_failover, "select_scope", AsyncMock(return_value="llmgw"))
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda **_: httpx.MockTransport(reply))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(reply))
+    response = client.post("/v1/chat/completions", json={
+        "model": "claude-sonnet-5.5", "max_tokens": 128, "stream": stream,
+        "user": str(uuid4()),
+        "metadata": {"project_id": str(uuid4()), "run_id": str(uuid4())},
+        "messages": [{"role": "user", "content": "synthetic"}],
+    })
+
+    assert hosts == ["api.llmgw.ru"] * primary_attempts + ["api.aitunnel.ru"] * 3, response.text
+    assert provider_calls.start_call.await_count == len(hosts)
+    assert all(call.kwargs["status"] == "failed"
+               for call in provider_calls.finish_call.await_args_list[:primary_attempts + 2])
+    if backup_completes:
+        assert response.status_code == 200 and '"content"' in response.text
+        assert billing.charge.await_count == 1
+    else:
+        assert '"providers_exhausted"' in response.text
+        billing.charge.assert_not_awaited()
 
 
 @pytest.mark.parametrize("stream", [False, True])

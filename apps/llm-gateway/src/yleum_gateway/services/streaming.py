@@ -113,11 +113,13 @@ async def stream_completion(
     source_options: dict[str, Any] = {}
     if max_tokens is not None:
         source_options["max_tokens"] = max_tokens
-    if generation_identity is not None:
+    backup_enabled = text_failover.enabled(model)
+    generation_retries = backup_enabled and run_id is not None and project_id is not None
+    if generation_identity is not None or generation_retries:
         source_options["retry_preconnect"] = False
-    attempted = {provider_scope}
-    timed_generation = text_failover.enabled(model) and (
-        generation_identity is not None
+    attempts = {provider_scope: 1}
+    timed_generation = backup_enabled and (
+        generation_identity is not None or generation_retries
         or (request is not None and request.headers.get("x-yleum-provider-timeout-seconds") is not None)
     )
 
@@ -126,7 +128,7 @@ async def stream_completion(
             source_options["timeout"] = min(
                 IDLE_TIMEOUT_SECONDS, provider_deadline - asyncio.get_running_loop().time(),
             )
-            if provider_scope == "aitunnel" or timed_generation or len(attempted) > 1:
+            if provider_scope == "aitunnel" or timed_generation or len(attempts) > 1:
                 source_options["deadline"] = provider_deadline
         return llmgw.astream(
             model, messages, temperature=0.5 if temperature is None else temperature,
@@ -300,6 +302,7 @@ async def stream_completion(
                 )
             overload = upstream_error.details.pop("_overload_retry_candidate", None) if upstream_error else None
             balance_refused = upstream_error.details.pop("_primary_balance_refused", False) if upstream_error else False
+            retry_deferred = upstream_error.details.pop("_primary_retry_deferred", False) if upstream_error else False
             preconnect = (
                 upstream_error is not None
                 and upstream_error.details.get("provider_failure_kind") == "preconnect"
@@ -309,11 +312,15 @@ async def stream_completion(
             reason: Literal["preconnect", "upstream_refused"] | None = (
                 "upstream_refused" if primary_refusal else "preconnect" if preconnect else None
             )
-            alternate = (
-                text_failover.alternate_scope(model, provider_scope, reason, attempted)
-                if generation_identity is None else None
-            )
-            exhausted = generation_identity is None and len(attempted) == 2
+            alternate = None
+            if generation_identity is None:
+                alternate = text_failover.next_retry_scope(
+                    model, provider_scope, reason, attempts,
+                    generation_retries=generation_retries,
+                    refusal=overload if isinstance(overload, dict) else None,
+                    defer_primary=balance_refused or retry_deferred,
+                )
+            exhausted = generation_identity is None and alternate is None and len(attempts) == 2
             if (reason is not None and (primary_refusal or alternate is not None or exhausted)
                     and not accumulated and not receipt):
                 settlement_task = asyncio.create_task(settle(
@@ -351,7 +358,7 @@ async def stream_completion(
                         settlement_error = exc
                         break
                     provider_scope, provider_call_id = alternate, next_call_id
-                    attempted.add(provider_scope)
+                    attempts[provider_scope] = attempts.get(provider_scope, 0) + 1
                     source_options["retry_preconnect"] = False
                     source = stream_source()
                     receipt_finished, settlement_task, upstream_error = False, None, None

@@ -185,13 +185,16 @@ async def _dispatch_chat_provider(
         request.headers.get("x-yleum-provider-timeout-seconds"), received_at,
         reserve=RECEIPT_RESERVE_SECONDS,
     )
-    tried_scopes: set[str] = set()
-    timed_generation = text_failover.enabled(req.model) and (
-        identity is not None or request.headers.get("x-yleum-provider-timeout-seconds") is not None
+    attempts: dict[str, int] = {}
+    backup_enabled = text_failover.enabled(req.model)
+    generation_retries = backup_enabled and meta.run_id is not None and meta.project_id is not None
+    timed_generation = backup_enabled and (
+        identity is not None or generation_retries
+        or request.headers.get("x-yleum-provider-timeout-seconds") is not None
     )
     while True:
-        deadline = shared_deadline if provider_scope == "aitunnel" or tried_scopes or timed_generation else None
-        tried_scopes.add(provider_scope)
+        deadline = shared_deadline if provider_scope == "aitunnel" or attempts or timed_generation else None
+        attempts[provider_scope] = attempts.get(provider_scope, 0) + 1
         try:
             if deadline is not None and loop.time() >= deadline:
                 raise DispatchDeadlineError()
@@ -240,6 +243,7 @@ async def _dispatch_chat_provider(
             retry_candidate = details.pop("_rate_limit_retry_candidate", None)
             overload = details.pop("_overload_retry_candidate", None) if provider_scope == "llmgw" else None
             balance_refused = details.pop("_primary_balance_refused", False)
+            retry_deferred = details.pop("_primary_retry_deferred", False)
             status = "failed" if details.get("provider_charge_ambiguous") is False else "ambiguous"
             failure_type = (
                 provider_calls.LLMGW_BALANCE_REFUSED if balance_refused else provider_calls.classify_failure(exc)
@@ -261,11 +265,16 @@ async def _dispatch_chat_provider(
                 identity, call_id, reason=reason, status=status, error_type=failure_type, **failed_receipt,
             ))
             if identity is None and status == "failed":
-                alternate = text_failover.alternate_scope(req.model, provider_scope, reason, tried_scopes)
+                alternate = text_failover.next_retry_scope(
+                    req.model, provider_scope, reason, attempts,
+                    generation_retries=generation_retries,
+                    refusal=overload if isinstance(overload, dict) else None,
+                    defer_primary=balance_refused or retry_deferred,
+                )
                 if alternate is not None:
                     provider_scope = alternate
                     continue
-                if len(tried_scopes) == 2 and reason is not None:
+                if len(attempts) == 2 and reason is not None:
                     exhausted = text_failover.exhausted_error()
                     exhausted.details.update(context)
                     raise _gateway_error_to_http(exhausted) from exc

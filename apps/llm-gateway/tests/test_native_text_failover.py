@@ -28,18 +28,24 @@ def primary_error(status, request=None):
     return httpx.Response(status, json={"error": error}, request=request)
 
 
-@pytest.mark.parametrize("status", [401, 402, 422, 500, 502, 503, 504, None])
-def test_native_refusal_continues_same_tools_with_separate_expense_and_one_charge(client, monkeypatch,status):
+@pytest.mark.parametrize(("status", "retry_after", "primary_attempts"), [
+    (401, None, 1), (402, None, 1), (422, None, 1), (500, None, 2), (501, None, 1),
+    (502, None, 2), (503, None, 2), (504, None, 2), (505, None, 1), (None, None, 2), (503, "30", 1),
+])
+def test_native_refusal_continues_same_tools_with_separate_expense_and_one_charge(
+    client, monkeypatch, status, retry_after, primary_attempts,
+):
     sent = []
 
-    def post(url, payload, headers, **kwargs):
-        sent.append((url, dict(payload)))
-        if status is None:
-            raise httpx.ConnectTimeout("synthetic preconnect failure")
-        return primary_error(status, request=httpx.Request("POST", url))
-
-    def backup(request):
+    def wire(request):
         sent.append((str(request.url), json.loads(request.content)))
+        if request.url.host == "api.llmgw.ru":
+            if status is None:
+                raise httpx.ConnectTimeout("synthetic preconnect failure", request=request)
+            response = primary_error(status, request=request)
+            if retry_after is not None:
+                response.headers["retry-after"] = retry_after
+            return response
         assert provider_calls.finish_call.await_args.kwargs["status"] == "failed"
         return httpx.Response(200, json={
             "id": "backup-receipt", "model": "claude-sonnet-5.5",
@@ -49,24 +55,33 @@ def test_native_refusal_continues_same_tools_with_separate_expense_and_one_charg
             ]}}],
         })
 
-    monkeypatch.setattr(messages_native, "_post_llmgw", post)
-    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(backup))
+    def reject_untimed_post(*args, **kwargs):
+        pytest.fail("Generation with metadata must use the shared deadline without a timeout header")
+
+    monkeypatch.setattr(text_failover, "select_scope", AsyncMock(return_value="llmgw"))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(wire))
+    monkeypatch.setattr(messages_native, "_post_llmgw", reject_untimed_post)
     response = client.post("/v1/messages", json={
         "model": "claude-sonnet-5.5", "user": str(uuid4()),
+        "metadata": {"run_id": str(uuid4()), "project_id": str(uuid4())},
         "messages": [{"role": "user", "content": "Read main.py"}],
         "tools": [{"name": "read_file", "input_schema": {"type": "object"}}],
         "tool_choice": {"type": "auto"}, "max_tokens": 128,
     })
     assert response.status_code == 200, response.text
-    assert [url for url, _ in sent] == ["https://api.llmgw.ru/v1/chat/completions", "https://api.aitunnel.ru/v1/chat/completions"]
-    assert sent[0][1]["messages"] == sent[1][1]["messages"]
-    assert sent[0][1]["tools"] == sent[1][1]["tools"]
-    assert sent[1][1]["model"] == "claude-sonnet-5.5"
+    assert [url for url, _ in sent] == (
+        ["https://api.llmgw.ru/v1/chat/completions"] * primary_attempts
+        + ["https://api.aitunnel.ru/v1/chat/completions"]
+    )
+    assert all(payload["messages"] == sent[0][1]["messages"] for _, payload in sent)
+    assert all(payload["tools"] == sent[0][1]["tools"] for _, payload in sent)
+    assert sent[-1][1]["model"] == "claude-sonnet-5.5"
     assert response.json()["content"][0]["type"] == "tool_use"
     assert response.json()["metadata"]["fallback_used"] is True
-    assert provider_calls.start_call.await_count == 2
-    assert provider_calls.finish_call.await_args_list[0].kwargs["status"] == "failed"
-    assert provider_calls.start_call.await_args_list[1].kwargs["provider_scope"] == "aitunnel"
+    assert provider_calls.start_call.await_count == primary_attempts + 1
+    assert all(call.kwargs["status"] == "failed"
+               for call in provider_calls.finish_call.await_args_list[:primary_attempts])
+    assert provider_calls.start_call.await_args_list[-1].kwargs["provider_scope"] == "aitunnel"
     assert billing.charge.await_count == 1
     assert billing.charge.await_args.kwargs["provider_scope"] == "aitunnel"
 
@@ -85,6 +100,42 @@ def test_failed_primary_receipt_commit_stops_backup(client, monkeypatch, preconn
     assert response.status_code == 503
     assert len(calls) == 1
     assert billing.charge.await_count == 0
+
+
+@pytest.mark.parametrize("backup_completes", [False, True])
+def test_native_safe_connect_failures_allow_two_primary_and_three_backup_attempts(
+    client, monkeypatch, backup_completes,
+):
+    sent = []
+
+    def wire(request):
+        sent.append(request.url.host)
+        if len(sent) < 5 or not backup_completes:
+            raise httpx.ConnectTimeout("synthetic connection failure before send", request=request)
+        return httpx.Response(200, json={
+            "id": "backup-receipt", "model": "claude-sonnet-5.5",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2, "cost_rub": 0.2},
+            "choices": [{"finish_reason": "stop", "message": {"content": "result"}}],
+        }, request=request)
+
+    monkeypatch.setattr(text_failover, "select_scope", AsyncMock(return_value="llmgw"))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(wire))
+    response = client.post("/v1/messages", headers={"x-yleum-provider-timeout-seconds": "30"}, json={
+        "model": "claude-sonnet-5.5", "user": str(uuid4()),
+        "metadata": {"run_id": str(uuid4()), "project_id": str(uuid4())},
+        "messages": [{"role": "user", "content": "synthetic"}],
+    })
+
+    assert sent == ["api.llmgw.ru"] * 2 + ["api.aitunnel.ru"] * 3
+    assert provider_calls.start_call.await_count == 5
+    assert [call.kwargs["status"] for call in provider_calls.finish_call.await_args_list[:4]] == ["failed"] * 4
+    if backup_completes:
+        assert response.status_code == 200, response.text
+        assert billing.charge.await_count == 1
+    else:
+        assert response.status_code == 503
+        assert response.json()["error"]["details"]["retry_safe"] is False
+        billing.charge.assert_not_awaited()
 
 
 def test_legacy_native_connect_error_after_headers_cannot_use_backup(client, monkeypatch):
@@ -114,7 +165,8 @@ def test_legacy_native_connect_error_after_headers_cannot_use_backup(client, mon
 
 
 @pytest.mark.parametrize("primary_refuses", [False, True])
-def test_native_sticky_backup_preconnect_can_return_to_primary_once(client, monkeypatch, primary_refuses):
+@pytest.mark.parametrize("generation", [False, True])
+def test_native_sticky_backup_preconnect_can_return_to_primary(client, monkeypatch, primary_refuses, generation):
     sent = []
 
     def wire(request):
@@ -135,9 +187,13 @@ def test_native_sticky_backup_preconnect_can_return_to_primary_once(client, monk
     response = client.post("/v1/messages", json={
         "model": "claude-sonnet-5.5", "user": str(uuid4()),
         "messages": [{"role": "user", "content": "synthetic"}], "max_tokens": 128,
+        "metadata": {"run_id": str(uuid4()), "project_id": str(uuid4())} if generation else {},
     })
-    assert sent == ["api.aitunnel.ru", "api.llmgw.ru"]
-    assert provider_calls.start_call.await_count == 2
+    if generation:
+        assert sent == ["api.aitunnel.ru"] * 3 + ["api.llmgw.ru"] * (2 if primary_refuses else 1)
+    else:
+        assert sent == ["api.aitunnel.ru", "api.llmgw.ru"]
+    assert provider_calls.start_call.await_count == len(sent)
     if primary_refuses:
         assert response.status_code == 503
         assert response.json()["error"]["details"]["retry_safe"] is False
