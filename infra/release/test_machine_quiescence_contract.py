@@ -13,7 +13,7 @@ from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from uuid import UUID
+from uuid import UUID, uuid5
 
 AVAILABLE = importlib.util.find_spec("yleum_orchestrator") is not None
 WORKSPACE = "11111111-1111-4111-8111-111111111111"
@@ -29,6 +29,81 @@ def _checker_module():
     checker = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(checker)
     return checker
+
+
+def _pending_fast_check():
+    request = {
+        "kind": "request", "state": "running", "startup_role": "fast_check",
+        "phase": "typecheck", "epoch": 7, "digest": "b" * 64, "log_bytes": 338,
+        "started_at": "2026-11-12T11:50:39+00:00",
+        "heartbeat_at": "2026-11-12T11:51:01+00:00",
+        "deadline_at": "2026-11-12T11:58:39+00:00",
+    }
+    argv = ["pnpm", "exec", "tsc", "--noEmit"]
+    child = {
+        "kind": "command", "state": "starting", "epoch": 7, "log_bytes": 0,
+        "started_at": "2026-11-12T11:51:01.984736+00:00",
+        "heartbeat_at": "2026-11-12T11:51:01.984736+00:00",
+        "digest": hashlib.sha256(json.dumps({
+            "command": {"argv": argv, "cwd": "."},
+            "epoch": request["epoch"], "request": request["digest"],
+        }, sort_keys=True).encode()).hexdigest(),
+    }
+    child_id = str(uuid5(UUID(COMMAND), request["phase"]))
+    return {
+        "epoch": 7,
+        "ready_epoch": 7,
+        "manifest": {"tasks": [
+            {"name": "typecheck", "role": "fast_check", "argv": argv, "cwd": "."},
+        ]},
+        "operations": {COMMAND: request, child_id: child},
+    }, child_id
+
+
+class PendingFastCheckTests(unittest.TestCase):
+    def setUp(self):
+        self.checker = _checker_module()
+        self.sources = self.checker._PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES
+        self.machine, self.child_id = _pending_fast_check()
+
+    def test_pending_wrapper_binds_its_exact_unacknowledged_child(self):
+        before = copy.deepcopy(self.machine)
+        covered = self.checker._pending_portable_commands(self.machine, sources=self.sources)
+        self.assertEqual(covered, {
+            key: self.checker._digest(record)
+            for key, record in self.machine["operations"].items()
+        })
+        self.assertEqual(self.machine, before)
+
+    def test_parent_and_child_must_match_the_manifest_and_reviewed_producer(self):
+        for op, field, value in (
+            (COMMAND, "startup_role", "restore_runtime"),
+            (COMMAND, "phase", "other"),
+            (COMMAND, "digest", "e" * 64),
+            (COMMAND, "heartbeat_at", "2026-11-12T11:52:00+00:00"),
+            (COMMAND, "result", {"exit_code": 1}),
+            (self.child_id, "epoch", 8),
+            (self.child_id, "digest", "f" * 64),
+            (self.child_id, "exec_id", "c" * 64),
+        ):
+            with self.subTest(op=op, field=field):
+                machine = copy.deepcopy(self.machine)
+                machine["operations"][op][field] = value
+                with self.assertRaises(self.checker.PhysicalDrainError):
+                    self.checker._pending_portable_commands(machine, sources=self.sources)
+        with self.assertRaises(self.checker.PhysicalDrainError):
+            self.checker._pending_portable_commands(self.machine, sources=self.checker._PORTABLE_QUIESCENCE_SOURCES)
+        del self.machine["operations"][self.child_id]
+        with self.assertRaises(self.checker.PhysicalDrainError):
+            self.checker._pending_portable_commands(self.machine, sources=self.sources)
+
+    def test_successor_manifest_and_additional_unknown_intent_are_denied(self):
+        for changes in ({"epoch": 8, "ready_epoch": 8}, {"ready_epoch": 0}):
+            with self.subTest(changes=changes), self.assertRaises(self.checker.PhysicalDrainError):
+                self.checker._pending_portable_commands({**self.machine, **changes}, sources=self.sources)
+        self.machine["operations"][PAUSE] = copy.deepcopy(self.machine["operations"][self.child_id])
+        with self.assertRaises(self.checker.PhysicalDrainError):
+            self.checker._pending_portable_commands(self.machine, sources=self.sources)
 
 
 class PortableQuiescenceSourcesTests(unittest.TestCase):
@@ -1058,6 +1133,19 @@ class MachineQuiescenceTests(unittest.TestCase):
         self.assertEqual(receipts[0].stat().st_mode & 0o777, 0o600)
         self.record()
         self.assertEqual(len(list(self.receipts.glob("*/*.json"))), 1)
+
+    def test_fast_check_wrapper_and_child_require_one_retirement_receipt(self):
+        pending, child_id = _pending_fast_check()
+        self.machine.update(pending)
+        self.write(self.machine_path, self.machine)
+        before = self.machine_path.read_bytes()
+        with self.assertRaises(self.checker.PhysicalDrainError):
+            self.checker.require_physical_writers_drained(self.state, self.client)
+        self.assertEqual(set(self.record()), {COMMAND, child_id})
+        self.assertEqual(self.checker.require_physical_writers_drained(
+            self.state, self.client
+        )["physical_journals"], 1)
+        self.assertEqual(self.machine_path.read_bytes(), before)
 
     def test_missing_receipt_namespace_is_created_private_without_reowning_parents(
         self,

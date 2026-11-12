@@ -17,7 +17,7 @@ import tempfile
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid5
 
 
 class PhysicalDrainError(RuntimeError):
@@ -355,14 +355,75 @@ def _quiescence_lock(state_parent: Path, workspace_id: str):
         os.close(fd)
 
 
-def _pending_portable_commands(machine: dict) -> dict[str, str]:
-    """Only an exec intent on an existing development, never container creation."""
+def _bind_pending_fast_check(machine: dict, request_id: str, record: dict, child: dict) -> None:
+    """Verify the reviewed typecheck wrapper and the child intent it last recorded."""
+    _kernel_need(
+        set(record) == {
+            "digest", "state", "epoch", "kind", "started_at", "heartbeat_at",
+            "log_bytes", "phase", "startup_role", "deadline_at",
+        }
+        and record["state"] == "running"
+        and record["startup_role"] == "fast_check"
+        and record["phase"] == "typecheck"
+        and str(UUID(request_id)) == request_id
+        and type(record["epoch"]) is int
+        and type(machine.get("epoch")) is int
+        and type(machine.get("ready_epoch")) is int
+        and record["epoch"] == child["epoch"] == machine["epoch"] == machine["ready_epoch"]
+        and type(record["log_bytes"]) is int
+        and record["log_bytes"] >= 0
+        and type(record["digest"]) is str
+        and re.fullmatch(r"[0-9a-f]{64}", record["digest"]),
+        "quiescence_command_scope",
+    )
+    start, heartbeat, child_start, deadline = (
+        datetime.fromisoformat(value) for value in (
+            record["started_at"], record["heartbeat_at"], child["started_at"], record["deadline_at"],
+        )
+    )
+    _kernel_need(
+        all(value.utcoffset() is not None for value in (start, heartbeat, child_start, deadline))
+        and start <= heartbeat <= child_start <= deadline
+        and start < deadline,
+        "quiescence_command_scope",
+    )
+    manifest = machine.get("manifest")
+    tasks = manifest.get("tasks") if type(manifest) is dict else None
+    _kernel_need(type(tasks) is list, "quiescence_command_scope")
+    matches = [
+        task for task in tasks if type(task) is dict
+        and task.get("name") == record["phase"] and task.get("role") == record["startup_role"]
+    ]
+    _kernel_need(len(matches) == 1, "quiescence_command_scope")
+    task = matches[0]
+    # The stored manifest has already passed the controller's command schema.
+    # Reproduce the digest of the persisted child using those exact fields.
+    argv, cwd = task.get("argv"), task.get("cwd")
+    _kernel_need(
+        type(argv) is list and bool(argv) and all(type(arg) is str for arg in argv)
+        and type(cwd) is str and bool(cwd),
+        "quiescence_command_scope",
+    )
+    digest = hashlib.sha256(json.dumps({
+        "command": {"argv": argv, "cwd": cwd},
+        "request": record["digest"],
+        "epoch": record["epoch"],
+    }, sort_keys=True).encode()).hexdigest()
+    _kernel_need(child["digest"] == digest, "quiescence_command_scope")
+
+
+def _pending_portable_commands(machine: dict, *, sources: dict[str, str]) -> dict[str, str]:
+    """Bind exec intents and a reviewed wrapper on a retired development machine."""
     operations = machine.get("operations")
     _kernel_need(type(operations) is dict, "quiescence_command_journal")
     pending = {}
+    requests = {}
     for operation_id, record in operations.items():
         _kernel_need(type(record) is dict, "quiescence_command_journal")
         if record.get("state") in {"completed", "failed", "timed_out"}:
+            continue
+        if record.get("kind") == "request":
+            requests[operation_id] = record
             continue
         _kernel_need(
             set(record)
@@ -393,6 +454,21 @@ def _pending_portable_commands(machine: dict) -> dict[str, str]:
             "quiescence_command_scope",
         )
         pending[operation_id] = _digest(record)
+    if requests:
+        _kernel_need(
+            sources == _PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES
+            and len(requests) == len(pending) == 1,
+            "quiescence_command_scope",
+        )
+        request_id, request = next(iter(requests.items()))
+        child_id = next(iter(pending))
+        _kernel_need(
+            type(request.get("phase")) is str
+            and str(uuid5(UUID(request_id), request["phase"])) == child_id,
+            "quiescence_command_scope",
+        )
+        _bind_pending_fast_check(machine, request_id, request, operations[child_id])
+        pending[request_id] = _digest(request)
     _kernel_need(bool(pending), "quiescence_command_scope")
     return pending
 
@@ -459,7 +535,8 @@ def _quiescence_binding(state_parent: Path, workspace_id: str, uid: int, client)
     backend_raw = _secure_bytes(directory / "docker.json", uid, 0o600)
     machine = json.loads(machine_raw)
     backend = json.loads(backend_raw)
-    pending = _pending_portable_commands(machine)
+    sources = _portable_quiescence_sources()
+    pending = _pending_portable_commands(machine, sources=sources)
     _kernel_need(
         machine.get("workspace_id") == workspace_id
         and type(machine.get("epoch")) is int
@@ -471,7 +548,6 @@ def _quiescence_binding(state_parent: Path, workspace_id: str, uid: int, client)
         ),
         "quiescence_retirement_fence",
     )
-    sources = _portable_quiescence_sources()
     binding = {
         "protocol": "portable-child-command-quiescence",
         "version": 1,

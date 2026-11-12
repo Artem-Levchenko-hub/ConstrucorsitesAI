@@ -335,13 +335,17 @@ closed unless all of these conditions hold:
   operation is terminal, and both generation
   authority fields are empty. The exact cell, machine and Docker metadata bytes
   are bound to the attestation.
-- Coverage is limited to the original portable `command/starting` intent with
-  no exec ID/result or progress. Its producer only creates/starts a child exec
-  on an existing immutable development-container ID; it cannot create a
-  container. Request/adaptation/lifecycle/source-write/command-receipt unknowns
-  retain their existing denial. The reviewed producer, routing, lock and state
-  source hashes are explicitly pinned. Changes require a protocol review and
-  manifest update; newly observed source is not automatically trusted.
+- A portable `command/starting` intent qualifies with no exec ID, result or
+  progress. Its producer creates and starts a child exec on an existing
+  immutable development-container ID. The reviewed producer, routing, lock and
+  state source hashes are explicitly pinned.
+- The source-guard lease bundle also supports one `fast_check` request whose
+  current phase is the declared `typecheck` task and whose exact pending child
+  meets the same intent requirements. Both records must match the manifest's
+  current ready epoch, the derived child UUID, command digest and timestamps.
+  Both original record hashes are bound to the same retirement receipt.
+  Other unresolved requests, adaptation, lifecycle, source-write and
+  command-receipt records continue to block the gate.
 - No portable workspace container/helper remains. Only the exact owned
   auxiliary cell PostgreSQL/Redis services may remain after pause, with no
   unresolved exec. After destroy, no workspace container may remain.
