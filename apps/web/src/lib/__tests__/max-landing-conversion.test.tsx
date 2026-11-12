@@ -71,6 +71,23 @@ describe("Yleum landing conversion", () => {
     expect(active?.textContent).toContain("Сегодня в 10:00");
     expect(active?.querySelector('.ys-slots button[aria-pressed="true"]')?.textContent).toBe("17:30");
   });
+  it("opens and confirms an earlier order from its date row in the feature examples", async () => {
+    const examples = host.querySelector("#examples")!;
+    const action = examples.querySelector<HTMLButtonElement>('button[aria-label="Повторить заказ от 24 сентября"]');
+    expect(action?.closest("[inert]")).toBeNull();
+    expect(action?.parentElement?.textContent).toContain("24 сентября");
+    expect(examples.textContent).toContain("250 мл · 1 шт.");
+    await act(async () => action?.click());
+    expect(examples.textContent).toContain("Повтор заказа");
+    expect(examples.textContent).toContain("Флэт уайт");
+    expect(examples.textContent).toContain("260 ₽");
+    const confirm = [...examples.querySelectorAll("button")].find(button => button.textContent === "Подтвердить повтор")!;
+    await act(async () => confirm.click());
+    expect(examples.textContent).toContain("Демо-заказ повторён");
+    const back = [...examples.querySelectorAll("button")].find(button => button.textContent === "К заказам")!;
+    await act(async () => back.click());
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Повторить заказ от 24 сентября");
+  });
   it("keeps the same participant count after joining and switching scenarios", async () => {
     const example = host.querySelector('[data-testid="landing-example"]')!;
     const click = async (name: string) => {

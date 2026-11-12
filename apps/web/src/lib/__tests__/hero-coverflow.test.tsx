@@ -123,7 +123,7 @@ it("orders coffee, pastries, dessert and tea together across categories", async 
   await click("Подтвердить заказ");
   expect(active().textContent).toContain("Демо-заказ оформлен");
   expect(active().textContent).toContain("Самовывоз к 9:56");
-  expect(active().textContent).toContain("Код выдачи1482");
+  expect(active().textContent).toContain("Код выдачи1479");
 });
 
 it("opens every plant category and keeps its cart separate from the café", async () => {

@@ -167,7 +167,7 @@ export function CatalogDemo({ kind }: { kind: CatalogKind }) {
             <span><Check size={18} aria-hidden="true" /></span>
             <h3>Демо-заказ оформлен</h3>
             <p>{pickup}</p>
-            <div className="ys-line"><span>Код выдачи</span><strong>{cafe ? "1482" : "1624"}</strong></div>
+            <div className="ys-line"><span>Код выдачи</span><strong>{cafe ? "1479" : "1624"}</strong></div>
             <Strip title="Итого" note="Демонстрационный заказ" value={price(total)} />
           </div>
         )}

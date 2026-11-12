@@ -17,17 +17,13 @@
  * — предмет узнаётся. Градиентное пятно читалось как заглушка и обесценивало всё
  * вокруг себя, даже когда остальной экран был честным.
  */
-import { ArrowRight, MapPin, Search } from "lucide-react";
+import { ArrowRight, Search } from "lucide-react";
 
-import { ClubDemo } from "./ClubDemo";
 import { CAFE_DEMO, SHOP_DEMO } from "./demo-content";
-import { demoClock } from "./demo-date";
+import { EstimateScreen, ExpensesScreen, LessonScreen } from "./FeatureExamples";
+import { OrderStatusScreen } from "./OrderStatusScreen";
 import { ProductArt, type ArtKind } from "./ProductArt";
-import { SalonDemo } from "./SalonDemo";
 import { PhoneFrame, Promo, ScreenChrome, Strip } from "./ScreenChrome";
-
-type StaticScreenKind = "cafe" | "cafe-after" | "shop" | "status" | "loyalty";
-type CollageScreenKind = StaticScreenKind | "salon" | "club";
 
 /** Строка категорий — первое, чем человек пользуется в каталоге. */
 function Chips({ items }: { items: readonly string[] }) {
@@ -152,47 +148,6 @@ export function ShopScreen() {
   );
 }
 
-/** Статус заказа — то, ради чего клиент возвращается в приложение. */
-export function StatusScreen() {
-  return (
-    <ScreenChrome name={CAFE_DEMO.name} section="Ваш заказ" bar={<b>Показать код · 1482</b>}>
-      <Promo kicker="Заказ №1482" title="Можно забирать в 10:30" pill="2 мин" tone="status" />
-      <div className="ys-steps">
-        {[
-          ["Принят", true],
-          ["Готовим", true],
-          ["Можно забирать", false],
-        ].map(([label, done]) => (
-          <div className={`ys-step${done ? " is-done" : ""}`} key={String(label)}>
-            <i />
-            <span>{String(label)}</span>
-          </div>
-        ))}
-      </div>
-      <p className="ys-kicker">В заказе</p>
-      {[
-        ["Капучино", "240 ₽"],
-        ["Круассан с миндалём", "190 ₽"],
-      ].map(([title, price]) => (
-        <div className="ys-row" key={title}>
-          <div>
-            <strong>{title}</strong>
-          </div>
-          <b>{price}</b>
-        </div>
-      ))}
-      <p className="ys-note">
-        <MapPin size={12} />
-        ул. Садовая, 12 · к 10:30
-      </p>
-      <Strip title="Оплачено" note="Картой через ЮKassa · 26 сентября" value="430 ₽" />
-      <p className="ys-kicker">Повторить прошлый заказ</p>
-      <PickRow art="flatwhite" title="Флэт уайт" note="Брали 24 сентября" price="260 ₽" />
-      <PickRow art="cheesecake" title="Чизкейк нью-йорк" note="Брали 21 сентября" price="290 ₽" />
-    </ScreenChrome>
-  );
-}
-
 /** Карта постоянного гостя. */
 export function LoyaltyScreen() {
   return (
@@ -225,52 +180,41 @@ export function LoyaltyScreen() {
   );
 }
 
-const registry: Record<StaticScreenKind, () => React.JSX.Element> = {
+const registry = {
   cafe: CafeScreen,
   "cafe-after": CafeAfterScreen,
   shop: ShopScreen,
-  status: StatusScreen,
   loyalty: LoyaltyScreen,
+  estimate: EstimateScreen,
+  lesson: LessonScreen,
+  expenses: ExpensesScreen,
 };
+type ScreenKind = keyof typeof registry | "status";
 
-export function AppScreen({ kind, framed = true }: { kind: StaticScreenKind; framed?: boolean }) {
-  const Screen = registry[kind];
-  // Рамка по умолчанию: все превью на витрине — это мини-приложения в телефоне.
-  // Отключается там, где телефон уже нарисован снаружи.
-  return framed ? (
-    <PhoneFrame time={kind === "status" ? "10:28" : undefined}>
-      <Screen />
-    </PhoneFrame>
-  ) : (
-    <Screen />
-  );
+export function AppScreen({ kind, framed = true, allowRepeat = false }: { kind: ScreenKind; framed?: boolean; allowRepeat?: boolean }) {
+  const Preview = kind === "status" ? null : registry[kind];
+  const screen = Preview ? <Preview /> : <OrderStatusScreen allowRepeat={allowRepeat} />;
+  return framed ? <PhoneFrame time={kind === "status" ? "10:28" : undefined}>{screen}</PhoneFrame> : screen;
 }
 
-/** Лента экранов во всю ширину — визуальный «что отсюда выходит». */
-export function ScreenCollage({
-  screens,
-  caption,
-  now,
-}: {
-  screens: { kind: CollageScreenKind; description: string }[];
-  caption?: string;
-  now: number;
-}) {
+export function ScreenCollage({ screens }: { screens: { kind: ScreenKind; description: string }[] }) {
   return (
     <figure className="ys-collage" tabIndex={0} aria-label="Примеры функций приложения">
       <div className="ys-collage-track">
-        {screens.map(({ kind, description }, i) => (
-          <div className="ys-collage-item" key={`${kind}-${i}`}>
-            <p className="ys-collage-description">{description}</p>
-            <div aria-hidden="true" inert>
-              {kind === "salon" ? <PhoneFrame time={demoClock(now)}><SalonDemo now={now} /></PhoneFrame>
-                : kind === "club" ? <PhoneFrame><ClubDemo now={now} /></PhoneFrame>
-                : <AppScreen kind={kind} />}
+        {screens.map(({ kind, description }) => {
+          const allowRepeat = kind === "status";
+          return (
+            <div className="ys-collage-item" key={kind}>
+              <p className="ys-collage-description">{description}</p>
+              {allowRepeat ? (
+                <div className="ys-collage-order" role="group" aria-label="Статус и повтор заказа"><AppScreen kind={kind} allowRepeat /></div>
+              ) : (
+                <div aria-hidden="true" inert><AppScreen kind={kind} /></div>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
-      {caption && <figcaption>{caption}</figcaption>}
     </figure>
   );
 }

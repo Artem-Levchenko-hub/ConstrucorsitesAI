@@ -1,0 +1,175 @@
+.ys-feature-example {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  color: #1c2229;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.ys-feature-example :where(h3, p, dl, dd, ul) { margin: 0; }
+.ys-feature-example h3 { font-size: 14px; font-weight: 700; }
+.ys-feature-example ul { padding: 0; list-style: none; }
+.ys-feature-example b,
+.ys-feature-example dd,
+.ys-example-footer strong { font-variant-numeric: tabular-nums; }
+.ys-example-label { font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+
+.ys-example-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 44px;
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+.ys-example-footer strong { font-size: 15px; }
+.ys-example-footer--estimate { background: #e8f4ef; color: #185740; }
+.ys-example-footer--lesson { background: #f3ebfa; color: #56337b; }
+.ys-bar .ys-example-footer span { color: inherit; }
+
+.ys-example-estimate .ys-promo--estimate {
+  min-height: 64px;
+  padding: 10px 12px;
+  background: linear-gradient(110deg, #144f48, #1d6a5b);
+}
+.ys-example-estimate .ys-promo strong { font-size: 16px; }
+.ys-example-estimate .ys-promo span { font-size: 9px; }
+.ys-estimate-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.ys-estimate-fields > div {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  align-content: center;
+  gap: 4px 7px;
+  min-height: 68px;
+  padding: 9px 10px;
+  border: 1px solid #cfe3da;
+  border-radius: 10px;
+  background: #f4faf7;
+}
+.ys-estimate-fields svg { grid-row: span 2; color: #247354; }
+.ys-estimate-fields dt { color: #435c50; font-size: 11px; }
+.ys-estimate-fields dd { font-size: 16px; font-weight: 700; }
+.ys-estimate-base {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 0 12px;
+  border-block: 1px solid #e5eee9;
+}
+.ys-estimate-base p { margin-top: 2px; color: #475951; font-size: 11px; }
+.ys-estimate-extras { margin-top: 6px; }
+.ys-estimate-extras li {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 49px;
+  border-bottom: 1px solid #e5eee9;
+}
+.ys-estimate-extra-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #e8f4ef;
+  color: #247354;
+}
+.ys-estimate-extras small { display: flex; align-items: center; gap: 3px; margin-top: 3px; color: #24654f; font-size: 10px; }
+.ys-estimate-extras b,
+.ys-estimate-base > strong { white-space: nowrap; }
+.ys-estimate-included { display: flex; gap: 8px; padding: 10px; border-radius: 9px; background: #f4faf7; color: #235140; }
+.ys-estimate-included svg { flex: none; }
+.ys-estimate-included span { display: block; margin-top: 3px; font-size: 11px; }
+
+.ys-lesson-progress { display: grid; gap: 7px; padding: 12px; border-radius: 10px; background: #f3ebfa; color: #56337b; }
+.ys-lesson-progress h3 { font-size: 16px; }
+.ys-lesson-progress > div { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; }
+.ys-lesson-progress progress { display: block; width: 100%; height: 7px; appearance: none; overflow: hidden; border: 0; border-radius: 8px; background: #e0d1ed; }
+.ys-lesson-progress progress::-webkit-progress-bar { background: #e0d1ed; }
+.ys-lesson-progress progress::-webkit-progress-value { border-radius: 8px; background: #754a9f; }
+.ys-lesson-progress progress::-moz-progress-bar { border-radius: 8px; background: #754a9f; }
+.ys-lesson-content { display: grid; gap: 6px; }
+.ys-example-lesson .ys-example-label { color: #70488d; }
+.ys-lesson-content h3 { font-size: 18px; }
+.ys-lesson-viewfinder {
+  position: relative;
+  min-height: 112px;
+  overflow: hidden;
+  border: 1px solid #8f729d;
+  border-radius: 9px;
+  background:
+    linear-gradient(90deg, transparent 33%, #fff9 33% 33.6%, transparent 33.6% 66.3%, #fff9 66.3% 67%, transparent 67%),
+    linear-gradient(0deg, transparent 33%, #fff9 33% 33.9%, transparent 33.9% 66.2%, #fff9 66.2% 67%, transparent 67%),
+    radial-gradient(ellipse at 10% 125%, #715e90 0 48%, transparent 49%),
+    radial-gradient(ellipse at 85% 135%, #ad88b7 0 55%, transparent 56%),
+    linear-gradient(150deg, #8275a4, #dcb5ca);
+}
+.ys-lesson-viewfinder::after {
+  position: absolute;
+  top: 33.333%;
+  left: 66.667%;
+  width: 25px;
+  height: 25px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #bfe7ff;
+  box-shadow: 0 0 0 3px rgb(70 42 89 / .38);
+  transform: translate(-50%, -50%);
+  content: "";
+}
+.ys-lesson-content > p:last-child { color: #4c4055; }
+.ys-example-lesson .ys-example-label + h3 { margin-top: 3px; }
+.ys-lesson-answers { display: grid; gap: 5px; margin-top: 7px; }
+.ys-lesson-answers li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 5px 8px;
+  border: 1px solid #eee6f3;
+  border-radius: 8px;
+  color: #51465b;
+  font-size: 12px;
+}
+.ys-lesson-answers .ys-lesson-correct { border-color: #a9d7bd; background: #edf7ef; color: #20553a; }
+.ys-lesson-correct svg { flex: none; }
+.ys-lesson-correct strong { margin-left: auto; }
+
+.ys-expense-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 90px;
+  padding: 12px 14px;
+  border-radius: 11px;
+  background: linear-gradient(120deg, #173353, #294c71);
+  color: #fff;
+}
+.ys-expense-total strong { display: block; margin-top: 3px; font-size: 29px; font-variant-numeric: tabular-nums; letter-spacing: -.04em; }
+.ys-expense-total span { color: #e1edf9; }
+.ys-expense-chart { display: flex; gap: 3px; height: 8px; margin-block: 8px; overflow: hidden; border-radius: 5px; }
+.ys-expense-chart > span { flex-basis: 0; }
+.ys-expense-category--groceries { background: #318869; }
+.ys-expense-category--cafes { background: #ba6a41; }
+.ys-expense-category--transport { background: #5a6ab2; }
+.ys-expense-legend > div,
+.ys-expense-day dl > div,
+.ys-expense-day > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ys-expense-legend > div { min-height: 25px; }
+.ys-expense-legend dt,
+.ys-expense-day dt { display: flex; align-items: center; gap: 7px; }
+.ys-expense-legend dt > span,
+.ys-expense-day dt > span { flex: none; width: 7px; height: 7px; border-radius: 50%; }
+.ys-expense-legend dd,
+.ys-expense-day dd { font-weight: 700; white-space: nowrap; }
+.ys-expense-day { overflow: hidden; border: 1px solid #e8edf2; border-radius: 9px; }
+.ys-expense-day > div:first-child { min-height: 35px; padding: 6px 9px; background: #eef3f8; color: #294c71; }
+.ys-expense-day dl > div { min-height: 40px; padding: 6px 9px; }
+.ys-expense-day dl > div + div { border-top: 1px solid #eef1f4; }

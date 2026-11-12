@@ -93,18 +93,17 @@ export function YleumLanding({ plans = null, signedIn = false, now }: { plans?: 
       {/* 2 — что отсюда выходит */}
       <section id="examples" className="yl-section" data-marketing-section="examples">
         <div className="yl-wrap yl-head yl-head--center">
-          <h2>Функции, которые вас ждут</h2>
+          <h2>Функции под вашу идею</h2>
+          <p className="yl-lead">Эти пять экранов — примеры. Опишите своими словами, что должно уметь ваше приложение, и Yleum соберёт его под вашу задачу.</p>
         </div>
         <ScreenCollage
-          now={now}
           screens={[
             { kind: "status", description: "Клиент следит за статусом и временем выдачи заказа" },
-            { kind: "cafe", description: "Гость выбирает товары из меню и собирает корзину" },
-            { kind: "salon", description: "Клиент выбирает мастера и свободное время" },
-            { kind: "club", description: "Участник записывается на встречу и читает программу" },
+            { kind: "estimate", description: "Клиент рассчитывает стоимость услуги по своим параметрам" },
+            { kind: "lesson", description: "Ученик проходит урок и проверяет, что запомнил" },
+            { kind: "expenses", description: "Пользователь записывает расходы и видит, на что ушли деньги" },
             { kind: "loyalty", description: "Клиент видит свои бонусы и историю покупок" },
           ]}
-          caption="Примеры экранов. Содержание и функции вы задаёте для своего бизнеса."
         />
       </section>
 
