@@ -108,10 +108,10 @@ describe("Integration Hub inside the editor modal", () => {
     expect(dialog.querySelector('input[aria-label="Найти сервис"]')).not.toBeNull();
   });
 
-  it("offers the project's masked AITunnel setup inside the services panel", async () => {
-    const dialog = await render([], undefined, undefined, false);
-    expect(dialog.querySelector('input[name="api_key"][type="password"]')).not.toBeNull();
-    expect(button("Подключить AITunnel")).toBeDefined();
+  it.each([false, true])("omits AITunnel from built-in services when nutrition is enabled=%s", async (enabled) => {
+    const dialog = await render([], undefined, undefined, enabled);
+    expect(dialog.textContent).not.toMatch(/aitunnel/i);
+    expect(dialog.querySelector('input[name="api_key"]')).toBeNull();
   });
 
   it("replaces the catalog with credentials and restores the filters when going back", async () => {

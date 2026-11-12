@@ -28,7 +28,6 @@ import { toast } from "sonner";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { MaxSectionShell } from "@/components/max/MaxSectionShell";
-import { MaxNutritionAiConnection } from "@/components/max/MaxNutritionAiConnection";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -63,7 +62,7 @@ import { OwnerChatQuotaNotice } from "@/components/workspace/OwnerChatQuotaNotic
 import { describeApiError } from "@/lib/api/errors";
 import { syncMaxManagedKit } from "@/lib/api/max-studio";
 import { sendPrompt } from "@/lib/api/messages";
-import type { AppIntegration, IntegrationCatalog, IntegrationCategory, IntegrationProvider } from "@/lib/api/types";
+import type { AppIntegration, IntegrationCategory, IntegrationProvider } from "@/lib/api/types";
 import { containsChatSecret } from "@/lib/max-chat-credentials";
 import { cn } from "@/lib/utils";
 import { getBuiltinIntegrationRequest, recognizeBuiltinIntegrationRequest } from "@/lib/builtin-integration-prompts";
@@ -665,18 +664,6 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
           <p>Подключение даёт приложению доступ к сервису. Если нужны новые экраны или действия, выберите «Сценарий оплаты» или «Добавить в приложение». После доработки опубликуйте изменения.</p>
         </details>
       </div>
-      {catalog.data?.nutrition_ai_enabled !== undefined && (
-        <MaxNutritionAiConnection
-          key={projectId}
-          projectId={projectId}
-          enabled={catalog.data.nutrition_ai_enabled}
-          onChange={(enabled) => {
-            qc.setQueryData<IntegrationCatalog>(queryKey, (data) =>
-              data ? { ...data, nutrition_ai_enabled: enabled } : data);
-            void qc.invalidateQueries({ queryKey });
-          }}
-        />
-      )}
       {canOfferPack && <section className="max-integration-pack rounded-[12px] border border-border-default bg-surface p-5">
           <div className="flex items-start gap-4">
             <span className="grid size-11 shrink-0 place-items-center rounded-[8px] bg-accent text-fg-on-accent"><Sparkles className="size-5" /></span>

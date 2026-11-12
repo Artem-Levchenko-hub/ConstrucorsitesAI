@@ -162,14 +162,3 @@ export function setPlatformAiEnabled(
     json: { enabled },
   });
 }
-
-export function setNutritionAiKey(
-  projectId: Uuid,
-  key: string | null,
-): Promise<{ enabled: boolean }> {
-  return apiFetch(`/api/projects/${projectId}/nutrition-ai`, {
-    method: "PUT",
-    json: { api_key: key },
-    timeoutMs: 32_000,
-  });
-}
