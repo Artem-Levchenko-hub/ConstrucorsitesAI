@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowUp, ChevronLeft, ChevronRight } from "lucide-react";
-import { useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { LANDING_PROMPT_MAX_LENGTH, startWithPrompt } from "@/lib/landing-prompt";
 
@@ -142,6 +142,8 @@ function PromptComposer({ demo }: { demo: string }) {
 export function HeroStage({ initialNow }: { initialNow: number }) {
   const [scenario, setScenario] = useState<Scenario>("cafe");
   const [now, setNow] = useState(initialNow);
+  const carousel = useRef<HTMLElement>(null);
+  const reduceMotion = useReducedMotion();
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
@@ -153,6 +155,17 @@ export function HeroStage({ initialNow }: { initialNow: number }) {
   const previous = order[(activeIndex + order.length - 1) % order.length];
   const next = order[(activeIndex + 1) % order.length];
   const slideId = (key: Scenario) => `${carouselId}-${key}`;
+
+  function showScenario(key: Scenario) {
+    setScenario(key);
+    const stage = carousel.current;
+    if (!stage || window.innerWidth < 720) return;
+    const bounds = stage.getBoundingClientRect();
+    const headerBottom = document.querySelector(".yl-header")?.getBoundingClientRect().bottom ?? 0;
+    if (bounds.top < headerBottom || bounds.bottom > window.innerHeight) {
+      stage.scrollIntoView?.({ block: "nearest", behavior: reduceMotion ? "instant" : "smooth" });
+    }
+  }
 
   return (
     <div className="ys-stage" data-testid="landing-example">
@@ -167,14 +180,14 @@ export function HeroStage({ initialNow }: { initialNow: number }) {
               aria-controls={slideId(key)}
               data-marketing="scenario_select"
               data-placement={scenarios[key].event}
-              onClick={() => setScenario(key)}
+              onClick={() => showScenario(key)}
             >
               {scenarios[key].tab}
             </button>
           </div>
         ))}
       </div>
-      <section className="ys-coverflow" aria-label="Примеры приложений" aria-roledescription="карусель">
+      <section ref={carousel} className="ys-coverflow" aria-label="Примеры приложений" aria-roledescription="карусель">
         <div className="ys-coverflow-track">
           {order.map((key, index) => {
             const distance = (index - activeIndex + order.length) % order.length;
@@ -188,14 +201,14 @@ export function HeroStage({ initialNow }: { initialNow: number }) {
             </div>;
           })}
           <button type="button" className="ys-coverflow-select ys-coverflow-select--previous" aria-label={`Показать: ${scenarios[previous].tab}`}
-            aria-controls={slideId(previous)} data-marketing="scenario_select" data-placement={scenarios[previous].event} onClick={() => setScenario(previous)} />
+            aria-controls={slideId(previous)} data-marketing="scenario_select" data-placement={scenarios[previous].event} onClick={() => showScenario(previous)} />
           <button type="button" className="ys-coverflow-select ys-coverflow-select--next" aria-label={`Показать: ${scenarios[next].tab}`}
-            aria-controls={slideId(next)} data-marketing="scenario_select" data-placement={scenarios[next].event} onClick={() => setScenario(next)} />
+            aria-controls={slideId(next)} data-marketing="scenario_select" data-placement={scenarios[next].event} onClick={() => showScenario(next)} />
         </div>
         <div className="ys-coverflow-navigation">
-          <button type="button" aria-label="Предыдущий экран" aria-controls={slideId(previous)} data-marketing="scenario_select" data-placement={scenarios[previous].event} onClick={() => setScenario(previous)}><ChevronLeft size={18} aria-hidden="true" /></button>
+          <button type="button" aria-label="Предыдущий экран" aria-controls={slideId(previous)} data-marketing="scenario_select" data-placement={scenarios[previous].event} onClick={() => showScenario(previous)}><ChevronLeft size={18} aria-hidden="true" /></button>
           <span aria-hidden="true">0{activeIndex + 1}<i> / </i>04</span>
-          <button type="button" aria-label="Следующий экран" aria-controls={slideId(next)} data-marketing="scenario_select" data-placement={scenarios[next].event} onClick={() => setScenario(next)}><ChevronRight size={18} aria-hidden="true" /></button>
+          <button type="button" aria-label="Следующий экран" aria-controls={slideId(next)} data-marketing="scenario_select" data-placement={scenarios[next].event} onClick={() => showScenario(next)}><ChevronRight size={18} aria-hidden="true" /></button>
         </div>
         <p className="sr-only" aria-live="polite" aria-atomic="true">{activeIndex + 1} из {order.length}: {scenarios[scenario].tab}</p>
       </section>

@@ -1,4 +1,4 @@
-import { ArrowRight, Check } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import Link from "next/link";
 
 import type { BillingPlan } from "@/lib/api/account";
@@ -57,17 +57,19 @@ function orderedCatalog(plans: BillingPlan[] | null): BillingPlan[] | null {
 
 export function LandingPricing({ plans, signedIn = false }: { plans: BillingPlan[] | null; signedIn?: boolean }) {
   const catalog = orderedCatalog(plans);
-  const accountHref = signedIn ? "/billing/plan" : "/login?next=/billing/plan";
+  const planPath = "/billing/plan";
+  const accountHref = signedIn ? planPath : `/login?next=${planPath}`;
   return (
-    <section id="pricing" className="yl-section yl-section--tint" data-marketing-section="pricing" aria-labelledby="landing-pricing-heading">
+    <section id="pricing" className="yl-section yl-section--tint yl-pricing" data-marketing-section="pricing" aria-labelledby="landing-pricing-heading">
       <div className="yl-wrap yl-head yl-head--center">
         <h2 id="landing-pricing-heading">Тарифы для вашего приложения</h2>
-        <p className="yl-lead">Сравните стоимость, количество проектов и лимиты генераций и правок.</p>
       </div>
       <div className="yl-wrap yl-plans">
         {catalog ? catalog.map(plan => {
           const isFree = plan.code === "free";
           const name = isFree ? "Бесплатный" : plan.name;
+          const target = `${planPath}?plan=${plan.code}`;
+          const href = signedIn ? target : isFree ? "/max/register" : `/login?next=${encodeURIComponent(target)}`;
           const rows = [
             ...LIMIT_ROWS.flatMap(([key, label]) => plan.entitlements[key] === undefined ? [] : [{
               key, label, value: plan.entitlements[key] === null ? "Без ограничений" : String(plan.entitlements[key]),
@@ -81,19 +83,19 @@ export function LandingPricing({ plans, signedIn = false }: { plans: BillingPlan
             <article key={plan.id} className="yl-plan">
               <h3 className="yl-plan-top">{name}</h3>
               <p className="yl-price">{money.format(Number(plan.price_rub))}<span>/ месяц</span></p>
-              <ul>
-                {rows.map(row => <li key={row.key}><Check aria-hidden="true" /><span>{row.label}: <strong>{row.value}</strong></span></li>)}
+              <ul role="list">
+                {rows.map(row => <li key={row.key}><span>{row.label}: <strong>{row.value}</strong></span></li>)}
               </ul>
               <p className="yl-note">{planPeriodDescription(plan)}</p>
+              <Link href={href} className="yl-cta yl-cta--outline yl-plan-cta" aria-label={`Выбрать тариф «${name}»`}>
+                Выбрать тариф <ArrowRight size={16} aria-hidden="true" />
+              </Link>
             </article>
           );
-        }) : <div role="status" className="yl-plan" style={{ gridColumn: "1 / -1" }}>
+        }) : <div role="status" className="yl-plan">
           <h3>Не удалось загрузить тарифы</h3>
-          <p>Актуальные цены временно недоступны. Обновите страницу или откройте раздел тарифов в аккаунте.</p>
+          <p>Обновите страницу или <Link href={accountHref} className="yl-quiet">откройте тарифы в аккаунте</Link>.</p>
         </div>}
-      </div>
-      <div className="yl-wrap yl-plan-actions">
-        <Link href={accountHref} className="yl-cta yl-cta--lg yl-cta--outline">Открыть тарифы в аккаунте<ArrowRight size={18} aria-hidden="true" /></Link>
       </div>
     </section>
   );

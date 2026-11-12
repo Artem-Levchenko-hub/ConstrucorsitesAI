@@ -1,16 +1,15 @@
 "use client";
 
-import { Circle, CircleCheck, CookingPot, Refrigerator, Ruler, ShowerHead, Sparkles, Wallet } from "lucide-react";
+import { Circle, CircleCheck, CookingPot, Refrigerator, Ruler, MessageSquare, ShowerHead, Sparkles, Star, TrainFront } from "lucide-react";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 
 import { Promo, ScreenChrome } from "./ScreenChrome";
 import "./feature-examples.css";
 
 const numbers = new Intl.NumberFormat("ru-RU");
-const fractions = new Intl.NumberFormat("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function rubles(value: number) {
-  return `${(Number.isInteger(value) ? numbers : fractions).format(value)} ₽`;
+  return `${numbers.format(value)} ₽`;
 }
 
 const PRICE_PER_METER = 60;
@@ -92,8 +91,8 @@ export function EstimateScreen() {
 
 const COURSE_LESSONS = 4;
 const CURRENT_LESSON = 2;
-const CORRECT_ANSWER = "У пересечения линий";
-const ANSWERS = ["У края кадра", CORRECT_ANSWER, "Всегда в центре"];
+const CORRECT_ANSWER = "Where is the train station?";
+const ANSWERS = ["How much is the ticket?", CORRECT_ANSWER, "When does the train leave?"];
 
 export function LessonScreen() {
   const [answer, setAnswer] = useState<string | null>(null);
@@ -105,30 +104,27 @@ export function LessonScreen() {
 
   return (
     <ScreenChrome
-      name="Кадр"
-      section="Мини-курс по фотографии"
-      bar={<div className="ys-example-footer ys-example-footer--lesson"><span>Следующий урок</span><strong>Свет и тень</strong></div>}
+      name="В пути"
+      section="Английский для путешествий"
+      bar={<div className="ys-example-footer ys-example-footer--lesson"><span>Следующий урок</span><strong>В гостинице</strong></div>}
     >
       <div className="ys-feature-example ys-example-lesson">
         <div className="ys-lesson-progress">
-          <h3>Съёмка на телефон</h3>
+          <h3>Английский в поездке</h3>
           <div><span>Пройдено</span><strong>{completed} из {COURSE_LESSONS}</strong></div>
           <progress aria-label="Пройдено уроков" value={completed} max={COURSE_LESSONS} />
         </div>
         <div className="ys-lesson-content">
           <p className="ys-example-label">Урок {CURRENT_LESSON}</p>
-          <h3>Правило третей</h3>
-          <div
-            className="ys-lesson-viewfinder"
-            role="img"
-            aria-label="На сетке три на три главный объект расположен у верхнего правого пересечения линий."
-          />
-          <p>Расположите главный объект у пересечения линий сетки.</p>
+          <div className="ys-lesson-phrase">
+            <TrainFront size={24} aria-hidden="true" />
+            <div><small>На вокзале</small><h3>Где находится вокзал?</h3></div>
+          </div>
         </div>
         <div>
           <p className="ys-example-label">Проверка</p>
           <fieldset className="ys-lesson-answers" disabled={solved}>
-            <legend>Где разместить главный объект?</legend>
+            <legend>Как спросить по-английски?</legend>
             {ANSWERS.map(option => (
               <button key={option} type="button" aria-pressed={answer === option}
                 className={answer === option && solved ? "ys-lesson-correct" : undefined} onClick={() => setAnswer(option)}>
@@ -144,138 +140,84 @@ export function LessonScreen() {
   );
 }
 
-const EXPENSE_CATEGORIES = [
-  { id: "groceries", name: "Продукты" },
-  { id: "cafes", name: "Кафе" },
-  { id: "transport", name: "Транспорт" },
-] as const;
+const RATINGS = [1, 2, 3, 4, 5];
 
-type ExpenseCategory = typeof EXPENSE_CATEGORIES[number]["id"];
-type ExpenseInput = { name: string; category: ExpenseCategory; kopecks: number };
-type Expense = ExpenseInput & { id: number };
-
-const INITIAL_TODAY: Expense[] = [
-  { id: 1, name: "Продукты у дома", category: "groceries", kopecks: 76000 },
-  { id: 2, name: "Кофе с собой", category: "cafes", kopecks: 24000 },
-  { id: 3, name: "Автобус", category: "transport", kopecks: 8000 },
-];
-const YESTERDAY: Expense[] = [
-  { id: 4, name: "Обед", category: "cafes", kopecks: 54000 },
-  { id: 5, name: "Такси", category: "transport", kopecks: 38000 },
-];
-
-function totalKopecks(entries: readonly Expense[]) {
-  return entries.reduce((sum, entry) => sum + entry.kopecks, 0);
-}
-
-function ExpenseForm({ onSave }: { onSave: (entry: ExpenseInput) => void }) {
-  const [name, setName] = useState("");
-  const [amount, setAmount] = useState("");
-  const [category, setCategory] = useState<ExpenseCategory>("groceries");
-  const nameInput = useRef<HTMLInputElement>(null);
-  const errorId = useId();
-  const parsed = /^(\d{0,7})(?:[.,](\d{1,2}))?$/.exec(amount.trim());
-  const kopecks = parsed ? Number(parsed[1]) * 100 + Number((parsed[2] ?? "").padEnd(2, "0")) : 0;
-  const invalidAmount = amount.length > 0 && kopecks === 0;
-
-  useEffect(() => { nameInput.current?.focus(); }, []);
-
-  function save(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (name.trim() && kopecks > 0) onSave({ name: name.trim(), category, kopecks });
-  }
-
-  return (
-    <form className="ys-feature-example ys-expense-form" onSubmit={save}>
-      <h3>Новый расход</h3>
-      <label>Название
-        <input ref={nameInput} name="expense-name" value={name} maxLength={60} required onChange={event => setName(event.target.value)} />
-      </label>
-      <label>Сумма, ₽
-        <input name="expense-amount" inputMode="decimal" value={amount} maxLength={10} required aria-invalid={invalidAmount}
-          aria-describedby={invalidAmount ? errorId : undefined} onChange={event => setAmount(event.target.value)} />
-      </label>
-      {invalidAmount && <p id={errorId}>Введите сумму больше нуля, до двух знаков после запятой.</p>}
-      <label>Категория
-        <select name="expense-category" value={category} onChange={event => setCategory(event.target.value as ExpenseCategory)}>
-          {EXPENSE_CATEGORIES.map(({ id, name }) => <option value={id} key={id}>{name}</option>)}
-        </select>
-      </label>
-      <button type="submit" className="ys-bar-button is-on" disabled={!name.trim() || kopecks === 0}>Сохранить расход</button>
-    </form>
-  );
-}
-
-export function ExpensesScreen() {
-  const [today, setToday] = useState(INITIAL_TODAY);
-  const [editing, setEditing] = useState(false);
-  const addButton = useRef<HTMLButtonElement>(null);
-  const returnFocus = useRef(false);
-  const entries = [...today, ...YESTERDAY];
-  const days = [{ day: "Сегодня", entries: today }, { day: "Вчера", entries: YESTERDAY }];
-  const categories = EXPENSE_CATEGORIES.map(({ id, name }) => ({
-    id,
-    name,
-    kopecks: totalKopecks(entries.filter(entry => entry.category === id)),
-  }));
-  const total = rubles(totalKopecks(entries) / 100);
+export function FeedbackScreen() {
+  const formId = useId();
+  const heading = useRef<HTMLHeadingElement>(null);
+  const focusAfterChange = useRef(false);
+  const [rating, setRating] = useState(0);
+  const [comment, setComment] = useState("");
+  const [submitted, setSubmitted] = useState(false);
 
   useEffect(() => {
-    if (!editing && returnFocus.current) {
-      addButton.current?.focus({ preventScroll: true });
-      returnFocus.current = false;
+    if (focusAfterChange.current) {
+      heading.current?.focus({ preventScroll: true });
+      focusAfterChange.current = false;
     }
-  }, [editing]);
+  }, [submitted]);
 
-  function addExpense(entry: ExpenseInput) {
-    setToday(previous => [{ ...entry, id: previous.length + YESTERDAY.length + 1 }, ...previous]);
-    setEditing(false);
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (rating) {
+      focusAfterChange.current = true;
+      setSubmitted(true);
+    }
+  }
+
+  function reset() {
+    focusAfterChange.current = true;
+    setRating(0);
+    setComment("");
+    setSubmitted(false);
   }
 
   return (
-    <ScreenChrome name="По полочкам" section="Личный учёт расходов" bodyKey={editing ? "form" : "expenses"}
-      backAction={editing ? { label: "К расходам", onClick: () => setEditing(false) } : undefined}
-      bar={!editing && (
-        <button ref={addButton} type="button" className="ys-bar-button ys-expense-add is-on" onClick={() => { returnFocus.current = true; setEditing(true); }}>
-          Добавить расход
-        </button>
+    <ScreenChrome name="Студия «Линия»" section="Отзыв о визите" bodyKey={submitted ? "review" : "form"}
+      bar={submitted ? (
+        <button type="button" className="ys-bar-button" onClick={reset}>Оценить ещё раз</button>
+      ) : (
+        <button type="submit" form={formId} className="ys-bar-button is-on" disabled={!rating}>Отправить отзыв</button>
       )}>
-      {editing ? <ExpenseForm onSave={addExpense} /> : (
-      <div className="ys-feature-example ys-example-expenses">
-        <div className="ys-expense-total" role="status">
-          <div><span>Расходы за 2 дня</span><strong>{total}</strong></div>
-          <Wallet size={24} aria-hidden="true" />
-        </div>
-        <div>
-          <h3>По категориям</h3>
-          <div className="ys-expense-chart" aria-hidden="true">
-            {categories.map(({ id, kopecks }) => (
-              <span key={id} className={`ys-expense-category--${id}`} style={{ flexGrow: kopecks }} />
-            ))}
+      {submitted ? (
+        <div className="ys-feature-example ys-review-result">
+          <div className="ys-review-visit">
+            <CircleCheck size={22} aria-hidden="true" />
+            <div>
+              <h3 ref={heading} tabIndex={-1}>Демо-отзыв сохранён</h3>
+              <p role="status">Оценка {rating} из 5</p>
+            </div>
           </div>
-          <dl className="ys-expense-legend">
-            {categories.map(({ id, name, kopecks }) => (
-              <div key={id}>
-                <dt><span className={`ys-expense-category--${id}`} aria-hidden="true" />{name}</dt>
-                <dd>{rubles(kopecks / 100)}</dd>
-              </div>
-            ))}
-          </dl>
+          {comment.trim() && <p className="ys-review-comment">{comment.trim()}</p>}
         </div>
-        {days.map(({ day, entries }) => (
-          <div className="ys-expense-day" key={day}>
-            <div><h3>{day}</h3><strong>{rubles(totalKopecks(entries) / 100)}</strong></div>
-            <dl>
-              {entries.map(({ id, name, category, kopecks }) => (
-                <div key={id}>
-                  <dt><span className={`ys-expense-category--${category}`} aria-hidden="true" />{name}</dt>
-                  <dd>{rubles(kopecks / 100)}</dd>
-                </div>
+      ) : (
+        <form id={formId} className="ys-feature-example ys-review-form" onSubmit={submit}>
+          <div className="ys-review-visit">
+            <MessageSquare size={22} aria-hidden="true" />
+            <div>
+              <h3 ref={heading} tabIndex={-1}>Как прошёл визит?</h3>
+              <p>Стрижка и укладка</p>
+            </div>
+          </div>
+          <fieldset>
+            <legend>Ваша оценка</legend>
+            <div className="ys-review-rating">
+              {RATINGS.map(value => (
+                <label key={value} data-filled={value <= rating || undefined}>
+                  <input className="sr-only" type="radio" name="rating" value={value}
+                    checked={rating === value} onChange={() => setRating(value)} required />
+                  <Star size={20} aria-hidden="true" />
+                  <span className="sr-only">Оценка {value} из 5</span>
+                </label>
               ))}
-            </dl>
-          </div>
-        ))}
-      </div>
+            </div>
+          </fieldset>
+          <label className="ys-review-note">
+            Комментарий <small>необязательно</small>
+            <textarea name="review-comment" rows={3} maxLength={300} value={comment}
+              placeholder="Расскажите о визите" onChange={event => setComment(event.target.value)} />
+          </label>
+        </form>
       )}
     </ScreenChrome>
   );

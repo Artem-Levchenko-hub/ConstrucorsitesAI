@@ -49,8 +49,7 @@
 }
 .ys-estimate-fields label > span { display: flex; align-items: center; gap: 5px; color: #435c50; font-size: 11px; }
 .ys-estimate-fields svg { flex: none; color: #247354; }
-.ys-estimate-fields :is(input, select),
-.ys-expense-form :is(input, select) {
+.ys-estimate-fields :is(input, select) {
   width: 100%;
   min-width: 0;
   min-height: 46px;
@@ -64,7 +63,7 @@
   font-variant-numeric: tabular-nums;
 }
 .ys-estimate-fields :is(input, select) { border-color: #cfe3da; font-weight: 700; }
-.ys-feature-example :is(input, select, button):focus-visible { outline: 2px solid var(--color-brand-blue, #0062ee); outline-offset: 1px; }
+.ys-feature-example :is(input, select, button, textarea):focus-visible { outline: 2px solid var(--color-brand-blue, #0062ee); outline-offset: 1px; }
 .ys-feature-example input[aria-invalid="true"] { border-color: #af5660; }
 .ys-estimate-base {
   display: flex;
@@ -112,33 +111,9 @@
 .ys-lesson-content { display: grid; gap: 6px; }
 .ys-example-lesson .ys-example-label { color: #70488d; }
 .ys-lesson-content h3 { font-size: 18px; }
-.ys-lesson-viewfinder {
-  position: relative;
-  min-height: 112px;
-  overflow: hidden;
-  border: 1px solid #8f729d;
-  border-radius: 9px;
-  background:
-    linear-gradient(90deg, transparent 33%, #fff9 33% 33.6%, transparent 33.6% 66.3%, #fff9 66.3% 67%, transparent 67%),
-    linear-gradient(0deg, transparent 33%, #fff9 33% 33.9%, transparent 33.9% 66.2%, #fff9 66.2% 67%, transparent 67%),
-    radial-gradient(ellipse at 10% 125%, #715e90 0 48%, transparent 49%),
-    radial-gradient(ellipse at 85% 135%, #ad88b7 0 55%, transparent 56%),
-    linear-gradient(150deg, #8275a4, #dcb5ca);
-}
-.ys-lesson-viewfinder::after {
-  position: absolute;
-  top: 33.333%;
-  left: 66.667%;
-  width: 25px;
-  height: 25px;
-  border: 2px solid #fff;
-  border-radius: 50%;
-  background: #bfe7ff;
-  box-shadow: 0 0 0 3px rgb(70 42 89 / .38);
-  transform: translate(-50%, -50%);
-  content: "";
-}
-.ys-lesson-content > p:last-child { color: #4c4055; }
+.ys-lesson-phrase { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 9px; background: #f8f4fb; color: #56337b; }
+.ys-lesson-phrase svg { flex: none; }
+.ys-lesson-phrase small { display: block; margin-bottom: 4px; color: #655170; }
 .ys-lesson-answers { display: grid; gap: 5px; min-width: 0; margin: 3px 0 0; padding: 0; border: 0; }
 .ys-lesson-answers legend { margin-bottom: 7px; padding: 0; font-size: 14px; font-weight: 700; }
 .ys-lesson-answers button {
@@ -162,38 +137,52 @@
 .ys-lesson-answers .ys-lesson-correct { border-color: #a9d7bd; background: #edf7ef; color: #20553a; }
 .ys-feature-example .ys-lesson-feedback { min-height: 16px; margin-top: 6px; color: #56337b; font-size: 11px; font-weight: 650; }
 
-.ys-expense-total {
+.ys-review-visit {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 90px;
-  padding: 12px 14px;
+  gap: 10px;
+  padding: 13px;
   border-radius: 11px;
-  background: linear-gradient(120deg, #173353, #294c71);
-  color: #fff;
+  background: #e9f1ff;
+  color: #214579;
 }
-.ys-expense-total strong { display: block; margin-top: 3px; font-size: 29px; font-variant-numeric: tabular-nums; letter-spacing: -.04em; }
-.ys-expense-total span { color: #e1edf9; }
-.ys-expense-chart { display: flex; gap: 3px; height: 8px; margin-block: 8px; overflow: hidden; border-radius: 5px; }
-.ys-expense-chart > span { flex-basis: 0; }
-.ys-expense-category--groceries { background: #318869; }
-.ys-expense-category--cafes { background: #ba6a41; }
-.ys-expense-category--transport { background: #5a6ab2; }
-.ys-expense-legend > div,
-.ys-expense-day dl > div,
-.ys-expense-day > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.ys-expense-legend > div { min-height: 25px; }
-.ys-expense-legend dt,
-.ys-expense-day dt { display: flex; align-items: center; gap: 7px; min-width: 0; overflow-wrap: anywhere; }
-.ys-expense-legend dt > span,
-.ys-expense-day dt > span { flex: none; width: 7px; height: 7px; border-radius: 50%; }
-.ys-expense-legend dd,
-.ys-expense-day dd { font-weight: 700; white-space: nowrap; }
-.ys-expense-day { overflow: hidden; border: 1px solid #e8edf2; border-radius: 9px; }
-.ys-expense-day > div:first-child { min-height: 35px; padding: 6px 9px; background: #eef3f8; color: #294c71; }
-.ys-expense-day dl > div { min-height: 40px; padding: 6px 9px; }
-.ys-expense-day dl > div + div { border-top: 1px solid #eef1f4; }
-.ys-expense-form label { display: grid; gap: 6px; font-weight: 650; }
-.ys-expense-form p { color: #8d303f; font-size: 11px; }
-.ys-expense-form .ys-bar-button, .ys-expense-add { min-height: 46px; font-size: 13px; }
+.ys-review-visit > svg { flex: none; }
+.ys-review-visit h3 { font-size: 16px; }
+.ys-review-visit p { margin-top: 4px; }
+.ys-review-form fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.ys-review-form legend { margin-bottom: 8px; font-weight: 650; }
+.ys-review-rating { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.ys-review-rating label {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 44px;
+  border: 1px solid #e3e6eb;
+  border-radius: 8px;
+  background: #f9fafc;
+  color: #6b7280;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+.ys-review-rating label:hover { background: #f1f5ff; }
+.ys-review-rating label[data-filled] { background: #ebf1ff; border-color: #ccd9ff; color: #3255ac; }
+.ys-review-rating label[data-filled] svg { fill: #a7bbfb; }
+.ys-review-rating label:focus-within { outline: 2px solid #0062ee; outline-offset: 2px; }
+.ys-review-note { display: grid; gap: 6px; font-weight: 650; }
+.ys-review-note small { color: #636773; font-weight: 400; }
+.ys-review-note textarea {
+  width: 100%;
+  min-height: 82px;
+  padding: 9px;
+  resize: vertical;
+  border: 1px solid #d9dee7;
+  border-radius: 8px;
+  background: #fff;
+  color: #1c2229;
+  font: inherit;
+  font-weight: 400;
+}
+.ys-review-comment { padding: 12px; border-radius: 8px; background: #f3f5f8; overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) {
+  .ys-review-rating label { transition: none; }
+}

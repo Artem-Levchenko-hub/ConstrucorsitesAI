@@ -21,9 +21,13 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi
 function slides() { return [...host.querySelectorAll<HTMLElement>("[data-scenario][data-position]")]; }
 function active() { return host.querySelector<HTMLElement>('[data-position="active"]')!; }
 function positions() { return Object.fromEntries(slides().map(slide => [slide.dataset.scenario, slide.dataset.position])); }
-async function click(label: string) {
-  const button = [...host.querySelectorAll<HTMLButtonElement>("button")].find(control => !control.closest("[inert]") && (control.getAttribute("aria-label") === label || control.textContent?.trim() === label));
-  expect(button, label).toBeDefined();
+async function click(label: string | RegExp) {
+  const button = [...host.querySelectorAll<HTMLButtonElement>("button")].find(control => {
+    if (control.closest("[inert]")) return false;
+    const name = control.getAttribute("aria-label") ?? control.textContent?.trim() ?? "";
+    return typeof label === "string" ? name === label : label.test(name);
+  });
+  expect(button, String(label)).toBeDefined();
   await act(async () => button!.click());
   return button!;
 }
@@ -31,7 +35,7 @@ async function click(label: string) {
 it("starts with cafe in front, salon on the right, shop on the left and club hidden", () => {
   expect(positions()).toEqual({ cafe: "active", salon: "next", club: "hidden", shop: "previous" });
   expect(active().textContent).toContain("Кофейня «Зёрна»");
-  expect(active().textContent).toContain("9:56");
+  expect(active().textContent).not.toContain("9:56");
   expect(host.querySelector('[aria-label="Показать: Услуги"]')).not.toBeNull();
   expect(host.querySelector('[aria-label="Показать: Магазин"]')).not.toBeNull();
   expect(host.querySelector('[aria-label="Показать: Клуб"]')).toBeNull();
@@ -107,6 +111,8 @@ it("does not rotate the selected screen as time passes or intercept caret keys",
 
 it("orders coffee, pastries, dessert and tea together across categories", async () => {
   await click("Добавить Капучино");
+  await click("Добавить в корзину");
+  expect(active().textContent).toContain("9:56");
   await click("Выпечка");
   expect(active().textContent).not.toContain("Капучино");
   await click("Добавить Круассан с миндалём");
@@ -114,6 +120,7 @@ it("orders coffee, pastries, dessert and tea together across categories", async 
   await click("Добавить Чизкейк");
   await click("Чай");
   await click("Добавить Эрл Грей");
+  await click("Добавить в корзину");
   await click("Открыть корзину");
 
   for (const item of ["Капучино", "Круассан с миндалём", "Чизкейк", "Эрл Грей"]) {
@@ -128,6 +135,7 @@ it("orders coffee, pastries, dessert and tea together across categories", async 
 
 it("opens every plant category and keeps its cart separate from the café", async () => {
   await click("Добавить Капучино");
+  await click("Добавить в корзину");
   await click("Показать: Магазин");
   await click("Неприхотливые");
   expect(active().textContent).toContain("Замиокулькас");
@@ -144,6 +152,7 @@ it("opens every plant category and keeps its cart separate from the café", asyn
 
 it("keeps keyboard focus in the cart when the focused line is removed", async () => {
   await click("Добавить Капучино");
+  await click("Добавить в корзину");
   await click("Открыть корзину");
   const remove = active().querySelector<HTMLButtonElement>('[aria-label="Убрать Капучино"]')!;
   remove.focus();
@@ -154,16 +163,21 @@ it("keeps keyboard focus in the cart when the focused line is removed", async ()
   expect(active().textContent).toContain("Капучино");
 });
 
-it("rejects a salon slot that expires before the next clock refresh", async () => {
+it("rejects a salon slot that expires while the appointment is under review", async () => {
   await click("Услуги");
-  expect(active().textContent).toContain("Сегодня в 14:30");
-  expect(active().querySelector('.ys-slots button[aria-pressed="true"]')?.textContent).toBe("14:30");
+  await click("Записаться");
+  await click(/^Стрижка/);
+  expect(active().textContent).toContain("Сегодня в 13:30");
+  await click("14:30, Анна Соколова");
+  await click("Продолжить");
   vi.setSystemTime(Date.parse("2026-11-12T11:30:01Z"));
-  await click("Оплатить");
+  await click("Подтвердить запись");
   expect(active().textContent).not.toContain("Демо-запись оформлена");
-  expect(active().textContent).toContain("Сегодня в 17:30");
-  await click("17:30");
-  await click("Оплатить");
+  expect(active().textContent).toContain("Это время уже прошло");
+  expect(active().textContent).toContain("Сегодня в 15:00");
+  await click("17:30, Анна Соколова");
+  await click("Продолжить");
+  await click("Подтвердить запись");
   expect(active().textContent).toContain("Демо-запись оформлена");
 });
 

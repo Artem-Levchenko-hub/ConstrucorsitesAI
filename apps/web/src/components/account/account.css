@@ -85,6 +85,7 @@
 .account-plans article { display: flex; flex-direction: column; padding: 20px 16px; border-top: 3px solid transparent; }
 .account-plans article + article { border-left: 1px solid var(--color-border-default); }
 .account-plans article.current { border-top-color: var(--color-accent); background: var(--color-accent-subtle); }
+.account-plans article[data-requested] { outline: 1px solid var(--color-accent); outline-offset: -1px; border-radius: 8px; }
 .account-plans h3 { font-size: 19px; }
 .account-plan-price { font-size: 24px; margin: 20px 0; font-weight: 550; }
 .account-plan-price small { display: block; font-size: 11px; font-weight: 400; color: var(--color-fg-secondary); }

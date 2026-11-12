@@ -1,7 +1,18 @@
-.ys-club-demo {
+.ys-club-shell {
   --ys-club-ink: #33407d;
   --ys-club-muted: #626475;
   --ys-club-rule: #e7e4ec;
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ys-club-chrome { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.ys-club-chrome > .ys-screen { flex: 1; min-height: 0; }
+
+.ys-club-demo {
   display: grid;
   min-width: 0;
   gap: 8px;
@@ -47,37 +58,95 @@
 .ys-club-meeting > div { display: grid; gap: 4px; }
 .ys-club-meeting .ys-club-topic { font-size: 11px; font-weight: 600; }
 
-.ys-club-summary {
+.ys-club-row {
   display: flex;
   align-items: center;
+  width: 100%;
   min-height: 44px;
   gap: 7px;
   padding: 6px 8px;
   border-radius: 7px;
   color: #272737;
   font-size: 11px;
+  text-align: start;
   cursor: pointer;
-  list-style: none;
 }
 
-.ys-club-summary::-webkit-details-marker { display: none; }
-.ys-club-summary:hover { background: #f7f6f9; }
-.ys-club-summary svg { flex: none; }
+.ys-club-row:hover { background: #f7f6f9; }
+.ys-club-row svg { flex: none; }
 .ys-club-chevron { margin-inline-start: auto; color: var(--ys-club-muted); }
-.ys-club-disclosure[open] > .ys-club-summary .ys-club-chevron { transform: rotate(180deg); }
-.ys-club-demo .ys-club-attendees { padding: 5px 8px 10px; }
 
-.ys-club-archive .ys-club-disclosure { border-bottom: 1px solid var(--ys-club-rule); }
+.ys-club-archive .ys-club-row { border-bottom: 1px solid var(--ys-club-rule); }
 .ys-club-archive time { margin-inline-start: auto; color: var(--ys-club-muted); white-space: nowrap; }
 .ys-club-archive .ys-club-chevron { margin-inline-start: 0; }
 .ys-club-past-title { display: grid; gap: 2px; }
 .ys-club-past-title small { color: var(--ys-club-muted); font-size: 10px; }
 
-.ys-club-vote { border-radius: 9px; background: #f1eef9; }
-.ys-club-vote .ys-club-summary { padding-inline: 9px; color: #403367; }
-.ys-club-vote .ys-club-summary:hover { background: #e9e4f5; }
+.ys-club-row.ys-club-vote { padding-inline: 9px; border-radius: 9px; background: #f1eef9; color: #403367; }
+.ys-club-row.ys-club-vote:hover { background: #e9e4f5; }
 
-.ys-club-ballot { display: grid; gap: 8px; padding: 0 9px 9px; }
+.ys-club-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  place-items: center;
+  padding: 12px;
+  background: rgb(34 27 54 / 0.35);
+}
+
+.ys-club-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 264px);
+  max-height: min(100%, 350px);
+  overflow: hidden;
+  border: 1px solid var(--ys-club-rule);
+  border-radius: 14px;
+  background: #fff;
+  color: #272737;
+  box-shadow: 0 12px 26px rgb(34 27 54 / 0.22);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.ys-club-dialog-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 5px 5px 5px 12px;
+  border-bottom: 1px solid var(--ys-club-rule);
+  background: #f7f6fb;
+}
+
+.ys-club-dialog-header h3 { color: var(--ys-club-ink); font-size: 13px; font-weight: 700; }
+.ys-club-dialog-header p { margin-top: 2px; color: var(--ys-club-muted); font-size: 10px; }
+.ys-club-close {
+  display: grid;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--ys-club-ink);
+  cursor: pointer;
+}
+
+.ys-club-close:hover { background: #e9e4f5; }
+.ys-club-dialog-body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  padding: 10px 12px;
+}
+
+.ys-club-dialog-body:focus-visible { outline: 2px solid var(--color-brand-blue, #0062ee); outline-offset: -2px; }
+.ys-club-attendees { gap: 7px; }
+.ys-club-ballot { display: grid; gap: 8px; }
 .ys-club-ballot fieldset { display: grid; min-width: 0; gap: 4px; }
 .ys-club-choice {
   display: flex;
@@ -111,11 +180,10 @@
 .ys-club-ballot .ys-action,
 .ys-club-signup { min-height: 44px; }
 .ys-club-ballot .ys-action:disabled { color: var(--ys-club-muted); cursor: default; }
-.ys-club-vote-result { margin: 0 9px 9px; color: #403367; font-size: 11px; overflow-wrap: anywhere; }
+.ys-club-vote-result { color: #403367; font-size: 11px; overflow-wrap: anywhere; }
 .ys-club-signup-status:empty { position: absolute; }
 
-.ys-club-demo :is(button, summary, input, .ys-club-vote-result):focus-visible,
-.ys-club-signup:focus-visible {
+.ys-club-shell :is(button, input, .ys-club-vote-result):focus-visible {
   outline: 2px solid var(--color-brand-blue, #0062ee);
   outline-offset: 2px;
 }

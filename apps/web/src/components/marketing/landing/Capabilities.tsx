@@ -2,7 +2,7 @@
  * Неинтерактивные примеры возможностей: каталог, запись, оплата и управление.
  * Подключение магазина ЮKassa показано отдельно от примера клиентской оплаты.
  */
-import { CreditCard, EyeOff } from "lucide-react";
+import { CreditCard, PackageX } from "lucide-react";
 
 import "./payment-connection.css";
 
@@ -81,18 +81,18 @@ export function Capabilities() {
         <div className="yl-cap-cta">Оплатить через ЮKassa</div>
       </Card>
 
-      <Card title="Правки обычными словами" note="Не настройки и не поля: пишете сообщение — приложение меняется.">
+      <Card title="Обновления после запуска" note="Добавляйте экраны и функции через чат. Проверьте изменения в предпросмотре и опубликуйте, когда всё готово.">
         <div className="yl-cap-msg yl-cap-msg--you">
-          Добавь тыквенный латте за 290 ₽ в раздел «Кофе»
+          Добавь экран с сезонным меню и предзаказом
         </div>
         <div className="yl-cap-msg yl-cap-msg--app">
-          Готово. Изменение уже в приложении — проверьте в MAX.
+          Готово. Сезонное меню можно проверить в предпросмотре.
         </div>
       </Card>
 
       <Card title="Бонусы и лояльность" note="Бонусы и скидки помогают клиентам возвращаться за следующей покупкой.">
         <div className="yl-cap-loyal">
-          <span>Бонусная карта</span>
+          <span>Бонусная система</span>
           <strong>4 из 6</strong>
         </div>
         <div className="yl-cap-stamps">
@@ -105,18 +105,18 @@ export function Capabilities() {
 
       <Card title="Управление каталогом" note="Меняйте цены и наличие, скрывайте товары в панели управления.">
         <div className="yp-catalog-preview">
-          <div className="yp-catalog-caption"><span>Каталог</span><span>Пример</span></div>
+          <div className="yp-catalog-caption"><span>Каталог</span><span>Цена</span></div>
           <div className="yp-catalog-row">
             <div><strong>Капучино</strong><small>В наличии</small></div>
             <span>240 ₽</span>
           </div>
           <div className="yp-catalog-row">
-            <div><strong>Круассан с миндалём</strong><small>Нет в наличии</small></div>
+            <div><strong>Круассан с миндалём</strong><small>В наличии</small></div>
             <span>190 ₽</span>
           </div>
-          <div className="yp-catalog-hidden">
-            <EyeOff size={12} aria-hidden="true" />
-            <span>Чизкейк скрыт с витрины</span>
+          <div className="yp-catalog-unavailable">
+            <PackageX size={12} aria-hidden="true" />
+            <span>Чизкейка нет в наличии</span>
           </div>
         </div>
       </Card>

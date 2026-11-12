@@ -114,7 +114,7 @@
 .yp-catalog-row small { display: block; margin-top: 1px; color: var(--yl-ink-2, #55555f); font-size: 10px; }
 .yp-catalog-row > span { flex-shrink: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
 
-.yp-catalog-hidden {
+.yp-catalog-unavailable {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -124,7 +124,7 @@
   line-height: 1.5;
 }
 
-.yp-catalog-hidden svg { flex-shrink: 0; }
+.yp-catalog-unavailable svg { flex-shrink: 0; }
 
 @media (min-width: 1024px) {
   .yp-payment { grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr); gap: clamp(40px, 6vw, 80px); }

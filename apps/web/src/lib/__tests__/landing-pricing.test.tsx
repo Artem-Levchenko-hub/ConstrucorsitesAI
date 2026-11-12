@@ -10,9 +10,9 @@ const plans: BillingPlan[] = [
   { id: "business-v3", code: "business", version: 3, name: "Business", price_rub: "6990.00", included_credit_rub: "0.0000", billing_interval: "month", entitlements: { max_projects: 10, static_publish_slots: 10, initial_generations_monthly: 5, edits_monthly: 50, team_seats: 5, always_on_slots: 1, integrations: true } },
 ];
 
-function render(catalog: BillingPlan[] | null) {
+function render(catalog: BillingPlan[] | null, signedIn = false) {
   const host = document.createElement("div");
-  host.innerHTML = renderToStaticMarkup(<LandingPricing plans={catalog} />);
+  host.innerHTML = renderToStaticMarkup(<LandingPricing plans={catalog} signedIn={signedIn} />);
   return host;
 }
 
@@ -64,15 +64,21 @@ it("keeps changed prices and allowances associated with the plan that supplied t
   expect(text(cards[2])).toContain("6 990,00 ₽");
 });
 
-it("shows all plans with one clear route to choosing a tariff in the account", () => {
+it("gives each plan a direct choice and preserves the paid plan through login", () => {
   const host = render(plans);
   expect(text(host)).toContain("Бесплатный");
   expect(text(host)).not.toMatch(/\bFree\b|без карты|когда пойдут клиенты/i);
   expect(host.querySelector('a[href="/pricing"]')).toBeNull();
   const links = Array.from(host.querySelectorAll("a"));
-  expect(links).toHaveLength(1);
-  expect(links[0].getAttribute("href")).toBe("/login?next=/billing/plan");
-  expect(links[0].textContent).toContain("Открыть тарифы в аккаунте");
+  expect(links).toHaveLength(3);
+  expect(links.every(link => link.textContent?.trim() === "Выбрать тариф")).toBe(true);
+  expect(links[0].getAttribute("href")).toBe("/max/register");
+  expect(new URL(links[1].getAttribute("href")!, location.origin).searchParams.get("next")).toBe("/billing/plan?plan=pro");
+  expect(new URL(links[2].getAttribute("href")!, location.origin).searchParams.get("next")).toBe("/billing/plan?plan=business");
+  const memberLinks = Array.from(render(plans, true).querySelectorAll("article a"));
+  expect(memberLinks.map(link => link.getAttribute("href"))).toEqual(
+    ["/billing/plan?plan=free", "/billing/plan?plan=pro", "/billing/plan?plan=business"],
+  );
 });
 
 it("shows no invented prices when the complete unique catalog is unavailable", () => {

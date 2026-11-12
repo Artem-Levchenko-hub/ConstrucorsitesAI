@@ -1,0 +1,182 @@
+.ys-catalog-content {
+  --ys-catalog-muted: #62616a;
+  --ys-catalog-border: #e4e1dd;
+  container: demo-catalog / inline-size;
+}
+
+.ys-catalog-content h3:focus { outline: none; }
+.ys-catalog-content .ys-row small,
+.ys-catalog-content .ys-strip small { color: var(--ys-catalog-muted); }
+
+.ys-catalog-product-title {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.ys-catalog-product-title strong { min-width: 0; overflow-wrap: anywhere; }
+
+.ys-catalog-info {
+  display: inline-grid;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--ys-catalog-muted);
+  cursor: pointer;
+}
+
+.ys-catalog-info:hover,
+.ys-catalog-loyalty:hover { background: #efede9; }
+
+.ys-catalog-info:focus-visible,
+.ys-catalog-loyalty:focus-visible,
+.ys-catalog-serving button:focus-visible,
+.ys-catalog-field select:focus-visible {
+  outline: 2px solid var(--color-brand-blue, #0062ee);
+  outline-offset: 2px;
+}
+
+.ys-catalog-loyalty {
+  width: 100%;
+  min-height: 44px;
+  border: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ys-catalog-loyalty-value {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  color: var(--ys-catalog-muted);
+}
+
+.ys-catalog-loyalty-value b { color: #14141a; }
+
+.ys-catalog-detail-heading {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid #eeece8;
+  border-radius: 10px;
+}
+
+.ys-catalog-detail-heading .ys-art { width: 54px; height: 52px; }
+.ys-catalog-detail-heading p { margin-top: 3px; color: var(--ys-catalog-muted); font-size: 11px; }
+.ys-catalog-ingredients { padding: 7px 2px; }
+.ys-catalog-ingredients li { font-size: 12px; }
+
+.ys-catalog-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: #41414a;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.ys-catalog-field select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 7px 8px;
+  border: 1px solid var(--ys-catalog-border);
+  border-radius: 8px;
+  background: #fff;
+  color: #14141a;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.ys-catalog-quantity {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #41414a;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.ys-catalog-quantity .ys-stepper button:disabled {
+  border-color: var(--ys-catalog-border);
+  background: #f5f3f0;
+  color: #8a8a93;
+  cursor: default;
+}
+
+.ys-catalog-checkout {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 10px;
+  background: #f5f3f0;
+}
+
+.ys-catalog-serving,
+.ys-catalog-stamps {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: 5px;
+}
+
+.ys-catalog-serving button {
+  min-height: 44px;
+  padding: 5px;
+  border: 1px solid var(--ys-catalog-border);
+  border-radius: 8px;
+  background: #fff;
+  color: #41414a;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.ys-catalog-serving button[aria-pressed="true"] {
+  border-color: #b4d1fc;
+  background: #edf4ff;
+  color: #0051bd;
+}
+
+.ys-catalog-loyalty-description { color: var(--ys-catalog-muted); font-size: 12px; line-height: 1.5; }
+
+.ys-catalog-stamps span {
+  display: grid;
+  min-height: 35px;
+  place-items: center;
+  border: 1px dashed #d6d1ca;
+  border-radius: 9px;
+  color: var(--ys-catalog-muted);
+}
+
+.ys-catalog-stamps span[data-collected="true"] {
+  border: 1px solid #cbded0;
+  background: #edf5ee;
+  color: #26724a;
+}
+
+@media (pointer: coarse) {
+  .ys-catalog-field select { font-size: 16px; }
+}
+
+@container demo-catalog (max-width: 265px) {
+  .ys-catalog-content .ys-row--art:has(.ys-stepper button:nth-of-type(2)) {
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr);
+    align-items: start;
+    row-gap: 4px;
+  }
+  .ys-catalog-content .ys-row--art > .ys-stepper:has(button:nth-of-type(2)) {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+}

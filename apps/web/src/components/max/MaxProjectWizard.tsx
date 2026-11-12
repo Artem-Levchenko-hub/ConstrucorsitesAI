@@ -40,7 +40,9 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
   const multipleTypes = values.appTypes !== undefined;
   const managementModules = newProjectManagementModules(values.appType, values.managementModules, values.appTypes);
   const length = Array.from(values.idea.trim()).length;
-  const ready = values.name.trim().length > 1 && values.idea.trim().length > 9 && length <= MAX_BRIEF_LENGTH;
+  const ideaTooShort = length < 10;
+  const ideaTooLong = length > MAX_BRIEF_LENGTH;
+  const ready = values.name.trim().length > 1 && !ideaTooShort && !ideaTooLong;
 
   useEffect(() => { if (open) heading.current?.focus(); }, [step, open]);
 
@@ -86,7 +88,7 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
           <div className="max-wizard-heading">
             <p className="omnia-kicker text-accent">Новое приложение · Шаг {step + 1} из 4</p>
             <DialogTitle ref={heading} tabIndex={-1} className="mt-3 text-2xl">{titles[step]}</DialogTitle>
-            <DialogDescription className="mt-2">{step === 0 ? "Название и идея станут основой первой сборки." : step === 3 ? "После подтверждения создадим проект и откроем редактор для первой сборки." : "Можно оставить эти поля пустыми и уточнить их позже."}</DialogDescription>
+            <DialogDescription className="mt-2">{step === 0 ? "Название и идея станут основой первой сборки" : step === 3 ? "После подтверждения создадим проект и откроем редактор для первой сборки." : "Можно оставить эти поля пустыми и уточнить их позже."}</DialogDescription>
             <progress className="max-wizard-progress" max={4} value={step + 1} aria-label={`Шаг ${step + 1} из 4`} />
           </div>
           {quotaNotice}
@@ -99,12 +101,16 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
               </div>
               <div className="space-y-2">
                 <Label htmlFor="max-project-idea">Что пользователь сможет делать?</Label>
-                <Textarea id="max-project-idea" value={values.idea} onChange={(event) => onChange({ idea: event.target.value })} placeholder="Получать баллы, выбирать награды и оформлять заказ к выдаче" className="min-h-28 resize-y" required aria-describedby="max-project-idea-limit" aria-invalid={length > MAX_BRIEF_LENGTH} />
-                <p id="max-project-idea-limit" className="text-xs text-fg-secondary">{length} / {MAX_BRIEF_LENGTH} символов. {length > MAX_BRIEF_LENGTH ? "Сократите описание перед отправкой — текст не обрезан." : "Не менее 10 символов. Описание отправится целиком."}</p>
+                <Textarea id="max-project-idea" value={values.idea} onChange={(event) => onChange({ idea: event.target.value })} placeholder="Получать баллы, выбирать награды и оформлять заказ к выдаче" className="min-h-28 resize-y" required aria-describedby="max-project-idea-limit" aria-invalid={ideaTooLong} />
+                <p id="max-project-idea-limit" className="text-xs text-fg-secondary">
+                  {length} / {MAX_BRIEF_LENGTH} символов
+                  {ideaTooShort && <span className="block">Не менее 10 символов</span>}
+                  {ideaTooLong && <span className="block">Сократите описание перед отправкой</span>}
+                </p>
               </div>
               <fieldset>
                 <legend className="text-sm font-medium">Тип приложения</legend>
-                {multipleTypes && <p className="max-wizard-note">Можно выбрать несколько типов. Оставьте хотя бы один.</p>}
+                {multipleTypes && <p className="max-wizard-note">Выберите хотя бы один</p>}
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {MAX_APP_TYPES.map(item => <button key={item.id} type="button" aria-pressed={appTypes.includes(item.id)} onClick={() => selectAppType(item.id)} className="max-wizard-option">
                     <span className="flex items-center justify-between gap-2 text-sm font-medium">{item.label}{appTypes.includes(item.id) && <Check className="size-4 text-accent" />}</span>

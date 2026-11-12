@@ -3,13 +3,23 @@ import { describe, expect, it } from "vitest";
 
 import { YleumLanding } from "@/components/marketing/YleumLanding";
 
-function landing() {
+function landing(signedIn = false) {
   const host = document.createElement("div");
-  host.innerHTML = renderToStaticMarkup(<YleumLanding now={0} />);
+  host.innerHTML = renderToStaticMarkup(<YleumLanding now={0} signedIn={signedIn} />);
   return host;
 }
 
 describe("landing explanations and examples", () => {
+  it("keeps the hero action visible for guests and signed-in owners", () => {
+    const guest = landing().querySelector(".yl-hero .yl-actions")!;
+    expect(guest.querySelector("a")?.getAttribute("href")).toBe("/max/register");
+    expect(guest.textContent?.trim()).toBe("Начать бесплатно");
+    const owner = landing(true).querySelector(".yl-hero .yl-actions")!;
+    expect(owner.querySelector("a")?.getAttribute("href")).toBe("/max");
+    expect(owner.textContent?.trim()).toBe("Открыть студию");
+    expect(owner.querySelector("svg")).not.toBeNull();
+  });
+
   it("places a readable function description above each of the five screens", () => {
     const section = landing().querySelector("#examples")!;
     const items = section.querySelectorAll(".ys-collage-item");
@@ -26,14 +36,14 @@ describe("landing explanations and examples", () => {
 
   it("shows five examples including custom features outside the hero carousel", () => {
     const section = landing().querySelector("#examples")!;
-    expect(section.querySelector("h2")?.textContent).toBe("Функции под вашу идею");
-    expect(section.querySelector(".yl-lead")?.textContent).toContain("Эти пять экранов — примеры");
+    expect(section.querySelector("h2")?.textContent).toBe("Что сможет ваше приложение");
+    expect(section.querySelector(".yl-lead")?.textContent).toContain("Yleum соберёт приложение под вашу задачу");
     const descriptions = [...section.querySelectorAll(".ys-collage-description")].map(item => item.textContent);
     expect(descriptions).toEqual([
       "Клиент следит за статусом и временем выдачи заказа",
       "Клиент рассчитывает стоимость услуги по своим параметрам",
-      "Ученик проходит урок и проверяет, что запомнил",
-      "Пользователь записывает расходы и видит, на что ушли деньги",
+      "Ученик практикует английский для поездки",
+      "Клиент оценивает визит и оставляет отзыв",
       "Клиент видит свои бонусы и историю покупок",
     ]);
     for (const duplicate of ["Услуги и запись", "Встречи и обсуждения", "Часто берут вместе"]) {

@@ -1,5 +1,7 @@
 "use client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { getBillingPurchaseOffer, getSubscription, listBillingPlans, manageSubscription } from "@/lib/api/account";
 import type { PaymentJourney } from "./PaymentCheckout";
@@ -9,18 +11,25 @@ import { planAllowanceDescription, planAllowanceRows, planPeriodDescription } fr
 const limit = (value: unknown) => value === null ? "Без ограничений" : value === undefined ? "—" : String(value);
 export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
   const client = useQueryClient();
+  const params = useSearchParams();
+  const requestedCard = useRef<HTMLElement>(null);
   const plans = useQuery({ queryKey: ["billing-plans"], queryFn: listBillingPlans });
   const subscription = useQuery({ queryKey: ["billing-subscription"], queryFn: getSubscription });
   const offer = useQuery({ queryKey: ["billing-purchase-offer", j.accountKey], queryFn: getBillingPurchaseOffer, staleTime: 0, gcTime: 0 });
   const manage = useMutation({ mutationFn: manageSubscription, onSuccess: updated => client.setQueryData(["billing-subscription"], updated) });
   const current = subscription.data;
   const personal = !offer.isError ? offer.data : null;
+  const requestedCode = params.get("payment") ? null : params.get("plan");
+  const requestedId = plans.data?.find(plan => plan.code === requestedCode)?.id;
+  useEffect(() => {
+    if (requestedId) requestedCard.current?.focus();
+  }, [requestedId]);
   const historical = current && current.plan.code !== "free" && plans.data
     && !plans.data.some(plan => plan.id === current.plan.id);
   return <>
     <QueryError error={subscription.error} retry={() => void subscription.refetch()} />
     {subscription.isPending && <p role="status">Загружаем тариф…</p>}
-    {current && <section className="account-plan-current">
+    {current && <section id="current-plan" className="account-plan-current">
       <div>
         <p>Текущий тариф</p>
         <h2>{planDisplayName(current.plan)}</h2>
@@ -54,7 +63,11 @@ export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
       <QueryError error={j.config.error} retry={() => void j.config.refetch()} />
       <div className="account-plans">{plans.data?.map(plan => {
         const active = current?.plan.id === plan.id;
-        return <article key={plan.id} className={active ? "current" : ""}>
+        const requested = requestedId === plan.id;
+        return <article key={plan.id} className={active ? "current" : ""}
+          data-requested={requested || undefined} tabIndex={requested ? -1 : undefined}
+          aria-label={requested ? `Тариф «${planDisplayName(plan)}»` : undefined}
+          ref={requested ? requestedCard : undefined}>
           <h3>{plan.name}</h3>
           {active && <span className="account-status success">Текущий</span>}
           <p className="account-plan-price">{money(plan.price_rub)}
@@ -80,6 +93,8 @@ export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
             </div>}
           </dl>
           <p className="account-hint">{planPeriodDescription(plan)}</p>
+          {requested && plan.code === "free" && current && current.plan.code !== "free" &&
+            <a href="#current-plan" className="text-accent underline">Управление текущей подпиской</a>}
           {plan.code !== "free" && <Button variant={active ? "outline" : "primary"} disabled={active || !current || !j.config.data?.enabled || j.locked} onClick={() => j.choose({ kind: "plan", code: plan.code, title: plan.name, price: plan.price_rub, credit: plan.included_credit_rub, allowance: planAllowanceDescription(plan) })}>{active ? "Текущий тариф" : `Выбрать ${plan.name}`}</Button>}</article>;
       })}</div>
       {j.config.data && !j.config.data.enabled && <p className="account-notice pending">{j.config.data.reason ?? "Платёжный сервис недоступен"}</p>}

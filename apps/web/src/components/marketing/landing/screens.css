@@ -378,8 +378,8 @@ button.ys-action { cursor: pointer; }
 .ys-step.is-done { color: #14141a; }
 .ys-step.is-done i { background: #1d7a45; }
 .ys-order-date { display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: 11px; font-weight: 650; color: #55555f; }
-.ys-order-date button { display: grid; place-items: center; width: 46px; height: 46px; border: 1px solid #dce8fa; border-radius: 12px; background: #f1f6ff; color: #0058d7; cursor: pointer; transition: background-color 160ms ease; }
-.ys-order-date button:hover { background: #e6effe; }
+.ys-order-date button { display: grid; place-items: center; width: 44px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: #62616a; cursor: pointer; transition: background-color 160ms ease, color 160ms ease; }
+.ys-order-date button:hover { background: #f1f4fa; color: #0752b6; }
 .ys-order-date button:focus-visible { outline: 2px solid var(--color-brand-blue, #0062ee); outline-offset: 2px; }
 .ys-order-repeat-title { margin: 0; font-size: 16px; font-weight: 650; }
 .ys-collage-interactive .ys-phone-viewport .ys-screen-body { overflow-y: auto; scrollbar-width: thin; }
@@ -492,6 +492,7 @@ button.ys-action { cursor: pointer; }
    настоящий скриншот телефона: пропорции те же, ничего не теряется. */
 .ys-collage-item .ys-phone-status,
 .ys-collage-item .ys-phone-viewport { zoom: 0.65; }
+.ys-collage-item .ys-phone-status { height: 31px; padding-inline: 28px; }
 
 @media (max-width: 720px) {
   .ys-collage-item .ys-phone-status,
@@ -539,6 +540,7 @@ button.ys-action { cursor: pointer; }
 .ys-phone-status {
   position: relative;
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: space-between;
   height: 26px;
@@ -550,12 +552,12 @@ button.ys-action { cursor: pointer; }
 .ys-phone-island {
   position: absolute;
   left: 50%;
-  top: 5px;
+  top: 50%;
   width: 58px;
   height: 16px;
   border-radius: 999px;
   background: #14141a;
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
 }
 .ys-phone-meters { display: inline-flex; align-items: center; gap: 4px; }
 /* Значки нарисованы фигурами, а не шрифтом и не картинкой: остаются чёткими
@@ -675,7 +677,12 @@ button.ys-action { cursor: pointer; }
 .ys-coverflow .ys-slots button,
 .ys-coverflow .ys-bar-button { min-height: 44px; }
 @media (min-width: 720px) {
-  .ys-coverflow { --ys-coverflow-width: 320px; }
+  .ys-coverflow {
+    --ys-coverflow-width: clamp(170px, calc((100svh - 168px) * 9 / 19.5), 320px);
+    scroll-margin-top: 76px;
+  }
+  .ys-coverflow-track { height: calc(var(--ys-coverflow-width) * 19.5 / 9 + 34px); }
+  .ys-coverflow-slide, .ys-coverflow-select { top: 10px; }
 }
 @media (max-width: 720px) {
   .ys-coverflow-track { width: calc(100% + 32px); }
@@ -684,10 +691,6 @@ button.ys-action { cursor: pointer; }
   .ys-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
   .ys-tabs > div { justify-content: center; }
   .ys-tabs-dot { display: none; }
-  .ys-coverflow .ys-row--art { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: start; }
-  .ys-coverflow .ys-row--art .ys-art { grid-column: 1; grid-row: 1 / 3; }
-  .ys-coverflow .ys-row-text { grid-column: 2; grid-row: 1; overflow-wrap: anywhere; }
-  .ys-coverflow .ys-stepper { grid-column: 2; grid-row: 2; justify-self: end; }
 }
 @media (prefers-reduced-motion: reduce) {
   .ys-coverflow-slide,

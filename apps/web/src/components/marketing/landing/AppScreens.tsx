@@ -20,7 +20,7 @@
 import { ArrowRight, Search } from "lucide-react";
 
 import { CAFE_DEMO, SHOP_DEMO } from "./demo-content";
-import { EstimateScreen, ExpensesScreen, LessonScreen } from "./FeatureExamples";
+import { EstimateScreen, FeedbackScreen, LessonScreen } from "./FeatureExamples";
 import { OrderStatusScreen } from "./OrderStatusScreen";
 import { ProductArt, type ArtKind } from "./ProductArt";
 import { PhoneFrame, Promo, ScreenChrome, Strip } from "./ScreenChrome";
@@ -97,7 +97,7 @@ function CafePreview({ enhanced = false }: { enhanced?: boolean }) {
     >
       <Promo kicker="Заберите без очереди" title={`Будет готово к ${CAFE_DEMO.readyAt}`} pill={CAFE_DEMO.wait} tone="cafe" />
       {enhanced && <div className="ys-search"><Search size={12} />Поиск по меню</div>}
-      <Chips items={["Кофе", "Выпечка", "Десерты", "Чай"]} />
+      <Chips items={["Кофе", "Чай", "Выпечка", "Десерты"]} />
       <Tiles items={CAFE_MENU} />
       <p className="ys-kicker">Часто берут вместе</p>
       <PickRow art="croissant" title="Круассан с миндалём" note="Испекли в 7:30" price="190 ₽" />
@@ -187,14 +187,14 @@ const registry = {
   loyalty: LoyaltyScreen,
   estimate: EstimateScreen,
   lesson: LessonScreen,
-  expenses: ExpensesScreen,
+  feedback: FeedbackScreen,
 };
 type ScreenKind = keyof typeof registry | "status";
 const interactiveExamples: Partial<Record<ScreenKind, string>> = {
   status: "Статус и повтор заказа",
   estimate: "Калькулятор уборки",
-  lesson: "Урок по фотографии",
-  expenses: "Учёт расходов",
+  lesson: "Английский в поездке",
+  feedback: "Отзыв о визите",
 };
 
 export function AppScreen({ kind, framed = true, allowRepeat = false }: { kind: ScreenKind; framed?: boolean; allowRepeat?: boolean }) {

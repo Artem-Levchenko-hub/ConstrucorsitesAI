@@ -1,6 +1,6 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { YleumLanding } from "@/components/marketing/YleumLanding";
 
 describe("Yleum landing conversion", () => {
@@ -10,9 +10,9 @@ describe("Yleum landing conversion", () => {
   const capture = (event: Event) => events.push((event as CustomEvent).detail);
   const example = (label: string) => host.querySelector<HTMLElement>(`#examples [role="group"][aria-label="${label}"]`)!;
   const text = (element: Element) => element.textContent?.replace(/\s+/g, " ");
-  async function type(input: HTMLInputElement, value: string) {
+  async function type(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
     await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), "value")!.set!.call(input, value);
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
   }
@@ -23,6 +23,7 @@ describe("Yleum landing conversion", () => {
   }
   const now = Date.parse("2026-11-12T06:41:00Z");
   beforeEach(async () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     events.length = 0;
     host = document.createElement("div"); document.body.append(host);
@@ -30,7 +31,7 @@ describe("Yleum landing conversion", () => {
     window.addEventListener("omnia:marketing", capture);
     await act(async () => root.render(<YleumLanding now={now} />));
   });
-  afterEach(() => { act(() => root.unmount()); host.remove(); window.removeEventListener("omnia:marketing", capture); });
+  afterEach(() => { act(() => root.unmount()); host.remove(); window.removeEventListener("omnia:marketing", capture); vi.restoreAllMocks(); });
   it("sends the signup placement without user data and keeps a real registration link", () => {
     const cta = host.querySelector<HTMLAnchorElement>('[data-marketing="signup_click"][data-placement="hero"]');
     expect(cta).not.toBeNull();
@@ -55,7 +56,8 @@ describe("Yleum landing conversion", () => {
       expect(control, `Missing control: ${name}`).toBeDefined();
       return control!;
     };
-    await act(async () => button("Добавить Капучино")?.click());
+    await act(async () => button("Добавить Капучино").click());
+    await act(async () => button("Добавить в корзину").click());
     await act(async () => button("Выпечка").click());
     await act(async () => button("Добавить Круассан с миндалём").click());
     for (let index = 0; index < 3; index++) await act(async () => button("Следующий экран").click());
@@ -71,18 +73,24 @@ describe("Yleum landing conversion", () => {
   });
   it("retains the selected appointment time after leaving and returning", async () => {
     const example = host.querySelector('[data-testid="landing-example"]')!;
-    const click = async (name: string) => {
-      const button = Array.from(example.querySelectorAll("button")).find(el => el.textContent === name);
+    const click = async (name: string | RegExp) => {
+      const button = Array.from(example.querySelectorAll("button")).find(el => {
+        if (el.closest("[inert]")) return false;
+        const label = el.getAttribute("aria-label") ?? el.textContent?.trim() ?? "";
+        return typeof name === "string" ? label === name : name.test(label);
+      });
       expect(button).toBeDefined();
       await act(async () => button?.click());
     };
     await click("Услуги");
-    await click("17:30");
+    await click("Записаться");
+    await click(/^Стрижка/);
+    await click("17:30, Анна Соколова");
     await click("Клуб");
     await click("Услуги");
     const active = example.querySelector('[data-position="active"]');
     expect(active?.textContent).toContain("Сегодня в 10:00");
-    expect(active?.querySelector('.ys-slots button[aria-pressed="true"]')?.textContent).toBe("17:30");
+    expect(active?.querySelector('.ys-slots button[aria-pressed="true"]')?.getAttribute("aria-label")).toBe("17:30, Анна Соколова");
   });
   it("opens and confirms an earlier order from its date row in the feature examples", async () => {
     const examples = host.querySelector("#examples")!;
@@ -119,7 +127,7 @@ describe("Yleum landing conversion", () => {
     expect(text(screen.querySelector('[role="status"]')!)).not.toMatch(/\d/);
   });
   it("lets the visitor correct a quiz answer and counts the lesson once", async () => {
-    const screen = example("Урок по фотографии");
+    const screen = example("Английский в поездке");
     expect(screen).not.toBeNull();
     const progress = screen.querySelector<HTMLProgressElement>("progress")!;
     expect(progress.value).toBe(1);
@@ -134,30 +142,21 @@ describe("Yleum landing conversion", () => {
     expect(screen.textContent).toContain("Верно");
     expect(progress.value).toBe(2);
   });
-  it("adds a decimal expense to today's entries, category and grand total", async () => {
-    const screen = example("Учёт расходов");
+  it("accepts a rating and comment, then resets the demo review", async () => {
+    const screen = example("Отзыв о визите");
     expect(screen).not.toBeNull();
-    expect(text(screen.querySelector('[role="status"]')!)).toContain("2 000 ₽");
-    await click(screen, "Добавить расход");
-    const name = screen.querySelector<HTMLInputElement>('input[name="expense-name"]')!;
-    expect(document.activeElement).toBe(name);
-    await type(name, "Чай");
-    await type(screen.querySelector<HTMLInputElement>('input[name="expense-amount"]')!, "75,50");
-    const category = screen.querySelector<HTMLSelectElement>('select[name="expense-category"]')!;
-    await act(async () => {
-      category.value = "cafes";
-      category.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-    await click(screen, "Сохранить расход");
-    expect(text(screen.querySelector('[role="status"]')!)).toContain("2 075,50 ₽");
-    expect(text(screen)).toMatch(/Кафе\s*855,50 ₽/);
-    expect(text(screen)).toMatch(/Чай\s*75,50 ₽/);
-    expect(document.activeElement?.textContent).toBe("Добавить расход");
-    await click(screen, "Добавить расход");
-    await type(screen.querySelector<HTMLInputElement>('input[name="expense-name"]')!, "Чай");
-    await type(screen.querySelector<HTMLInputElement>('input[name="expense-amount"]')!, ",50");
-    await click(screen, "Сохранить расход");
-    expect(text(screen.querySelector('[role="status"]')!)).toContain("2 076 ₽");
+    expect(screen.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
+    await act(async () => screen.querySelector<HTMLInputElement>('input[value="4"]')!.click());
+    const comment = screen.querySelector<HTMLTextAreaElement>('textarea[name="review-comment"]')!;
+    await type(comment, "Приятная атмосфера");
+    await click(screen, "Отправить отзыв");
+    expect(screen.textContent).toContain("Демо-отзыв сохранён");
+    expect(screen.querySelector('[role="status"]')?.textContent).toBe("Оценка 4 из 5");
+    expect(screen.textContent).toContain("Приятная атмосфера");
+    await click(screen, "Оценить ещё раз");
+    expect(screen.querySelector('input:checked')).toBeNull();
+    expect(screen.querySelector("textarea")?.value).toBe("");
+    expect(document.activeElement?.textContent).toBe("Как прошёл визит?");
   });
   it("keeps the same participant count after joining and switching scenarios", async () => {
     const example = host.querySelector('[data-testid="landing-example"]')!;
@@ -225,7 +224,7 @@ describe("Yleum landing conversion", () => {
     ]);
   });
   it("describes generation and edits without promising customer version restoration", () => {
-    expect(host.querySelector("#process")?.textContent).toContain("обычными словами");
+    expect(host.querySelector("#process")?.textContent).toContain("простыми словами");
     expect(host.textContent).not.toContain("Откат за секунды");
     expect(host.textContent).not.toContain("Вернитесь к предыдущей версии");
     expect(host.textContent).not.toContain("История версий");

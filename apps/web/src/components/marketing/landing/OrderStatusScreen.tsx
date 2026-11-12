@@ -93,7 +93,7 @@ export function OrderStatusScreen({ allowRepeat = false }: { allowRepeat?: boole
                   returnTo.current = order.dateTime;
                   setRepeat({ order, confirmed: false });
                 }}>
-                <RotateCcw size={18} aria-hidden="true" />
+                <RotateCcw size={13} aria-hidden="true" />
               </button>
             )}
           </div>

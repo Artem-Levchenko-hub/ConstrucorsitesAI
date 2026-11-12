@@ -21,12 +21,6 @@ const stack = [
   ["Конфиденциальность", "Другие владельцы приложений не видят данные вашего проекта"],
 ] as const;
 
-const afterLaunch = [
-  ["Обновление", "Меняйте приложение после запуска — публикуйте обновления, когда готовы."],
-  ["Доработка", "Опишите нужные изменения в чате и проверьте результат."],
-  ["Развитие", "Расширяйте каталог и добавляйте новые разделы по мере роста бизнеса."],
-] as const;
-
 const faqs = [
   ["code", "Я не программист. У меня получится?", "Начните с того, что должен сделать ваш клиент: выбрать товар, записаться или открыть материал. Пошаговый опрос поможет описать задачу. Yleum соберёт приложение, а вы проверите его и попросите изменения обычным сообщением."],
   ["free", "Что значит «начать бесплатно»?", "Регистрация на бесплатном тарифе не требует оплаты. В нём есть ограничения на проекты, генерации и правки. Сравнение актуальных тарифов находится прямо на этой странице; выбранные условия вы увидите в аккаунте до оплаты."],
@@ -74,18 +68,18 @@ export function YleumLanding({ plans = null, signedIn = false, now }: { plans?: 
       <section id="main-content" className="yl-hero" data-marketing-section="hero">
         <div className="yl-wrap yl-hero-copy">
           <h1>Опишите словами<br /><em className="yl-grad-text">Получите приложение</em></h1>
-          <p className="yl-lead">Приложение для вашего бизнеса в MAX<br />Клиенты открывают его в мессенджере — без отдельной установки</p>
+          <p className="yl-lead">Клиенты открывают ваше приложение в MAX, без отдельной установки</p>
           <ul className="yl-niches" aria-label="Для какого бизнеса">
             {["Кофейня", "Кафе", "Ресторан", "Салон красоты", "Барбершоп", "Магазин", "Студия", "Школа", "Клуб"].map((niche) => (
               <li className="yl-niche" key={niche}>{niche}</li>
             ))}
           </ul>
-          {!signedIn && <div className="yl-actions">
-            <Link href="/max/register" className="yl-cta yl-cta--lg" data-marketing="signup_click" data-placement="hero">
-              Начать бесплатно <ArrowRight size={18} aria-hidden="true" />
+          <div className="yl-actions">
+            <Link href={signedIn ? "/max" : "/max/register"} className="yl-cta yl-cta--lg"
+              data-marketing={signedIn ? undefined : "signup_click"} data-placement="hero">
+              {signedIn ? "Открыть студию" : "Начать бесплатно"} <ArrowRight size={18} aria-hidden="true" />
             </Link>
-            <span className="yl-note">Бесплатный тариф</span>
-          </div>}
+          </div>
         </div>
         <div className="yl-wrap"><HeroStage initialNow={now} /></div>
       </section>
@@ -93,15 +87,15 @@ export function YleumLanding({ plans = null, signedIn = false, now }: { plans?: 
       {/* 2 — что отсюда выходит */}
       <section id="examples" className="yl-section" data-marketing-section="examples">
         <div className="yl-wrap yl-head yl-head--center">
-          <h2>Функции под вашу идею</h2>
-          <p className="yl-lead">Эти пять экранов — примеры. Опишите своими словами, что должно уметь ваше приложение, и Yleum соберёт его под вашу задачу.</p>
+          <h2>Что сможет ваше приложение</h2>
+          <p className="yl-lead">Попробуйте примеры и расскажите, что нужно вашим клиентам. Yleum соберёт приложение под вашу задачу.</p>
         </div>
         <ScreenCollage
           screens={[
             { kind: "status", description: "Клиент следит за статусом и временем выдачи заказа" },
             { kind: "estimate", description: "Клиент рассчитывает стоимость услуги по своим параметрам" },
-            { kind: "lesson", description: "Ученик проходит урок и проверяет, что запомнил" },
-            { kind: "expenses", description: "Пользователь записывает расходы и видит, на что ушли деньги" },
+            { kind: "lesson", description: "Ученик практикует английский для поездки" },
+            { kind: "feedback", description: "Клиент оценивает визит и оставляет отзыв" },
             { kind: "loyalty", description: "Клиент видит свои бонусы и историю покупок" },
           ]}
         />
@@ -135,7 +129,7 @@ export function YleumLanding({ plans = null, signedIn = false, now }: { plans?: 
       {/* 4 — редактор: правка показана на самом приложении */}
       <section id="process" className="yl-section" data-marketing-section="editor">
         <div className="yl-wrap yl-head yl-head--center">
-          <h2>Меняйте приложение<br /><em className="yl-grad-text">обычными словами</em></h2>
+          <h2>Меняйте приложение<br /><em className="yl-grad-text">простыми словами</em></h2>
         </div>
         <div className="yl-wrap yl-diff">
           <figure>
@@ -153,11 +147,11 @@ export function YleumLanding({ plans = null, signedIn = false, now }: { plans?: 
           </figure>
         </div>
         <div className="yl-wrap yl-head yl-head--steps">
-          <h3 className="yl-subhead">Как создать и опубликовать приложение</h3>
+          <h3 className="yl-subhead">Этапы создания вашего приложения в MAX</h3>
         </div>
         <div className="yl-wrap yl-steps">
           {[
-            ["Опишите бизнес", "Обычными словами: что продаёте, какие услуги, цены и адреса"],
+            ["Опишите бизнес", "Укажите товары, услуги, цены, адреса и другие составляющие бизнеса"],
             ["Yleum соберёт приложение", "Экраны и функции на основе вашего описания"],
             ["Проверьте и поправьте", "Правки тоже пишете словами, а не ищете в настройках"],
             ["Опубликуйте в боте MAX", "Клиентам не нужно ничего устанавливать"],
@@ -168,24 +162,6 @@ export function YleumLanding({ plans = null, signedIn = false, now }: { plans?: 
               <p>{text}</p>
             </article>
           ))}
-        </div>
-      </section>
-
-      {/* 5 — после запуска */}
-      <section className="yl-section yl-section--tint" data-marketing-section="after">
-        <div className="yl-wrap yl-after">
-          <div className="yl-after-copy">
-            <h2>Развивайте приложение<br />после запуска</h2>
-            <ul>
-              {afterLaunch.map(([title, text]) => (
-                <li key={title}><strong>{title}</strong><span>{text}</span></li>
-              ))}
-            </ul>
-          </div>
-          <div className="yl-after-screens">
-            <AppScreen kind="status" />
-            <AppScreen kind="loyalty" />
-          </div>
         </div>
       </section>
 

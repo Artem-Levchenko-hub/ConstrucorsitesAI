@@ -75,6 +75,19 @@ const wait = async (check: () => void) => { await act(async () => { await vi.wai
 const button = (text: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes(text))!;
 const click = async (text: string) => { await act(async () => button(text).click()); };
 
+it("focuses the requested plan without opening checkout or submitting payment", async () => {
+  mocks.search = "plan=pro";
+  const app = await mount("plan");
+  try {
+    await wait(() => expect(document.activeElement?.getAttribute("aria-label")).toBe("Тариф «Pro»"));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(requests).toHaveLength(0);
+    await click("Выбрать Pro");
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Pro");
+    expect(requests).toHaveLength(0);
+  } finally { await app.close(); }
+});
+
 it("quotes an independent personal payment test and preserves its offer on uncertain retry", async () => {
   currentPlan = { ...freePlan, ...plan, entitlements: { ...freePlan.entitlements, ...plan.entitlements } };
   personalOffer = { id: "personal-offer", price_rub: "1.00", currency: "RUB", expires_at: "2026-11-03T00:00:00Z", reserved_payment_id: null };
