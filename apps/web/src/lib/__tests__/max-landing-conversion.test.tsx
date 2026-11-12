@@ -8,6 +8,19 @@ describe("Yleum landing conversion", () => {
   let root: Root;
   const events: unknown[] = [];
   const capture = (event: Event) => events.push((event as CustomEvent).detail);
+  const example = (label: string) => host.querySelector<HTMLElement>(`#examples [role="group"][aria-label="${label}"]`)!;
+  const text = (element: Element) => element.textContent?.replace(/\s+/g, " ");
+  async function type(input: HTMLInputElement, value: string) {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+  async function click(screen: Element, label: string) {
+    const button = [...screen.querySelectorAll("button")].find(element => element.textContent?.trim() === label);
+    expect(button, label).toBeDefined();
+    await act(async () => button!.click());
+  }
   const now = Date.parse("2026-11-12T06:41:00Z");
   beforeEach(async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -87,6 +100,64 @@ describe("Yleum landing conversion", () => {
     const back = [...examples.querySelectorAll("button")].find(button => button.textContent === "К заказам")!;
     await act(async () => back.click());
     expect(document.activeElement?.getAttribute("aria-label")).toBe("Повторить заказ от 24 сентября");
+  });
+  it("recalculates the example cleaning price using area, bathrooms and optional services", async () => {
+    const screen = example("Калькулятор уборки");
+    expect(screen).not.toBeNull();
+    expect(screen.closest("[inert]")).toBeNull();
+    expect(text(screen.querySelector('[role="status"]')!)).toContain("4 100 ₽");
+    const area = screen.querySelector<HTMLInputElement>('input[aria-label="Площадь, м²"]')!;
+    await type(area, "60");
+    const bathrooms = screen.querySelector<HTMLSelectElement>('select[aria-label="Санузлы"]')!;
+    await act(async () => {
+      bathrooms.value = "2";
+      bathrooms.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => screen.querySelector<HTMLInputElement>('input[aria-label="Холодильник изнутри"]')!.click());
+    expect(text(screen.querySelector('[role="status"]')!)).toContain("4 550 ₽");
+    await type(area, "");
+    expect(text(screen.querySelector('[role="status"]')!)).not.toMatch(/\d/);
+  });
+  it("lets the visitor correct a quiz answer and counts the lesson once", async () => {
+    const screen = example("Урок по фотографии");
+    expect(screen).not.toBeNull();
+    const progress = screen.querySelector<HTMLProgressElement>("progress")!;
+    expect(progress.value).toBe(1);
+    const options = screen.querySelectorAll<HTMLButtonElement>(".ys-lesson-answers button");
+    options[0].focus();
+    await act(async () => options[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    expect(progress.value).toBe(1);
+    await act(async () => options[0].click());
+    expect(screen.textContent).toContain("Попробуйте ещё");
+    expect(progress.value).toBe(1);
+    await act(async () => options[1].click());
+    expect(screen.textContent).toContain("Верно");
+    expect(progress.value).toBe(2);
+  });
+  it("adds a decimal expense to today's entries, category and grand total", async () => {
+    const screen = example("Учёт расходов");
+    expect(screen).not.toBeNull();
+    expect(text(screen.querySelector('[role="status"]')!)).toContain("2 000 ₽");
+    await click(screen, "Добавить расход");
+    const name = screen.querySelector<HTMLInputElement>('input[name="expense-name"]')!;
+    expect(document.activeElement).toBe(name);
+    await type(name, "Чай");
+    await type(screen.querySelector<HTMLInputElement>('input[name="expense-amount"]')!, "75,50");
+    const category = screen.querySelector<HTMLSelectElement>('select[name="expense-category"]')!;
+    await act(async () => {
+      category.value = "cafes";
+      category.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await click(screen, "Сохранить расход");
+    expect(text(screen.querySelector('[role="status"]')!)).toContain("2 075,50 ₽");
+    expect(text(screen)).toMatch(/Кафе\s*855,50 ₽/);
+    expect(text(screen)).toMatch(/Чай\s*75,50 ₽/);
+    expect(document.activeElement?.textContent).toBe("Добавить расход");
+    await click(screen, "Добавить расход");
+    await type(screen.querySelector<HTMLInputElement>('input[name="expense-name"]')!, "Чай");
+    await type(screen.querySelector<HTMLInputElement>('input[name="expense-amount"]')!, ",50");
+    await click(screen, "Сохранить расход");
+    expect(text(screen.querySelector('[role="status"]')!)).toContain("2 076 ₽");
   });
   it("keeps the same participant count after joining and switching scenarios", async () => {
     const example = host.querySelector('[data-testid="landing-example"]')!;

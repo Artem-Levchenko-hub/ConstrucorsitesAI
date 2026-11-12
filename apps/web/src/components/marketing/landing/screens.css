@@ -382,7 +382,7 @@ button.ys-action { cursor: pointer; }
 .ys-order-date button:hover { background: #e6effe; }
 .ys-order-date button:focus-visible { outline: 2px solid var(--color-brand-blue, #0062ee); outline-offset: 2px; }
 .ys-order-repeat-title { margin: 0; font-size: 16px; font-weight: 650; }
-.ys-collage-order .ys-phone-viewport .ys-screen-body { overflow-y: auto; scrollbar-width: thin; }
+.ys-collage-interactive .ys-phone-viewport .ys-screen-body { overflow-y: auto; scrollbar-width: thin; }
 
 /* ── первый экран ────────────────────────────────────────────────────────── */
 .ys-stage { position: relative; display: grid; justify-items: center; gap: 22px; width: 100%; }

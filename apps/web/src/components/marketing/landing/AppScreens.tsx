@@ -190,6 +190,12 @@ const registry = {
   expenses: ExpensesScreen,
 };
 type ScreenKind = keyof typeof registry | "status";
+const interactiveExamples: Partial<Record<ScreenKind, string>> = {
+  status: "Статус и повтор заказа",
+  estimate: "Калькулятор уборки",
+  lesson: "Урок по фотографии",
+  expenses: "Учёт расходов",
+};
 
 export function AppScreen({ kind, framed = true, allowRepeat = false }: { kind: ScreenKind; framed?: boolean; allowRepeat?: boolean }) {
   const Preview = kind === "status" ? null : registry[kind];
@@ -202,15 +208,14 @@ export function ScreenCollage({ screens }: { screens: { kind: ScreenKind; descri
     <figure className="ys-collage" tabIndex={0} aria-label="Примеры функций приложения">
       <div className="ys-collage-track">
         {screens.map(({ kind, description }) => {
-          const allowRepeat = kind === "status";
+          const label = interactiveExamples[kind];
           return (
             <div className="ys-collage-item" key={kind}>
               <p className="ys-collage-description">{description}</p>
-              {allowRepeat ? (
-                <div className="ys-collage-order" role="group" aria-label="Статус и повтор заказа"><AppScreen kind={kind} allowRepeat /></div>
-              ) : (
-                <div aria-hidden="true" inert><AppScreen kind={kind} /></div>
-              )}
+              <div className={label ? "ys-collage-interactive" : undefined} role={label ? "group" : undefined}
+                aria-label={label} aria-hidden={label ? undefined : true} inert={!label}>
+                <AppScreen kind={kind} allowRepeat={kind === "status"} />
+              </div>
             </div>
           );
         })}
