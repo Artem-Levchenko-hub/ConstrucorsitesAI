@@ -357,9 +357,10 @@ closed unless all of these conditions hold:
   last pause checkpoint. The original pause and restore envelopes must match,
   and each uncertain restore or observation must have an exact completed
   higher-fence observation of `resources_paused`. Their history is retained.
-  A subsequent completed `destroy` may bind that same history if its ownerless
-  request and retained checkpoint match, its fence advanced, and no workspace
-  resources remain. The gate retains the original restore and observations.
+  A subsequent completed `destroy` may bind that same history if it has the
+  canonical ownerless request, its final checkpoint names the exact destroy
+  operation and advanced fence, and no workspace compute remains. The gate
+  retains the original restore and observations.
   The same root physical checks still run; this grants no startup authority.
 - No portable workspace container/helper remains. Only the exact owned
   auxiliary cell PostgreSQL/Redis services may remain after pause, with no

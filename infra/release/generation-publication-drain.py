@@ -634,9 +634,8 @@ def _retirement_operation(cell, workspace_id: str):
         and len(rows) >= 4
         and rows[-2].fencing_epoch < operation.fencing_epoch
         and operation.operation_id not in {item.operation_id for item in rows[:-1]}
-        and operation.checkpoint_ref == next(
-            (item.checkpoint_ref for item in reversed(rows[:-1]) if item.kind == "pause"), None,
-        )
+        # Owner-canary destroy writes a new checkpoint bound to this mutation.
+        and operation.checkpoint_ref == f"final-{operation.fencing_epoch}-{operation.operation_id.hex}"
         and operation.request_digest == _digest({
             "workspace_id": workspace_id, "generation_run_id": None, "kind": "destroy",
             "request": {},

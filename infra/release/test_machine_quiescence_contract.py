@@ -91,7 +91,8 @@ class PendingFastCheckTests(unittest.TestCase):
                                 {"indeterminate_operation_id": str(first.operation_id)})
         clear_restore = operation(12, "reconcile", "completed", "completed", "resources_paused",
                                   {"indeterminate_operation_id": str(restore.operation_id)})
-        destroy = operation(13, "destroy", "completed", "completed", "retained", {}, checkpoint)
+        final = f"final-13-{UUID(int=13).hex}"
+        destroy = operation(13, "destroy", "completed", "completed", "retained", {}, final)
 
         def verify(rows):
             last = rows[-1]
@@ -114,7 +115,12 @@ class PendingFastCheckTests(unittest.TestCase):
                      [pause, restore, clear_first, destroy],
                      [pause, restore, first, clear_first, clear_restore,
                       operation(13, "destroy", "completed", "completed", "retained",
-                                {"unexpected": True}, checkpoint)]):
+                                {"unexpected": True}, final)],
+                     [pause, restore, first, clear_first, clear_restore,
+                      operation(13, "destroy", "completed", "completed", "retained", {}, checkpoint)],
+                     [pause, restore, first, clear_first, clear_restore,
+                      operation(13, "destroy", "completed", "completed", "retained", {},
+                                f"final-13-{UUID(int=12).hex}")]):
             with self.subTest(rows=[row.fencing_epoch for row in rows]), self.assertRaises(
                 self.checker.PhysicalDrainError,
             ):
