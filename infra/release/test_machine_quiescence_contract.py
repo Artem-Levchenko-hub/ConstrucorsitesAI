@@ -91,21 +91,30 @@ class PendingFastCheckTests(unittest.TestCase):
                                 {"indeterminate_operation_id": str(first.operation_id)})
         clear_restore = operation(12, "reconcile", "completed", "completed", "resources_paused",
                                   {"indeterminate_operation_id": str(restore.operation_id)})
+        destroy = operation(13, "destroy", "completed", "completed", "retained", {}, checkpoint)
 
         def verify(rows):
             last = rows[-1]
             cell = SimpleNamespace(
                 workspace_id=UUID(WORKSPACE), project_id=UUID(WORKSPACE), owner_id=UUID(WORKSPACE),
-                phase="completed", bundle_state="resources_paused", fencing_epoch=last.fencing_epoch,
+                phase="completed", bundle_state=last.bundle_state, fencing_epoch=last.fencing_epoch,
                 active_generation_run_id=None, active_generation_fencing_epoch=None,
                 last_operation_id=last.operation_id, operation=lambda _: last, operations=tuple(rows),
             )
             return self.checker._retirement_operation(cell, WORKSPACE)
 
         self.assertEqual(verify([pause, restore, first, clear_first, clear_restore]), clear_restore)
+        self.assertEqual(
+            verify([pause, restore, first, clear_first, clear_restore, destroy]), destroy,
+        )
         for rows in ([pause, restore, first, clear_restore], [pause, restore, clear_first],
                      [pause, restore, first, clear_restore, first, clear_first],
-                     [pause, restore, clear_restore, clear_first]):
+                     [pause, restore, clear_restore, clear_first],
+                     [pause, restore, first, clear_restore, destroy],
+                     [pause, restore, clear_first, destroy],
+                     [pause, restore, first, clear_first, clear_restore,
+                      operation(13, "destroy", "completed", "completed", "retained",
+                                {"unexpected": True}, checkpoint)]):
             with self.subTest(rows=[row.fencing_epoch for row in rows]), self.assertRaises(
                 self.checker.PhysicalDrainError,
             ):

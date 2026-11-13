@@ -542,11 +542,10 @@ def _reconciliation_digest(workspace_id: str, target_id: UUID) -> str:
     })
 
 
-def _reconciled_restore_retirement(cell, operation, workspace_id: str) -> bool:
+def _reconciled_restore_retirement(rows, operation, workspace_id: str) -> bool:
     """Allow current physical proof after an interrupted idle restore was observed."""
-    if operation.kind != "reconcile" or cell.bundle_state != "resources_paused":
+    if operation.kind != "reconcile" or operation.bundle_state != "resources_paused":
         return False
-    rows = cell.operations
     if len(rows) < 3:
         return False
     # Preserve the preceding canonical pause, and require one exact newer
@@ -623,12 +622,30 @@ def _retirement_operation(cell, workspace_id: str):
         and re.fullmatch(r"[0-9a-f]{64}", operation.request_digest),
         "quiescence_retirement_authority",
     )
+    rows = cell.operations
+    completed_retirement = (
+        (operation.kind, cell.bundle_state) in {("pause", "resources_paused"), ("destroy", "retained")}
+        and all(item.status in {"completed", "failed", "cancelled"}
+                and item.fencing_epoch <= cell.fencing_epoch for item in rows)
+    )
+    destroyed_after_reconciliation = (
+        operation.kind == "destroy"
+        and cell.bundle_state == "retained"
+        and len(rows) >= 4
+        and rows[-2].fencing_epoch < operation.fencing_epoch
+        and operation.operation_id not in {item.operation_id for item in rows[:-1]}
+        and operation.checkpoint_ref == next(
+            (item.checkpoint_ref for item in reversed(rows[:-1]) if item.kind == "pause"), None,
+        )
+        and operation.request_digest == _digest({
+            "workspace_id": workspace_id, "generation_run_id": None, "kind": "destroy",
+            "request": {},
+        })
+        and _reconciled_restore_retirement(rows[:-1], rows[-2], workspace_id)
+    )
     _kernel_need(
-        (
-            (operation.kind, cell.bundle_state) in {("pause", "resources_paused"), ("destroy", "retained")}
-            and all(item.status in {"completed", "failed", "cancelled"}
-                    and item.fencing_epoch <= cell.fencing_epoch for item in cell.operations)
-        ) or _reconciled_restore_retirement(cell, operation, workspace_id),
+        completed_retirement or destroyed_after_reconciliation
+        or _reconciled_restore_retirement(rows, operation, workspace_id),
         "quiescence_retirement_authority",
     )
     return operation
