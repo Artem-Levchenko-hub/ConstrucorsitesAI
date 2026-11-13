@@ -1,10 +1,19 @@
 """Technology-neutral guidance used only for an enabled, selected Cell provider."""
 
 import json
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Protocol
 
 RequestedCapability = tuple[str, str, tuple[str, ...]]
+_NEXT_HOME = re.compile(
+    r"(?:src/)?(?:app/(?:\([^/]+\)/)*page|pages/index)\.(?:tsx|ts|jsx|js)"
+)
+_NEXT_LAYOUT = re.compile(r"(?:src/)?app/(?:\([^/]+\)/)*layout\.(?:tsx|ts|jsx|js)")
+
+
+def has_next_home(files: Mapping[str, str]) -> bool:
+    return any(_NEXT_HOME.fullmatch(path) and source.strip() for path, source in files.items())
 
 
 class PortableGuideExecutor(Protocol):
@@ -223,6 +232,9 @@ def portable_source_gap(
             return "Portable product needs a declared service and root HTTP route."
     except (ValueError, TypeError, AttributeError):
         return "Write a valid .omnia/cell.json portable manifest before done."
+
+    if any(_NEXT_LAYOUT.fullmatch(path) for path in files) and not has_next_home(files):
+        return "MAX Next.js product has no home page. Create src/app/page.tsx."
     source = {
         path: content
         for path, content in files.items()

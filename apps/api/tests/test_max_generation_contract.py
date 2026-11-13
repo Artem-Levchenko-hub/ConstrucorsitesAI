@@ -84,6 +84,16 @@ def test_portable_crm_history_passes_the_actual_finalization_path() -> None:
     ))
 
 
+def test_portable_next_draft_with_helpers_but_no_root_screen_is_incomplete() -> None:
+    files = _portable_crm_files()
+    page = files.pop("src/app/page.tsx")
+    files["src/app/layout.tsx"] = "export default function Layout({children}) { return children; }"
+    gap = max_source_completion_gap("Покажи историю заявок.", files, portable=True)
+    assert gap is not None and "src/app/page.tsx" in gap
+    files["src/app/(product)/page.tsx"] = page
+    assert max_source_completion_gap("Покажи историю заявок.", files, portable=True) is None
+
+
 def _portable_coffee_files() -> dict[str, str]:
     return {
         **_portable_crm_files(),

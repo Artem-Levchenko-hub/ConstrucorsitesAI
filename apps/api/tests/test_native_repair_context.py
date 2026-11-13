@@ -220,6 +220,75 @@ async def test_directed_text_strategy_resumes_original_request(monkeypatch, isol
     assert result.done and result.files == {ENTRY: page}
 
 
+async def test_missing_entry_reduces_scope_after_rejected_formats_then_completes_original_task(
+    monkeypatch, isolated_repair,
+):
+    domain = "src/lib/ration/domain.ts"
+    report = "src/app/api/report/route.ts"
+    files = {domain: "export const dishCount = 10;"}
+    page = ('import {dishCount} from "@/lib/ration/domain";\n'
+            "export default function Page() { return <main>{dishCount}</main>; }\n")
+    report_source = "export const GET = () => new Response('report');"
+    calls, effects, checkpoints = [], [], []
+    task = "Use the saved meal domain.\n" + "x" * 5000 + "\nComplete the requested report."
+
+    async def model(*args, **kwargs):
+        calls.append(kwargs)
+        seq = len(calls)
+        if seq == 1:
+            return turn(("read_file", {"path": domain}))
+        if seq in {2, 3}:
+            return {"stop_reason": "max_tokens", "content": [{"type": "text", "text": "partial"}]}
+        if seq == 4:
+            context = str(args[2])
+            assert kwargs["tools"] == []
+            assert "one working screen" in context and files[domain] in context
+            assert "x" * 5000 not in context
+            return {"stop_reason": "end_turn", "content": [
+                {"type": "text", "text": "```tsx\n" + page + "```"},
+            ]}
+        assert "Complete the requested report." in str(args[2])
+        assert files[ENTRY] == page
+        if seq == 5:  # The first screen alone must not satisfy the original task.
+            return turn(("done", {"summary": "Too early"}))
+        if seq == 6:
+            return turn(("write_file", {"path": report, "content": report_source}))
+        return turn(("build", {}), ("done", {"summary": "Product and report verified"}))
+
+    async def snapshot():
+        return dict(files)
+
+    async def execute(action):
+        effects.append((action.name, action.path))
+        if action.name == "write_file":
+            files[action.path] = action.args["content"]
+        return {"ok": True}
+
+    async def checkpoint(result):
+        checkpoints.append(result.files)
+
+    from yleum_api.services.generation.agent_generation import checkpoint_source_actions
+
+    monkeypatch.setattr(agent_native, "_call_messages", model)
+    result = await agent_native._run_native_segment(
+        system="MAX VERIFICATION OVERRIDE", task=task, model="claude-sonnet-5.5",
+        run_id="r", portable_cell=True, source_repair=True, max_steps=9,
+        initial_files=dict(files), directed_path=ENTRY, snapshot_files=snapshot,
+        execute=checkpoint_source_actions(
+            execute=execute, snapshot=snapshot, checkpoint=checkpoint,
+        ),
+        completion_check=lambda written, _evidence: (
+            None if written.get(report) == report_source else "Report missing"
+        ),
+    )
+    assert result.done and result.summary == "Product and report verified"
+    assert all(call["run_id"] == "r" for call in calls)
+    assert effects == [
+        ("write_file", ENTRY), ("build", ""), ("write_file", report), ("build", ""),
+    ]
+    assert checkpoints == [{domain: files[domain], ENTRY: page}, files]
+
+
 async def test_late_exact_edit_uses_complete_loaded_source_without_any_read(
     monkeypatch, isolated_repair,
 ):

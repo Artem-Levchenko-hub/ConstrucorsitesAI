@@ -395,6 +395,35 @@ async def test_stopped_max_draft_hands_off_only_for_repairable_reasons(source_ch
     rollback.assert_not_awaited()
 
 
+async def test_output_limit_with_saved_component_reaches_same_run_repair(source_check):
+    kwargs, _, calls, rollback, _ = source_check
+    draft = {
+        "src/app/layout.tsx": "platform layout",
+        "src/components/ration/MealList.tsx": "export const MealList = () => <ul />;",
+    }
+    candidate = AgentResult(
+        done=False, summary="Truncated provider response", files=draft, steps=40,
+        stop_reason="output_limit",
+    )
+    stopped, first, _, _ = await agent_recovery.recover_stopped_candidate(
+        _agent_res=candidate,
+        _max_has_generated_snapshot=False,
+        _max_seed_files={},
+        _provider_failure="Provider response rejected (output_limit)",
+        _render_current_max_starter_files=kwargs["_render_current_max_starter_files"],
+        baseline=kwargs["baseline"],
+        ids=kwargs["ids"],
+        project_info=SimpleNamespace(slug="owned-test", template="max_miniapp"),
+        runtime=kwargs["runtime"],
+        operations=kwargs["operations"],
+        allow_source_repair=True,
+    )
+    assert first and stopped.needs_finalization and not stopped.done
+    assert stopped.continuation_reason == "output_limit" and stopped.files == draft
+    rollback.assert_not_awaited()
+    assert calls == []
+
+
 @pytest.mark.parametrize("error", [asyncio.CancelledError, TimeoutError])
 async def test_cancel_and_deadline_propagate_without_provider_retry(source_check, error):
     kwargs, _, calls, rollback, _ = source_check

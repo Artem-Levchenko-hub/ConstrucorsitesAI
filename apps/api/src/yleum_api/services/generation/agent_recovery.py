@@ -26,7 +26,9 @@ from yleum_api.services.generation.runtime import (
     _apply_project_cell_preview_files,
     _require_project_cell,
 )
+from yleum_api.services.max_generation_contract import _is_product_source
 from yleum_api.services.max_project_kit import include_portable_manifest
+from yleum_api.services.portable_cell_contract import has_next_home
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 from yleum_api.services.project_cell_executor import (
     ProjectCellCommandRole,
@@ -77,12 +79,26 @@ async def recover_stopped_candidate(
     _must_restore_previous = not _agent_res.done and not _agent_res.needs_finalization
     _source_only = getattr(runtime, "coordinator", None) is not None
     _first_max_without_product = not _max_has_generated_snapshot
+    # A settled length limit left no executable batch, but earlier writes are
+    # still valid repair input. A new task can finish the missing home screen.
+    repair_missing_home = (
+        _first_max_without_product
+        and _agent_res.stop_reason in {"output_limit", "exploring"}
+        and project_info.template == "max_miniapp"
+        and not has_next_home(_agent_res.files)
+        and any(
+            _is_product_source(path) and bool(source.strip())
+            for path, source in _agent_res.files.items()
+        )
+    )
     if (
         allow_source_repair
         and _must_restore_previous
-        and not _provider_failure
         and _agent_res.files
-        and _agent_res.stop_reason in _REPAIRABLE_AGENT_STOPS
+        and (
+            (not _provider_failure and _agent_res.stop_reason in _REPAIRABLE_AGENT_STOPS)
+            or repair_missing_home
+        )
         and getattr(operations, "continuation", None) is None
         and uses_single_max_source_repair(runtime)
     ):

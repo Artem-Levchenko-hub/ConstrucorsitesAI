@@ -716,8 +716,14 @@ _DIRECTED_INVALID_REPLY = (
     "No action was applied. Supply exactly the requested single complete code change."
 )
 _DIRECTED_STRATEGIES = ("tool", "json", "code")
-_DIRECTED_REPAIR_ATTEMPTS = len(_DIRECTED_STRATEGIES)
+_ENTRY_MILESTONE_STRATEGY = "entry_milestone"
 _DIRECTED_REPAIR_LOG = "agent_native.directed_repair"
+
+
+def _directed_strategies(path: str | None, baseline: Mapping[str, str]) -> tuple[str, ...]:
+    if path == _MAX_PRODUCT_ENTRY_PATH and path not in baseline:
+        return (*_DIRECTED_STRATEGIES, _ENTRY_MILESTONE_STRATEGY)
+    return _DIRECTED_STRATEGIES
 
 
 def _directed_tool(path: str, *, exists: bool) -> dict[str, Any]:
@@ -747,7 +753,7 @@ def _directed_action(
         if calls:
             return None
         text = _text_of(content).strip()
-        if strategy == "code":
+        if strategy in {"code", _ENTRY_MILESTONE_STRATEGY}:
             blocks = re.findall(r"(?ms)^```[a-zA-Z]*[^\S\n]*\n(.*?)^```[^\S\n]*$", text)
             if current is None and len(blocks) == 1:
                 args = {"content": blocks[0]}
@@ -2020,7 +2026,8 @@ async def _run_native_segment(
             )
             active_path = directed_path
             directed = active_path is not None and active_path not in written
-            strategy = _DIRECTED_STRATEGIES[min(no_write_turns, len(_DIRECTED_STRATEGIES) - 1)]
+            strategies = _directed_strategies(active_path, baseline_files)
+            strategy = strategies[min(no_write_turns, len(strategies) - 1)]
             text_repair = directed and strategy != "tool"
             limited_output = is_sonnet55_model(model) and (source_repair or bounded_repair)
             call_stage = "source_repair" if limited_output else (
@@ -2069,7 +2076,8 @@ async def _run_native_segment(
                         # Reconcile an older paid/tool batch under its original rules.
                         active_path = request.get("directed_path")
                         directed = active_path is not None
-                        text_repair = directed and strategy != "tool"
+                        strategies = _directed_strategies(active_path, baseline_files)
+                        strategy = strategies[min(no_write_turns, len(strategies) - 1)]
                     elif active_path is not None and directed:
                         entry_exists = active_path in baseline_files
                         fields = (
@@ -2080,12 +2088,24 @@ async def _run_native_segment(
                             "Return one fenced TSX code block containing the entire file."
                             if not entry_exists else
                             "Return two fenced code blocks: exact search text, then replacement."
-                        ) if strategy == "code" else f"Return this JSON object: {fields}"
+                        ) if strategy in {"code", _ENTRY_MILESTONE_STRATEGY} else (
+                            f"Return this JSON object: {fields}"
+                        )
                         feedback = _directed_feedback(convo[-1]["content"]) if text_repair else ""
                         reply_rule = _DIRECTED_TEXT_REPLY if text_repair else _DIRECTED_TOOL_REPLY
+                        selected_context = directed_request
+                        if strategy == _ENTRY_MILESTONE_STRATEGY:
+                            if emit:
+                                await emit("agent.step", {
+                                    "step": step, "action": "source_repair", "path": active_path,
+                                    "human": "Разбиваю работу: сначала главный экран",
+                                })
+                            selected_context = directed_source_context(
+                                task, baseline_files, active_path, entry_milestone=True,
+                            )
                         request.update(
                             convo=[{"role": "user", "content": (
-                                directed_request + "\n\n" + reply_rule
+                                selected_context + "\n\n" + reply_rule
                                 + (f"\n{format_hint}\nPrevious result: {feedback}"
                                    if text_repair else "")
                             )}],
@@ -2284,7 +2304,7 @@ async def _run_native_segment(
                     convo.append({"role": "user", "content": feedback})
                     log.info(_DIRECTED_REPAIR_LOG, run_id=run_id, step=step, path=active_path,
                              strategy=strategy, outcome=response_problem or "unexpected_action")
-                    if no_write_turns >= _DIRECTED_REPAIR_ATTEMPTS:
+                    if no_write_turns >= len(strategies):
                         return await _finish_without_provider(
                             steps=step + 1, reason="exploring",
                             detail=f"No applicable source change for {active_path}.",
@@ -2764,11 +2784,16 @@ async def _run_native_segment(
                     f"Server applied the change to {active_path}; verify the saved source."
                     if source_changed else str(results[0]["content"])
                 )
+                if source_changed and strategy == _ENTRY_MILESTONE_STRATEGY:
+                    detail += (
+                        " The first screen is only one milestone. Continue the remaining "
+                        "features in the original request, one complete change at a time."
+                    )
                 results = [{"type": "text", "text": detail}]
             convo.append({"role": "user", "content": results})
             if (
                 directed and active_path is not None and active_path not in written
-                and no_write_turns >= _DIRECTED_REPAIR_ATTEMPTS
+                and no_write_turns >= len(strategies)
                 and infra_dead_turns < _INFRA_DEAD_ABORT_AT
             ):
                 return await _finish_without_provider(
@@ -2776,7 +2801,7 @@ async def _run_native_segment(
                     detail=f"No applicable source change for {active_path}.",
                 )
             if (
-                source_repair and not _repair_source_changed()
+                not directed and source_repair and not _repair_source_changed()
                 and no_write_turns >= _SOURCE_REPAIR_NO_PROGRESS_TURNS
             ):
                 return await _finish_without_provider(
