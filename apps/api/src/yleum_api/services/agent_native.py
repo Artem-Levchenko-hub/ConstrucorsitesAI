@@ -36,7 +36,8 @@ from yleum_api.core.config import get_settings
 from yleum_api.services.agent_build_feedback import render_model_observation
 from yleum_api.services.agent_builder import _KNOWN_ACTIONS, Action, AgentResult
 from yleum_api.services.agent_output_budget import (
-    REPAIR_OUTPUT_TOKENS,
+    DEFAULT_REPAIR_OUTPUT_TOKENS,
+    SONNET55_REPAIR_OUTPUT_TOKENS,
     agent_output_tokens,
     is_sonnet55_model,
 )
@@ -2069,7 +2070,7 @@ async def _run_native_segment(
                         ),
                     )
                     if limited_output:
-                        request["max_tokens"] = REPAIR_OUTPUT_TOKENS
+                        request["max_tokens"] = SONNET55_REPAIR_OUTPUT_TOKENS
                     if restoring:
                         assert saved_frame is not None
                         request = saved_frame.request
@@ -2116,13 +2117,19 @@ async def _run_native_segment(
                             tool_choice={"type": "none" if text_repair else "auto"},
                             directed_path=active_path,
                         )
-                    async def invoke(request: dict[str, Any] = request) -> dict[str, Any]:
+                    async def invoke(
+                        request: dict[str, Any] = request, *, restoring: bool = restoring,
+                    ) -> dict[str, Any]:
                         expected = {"convo", "system", "model", "stage", "tools", "tool_choice"}
                         repair_budget = request.get("max_tokens")
                         if "max_tokens" in request:
+                            allowed_repair_budgets = {SONNET55_REPAIR_OUTPUT_TOKENS}
+                            if restoring:
+                                # Saved requests retain the budget they were admitted with.
+                                allowed_repair_budgets.add(DEFAULT_REPAIR_OUTPUT_TOKENS)
                             if (
                                 type(repair_budget) is not int
-                                or repair_budget != REPAIR_OUTPUT_TOKENS
+                                or repair_budget not in allowed_repair_budgets
                                 or request.get("stage") != "source_repair"
                                 or not isinstance(request.get("model"), str)
                                 or not is_sonnet55_model(request["model"])

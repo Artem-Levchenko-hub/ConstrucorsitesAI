@@ -97,7 +97,7 @@ async def test_current_max_repair_compacts_the_request_only_with_exact_source(
 
     assert result.done and result.needs_finalization
     assert [payload.get("max_tokens") for payload in payloads] == (
-        [None, None, 8192 if exact_target else None] + [None] * (len(replies) - 3)
+        [None, None, 128_000 if exact_target else None] + [None] * (len(replies) - 3)
     )
     messages = payloads[2]["messages"]
     assert "task fixture" in str(messages) and str(managed_gap()) in str(messages)
@@ -111,9 +111,9 @@ async def test_current_max_repair_compacts_the_request_only_with_exact_source(
         assert "content" not in context
 
 
-@pytest.mark.parametrize("historical", [False, True])
+@pytest.mark.parametrize("saved_limit", [None, 8192, 128_000])
 async def test_cold_repair_keeps_original_output_budget_through_a_safe_retry(
-    monkeypatch, historical,
+    monkeypatch, saved_limit,
 ):
     monkeypatch.setattr(ab.asyncio, "sleep", AsyncMock())
     frames, requests = [], []
@@ -124,8 +124,10 @@ async def test_cold_repair_keeps_original_output_budget_through_a_safe_retry(
         nonlocal saved
         if not cold:
             saved = deepcopy(frame["value"])
-            if historical:
+            if saved_limit is None:
                 saved.pop("repair_max_tokens", None)
+            elif saved_limit == 8192:
+                saved["repair_max_tokens"] = saved_limit
             raise GenerationYielded(
                 run_id=uuid4(), checkpoint=None, attempt_seq=1, phase="waiting_dependency",
             )
@@ -159,12 +161,12 @@ async def test_cold_repair_keeps_original_output_budget_through_a_safe_retry(
         )
 
     with pytest.raises(GenerationYielded):
-        await run(bounded_repair=not historical)
+        await run(bounded_repair=saved_limit is not None)
     assert saved is not None
-    assert saved.get("repair_max_tokens") == (None if historical else 8192)
+    assert saved.get("repair_max_tokens") == saved_limit
     cold = True
-    assert (await run(bounded_repair=historical)).done
-    assert requests == [(saved["call_messages"], None if historical else 8192)] * 2
+    assert (await run(bounded_repair=saved_limit is None)).done
+    assert requests == [(saved["call_messages"], saved_limit)] * 2
 
 
 def test_safe_retry_rejects_a_changed_repair_output_budget():

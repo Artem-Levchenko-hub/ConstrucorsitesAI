@@ -59,7 +59,8 @@ from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, PositiveInt
 from yleum_api.services import llm_client
 from yleum_api.services.agent_build_feedback import render_model_observation
 from yleum_api.services.agent_output_budget import (
-    REPAIR_OUTPUT_TOKENS,
+    DEFAULT_REPAIR_OUTPUT_TOKENS,
+    SONNET55_REPAIR_OUTPUT_TOKENS,
     agent_output_tokens,
     is_sonnet55_model,
 )
@@ -1166,7 +1167,10 @@ async def _run_agent_segment(
                     call_msgs = _repair_window_messages(convo, source_repair.gap)
                 call_msgs = [*call_msgs, {"role": "user", "content": context}]
             if max_tokens is None and (bounded_repair or focused_repair):
-                repair_max_tokens = REPAIR_OUTPUT_TOKENS
+                repair_max_tokens = (
+                    SONNET55_REPAIR_OUTPUT_TOKENS if is_sonnet55_model(active_model)
+                    else DEFAULT_REPAIR_OUTPUT_TOKENS
+                )
 
             # The transcript window can drop the actions that wrote these files.
             note = _progress_note(

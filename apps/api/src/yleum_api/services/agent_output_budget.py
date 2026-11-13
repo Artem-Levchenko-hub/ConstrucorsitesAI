@@ -1,6 +1,7 @@
 """Per-response defaults; None leaves the output limit to the provider."""
 
-REPAIR_OUTPUT_TOKENS = 8192
+SONNET55_REPAIR_OUTPUT_TOKENS = 128_000
+DEFAULT_REPAIR_OUTPUT_TOKENS = 8192
 
 
 def is_sonnet55_model(model: str) -> bool:

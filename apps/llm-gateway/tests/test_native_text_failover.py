@@ -203,28 +203,40 @@ def test_native_sticky_backup_preconnect_can_return_to_primary(client, monkeypat
         assert billing.charge.await_count == 1
 
 
-def test_native_source_repair_reads_capped_reserve_as_stream(client, monkeypatch):
+@pytest.mark.parametrize("max_tokens", [8192, 128_000])
+@pytest.mark.parametrize("scope", ["llmgw", "aitunnel"])
+def test_native_source_repair_preserves_output_budget(client, monkeypatch, max_tokens, scope):
     sent = []
 
-    def reserve(request):
-        sent.append(json.loads(request.content))
-        common = {"id": "backup-receipt", "model": "claude-sonnet-5.5"}
+    def wire(request):
+        sent.append((request.url.host, json.loads(request.content)))
+        common = {"id": "repair-receipt", "model": "claude-sonnet-5.5"}
+        usage = {"prompt_tokens": 10, "completion_tokens": 2, "cost_rub": 0.2}
+        if request.url.host == "api.llmgw.ru":
+            return httpx.Response(200, json={**common, "usage": usage, "choices": [
+                {"finish_reason": "stop", "message": {"content": "result"}},
+            ]})
         chunks = [
             {**common, "choices": [{"index": 0, "delta": {"content": "result"}, "finish_reason": None}]},
             {**common, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
-            {**common, "choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 2, "cost_rub": 0.2}},
+            {**common, "choices": [], "usage": usage},
         ]
         return httpx.Response(200, headers={"content-type": "text/event-stream"},
             text="".join("data: " + json.dumps(chunk) + "\n\n" for chunk in chunks) + "data: [DONE]\n\n")
 
-    monkeypatch.setattr(text_failover, "select_scope", AsyncMock(return_value="aitunnel"))
-    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(reserve))
+    monkeypatch.setattr(text_failover, "select_scope", AsyncMock(return_value=scope))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(wire))
     response = client.post("/v1/messages", json={
-        "model": "claude-sonnet-5.5", "user": str(uuid4()), "max_tokens": 8192,
-        "messages": [{"role": "user", "content": "synthetic"}], "metadata": {"stage": "source_repair"},
+        "model": "claude-sonnet-5.5", "user": str(uuid4()), "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": "synthetic"}],
+        "metadata": {"stage": "source_repair", "run_id": str(uuid4()), "project_id": str(uuid4())},
     })
-    assert [(body["stream"], body["max_tokens"]) for body in sent] == [(True, 8192)]
     assert response.status_code == 200, response.text
+    assert len(sent) == 1
+    host, payload = sent[0]
+    assert host == f"api.{scope}.ru"
+    assert payload["max_tokens"] == max_tokens
+    assert payload.get("stream", False) is (scope == "aitunnel")
     assert response.json()["content"][0]["text"] == "result"
     assert billing.charge.await_count == 1
 

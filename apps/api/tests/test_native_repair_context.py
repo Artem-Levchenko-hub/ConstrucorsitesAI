@@ -153,7 +153,10 @@ async def test_missing_entry_repairs_same_draft_with_one_action_and_text_fallbac
         assert result.files == {ENTRY: page}
 
 
-async def test_directed_text_strategy_resumes_original_request(monkeypatch, isolated_repair):
+@pytest.mark.parametrize("saved_limit", [8192, 128_000])
+async def test_directed_text_strategy_resumes_original_request(
+    monkeypatch, isolated_repair, saved_limit,
+):
     from yleum_api.services.generation.contracts import AgentPromptPlan, StackPrompt
     from yleum_api.services.generation.recovery_execution import GenerationYielded
     from yleum_api.services.generation.recovery_pipeline import PreparedAgentEntry
@@ -173,6 +176,8 @@ async def test_directed_text_strategy_resumes_original_request(monkeypatch, isol
 
     async def recorded_provider(frame, invoke):
         frames.append(deepcopy(frame))
+        if len(frames) == 2 and saved_limit == 8192:
+            frames[-1]["value"]["request"]["max_tokens"] = saved_limit
         return await invoke()
 
     def restore_frame(kind):
@@ -180,7 +185,7 @@ async def test_directed_text_strategy_resumes_original_request(monkeypatch, isol
         return deepcopy(frames[-1]["value"]) if resume else None
 
     async def model(*args, **kwargs):
-        calls.append((deepcopy(args[2]), deepcopy(kwargs["tools"])))
+        calls.append((deepcopy(args[2]), deepcopy(kwargs["tools"]), kwargs["max_tokens"]))
         if len(calls) == 1:
             return turn(("read_file", {"path": "src/lib/ration/domain.ts"}))
         if len(calls) == 2:
@@ -215,7 +220,9 @@ async def test_directed_text_strategy_resumes_original_request(monkeypatch, isol
     resume = True
     arguments["initial_files"] = PreparedAgentEntry.from_json(entry.to_json()).restored_files
     result = await agent_native._run_native_segment(**arguments)
-    assert calls[2] == calls[1] and calls[1][1] == []
+    assert calls[1][1:] == ([], 128_000)
+    assert calls[2] == (*calls[1][:2], saved_limit)
+    assert calls[3][2] == 128_000
     assert effects == ["write_file", "build"]
     assert result.done and result.files == {ENTRY: page}
 

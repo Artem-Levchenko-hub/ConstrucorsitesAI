@@ -101,8 +101,14 @@ async def test_legacy_escalation_uses_active_model_budget_unless_overridden(over
     assert calls == expected
 
 
-@pytest.mark.parametrize("override,expected", [(None, 8192), (4096, 4096)])
-async def test_checkpoint_repair_sends_an_explicit_output_budget(monkeypatch, override, expected):
+@pytest.mark.parametrize("model,override,expected", [
+    ("claude-sonnet-5.5", None, 128_000),
+    ("claude-sonnet-5.5", 4096, 4096),
+    ("claude-sonnet-4.6", None, 8192),
+])
+async def test_checkpoint_repair_sends_an_explicit_output_budget(
+    monkeypatch, model, override, expected,
+):
     payloads = []
 
     def gateway(request):
@@ -117,7 +123,7 @@ async def test_checkpoint_repair_sends_an_explicit_output_budget(monkeypatch, ov
 
     install_transport(monkeypatch, gateway)
     result = await agent_builder.run_agent_build(
-        system_prompt="s", user_prompt="Finish the saved application", model="claude-sonnet-5.5",
+        system_prompt="s", user_prompt="Finish the saved application", model=model,
         execute=execute, max_steps=1, bounded_repair=True, max_tokens=override,
     )
 
@@ -192,7 +198,7 @@ async def test_native_build_limits_only_source_repair_requests(
     assert result.stop_reason == "provider_error"
     assert len(payloads) == 1
     if source_repair or bounded_repair:
-        assert payloads[0]["max_tokens"] == 8192
+        assert payloads[0]["max_tokens"] == 128_000
         assert payloads[0]["metadata"]["stage"] == "source_repair"
     else:
         assert "max_tokens" not in payloads[0]
