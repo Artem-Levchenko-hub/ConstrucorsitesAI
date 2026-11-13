@@ -67,6 +67,149 @@ def source_from_task(task: str) -> dict:
     return json.loads(task.split(marker, 1)[1])
 
 
+@pytest.mark.parametrize("fallback", ["json", "code", "unchanged"])
+async def test_missing_entry_repairs_same_draft_with_one_action_and_text_fallback(
+    monkeypatch, isolated_repair, fallback,
+):
+    before = {
+        "src/components/ration/BottomNav.tsx": "export default function Nav() { return null; }",
+        "src/lib/ration/domain.ts": "export const dishCount = 10;",
+        "src/app/ration.css": ".meal { display: grid; }",
+        ".env": "MUST_NOT_SEND_TO_MODEL",
+    }
+    files = dict(before)
+    page = (
+        '"use client";\n'
+        'import {useYleumAppProfile} from "@/lib/omnia/app-profile-client";\n'
+        'export default function Page() {\n'
+        '  const {profile} = useYleumAppProfile();\n'
+        '  return <main>{profile?.app_name ?? "Рацион на месяц"}</main>;\n'
+        '}\n'
+    )
+    calls, executed, checkpoints = [], [], []
+
+    async def provider(*args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            assert [tool["name"] for tool in kwargs["tools"]] == ["write_file"]
+            context = str(args[2])
+            assert "useYleumAppProfile" in context
+            assert "export const dishCount = 10;" in context
+            assert "MUST_NOT_SEND_TO_MODEL" not in context
+            return turn(
+                ("write_file", {"path": ENTRY, "content": page}),
+                ("read_file", {"path": "src/lib/ration/domain.ts"}),
+            )
+        if len(calls) == 2:
+            assert kwargs["tools"] == []
+            return {"stop_reason": "end_turn", "content": [
+                {"type": "text", "text": (
+                    json.dumps({"content": page}) if fallback != "code" else "I'll write it next."
+                )},
+            ]}
+        if len(calls) == 3 and fallback == "code":
+            assert kwargs["tools"] == [] and "fenced TSX code block" in str(args[2])
+            return {"stop_reason": "end_turn", "content": [
+                {"type": "text", "text": "```tsx\n" + page + "```"},
+            ]}
+        return turn(("done", {"summary": "Проверено"}))
+
+    async def execute(action):
+        executed.append(action.name)
+        if action.name == "write_file":
+            assert action.path == ENTRY
+            if fallback != "unchanged":
+                files[ENTRY] = action.args["content"]
+            return {"ok": True}
+        assert action.name == "build"
+        assert files[ENTRY] == page
+        return {"ok": True}
+
+    async def snapshot():
+        return dict(files)
+
+    async def checkpoint(result):
+        checkpoints.append(result.files)
+
+    async def guard(runtime, ids, execute, completion):
+        return execute, lambda written, _evidence: None if written.get(ENTRY) == page else "no page"
+
+    monkeypatch.setattr(agent_native, "_call_messages", provider)
+    monkeypatch.setattr(agent_runtime, "guard_native_source_contract", guard)
+    args = repair_arguments(dict(before), execute=execute)
+    args["plan"].model = "claude-sonnet-5.5"
+    args["operations"].snapshot_files = snapshot
+    args["operations"].checkpoint = checkpoint
+    result = await agent_finalization.run_native_source_repair(**args)
+    assert all(call["run_id"] == "r" for call in calls)
+    if fallback == "unchanged":
+        assert not result.done and not result.needs_finalization
+        assert not checkpoints and files == before
+        assert executed == ["write_file"]
+    else:
+        assert result.done or result.needs_finalization
+        assert executed == ["write_file", "build"]
+        assert checkpoints == [{**before, ENTRY: page}]
+        assert result.files == {ENTRY: page}
+
+
+async def test_directed_text_strategy_resumes_original_request(monkeypatch, isolated_repair):
+    from yleum_api.services.generation.recovery_execution import GenerationYielded
+
+    files = {"src/lib/ration/domain.ts": "export const dishCount = 10;"}
+    page = "export default function Page() { return <main>Рацион</main>; }"
+    frames, effects, calls = [], [], []
+    resume = False
+    run_id = uuid4()
+
+    async def recorded_provider(frame, invoke):
+        frames.append(deepcopy(frame))
+        return await invoke()
+
+    def restore_frame(kind):
+        assert kind == "native"
+        return deepcopy(frames[-1]["value"]) if resume else None
+
+    async def model(*args, **kwargs):
+        calls.append((deepcopy(args[2]), deepcopy(kwargs["tools"])))
+        if len(calls) == 1:
+            return turn(("read_file", {"path": "src/lib/ration/domain.ts"}))
+        if len(calls) == 2:
+            raise GenerationYielded(run_id=run_id, checkpoint=None, attempt_seq=1,
+                                   phase="waiting_dependency")
+        if len(calls) == 3:
+            return {"stop_reason": "end_turn", "content": [
+                {"type": "text", "text": json.dumps({"content": page})},
+            ]}
+        return turn(("done", {"summary": "done"}))
+
+    async def snapshot():
+        return dict(files)
+
+    async def execute(action):
+        effects.append(action.name)
+        if action.name == "write_file":
+            files[action.path] = action.args["content"]
+        return {"ok": True}
+
+    monkeypatch.setattr(agent_native, "_call_messages", model)
+    arguments = dict(
+        system="MAX VERIFICATION OVERRIDE", task="Continue saved ration", execute=execute,
+        model="claude-sonnet-5.5", run_id=run_id, directed_path=ENTRY, source_repair=True,
+        portable_cell=True, initial_files=dict(files), max_steps=8, snapshot_files=snapshot,
+        continuation=SimpleNamespace(provider=recorded_provider, restore_frame=restore_frame),
+        completion_check=lambda written, _evidence: None if written.get(ENTRY) == page else "gap",
+    )
+    with pytest.raises(GenerationYielded):
+        await agent_native._run_native_segment(**arguments)
+    assert effects == []
+    resume = True
+    result = await agent_native._run_native_segment(**arguments)
+    assert calls[2] == calls[1] and calls[1][1] == []
+    assert effects == ["write_file", "build"]
+    assert result.done and result.files == {ENTRY: page}
+
+
 async def test_late_exact_edit_uses_complete_loaded_source_without_any_read(
     monkeypatch, isolated_repair,
 ):

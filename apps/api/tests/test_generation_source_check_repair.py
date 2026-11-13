@@ -60,10 +60,16 @@ def source_check(monkeypatch):
         if len(calls) > 1 and mode["provider_error"]:
             raise RuntimeError("synthetic provider error")
         if len(calls) == 1 and mode["write"]:
-            name, arguments = (
-                "write_file",
-                {"path": "src/app/page.tsx", "content": mode["replacement"]},
-            )
+            names = [tool["name"] for tool in kwargs.get("tools", [])]
+            if names == ["edit_file"]:
+                name, arguments = "edit_file", {
+                    "path": "src/app/page.tsx", "search": workspace["src/app/page.tsx"],
+                    "replace": mode["replacement"],
+                }
+            else:
+                name, arguments = "write_file", {
+                    "path": "src/app/page.tsx", "content": mode["replacement"],
+                }
         elif mode["write"]:
             name, arguments = "done", {"summary": "repaired"}
         else:
@@ -76,13 +82,19 @@ def source_check(monkeypatch):
         }
 
     async def execute(action):
-        if action.name == "write_file":
-            workspace[action.path] = action.args["content"]
+        if action.name in {"write_file", "edit_file"}:
+            workspace[action.path] = (
+                action.args["content"] if action.name == "write_file" else
+                workspace[action.path].replace(action.args["search"], action.args["replace"], 1)
+            )
             if mode["extra"]:
                 workspace["src/lib/new-filter.ts"] = "new candidate helper"
         if action.name == "build" and mode["build_error"] is not None:
             raise mode["build_error"]
-        return {"ok": mode["green"], "detail": "clean" if mode["green"] else FAILURE}
+        observation = {"ok": mode["green"], "detail": "clean" if mode["green"] else FAILURE}
+        if action.name == "edit_file":
+            observation["content"] = workspace[action.path]
+        return observation
 
     async def probe():
         return {"ok": mode["green"] and workspace != before, "detail": FAILURE}

@@ -26,6 +26,7 @@ from yleum_api.services.generation.source_intent import (
 from yleum_api.services.generation.source_intent import (
     source_change_required,
 )
+from yleum_api.services.generation.source_repair_context import directed_repair_target
 from yleum_api.services.project_cell_errors import ProjectCellInfrastructureError
 
 _log = logging.getLogger("yleum_api.routers.messages")
@@ -430,7 +431,30 @@ async def execute_agent_turn(
                     orchestrator_template(project_info.template) == "max-miniapp-nextjs"
                 ),
             )
-    _native_agent = get_settings().use_native_agent
+    snapshot_reader = getattr(operations, "snapshot_files", None) or getattr(
+        runtime.handle, "snapshot_files", None,
+    )
+    directed_path = (
+        directed_repair_target(restored_source)
+        if restored_source is not None and not _max_has_generated_snapshot
+        and not _is_edit and runtime.coordinator is not None and callable(snapshot_reader)
+        else None
+    )
+    continuation = getattr(operations, "continuation", None)
+    frame = continuation.context.get("active_frame") if continuation is not None else None
+    # An already-issued request keeps its original wire protocol when the worker resumes.
+    _native_agent = (
+        frame.get("kind") == "native" if isinstance(frame, dict) else
+        get_settings().use_native_agent or directed_path is not None
+    )
+    if continuation is not None and frame is not None and _native_agent and bounded_repair:
+        outer = continuation.context.get("native_outer")
+        original = outer.get("observed_source") if isinstance(outer, dict) else None
+        if isinstance(original, dict) and _NATIVE_EDIT_ENTRY_PATH not in original:
+            # A cold workspace may already contain a receipted write. Rebuild
+            # the original initial request using its saved pre-write baseline.
+            current_source = original
+            directed_path = directed_repair_target(original)
     _completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = (
         None
     )
@@ -524,9 +548,6 @@ async def execute_agent_turn(
                 and getattr(operations, "continuation", None) is None
             ),
         )
-        snapshot_reader = getattr(operations, "snapshot_files", None) or getattr(
-            runtime.handle, "snapshot_files", None,
-        )
         _native_max_segments = (
             None
             if runtime.coordinator is not None
@@ -561,6 +582,7 @@ async def execute_agent_turn(
                 snapshot_files=snapshot_reader if callable(snapshot_reader) else None,
                 allow_max_bash=_max_shell_enabled,
                 bounded_repair=bounded_repair,
+                directed_path=directed_path,
                 portable_cell=bool(runtime.handle is not None and runtime.handle.is_portable()),
                 initial_files=(
                     current_source
@@ -582,7 +604,7 @@ async def execute_agent_turn(
                 recovery_binding=getattr(operations, "recovery_binding", None),
                 response_recovery=getattr(operations, "response_recovery", None),
                 take_verified_progress=getattr(operations, "take_verified_progress", None),
-                continuation=getattr(operations, "continuation", None),
+                continuation=continuation,
                 pure_check=getattr(operations, "pure_check", None),
             )
         except SourceCheckpointError as exc:

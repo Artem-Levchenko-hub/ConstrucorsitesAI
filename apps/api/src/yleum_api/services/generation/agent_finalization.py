@@ -34,7 +34,10 @@ from yleum_api.services.generation.source_intent import (
 from yleum_api.services.generation.source_intent import (
     source_change_required,
 )
-from yleum_api.services.generation.source_repair_context import with_managed_source_context
+from yleum_api.services.generation.source_repair_context import (
+    directed_repair_target,
+    with_managed_source_context,
+)
 from yleum_api.services.max_finalization import ProofBundle
 from yleum_api.services.max_project_kit import max_sast_source_view
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
@@ -284,10 +287,11 @@ async def run_native_source_repair(
             },
         )
     execute = operations.execute
+    guarded_write = getattr(runtime.handle, "capabilities", {}).get(
+        "source_write_nofollow_v1",
+    ) is True
     if source_failure is not None:
         allowed = frozenset(source_failure.allowed_paths)
-        capability = getattr(runtime.handle, "capabilities", {})
-        guarded_write = capability.get("source_write_nofollow_v1") is True
 
         async def targeted_execute(action: agent_builder.Action) -> dict[str, object]:
             if action.name in {"write_file", "edit_file"}:
@@ -314,6 +318,15 @@ async def run_native_source_repair(
         repair_execute = checkpoint_source_actions(
             execute=repair_execute, snapshot=snapshot, checkpoint=checkpoint,
         )
+    directed_path = None
+    if callable(snapshot):
+        directed_path = directed_repair_target(
+            model_baseline,
+            importer=source_failure.importer if source_failure is not None else None,
+            allowed=source_failure.allowed_paths if source_failure is not None else None,
+        )
+        if source_failure is not None and directed_path not in baseline and not guarded_write:
+            directed_path = None
     try:
         result = await agent_native.run_native_build(
             continuation=continuation,
@@ -335,6 +348,7 @@ async def run_native_source_repair(
             ),
             snapshot_files=snapshot if callable(snapshot) else None,
             source_repair=True,
+            directed_path=directed_path,
             allow_max_bash=shell_enabled, portable_cell=True, initial_files=model_baseline,
             edit_deadline=edit_deadline, completion_check=repair_completion,
         )
@@ -456,7 +470,9 @@ async def finalize_max_candidate(
                 source_failure=source_failure,
                 feedback=detail,
             )
-            if single_repair and not (repaired.done or repaired.needs_finalization):
+            if single_repair and not (
+                repaired.done or repaired.needs_finalization or repaired.files
+            ):
                 raise RuntimeError("MAX_FINALIZATION_FAILED: source repair did not complete")
 
         try:

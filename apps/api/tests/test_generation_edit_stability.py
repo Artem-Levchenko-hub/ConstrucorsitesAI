@@ -487,6 +487,47 @@ async def test_first_product_resume_can_finish_helper_without_rewriting_saved_en
     assert len(calls) == 3
 
 
+async def test_legacy_max_resume_creates_missing_entry_before_resuming_product(
+    edit_workspace, monkeypatch,
+):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from yleum_api.services import max_behavior_proof, max_generation_contract
+
+    monkeypatch.setattr(max_behavior_proof, "freeze_for_turn", AsyncMock())
+    monkeypatch.setattr(
+        max_generation_contract, "max_source_completion_gap", lambda *args, **kwargs: None,
+    )
+    run, _, workspace, executed = edit_workspace
+    del workspace["src/app/page.tsx"]
+    workspace["src/lib/ration/domain.ts"] = "export const dishes = 10;"
+    page = "export default function Page() { return <main>Saved product</main>; }"
+    calls, saved = [], []
+
+    async def native_provider(*args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            assert [tool["name"] for tool in kwargs["tools"]] == ["write_file"]
+            assert "export const dishes = 10;" in str(args[2])
+            return turn("write_file", {"path": "src/app/page.tsx", "content": page})
+        return turn("done", {"summary": "continued"})
+
+    async def checkpoint(result):
+        saved.append(dict(result.files))
+
+    result, failure = await run(
+        native_provider, native=False, is_edit=False, generated_snapshot=False,
+        prompt_text="Build product", stack_guide="MAX VERIFICATION OVERRIDE",
+        coordinator=SimpleNamespace(source_edit_deadline=AsyncMock(return_value=None)),
+        workspace_context_files=dict(workspace), source_checkpoint=checkpoint,
+    )
+    assert result.done and failure is None
+    assert executed == ["write_file", "build"]
+    assert "src/app/page.tsx" not in saved[0] and saved[1]["src/app/page.tsx"] == page
+    assert workspace["src/lib/ration/domain.ts"] == "export const dishes = 10;"
+
+
 @pytest.mark.parametrize("native", [False, True])
 async def test_expired_coordinator_deadline_cannot_start_a_provider_request(
     edit_workspace, monkeypatch, native,

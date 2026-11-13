@@ -731,7 +731,12 @@ async def run_agent_generation(
             source_checkpoint=save_source_checkpoint,
             workspace_context_files=(
                 await _operations.snapshot_files()
-                if resumed is not None and _operations.snapshot_files is not None else None
+                if _operations.snapshot_files is not None and (
+                    resumed is not None or (
+                        bootstrap_preparation is not None
+                        and bootstrap_preparation.adjacent_files is not None
+                    )
+                ) else None
             ),
         )
         if continuation is not None:

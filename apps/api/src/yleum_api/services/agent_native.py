@@ -58,7 +58,14 @@ from yleum_api.services.generation.recovery_contract import (
     IncompleteResponseBudget,
     RecoveryContractError,
 )
-from yleum_api.services.generation.recovery_trace import provider_error_context
+from yleum_api.services.generation.recovery_trace import (
+    bounded_recovery_diagnostic,
+    provider_error_context,
+)
+from yleum_api.services.generation.source_repair_context import (
+    MAX_REPAIR_CONTEXT_BYTES,
+    directed_source_context,
+)
 from yleum_api.services.generation_failure import failure_for_error
 from yleum_api.services.integration_providers import PROVIDER_MAP
 from yleum_api.services.llm_client import (
@@ -68,6 +75,7 @@ from yleum_api.services.llm_client import (
 )
 from yleum_api.services.max_management_generation import ManagedSourceGap
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
+from yleum_api.services.secret_safety import max_model_write_rejection
 
 if TYPE_CHECKING:
     from yleum_api.services.generation.recovery_execution import ExecutionDriver
@@ -696,6 +704,103 @@ _MAX_ENTRY_WRITE_CHOICE: dict[str, str] = {"type": "tool", "name": "write_file"}
 _SOURCE_REPAIR_TOOLS_CACHED = _cache_toolset(
     [tool for tool in _TOOLS if tool["name"] in {"write_file", "edit_file"}]
 )
+_DIRECTED_TOOL_REPLY = (
+    "For this response use exactly the offered file operation with the supplied source. "
+    "The server performs verification. Do not inspect the workspace or call any other tool."
+)
+_DIRECTED_TEXT_REPLY = (
+    "For this response all tools are disabled. Return only the requested code payload. "
+    "The server applies the selected file operation and verifies it."
+)
+_DIRECTED_INVALID_REPLY = (
+    "No action was applied. Supply exactly the requested single complete code change."
+)
+_DIRECTED_STRATEGIES = ("tool", "json", "code")
+_DIRECTED_REPAIR_ATTEMPTS = len(_DIRECTED_STRATEGIES)
+_DIRECTED_REPAIR_LOG = "agent_native.directed_repair"
+
+
+def _directed_tool(path: str, *, exists: bool) -> dict[str, Any]:
+    if not exists and path == _MAX_PRODUCT_ENTRY_PATH:
+        return _MAX_ENTRY_WRITE_TOOLS[0]
+    tool = next(tool for tool in _SOURCE_REPAIR_TOOLS_CACHED if tool["name"] == "edit_file")
+    schema = tool["input_schema"]
+    return {
+        **tool,
+        "input_schema": {
+            **schema,
+            "properties": {**schema["properties"], "path": {"type": "string", "enum": [path]}},
+        },
+    }
+
+
+def _directed_action(
+    content: list[dict[str, Any]], *, path: str, current: str | None, strategy: str,
+) -> dict[str, Any] | None:
+    """Accept one proposal for the server-selected operation and path."""
+    name = "write_file" if current is None else "edit_file"
+    fields = {"content"} if current is None else {"search", "replace"}
+    args: dict[str, Any]
+    calls = [block for block in content if isinstance(block, dict)
+             and block.get("type") == "tool_use"]
+    if strategy != "tool":
+        if calls:
+            return None
+        text = _text_of(content).strip()
+        if strategy == "code":
+            blocks = re.findall(r"(?ms)^```[a-zA-Z]*[^\S\n]*\n(.*?)^```[^\S\n]*$", text)
+            if current is None and len(blocks) == 1:
+                args = {"content": blocks[0]}
+            elif current is not None and len(blocks) == 2:
+                args = {"search": blocks[0].removesuffix("\n"),
+                        "replace": blocks[1].removesuffix("\n")}
+            else:
+                return None
+        else:
+            fenced = re.fullmatch(r"```(?:json)?\s*\n(.*?)\n```", text, re.DOTALL)
+            try:
+                args = json.loads(fenced[1] if fenced else text)
+            except (ValueError, RecursionError):
+                return None
+            if not isinstance(args, dict) or set(args) != fields:
+                return None
+        args["path"] = path
+        call = {"type": "tool_use", "id": "directed-repair", "name": name, "input": args}
+    else:
+        if len(calls) != 1 or calls[0].get("name") != name:
+            return None
+        call = calls[0]
+        raw_args = call.get("input")
+        if not isinstance(raw_args, dict) or set(raw_args) != fields | {"path"}:
+            return None
+        args = raw_args
+    if args["path"] != path or any(not isinstance(args[key], str) for key in fields):
+        return None
+    if current is None:
+        candidate = args["content"]
+        if not candidate.strip():
+            return None
+    else:
+        search, replacement = args["search"], args["replace"]
+        if not search or search == replacement or current.count(search) != 1:
+            return None
+        candidate = current.replace(search, replacement, 1)
+    try:
+        if len(candidate.encode("utf-8")) > MAX_REPAIR_CONTEXT_BYTES or "\x00" in candidate:
+            return None
+    except UnicodeEncodeError:
+        return None
+    return call if max_model_write_rejection(path, candidate) is None else None
+
+
+def _directed_feedback(value: str | list[dict[str, Any]]) -> str:
+    if isinstance(value, str):
+        return bounded_recovery_diagnostic(value, max_bytes=2000)
+    text = "\n".join(
+        str(block.get("text") or block.get("content") or "") for block in value
+        if isinstance(block, dict)
+    )
+    return bounded_recovery_diagnostic(text, max_bytes=2000)
 
 
 def _source_repair_tools(read_paths: list[str]) -> list[dict[str, Any]]:
@@ -1166,11 +1271,14 @@ async def _call_messages(
         "tool_choice": dict(tool_choice) if tool_choice is not None else {"type": "auto"},
         "messages": _with_incremental_cache(convo),
     }
+    if tools == []:
+        payload.pop("tools")
+        payload.pop("tool_choice")
     if is_sonnet55_model(model):
         # The pinned Gateway model rejects forced tool use. It does not expose
         # verified adaptive/effort controls; do not send a legacy manual budget.
         payload.pop("thinking")
-        if payload["tool_choice"].get("type") in {"any", "tool"}:
+        if payload.get("tool_choice", {}).get("type") in {"any", "tool"}:
             payload["tool_choice"] = {"type": "auto"}
     if user_id:
         payload["user"] = user_id
@@ -1488,6 +1596,8 @@ async def _run_native_segment(
     continuation: ExecutionDriver | None = None,
     prior_source_writes: bool = False,
     prior_managed_rejection: str | None = None,
+    directed_path: str | None = None,
+    snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None,
 ) -> AgentResult:
     """Drive the native tool-use loop until the model calls ``done`` (with a clean
     build) or the step budget is hit. Returns the written files + transcript.
@@ -1571,6 +1681,11 @@ async def _run_native_segment(
                 response_recovery.budget.since_progress, saved_frame.response_budget.since_progress,
             ),
         )
+
+    directed_request = (
+        directed_source_context(task, baseline_files, directed_path)
+        if directed_path is not None else ""
+    )
 
     def _evidence() -> dict[str, int]:
         result = dict(successful_tools)
@@ -1903,6 +2018,10 @@ async def _run_native_segment(
                 edit_source_changed is not None and not edit_source_changed()
                 and no_write_turns >= _EDIT_DISCOVERY_TURNS
             )
+            active_path = directed_path
+            directed = active_path is not None and active_path not in written
+            strategy = _DIRECTED_STRATEGIES[min(no_write_turns, len(_DIRECTED_STRATEGIES) - 1)]
+            text_repair = directed and strategy != "tool"
             limited_output = is_sonnet55_model(model) and (source_repair or bounded_repair)
             call_stage = "source_repair" if limited_output else (
                 "build_plan"
@@ -1947,6 +2066,36 @@ async def _run_native_segment(
                     if restoring:
                         assert saved_frame is not None
                         request = saved_frame.request
+                        # Reconcile an older paid/tool batch under its original rules.
+                        active_path = request.get("directed_path")
+                        directed = active_path is not None
+                        text_repair = directed and strategy != "tool"
+                    elif active_path is not None and directed:
+                        entry_exists = active_path in baseline_files
+                        fields = (
+                            '{"content":"complete file source"}' if not entry_exists
+                            else '{"search":"exact unique original text","replace":"new text"}'
+                        )
+                        format_hint = (
+                            "Return one fenced TSX code block containing the entire file."
+                            if not entry_exists else
+                            "Return two fenced code blocks: exact search text, then replacement."
+                        ) if strategy == "code" else f"Return this JSON object: {fields}"
+                        feedback = _directed_feedback(convo[-1]["content"]) if text_repair else ""
+                        reply_rule = _DIRECTED_TEXT_REPLY if text_repair else _DIRECTED_TOOL_REPLY
+                        request.update(
+                            convo=[{"role": "user", "content": (
+                                directed_request + "\n\n" + reply_rule
+                                + (f"\n{format_hint}\nPrevious result: {feedback}"
+                                   if text_repair else "")
+                            )}],
+                            system=system + "\n\n" + reply_rule,
+                            tools=[] if text_repair else [
+                                _directed_tool(active_path, exists=entry_exists),
+                            ],
+                            tool_choice={"type": "none" if text_repair else "auto"},
+                            directed_path=active_path,
+                        )
                     async def invoke(request: dict[str, Any] = request) -> dict[str, Any]:
                         expected = {"convo", "system", "model", "stage", "tools", "tool_choice"}
                         repair_budget = request.get("max_tokens")
@@ -1962,6 +2111,15 @@ async def _run_native_segment(
                                     "native continuation repair budget changed",
                                 )
                             expected.add("max_tokens")
+                        if "directed_path" in request:
+                            path = request["directed_path"]
+                            if (
+                                not isinstance(path, str)
+                                or _source_repair_read_path(path) != path
+                                or (path not in baseline_files and path != _MAX_PRODUCT_ENTRY_PATH)
+                            ):
+                                raise RecoveryContractError("invalid directed repair target")
+                            expected.add("directed_path")
                         if set(request) != expected:
                             raise RecoveryContractError("native continuation request shape changed")
                         return await _call_messages(
@@ -2104,6 +2262,34 @@ async def _run_native_segment(
                         await emit("agent.tool_contract_mismatch", mismatch)
                     break
             response_problem = _incomplete_tool_response(resp, content)
+            selected = None
+            directed_current = baseline_files.get(active_path) if active_path is not None else None
+            if directed and active_path is not None:
+                if response_problem is None:
+                    selected = _directed_action(
+                        content, path=active_path, current=directed_current,
+                        strategy=strategy,
+                    )
+                if selected is None:
+                    if response_problem is not None:
+                        response_recovery.truncated()
+                        unverified_response_problem = response_problem
+                        last_build_ok = None
+                        _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
+                    _record_turn_progress(False)
+                    feedback = (
+                        "The answer reached the output limit. Make one smaller complete change."
+                        if response_problem == "output_limit" else _DIRECTED_INVALID_REPLY
+                    )
+                    convo.append({"role": "user", "content": feedback})
+                    log.info(_DIRECTED_REPAIR_LOG, run_id=run_id, step=step, path=active_path,
+                             strategy=strategy, outcome=response_problem or "unexpected_action")
+                    if no_write_turns >= _DIRECTED_REPAIR_ATTEMPTS:
+                        return await _finish_without_provider(
+                            steps=step + 1, reason="exploring",
+                            detail=f"No applicable source change for {active_path}.",
+                        )
+                    continue
             if response_problem:
                 # Validate the entire response before executing ANY call. A valid
                 # prefix of a truncated batch is not an authorized complete plan.
@@ -2170,19 +2356,22 @@ async def _run_native_segment(
                                 "type": "text", "text": _EDIT_SOURCE_NUDGE,
                             })
                 continue
-            # Echo the assistant turn VERBATIM — thinking blocks (with signatures)
-            # MUST be preserved for the next turn or Anthropic rejects the round-trip.
-            convo.append({"role": "assistant", "content": content})
+            if not directed:
+                # Signed thinking belongs to this exact prompt and tool list. A
+                # separate repair request hands back only the observed effect.
+                convo.append({"role": "assistant", "content": content})
 
             # Streaming (phase 8): surface Opus's own narration between tool calls to
             # the UI so the workspace reads «как переписка с Claude» — the model
             # explains what it's doing, live, next to the tool steps.
-            if emit:
+            if emit and not directed:
                 _narration = _text_of(content)
                 if _narration:
                     await emit("agent.text", {"step": step, "text": _narration})
 
-            tool_uses = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"]
+            tool_uses = [selected] if selected is not None else [
+                b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"
+            ]
             if not tool_uses:
                 _done = resp.get("stop_reason") == "end_turn"
                 _text = _text_of(content)
@@ -2328,8 +2517,23 @@ async def _run_native_segment(
                         action_executed = True
                         async def execute_batch(
                             current: Action = action, checks: PureCheckBatch = batch,
+                            verify_source: bool = directed,
+                            expected_source: str | None = directed_current,
                         ) -> dict[str, Any]:
+                            if verify_source and snapshot_files is not None:
+                                before = await snapshot_files()
+                                if before.get(current.path) != expected_source:
+                                    return {"ok": False, "error": "Selected source changed."}
                             result, _ = await checks.execute(current, execute)
+                            if verify_source and snapshot_files is not None and result.get("ok"):
+                                actual = (await snapshot_files()).get(current.path)
+                                expected = current.args.get("content")
+                                if expected_source is not None:
+                                    expected = expected_source.replace(
+                                        current.args["search"], current.args["replace"], 1,
+                                    )
+                                if actual != expected:
+                                    return {"ok": False, "error": "Selected write was not applied."}
                             return result
 
                         tool = getattr(continuation, "tool", None)
@@ -2550,7 +2754,27 @@ async def _run_native_segment(
                     )
                     if emit:
                         await emit("agent.stalled", {"step": step})
+            if directed:
+                source_changed = active_path is not None and active_path in written
+                log.info(_DIRECTED_REPAIR_LOG, run_id=run_id, step=step, path=active_path,
+                         strategy=strategy, outcome="applied" if source_changed else "unchanged")
+                if source_changed:
+                    checkpoint_at = None  # Verify this correction before the next model step.
+                detail = (
+                    f"Server applied the change to {active_path}; verify the saved source."
+                    if source_changed else str(results[0]["content"])
+                )
+                results = [{"type": "text", "text": detail}]
             convo.append({"role": "user", "content": results})
+            if (
+                directed and active_path is not None and active_path not in written
+                and no_write_turns >= _DIRECTED_REPAIR_ATTEMPTS
+                and infra_dead_turns < _INFRA_DEAD_ABORT_AT
+            ):
+                return await _finish_without_provider(
+                    steps=step + 1, reason="exploring",
+                    detail=f"No applicable source change for {active_path}.",
+                )
             if (
                 source_repair and not _repair_source_changed()
                 and no_write_turns >= _SOURCE_REPAIR_NO_PROGRESS_TURNS
@@ -2880,6 +3104,7 @@ async def run_native_build(
     recovery: RecoveryObserver | None = None,
     recovery_binding: RecoveryBindingReader | None = None,
     continuation: ExecutionDriver | None = None,
+    directed_path: str | None = None,
 ) -> AgentResult:
     """Run one native generation, optionally continuing inside the same run."""
     response_recovery = response_recovery or ResponseRecovery()
@@ -2895,6 +3120,8 @@ async def run_native_build(
         initial_files: Mapping[str, str],
     ) -> AgentResult:
         nonlocal prior_source_writes, prior_managed_rejection
+        outer = continuation.context.get("native_outer") if continuation is not None else None
+        first_segment = not isinstance(outer, dict) or outer.get("segment") == 1
         result = await _run_native_segment(
             model=model,
             system=system,
@@ -2923,6 +3150,10 @@ async def run_native_build(
             pure_check=pure_check, continuation=continuation,
             prior_source_writes=prior_source_writes,
             prior_managed_rejection=prior_managed_rejection,
+            directed_path=(
+                directed_path if first_segment and not prior_source_writes else None
+            ),
+            snapshot_files=snapshot_files,
         )
         prior_source_writes = prior_source_writes or bool(result.files)
         # The next segment is prompted with this exact summary. The rejection
