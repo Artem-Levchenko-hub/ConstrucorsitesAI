@@ -66,6 +66,51 @@ class PendingFastCheckTests(unittest.TestCase):
         self.sources = self.checker._PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES
         self.machine, self.child_id = _pending_fast_check()
 
+    def test_interrupted_restore_requires_exact_completed_observations(self):
+        from yleum_orchestrator.services.cell_state import CellOperationRecord
+
+        def operation(number, kind, status, phase, state, request, checkpoint=None):
+            digest = hashlib.sha256(json.dumps({
+                "workspace_id": WORKSPACE, "generation_run_id": None, "kind": kind,
+                "request": request,
+            }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            return CellOperationRecord(
+                operation_id=UUID(int=number), kind=kind, status=status, phase=phase,
+                request_digest=digest, fencing_epoch=number, bundle_state=state,
+                checkpoint_ref=checkpoint,
+            )
+
+        checkpoint = "capacity-qa"
+        pause = operation(8, "pause", "completed", "completed", "resources_paused",
+                          {"checkpoint_ref": checkpoint}, checkpoint)
+        restore = operation(9, "restore", "indeterminate", "completed", "degraded",
+                            {"checkpoint_ref": checkpoint}, checkpoint)
+        first = operation(10, "reconcile", "indeterminate", "indeterminate", "indeterminate",
+                          {"indeterminate_operation_id": str(restore.operation_id)})
+        clear_first = operation(11, "reconcile", "completed", "completed", "resources_paused",
+                                {"indeterminate_operation_id": str(first.operation_id)})
+        clear_restore = operation(12, "reconcile", "completed", "completed", "resources_paused",
+                                  {"indeterminate_operation_id": str(restore.operation_id)})
+
+        def verify(rows):
+            last = rows[-1]
+            cell = SimpleNamespace(
+                workspace_id=UUID(WORKSPACE), project_id=UUID(WORKSPACE), owner_id=UUID(WORKSPACE),
+                phase="completed", bundle_state="resources_paused", fencing_epoch=last.fencing_epoch,
+                active_generation_run_id=None, active_generation_fencing_epoch=None,
+                last_operation_id=last.operation_id, operation=lambda _: last, operations=tuple(rows),
+            )
+            return self.checker._retirement_operation(cell, WORKSPACE)
+
+        self.assertEqual(verify([pause, restore, first, clear_first, clear_restore]), clear_restore)
+        for rows in ([pause, restore, first, clear_restore], [pause, restore, clear_first],
+                     [pause, restore, first, clear_restore, first, clear_first],
+                     [pause, restore, clear_restore, clear_first]):
+            with self.subTest(rows=[row.fencing_epoch for row in rows]), self.assertRaises(
+                self.checker.PhysicalDrainError,
+            ):
+                verify(rows)
+
     def test_pending_wrapper_binds_its_exact_unacknowledged_child(self):
         before = copy.deepcopy(self.machine)
         covered = self.checker._pending_portable_commands(self.machine, sources=self.sources)

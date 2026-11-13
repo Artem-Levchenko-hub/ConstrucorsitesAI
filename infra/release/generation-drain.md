@@ -353,6 +353,11 @@ closed unless all of these conditions hold:
   a terminal one. This attests retirement only; it does not clear the startup
   hold or replay the request. Other unresolved requests, adaptation,
   lifecycle, source-write and command-receipt records still block drain.
+- A stopped workspace can also be observed after a failed restore of its own
+  last pause checkpoint. The original pause and restore envelopes must match,
+  and each uncertain restore or observation must have an exact completed
+  higher-fence observation of `resources_paused`. Their history is retained.
+  The same root physical checks still run; this grants no startup authority.
 - No portable workspace container/helper remains. Only the exact owned
   auxiliary cell PostgreSQL/Redis services may remain after pause, with no
   unresolved exec. After destroy, no workspace container may remain.

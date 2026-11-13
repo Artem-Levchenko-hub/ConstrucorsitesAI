@@ -75,6 +75,7 @@ _CPU_PERIOD = 100_000
 _HELPER_MEMORY_LIMIT_BYTES = 256 * 1024 * 1024
 _HELPER_PIDS_LIMIT = 64
 _ARCHIVE_LIMIT_BYTES = 128 * 1024 * 1024
+_VOLUME_ARCHIVE_SOCKET_TIMEOUT_SECONDS = 60.0
 _POSTGRES_VOLUME_PROBE_TIMEOUT_SECONDS = 30.0
 _WORKSPACE_SOURCE_STREAM_TIMEOUT_SECONDS = 60.0
 _WORKSPACE_SOURCE_STDERR_LIMIT_BYTES = 64 * 1024
@@ -426,7 +427,7 @@ class DockerPyCellBackend:
             await self._require_source_incarnation(
                 name, expected_identity, helper=container, labels=labels,
             )
-            raw = await asyncio.to_thread(self._get_archive_bytes, container, _VOLUME_ROOT, name)
+            raw = await machine_effect(self._get_archive_bytes, container, _VOLUME_ROOT, name)
             return _archive_to_files(raw, root_prefix=PurePosixPath(_VOLUME_ROOT).name)
         finally:
             await self._remove_container_object(container)
@@ -1756,12 +1757,26 @@ printf '%s\n' 'empty'
             raise
 
     def _get_archive_bytes(self, container: Any, path: str, label: str) -> bytes:
-        chunks, _ = container.get_archive(path)
-        return _read_archive_bytes(
-            cast(Iterable[bytes | bytearray], chunks),
-            label=label,
-            max_bytes=self.archive_limit_bytes,
-        )
+        api = self._client_obj().api
+        try:
+            # The SDK's get_archive iterator disables socket timeouts and
+            # does not close its HTTP response when iteration stops early.
+            # Docker keeps the container locked until that response is closed.
+            response = api._get(
+                api._url("/containers/{0}/archive", container.id),
+                params={"path": path}, stream=True, headers={"Accept-Encoding": "identity"},
+                timeout=_VOLUME_ARCHIVE_SOCKET_TIMEOUT_SECONDS,
+            )
+            with contextlib.closing(response):
+                api._raise_for_status(response)
+                return _read_archive_bytes(
+                    response.iter_content(chunk_size=65536),
+                    label=label, max_bytes=self.archive_limit_bytes,
+                )
+        except docker.errors.APIError:
+            raise
+        except requests.RequestException as exc:
+            raise CellResourceError("volume archive transport failed") from exc
 
     def _exec_checked(
         self,

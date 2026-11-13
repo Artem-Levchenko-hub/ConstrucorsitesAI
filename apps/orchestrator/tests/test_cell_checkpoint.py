@@ -101,7 +101,8 @@ class SourceOnlyCheckpointBackend(FakeDockerBackend):
 
     async def read_workspace_source_files(self, name: str) -> dict[str, bytes]:
         self.source_reads.append(name)
-        return await super().read_volume_files(name)
+        return {path: value for path, value in (await super().read_volume_files(name)).items()
+                if not path.startswith("node_modules/")}
 
 
 async def test_checkpoint_archives_workspace_source_without_dependency_caches(tmp_path):
@@ -142,6 +143,37 @@ async def test_legacy_checkpoint_archives_complete_workspace(tmp_path):
 
     assert names.workspace_volume in docker.raw_reads
     assert docker.source_reads == []
+
+
+async def test_portable_restore_never_downloads_package_cache_to_replace_sources(tmp_path):
+    from unittest.mock import AsyncMock
+
+    docker = SourceOnlyCheckpointBackend()
+    manager, checkpoints, _ = _make_fixture(tmp_path, docker)
+    checkpoints.machine_runtime = SimpleNamespace(
+        checkpoint_payload=AsyncMock(return_value=b"{}"),
+        validate_restore_payload=AsyncMock(), restore_payload=AsyncMock(),
+        bootstrap_core_database=lambda *_, **__: None,
+    )
+    spec = _spec(uuid4())
+    await manager.ensure(spec, _mutation("a", 1))
+    names = _names(manager, spec.workspace_id)
+    await docker.write_volume_files(names.workspace_volume, {"src/app.tsx": b"verified draft"})
+    await checkpoints.create(spec.workspace_id, "source-only", _mutation("b", 2))
+    await docker.write_volume_files(names.workspace_volume, {
+        "src/app.tsx": b"current source", "src/stale.ts": b"stale source",
+        "node_modules/cache": b"large disposable cache",
+    })
+    await manager.pause_services(spec.workspace_id, _mutation("c", 3), checkpoint_ref="source-only")
+    docker.raw_reads.clear()
+
+    await checkpoints.restore(spec.workspace_id, "source-only", _mutation("d", 4))
+
+    assert names.workspace_volume not in docker.raw_reads
+    checkpoints.machine_runtime.restore_payload.assert_awaited_once()
+    assert (await docker.read_volume_files(names.workspace_volume)) == {
+        "src/app.tsx": b"verified draft", "node_modules/cache": b"large disposable cache",
+    }
 
 
 async def test_portable_checkpoint_payload_is_sealed_and_restored_with_same_revision(tmp_path):

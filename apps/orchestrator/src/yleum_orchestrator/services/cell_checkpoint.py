@@ -467,6 +467,7 @@ class CellCheckpointManager:
         await self._replace_volume_files(
             names.workspace_volume,
             _extract_archive(artifacts["workspace.tar"]),
+            source_only="machine.json" in artifacts,
         )
         await self._replace_volume_files(
             names.agent_home_volume,
@@ -500,8 +501,15 @@ class CellCheckpointManager:
         elif "machine.json" in artifacts:
             raise CellRestoreFailed("portable environment provider is unavailable")
 
-    async def _replace_volume_files(self, volume_name: str, files: dict[str, bytes]) -> None:
-        current = await self.docker.read_volume_files(volume_name)
+    async def _replace_volume_files(
+        self, volume_name: str, files: dict[str, bytes], *, source_only: bool = False,
+    ) -> None:
+        # Portable checkpoints carry package/build data separately. Compare
+        # like for like and let the portable restore import its own volumes.
+        read = self.docker.read_volume_files
+        if source_only:
+            read = self.docker.read_workspace_source_files
+        current = await read(volume_name)
         to_delete = tuple(path for path in current if path not in files)
         if to_delete:
             await self.docker.delete_volume_paths(volume_name, to_delete)

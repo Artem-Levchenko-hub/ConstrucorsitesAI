@@ -534,8 +534,77 @@ def _daemon_identity(client) -> dict:
     return {key: info[key] for key in ("ID", "CgroupDriver", "CgroupVersion")}
 
 
+def _reconciliation_digest(workspace_id: str, target_id: UUID) -> str:
+    # Match the platform's canonical ownerless Project Cell operation envelope.
+    return _digest({
+        "workspace_id": workspace_id, "generation_run_id": None, "kind": "reconcile",
+        "request": {"indeterminate_operation_id": str(target_id)},
+    })
+
+
+def _reconciled_restore_retirement(cell, operation, workspace_id: str) -> bool:
+    """Allow current physical proof after an interrupted idle restore was observed."""
+    if operation.kind != "reconcile" or cell.bundle_state != "resources_paused":
+        return False
+    rows = cell.operations
+    if len(rows) < 3:
+        return False
+    # Preserve the preceding canonical pause, and require one exact newer
+    # observation for every uncertain restore/observation in this tail.
+    pauses = [i for i, row in enumerate(rows[:-1]) if row.kind == "pause"]
+    if not pauses:
+        return False
+    pause_index = pauses[-1]
+    pause = rows[pause_index]
+    if (
+        pause.status != "completed" or pause.phase != "completed"
+        or pause.bundle_state != "resources_paused" or pause.generation_run_id is not None
+        or not pause.checkpoint_ref
+        or pause.request_digest != _digest({
+            "workspace_id": workspace_id, "generation_run_id": None, "kind": "pause",
+            "request": {"checkpoint_ref": pause.checkpoint_ref},
+        })
+        or any(row.status not in {"completed", "failed", "cancelled"}
+               or row.fencing_epoch > pause.fencing_epoch for row in rows[:pause_index])
+    ):
+        return False
+    tail = rows[pause_index + 1:]
+    restore = tail[0]
+    if (
+        restore.kind != "restore" or restore.status != "indeterminate"
+        or restore.phase != "completed" or restore.bundle_state != "degraded"
+        or restore.checkpoint_ref != pause.checkpoint_ref
+        or restore.request_digest != _digest({
+            "workspace_id": workspace_id, "generation_run_id": None, "kind": "restore",
+            "request": {"checkpoint_ref": pause.checkpoint_ref},
+        })
+        or any(row.generation_run_id is not None for row in tail)
+        or any(prev.fencing_epoch >= row.fencing_epoch
+               for prev, row in zip((pause, *tail[:-1]), tail, strict=True))
+        or len({row.operation_id for row in rows}) != len(rows)
+    ):
+        return False
+    unresolved = {_reconciliation_digest(workspace_id, restore.operation_id)}
+    for row in tail[1:]:
+        if row.kind != "reconcile" or row.checkpoint_ref is not None:
+            return False
+        if row.request_digest not in unresolved:
+            return False
+        if row.status == "indeterminate":
+            if (row.phase, row.bundle_state) != ("indeterminate", "indeterminate"):
+                return False
+            unresolved.add(_reconciliation_digest(workspace_id, row.operation_id))
+        elif (row.status, row.phase, row.bundle_state) == (
+            "completed", "completed", "resources_paused",
+        ):
+            unresolved.remove(row.request_digest)
+        else:
+            return False
+    return not unresolved
+
+
 def _retirement_operation(cell, workspace_id: str):
-    """Only canonical completed pause/destroy may establish current retirement."""
+    """Bind a canonical pause/destroy or a fully observed idle restore tail."""
     operation = cell.operation(cell.last_operation_id)
     _kernel_need(
         str(cell.workspace_id) == workspace_id
@@ -545,20 +614,21 @@ def _retirement_operation(cell, workspace_id: str):
         and cell.active_generation_run_id is None
         and cell.active_generation_fencing_epoch is None
         and operation is not None
-        and (operation.kind, cell.bundle_state)
-        in {("pause", "resources_paused"), ("destroy", "retained")}
         and operation.status == "completed"
         and operation.phase == "completed"
         and operation.bundle_state == cell.bundle_state
         and operation.fencing_epoch == cell.fencing_epoch
         and operation.generation_run_id is None
         and cell.operations[-1] == operation
-        and all(
-            item.status in {"completed", "failed", "cancelled"}
-            and item.fencing_epoch <= cell.fencing_epoch
-            for item in cell.operations
-        )
         and re.fullmatch(r"[0-9a-f]{64}", operation.request_digest),
+        "quiescence_retirement_authority",
+    )
+    _kernel_need(
+        (
+            (operation.kind, cell.bundle_state) in {("pause", "resources_paused"), ("destroy", "retained")}
+            and all(item.status in {"completed", "failed", "cancelled"}
+                    and item.fencing_epoch <= cell.fencing_epoch for item in cell.operations)
+        ) or _reconciled_restore_retirement(cell, operation, workspace_id),
         "quiescence_retirement_authority",
     )
     return operation

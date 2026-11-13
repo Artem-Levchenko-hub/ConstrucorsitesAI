@@ -828,6 +828,15 @@ class _FakeClient:
         self.volumes = _FakeVolumes()
         self.networks = _FakeNetworks(self)
         self.containers = _FakeContainers(self)
+        self.api._get = self._archive_response
+        self.api._url = lambda route, item: route.format(item)
+        self.api._raise_for_status = lambda _: None
+
+    def _archive_response(self, url: str, *, params: dict, **_options: Any) -> Any:
+        container_id = url.split("/")[-2]
+        container = next(item for item in self.containers.items.values() if item.id == container_id)
+        chunks, _ = container.get_archive(params["path"])
+        return SimpleNamespace(iter_content=lambda **_: iter(chunks), close=lambda: None)
 
     def ping(self) -> None:
         self.ping_calls += 1
@@ -1251,6 +1260,84 @@ async def test_failed_volume_read_removes_helper_and_keeps_data(
     monkeypatch.setattr(_FakeContainer, "get_archive", fail)
     with pytest.raises(docker.errors.APIError, match="archive failed"):
         await _backend(client).read_volume_files("workspace-vol")
+    assert client.containers.items == {}
+    assert client.volumes.items["workspace-vol"].files == {"proof.txt": b"keep"}
+
+
+@pytest.mark.parametrize("fault", ["oversized", "interrupted", "cancelled", "success"])
+async def test_volume_archive_releases_http_response_before_helper_cleanup(monkeypatch, fault):
+    import requests
+
+    client = _FakeClient()
+    client.volumes.items["workspace-vol"] = _FakeVolume(
+        "workspace-vol", _labels("workspace"), files={"proof.txt": b"keep"},
+    )
+    order = []
+    entered = threading.Event()
+    finish = threading.Event()
+    backend = _backend(client)
+    backend.archive_limit_bytes = 20 * 1024
+    remove = DockerPyCellBackend._remove_container_object
+
+    class Response:
+        def iter_content(self, chunk_size):
+            assert chunk_size <= 65536
+            if fault == "oversized":
+                yield b"x" * (backend.archive_limit_bytes + 1)
+            elif fault == "interrupted":
+                raise requests.ReadTimeout("fixture-only archive timeout")
+            else:
+                if fault == "cancelled":
+                    entered.set()
+                    assert finish.wait(3)
+                raw = io.BytesIO()
+                with tarfile.open(fileobj=raw, mode="w") as archive:
+                    entry = tarfile.TarInfo("volume/proof.txt")
+                    entry.size = 4
+                    archive.addfile(entry, io.BytesIO(b"keep"))
+                yield raw.getvalue()
+
+        def close(self):
+            order.append("close-response")
+
+    def get(url, **kwargs):
+        assert url.endswith("/archive") and kwargs["stream"] is True
+        assert 0 < kwargs["timeout"] <= 60
+        return Response()
+
+    def open_archive(_self, _path):
+        # This models docker-py's public get_archive: closing its generator
+        # does not close the HTTP response when iteration stops early.
+        return Response().iter_content(65536), {}
+
+    async def remove_helper(self, helper, **kwargs):
+        order.append("remove-helper")
+        await remove(self, helper, **kwargs)
+
+    monkeypatch.setattr(_FakeContainer, "get_archive", open_archive)
+    monkeypatch.setattr(client.api, "_get", get, raising=False)
+    monkeypatch.setattr(client.api, "_url", lambda route, item: route.format(item), raising=False)
+    monkeypatch.setattr(client.api, "_raise_for_status", lambda _: None, raising=False)
+    monkeypatch.setattr(DockerPyCellBackend, "_remove_container_object", remove_helper)
+    if fault == "success":
+        assert await backend.read_volume_files("workspace-vol") == {"proof.txt": b"keep"}
+    elif fault == "cancelled":
+        task = asyncio.create_task(backend.read_volume_files("workspace-vol"))
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            task.cancel()
+            await asyncio.sleep(0)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert order == []
+        finally:
+            finish.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        with pytest.raises(CellResourceError):
+            await backend.read_volume_files("workspace-vol")
+    assert order == ["close-response", "remove-helper"]
     assert client.containers.items == {}
     assert client.volumes.items["workspace-vol"].files == {"proof.txt": b"keep"}
 
