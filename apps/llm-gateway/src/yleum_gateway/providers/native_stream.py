@@ -26,6 +26,9 @@ RECEIPT_RESERVE_SECONDS = 15.0
 MAX_WIRE_BYTES = 16 * 1024 * 1024
 MAX_EVENT_BYTES = 2 * 1024 * 1024
 MAX_EVENTS = 100_000
+SONNET55_LARGE_OUTPUT_TOKENS = 128_000
+SONNET55_LARGE_OUTPUT_WIRE_BYTES = 64 * 1024 * 1024
+SONNET55_LARGE_OUTPUT_EVENTS = SONNET55_LARGE_OUTPUT_TOKENS + 4096
 MAX_TOOLS = 256
 TRANSPORT_STAGES = frozenset({"connect", "sending", "awaiting_headers", "headers", "body", "complete"})
 _MILLISECONDS = (
@@ -191,9 +194,11 @@ def _identity(value: Any) -> str:
 
 
 class _Collector:
-    def __init__(self, evidence: dict[str, Any], *, provider_scope: str = "llmgw") -> None:
+    def __init__(self, evidence: dict[str, Any], *, provider_scope: str = "llmgw",
+                 max_events: int = MAX_EVENTS) -> None:
         self.evidence = evidence
         self.provider_scope = provider_scope
+        self.max_events = max_events
         self.provider_header_id: str | None = None
         self.identity: dict[str, str] = {}
         self.text: list[str] = []
@@ -206,7 +211,7 @@ class _Collector:
 
     def feed(self, raw: str) -> None:
         self.events += 1
-        if self.events > MAX_EVENTS or self.done:
+        if self.events > self.max_events or self.done:
             raise StreamReceiptError(ReceiptFailure.EVENT_LIMIT)
         if raw == "[DONE]":
             self.done = True
@@ -342,7 +347,15 @@ async def collect_response(
     evidence.pop("upstream_http_status", None)
     if not math.isfinite(budget_seconds) or budget_seconds <= 0:
         raise TimeoutError("Provider response budget exhausted")
-    collector = _Collector(evidence, provider_scope=provider_scope)
+    # One delta per token plus framing and usage must fit in a bounded receipt.
+    large_output = (
+        provider_scope == "aitunnel"
+        and payload.get("model") in ("claude-sonnet-5.5", "anthropic/claude-sonnet-5.5")
+        and payload.get("max_tokens") == SONNET55_LARGE_OUTPUT_TOKENS
+    )
+    max_wire_bytes = SONNET55_LARGE_OUTPUT_WIRE_BYTES if large_output else MAX_WIRE_BYTES
+    max_events = SONNET55_LARGE_OUTPUT_EVENTS if large_output else MAX_EVENTS
+    collector = _Collector(evidence, provider_scope=provider_scope, max_events=max_events)
     request_headers = httpx.Headers(headers)
     request_headers["accept"] = "text/event-stream"
     from yleum_gateway.services.payload_limits import require_provider_payload_size
@@ -401,15 +414,15 @@ async def collect_response(
             async for part in response.aiter_bytes():
                 evidence["transport_stage"] = "body"
                 wire_bytes += len(part)
-                if wire_bytes > (16_384 if response.status_code >= 400 else MAX_WIRE_BYTES):
+                if wire_bytes > (16_384 if response.status_code >= 400 else max_wire_bytes):
                     raise StreamReceiptError(ReceiptFailure.SIZE_LIMIT)
                 raw.extend(part)
                 if response.status_code >= 400:
                     continue
-                while b"\n" in raw:
-                    line, _, rest = raw.partition(b"\n")
-                    raw = bytearray(rest)
-                    line = line.rstrip(b"\r")
+                consumed = 0
+                while (newline := raw.find(b"\n", consumed)) >= 0:
+                    line = raw[consumed:newline].rstrip(b"\r")
+                    consumed = newline + 1
                     event_bytes += len(line)
                     if event_bytes > MAX_EVENT_BYTES:
                         raise StreamReceiptError(ReceiptFailure.SIZE_LIMIT)
@@ -428,6 +441,7 @@ async def collect_response(
                     elif line.startswith(b"data:"):
                         progress.record("body", "first_sse_data_ms")
                         event_lines.append(bytes(line[5:].lstrip(b" ")))
+                del raw[:consumed]
                 if len(raw) + event_bytes > MAX_EVENT_BYTES:
                     raise StreamReceiptError(ReceiptFailure.SIZE_LIMIT)
             if response.status_code >= 400:

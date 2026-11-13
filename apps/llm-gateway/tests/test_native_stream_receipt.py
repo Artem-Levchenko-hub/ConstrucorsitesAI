@@ -163,6 +163,35 @@ class Chunks(httpx.AsyncByteStream):
         self.closed = True
 
 
+@pytest.mark.parametrize("max_tokens", [8192, 128_000])
+async def test_aitunnel_sonnet_stream_at_large_output_limit(monkeypatch, max_tokens):
+    token_count = 128_000
+    event = encode([chunk({"content": "x"}, object="chat.completion.chunk", created=1741816890)])
+    stream = Chunks([
+        *([event * 200] * (token_count // 200)),
+        encode([chunk(finish="stop"),
+                chunk(usage={"prompt_tokens": 12, "completion_tokens": token_count}), "[DONE]"]),
+    ])
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **kw: httpx.MockTransport(
+        lambda request: httpx.Response(200, stream=stream)))
+    payload = {"model": "claude-sonnet-5.5", "max_tokens": max_tokens}
+
+    async def collect_stream():
+        return await native_stream.collect_response(
+            "https://provider.test", payload, {}, budget_seconds=20, evidence={},
+            provider_scope="aitunnel",
+        )
+
+    if max_tokens == 8192:
+        with pytest.raises(native_stream.StreamReceiptError, match="receipt_size_limit"):
+            await collect_stream()
+    else:
+        body = (await collect_stream()).json()
+        assert body["usage"]["completion_tokens"] == token_count
+        assert body["choices"][0]["message"]["content"] == "x" * token_count
+    assert stream.closed
+
+
 async def test_response_can_complete_after_old_wall_limits_with_regular_chunks(monkeypatch):
     clock = [0]
 
