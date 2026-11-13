@@ -218,7 +218,7 @@ _PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES = {
 # before calling Docker. The controller journals and child UUIDs are unchanged.
 _PORTABLE_QUIESCENCE_READER_WAIT_SOURCES = {
     **_PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES,
-    "services.generation_reader_inventory": "bcefef4513c52439f90506cb96e79f53ed9d87b2c82b4cb6e8651ff6a04af42f",
+    "services.generation_reader_inventory": "094423193b883820e3360d6db54ca9bc3c03c2c48347c9ab0f8eeaedfd0f3c0c",
     "services.machine_adapter": "98fd7d44428611fdcdd36f1fbf51735e494d16fee759322e7d772e780bdd2b89",
     "routers.workspace": "25e167c1832959ecafd47f970735a113d56e1ae7630b557f773209d9a270c742",
 }

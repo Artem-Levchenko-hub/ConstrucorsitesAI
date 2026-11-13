@@ -535,7 +535,9 @@ async def test_fast_check_missing_database_dependency_is_feedback_before_command
 
 
 @pytest.mark.parametrize("recovers", [True, False])
-async def test_fast_check_settles_reader_denial_after_request_journal(monkeypatch, tmp_path, recovers):
+async def test_fast_check_settles_reader_denial_after_request_journal(
+    monkeypatch, tmp_path, recovers,
+):
     from yleum_orchestrator.services import generation_reader_inventory as readers
 
     api = module()

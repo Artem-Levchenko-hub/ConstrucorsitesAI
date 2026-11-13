@@ -510,7 +510,8 @@ def _recheck_dispatch(wait: _DispatchWait, denial: ReaderInventoryUnavailable) -
         deadline = now + wait.remaining(remaining)
     except TimeoutError:
         raise denial from None
-    _log.info("cell.reader_inventory_wait", reason=denial.message)
+    with suppress(OSError):
+        _log.info("cell.reader_inventory_wait", reason=denial.message)
     for _ in range(TTL):
         if not wait.active(deadline):
             break
@@ -545,7 +546,8 @@ def reader_dispatch[Result](call: Callable[..., Result], *args: Any, **kwargs: A
         try:
             return call(*args, **kwargs)
         finally:
-            _log.info("cell.reader_inventory_restored", wait_ms=wait_ms)
+            with suppress(OSError):
+                _log.info("cell.reader_inventory_restored", wait_ms=wait_ms)
     return call(*args, **kwargs)
 
 
