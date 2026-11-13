@@ -398,6 +398,7 @@ class PreparedAgentEntry:
     seed_files: dict[str, str]
     initial_result: AgentResult | None
     edit_deadline: datetime | None
+    restored_files: dict[str, str] | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -410,13 +411,14 @@ class PreparedAgentEntry:
             "seed_files": self.seed_files,
             "initial_result": _result_data(self.initial_result) if self.initial_result else None,
             "edit_deadline": self.edit_deadline.isoformat() if self.edit_deadline else None,
+            **({"restored_files": self.restored_files} if self.restored_files is not None else {}),
         }
 
     @classmethod
     def from_json(cls, raw: Any) -> PreparedAgentEntry:
         if (
             type(raw) is not dict
-            or set(raw)
+            or (set(raw) - {"restored_files"})
             != {
                 "version",
                 "classification",
@@ -435,6 +437,7 @@ class PreparedAgentEntry:
             raise RecoveryContractError("unsupported prepared agent entry")
         turn = raw["classification"]
         files = raw["seed_files"]
+        restored = raw.get("restored_files")
         if (
             type(turn) is not list
             or len(turn) != 4
@@ -442,6 +445,14 @@ class PreparedAgentEntry:
             or any(type(value) is not bool for value in turn[1:])
             or type(files) is not dict
             or any(type(path) is not str or type(value) is not str for path, value in files.items())
+            or (
+                restored is not None and (
+                    type(restored) is not dict or any(
+                        type(path) is not str or type(value) is not str
+                        for path, value in restored.items()
+                    )
+                )
+            )
         ):
             raise RecoveryContractError("invalid prepared agent inputs")
         deadline = None
@@ -461,6 +472,7 @@ class PreparedAgentEntry:
             files,
             _result_from_data(raw["initial_result"]) if raw["initial_result"] is not None else None,
             deadline,
+            restored,
         )
 
 

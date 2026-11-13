@@ -154,13 +154,22 @@ async def test_missing_entry_repairs_same_draft_with_one_action_and_text_fallbac
 
 
 async def test_directed_text_strategy_resumes_original_request(monkeypatch, isolated_repair):
+    from yleum_api.services.generation.contracts import AgentPromptPlan, StackPrompt
     from yleum_api.services.generation.recovery_execution import GenerationYielded
+    from yleum_api.services.generation.recovery_pipeline import PreparedAgentEntry
 
     files = {"src/lib/ration/domain.ts": "export const dishCount = 10;"}
     page = "export default function Page() { return <main>Рацион</main>; }"
     frames, effects, calls = [], [], []
     resume = False
     run_id = uuid4()
+    entry = PreparedAgentEntry(
+        ("Continue saved ration", True, False, False), None,
+        StackPrompt("seed", None, None, None, "system", False),
+        AgentPromptPlan("system", "brief", "claude-sonnet-5.5", None, 8, "", None, "", None,
+                        False),
+        {}, None, None, restored_files=dict(files),
+    )
 
     async def recorded_provider(frame, invoke):
         frames.append(deepcopy(frame))
@@ -204,6 +213,7 @@ async def test_directed_text_strategy_resumes_original_request(monkeypatch, isol
         await agent_native._run_native_segment(**arguments)
     assert effects == []
     resume = True
+    arguments["initial_files"] = PreparedAgentEntry.from_json(entry.to_json()).restored_files
     result = await agent_native._run_native_segment(**arguments)
     assert calls[2] == calls[1] and calls[1][1] == []
     assert effects == ["write_file", "build"]

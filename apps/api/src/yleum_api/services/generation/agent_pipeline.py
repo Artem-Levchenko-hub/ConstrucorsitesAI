@@ -626,6 +626,9 @@ async def run_agent_generation(
     )
     if continuation is not None:
         edit_deadline = continuation.soft_edit_deadline(edit_deadline)
+    workspace_context_files = prepared_entry.restored_files if prepared_entry else None
+    if prepared_entry is None and resumed is not None and runtime.handle is not None:
+        workspace_context_files = await runtime.handle.snapshot_files()
     if _resume_state is not None:
         assert execution_context is not None
         assert continuation is not None
@@ -636,6 +639,7 @@ async def run_agent_generation(
             prepared_entry = PreparedAgentEntry(
                 (prompt_text, _is_continue, _is_edit, _max_has_generated_snapshot),
                 _design_contract, _stack, _prompt_plan, _max_seed_files, _agent_res, edit_deadline,
+                restored_files=workspace_context_files,
             )
             completed = {
                 **continuation.context["completed"], "agent_entry": prepared_entry.to_json(),
@@ -729,15 +733,7 @@ async def run_agent_generation(
             reference_images=await _load_turn_reference_images(factory, ids, baseline),
             operations=_operations,
             source_checkpoint=save_source_checkpoint,
-            workspace_context_files=(
-                await _operations.snapshot_files()
-                if _operations.snapshot_files is not None and (
-                    resumed is not None or (
-                        bootstrap_preparation is not None
-                        and bootstrap_preparation.adjacent_files is not None
-                    )
-                ) else None
-            ),
+            workspace_context_files=workspace_context_files,
         )
         if continuation is not None:
             await complete_agent_turn(

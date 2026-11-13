@@ -447,14 +447,6 @@ async def execute_agent_turn(
         frame.get("kind") == "native" if isinstance(frame, dict) else
         get_settings().use_native_agent or directed_path is not None
     )
-    if continuation is not None and frame is not None and _native_agent and bounded_repair:
-        outer = continuation.context.get("native_outer")
-        original = outer.get("observed_source") if isinstance(outer, dict) else None
-        if isinstance(original, dict) and _NATIVE_EDIT_ENTRY_PATH not in original:
-            # A cold workspace may already contain a receipted write. Rebuild
-            # the original initial request using its saved pre-write baseline.
-            current_source = original
-            directed_path = directed_repair_target(original)
     _completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = (
         None
     )
