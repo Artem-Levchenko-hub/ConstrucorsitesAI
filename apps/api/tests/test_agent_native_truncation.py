@@ -1,10 +1,15 @@
 """No partial response may execute tools; recovery must stay bounded."""
+import json
 from copy import deepcopy
+from pathlib import Path
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from yleum_api.services import agent_native
+
+_GATEWAY_SRC = Path(__file__).resolve().parents[2] / "llm-gateway" / "src"
 
 
 def turn(*calls, stop="tool_use"):
@@ -61,6 +66,64 @@ async def test_bad_response_does_not_execute_any_call_and_recovers_with_small_ed
     feedback = str(conversations[1][-1])
     assert "No tools from this response were executed" in feedback
     assert "edit_file" in feedback and "small" in feedback
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rejected", [
+    {"stop_reason": "max_tokens", "content": []},
+    {"stop_reason": "max_tokens", "content": [{"type": "thinking", "thinking": "partial"}]},
+    {"stop_reason": "end_turn", "content": []},
+    turn(("bash", {"cmd": "NEVER_EXECUTE"}), stop="max_tokens"),
+])
+async def test_native_retry_history_survives_gateway_validation(monkeypatch, rejected):
+    monkeypatch.syspath_prepend(str(_GATEWAY_SRC))
+    from yleum_gateway.routers.messages_native import _openai_messages
+    from yleum_gateway.services.native_request_validation import (
+        NativeRequestValidationError,
+        validate_native_chat_request,
+    )
+
+    path = "src/app/page.tsx"
+    turns = iter([
+        rejected,
+        turn(("write_file", {"path": path, "content": "working page"})),
+        {**turn(("build", {})), "content": [
+            {"type": "tool_use", "id": "call-build", "name": "build", "input": {}},
+        ]},
+        {**turn(("done", {})), "content": [
+            {"type": "tool_use", "id": "call-done", "name": "done", "input": {}},
+        ]},
+    ])
+    requests = []
+    validation_errors = []
+
+    def gateway(request):
+        converted = _openai_messages(json.loads(request.content))
+        requests.append(converted)
+        try:
+            validate_native_chat_request({"messages": converted})
+        except NativeRequestValidationError as exc:
+            validation_errors.append((exc.reason, exc.field))
+            return httpx.Response(400, json={"error": {"type": "invalid_request_error"}})
+        return httpx.Response(200, json=next(turns))
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(agent_native.httpx, "AsyncClient", lambda: client(
+        transport=httpx.MockTransport(gateway),
+    ))
+    execute = AsyncMock(return_value={"ok": True})
+    result = await agent_native.run_native_build(
+        model="claude-sonnet-5.5", system="s", task="Complete the saved product",
+        execute=execute, max_steps=5, messages_url="https://gateway.test/v1/messages",
+    )
+
+    assert validation_errors == []
+    assert result.done and result.files == {path: "working page"}
+    assert [call.args[0].name for call in execute.await_args_list] == ["write_file", "build"]
+    assert len(requests) == 4
+    assert [message["role"] for message in requests[1]] == ["system", "user", "user"]
+    assert "NEVER_EXECUTE" not in str(requests[1])
+    assert any(message["role"] == "tool" for message in requests[2])
 
 
 @pytest.mark.asyncio

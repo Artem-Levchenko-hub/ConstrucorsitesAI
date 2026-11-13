@@ -2329,21 +2329,11 @@ async def _run_native_segment(
                     "with write_file. Do not rewrite the whole large page. Supply complete "
                     "JSON arguments including all required fields, then build and verify."
                 )
-                sanitized = [
-                    {"type": "tool_use", "id": block.get("id", ""),
-                     "name": block.get("name", ""), "input": {}}
-                    if isinstance(block, dict) and block.get("type") == "tool_use" else block
-                    for block in content
-                ]
-                convo.append({"role": "assistant", "content": sanitized})
-                recovery_results = [
-                    {"type": "tool_result", "tool_use_id": block.get("id", ""),
-                     "is_error": True, "content": feedback}
-                    for block in sanitized
-                    if isinstance(block, dict) and block.get("type") == "tool_use"
-                ]
+                # A rejected response never becomes conversation history. It may
+                # be empty or reasoning-only, or carry untrustworthy tool IDs.
+                # Retain the last accepted turn and only send fresh feedback.
                 convo.append({"role": "user", "content": [
-                    *recovery_results, {"type": "text", "text": feedback},
+                    {"type": "text", "text": feedback},
                 ]})
                 if emit:
                     await emit("agent.step", {
@@ -2376,25 +2366,18 @@ async def _run_native_segment(
                                 "type": "text", "text": _EDIT_SOURCE_NUDGE,
                             })
                 continue
-            if not directed:
-                # Signed thinking belongs to this exact prompt and tool list. A
-                # separate repair request hands back only the observed effect.
-                convo.append({"role": "assistant", "content": content})
-
-            # Streaming (phase 8): surface Opus's own narration between tool calls to
-            # the UI so the workspace reads «как переписка с Claude» — the model
-            # explains what it's doing, live, next to the tool steps.
-            if emit and not directed:
-                _narration = _text_of(content)
-                if _narration:
-                    await emit("agent.text", {"step": step, "text": _narration})
-
             tool_uses = [selected] if selected is not None else [
                 b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"
             ]
+            narration = _text_of(content)
+            if not directed and (tool_uses or narration):
+                # Keep meaningful turns verbatim, including signed thinking.
+                # An empty assistant turn fails the gateway transcript check.
+                convo.append({"role": "assistant", "content": content})
+                if emit and narration:
+                    await emit("agent.text", {"step": step, "text": narration})
             if not tool_uses:
                 _done = resp.get("stop_reason") == "end_turn"
-                _text = _text_of(content)
                 # Prose is not proof. Keep the turn inside the same hard budget
                 # until a real clean build exists; never ship a broken app because
                 # the model happened to finish speaking.
@@ -2404,7 +2387,7 @@ async def _run_native_segment(
                 if _done and last_build_ok is True and not wrote_since_build and not gap:
                     return AgentResult(
                         done=True,
-                        summary=_text or "Готово — приложение собрано и проверено.",
+                        summary=narration or "Готово — приложение собрано и проверено.",
                         files=written,
                         steps=step + 1,
                         transcript=convo,
