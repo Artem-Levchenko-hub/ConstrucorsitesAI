@@ -16,7 +16,7 @@ from .test_legacy_provider_error_policy import install_transport
     ("claude-sonnet-5.5", None, False, 600, None),
     ("anthropic/claude-sonnet-5.5", None, False, 600, None),
     ("claude-sonnet-5.5", 4096, False, 300, 4096),
-    ("claude-sonnet-5.5", None, True, 600, 8192),
+    ("claude-sonnet-5.5", None, True, 600, 128_000),
     ("claude-sonnet-5.5", 4096, True, 300, 4096),
     ("claude-sonnet-5", None, False, 300, 16384),
 ])
