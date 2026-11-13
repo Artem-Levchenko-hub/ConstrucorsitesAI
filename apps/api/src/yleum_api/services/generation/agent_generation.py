@@ -441,7 +441,10 @@ async def execute_agent_turn(
         else None
     )
     continuation = getattr(operations, "continuation", None)
-    frame = continuation.context.get("active_frame") if continuation is not None else None
+    continuation_context = getattr(continuation, "context", None)
+    frame = (
+        continuation_context.get("active_frame") if isinstance(continuation_context, dict) else None
+    )
     # An already-issued request keeps its original wire protocol when the worker resumes.
     _native_agent = (
         frame.get("kind") == "native" if isinstance(frame, dict) else
