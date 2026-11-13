@@ -7,6 +7,7 @@ import importlib
 import importlib.util
 import json
 import os
+import threading
 import unittest
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -326,6 +327,112 @@ class ControllerReaderTests(unittest.TestCase):
         ):
             with self.assertRaises(self.module.ReaderInventoryUnavailable):
                 self.module.require_if_configured()
+
+
+@pytest.mark.parametrize("outcome", [
+    "recovered", "expired", "task_deadline", "outer_budget", "foreign", "effect_error", "unscoped",
+])
+def test_fenced_build_waits_for_admission_without_replaying_docker(monkeypatch, outcome):
+    from yleum_orchestrator.services import generation_reader_inventory as readers
+
+    now = 0.0
+    calls = []
+    denied = readers.ReaderInventoryUnavailable("reader inventory is incompatible or stale")
+    action_error = readers.ReaderInventoryUnavailable("reader epoch changed")
+
+    def guard():
+        calls.append("guard")
+        if outcome == "foreign":
+            raise readers.ReaderInventoryUnavailable("controller incarnation is not admitted")
+        if outcome != "effect_error" and now == 0:
+            raise denied
+
+    def effect():
+        calls.append("effect")
+        if outcome == "effect_error":
+            raise action_error
+        return 17
+
+    def wait(seconds):
+        nonlocal now
+        calls.append("wait")
+        now += 31 if outcome == "expired" else seconds
+
+    def remaining(limit):
+        if outcome == "outer_budget":
+            raise TimeoutError("work budget elapsed while checking admission")
+        return limit
+
+    monkeypatch.setattr(readers, "require_if_configured", guard)
+    monkeypatch.setattr(readers, "monotonic", lambda: now)
+    monkeypatch.setattr(readers, "_wait_for_dispatch_retry", lambda _, seconds: wait(seconds))
+
+    if outcome == "unscoped":
+        with pytest.raises(readers.ReaderInventoryUnavailable):
+            readers.reader_dispatch(effect)
+        assert calls == ["guard"]
+        return
+
+    with (
+        readers.wait_for_reader_dispatch(30, remaining=remaining),
+        readers.limit_reader_dispatch_wait(0.5 if outcome == "task_deadline" else 60),
+    ):
+        if outcome == "recovered":
+            assert readers.reader_dispatch(effect) == 17
+            assert calls == ["guard", "wait", "guard", "effect"]
+        else:
+            with pytest.raises(readers.ReaderInventoryUnavailable):
+                readers.reader_dispatch(effect)
+            assert calls == {
+                "expired": ["guard", "wait"], "task_deadline": ["guard", "wait"],
+                "foreign": ["guard"], "outer_budget": ["guard"],
+                "effect_error": ["guard", "effect"],
+            }[outcome]
+
+
+async def test_cancelling_build_releases_wait_without_dispatching_docker(monkeypatch):
+    from yleum_orchestrator.services import generation_reader_inventory as readers
+
+    rechecking = threading.Event()
+    cancelled = asyncio.Event()
+    resume = threading.Event()
+    effects = []
+    checks = 0
+
+    def guard():
+        nonlocal checks
+        checks += 1
+        if checks == 1:
+            raise readers.ReaderInventoryUnavailable("reader epoch changed")
+        rechecking.set()
+        assert resume.wait(3)
+
+    monkeypatch.setattr(readers, "require_if_configured", guard)
+    monkeypatch.setattr(readers, "_wait_for_dispatch_retry", lambda *_: None)
+
+    async def run():
+        with readers.wait_for_reader_dispatch(30):
+            worker = asyncio.create_task(asyncio.to_thread(
+                readers.reader_dispatch, lambda: effects.append("started"),
+            ))
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                cancelled.set()
+                with pytest.raises(readers.ReaderInventoryUnavailable):
+                    await worker
+                raise
+
+    request = asyncio.create_task(run())
+    try:
+        assert await asyncio.to_thread(rechecking.wait, 2)
+        request.cancel()
+        await asyncio.wait_for(cancelled.wait(), 2)
+    finally:
+        resume.set()
+    with pytest.raises(asyncio.CancelledError):
+        await request
+    assert checks == 2 and effects == []
 
 
 class ControllerStartupTests(unittest.IsolatedAsyncioTestCase):

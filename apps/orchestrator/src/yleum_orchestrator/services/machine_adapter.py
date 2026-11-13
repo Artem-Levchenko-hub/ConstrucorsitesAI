@@ -41,6 +41,8 @@ from yleum_orchestrator.services.docker_cell_resources import DockerCommandResul
 from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend
 from yleum_orchestrator.services.generation_reader_inventory import (
     ReaderInventoryUnavailable,
+    build_reader_dispatch_wait,
+    limit_reader_dispatch_wait,
     reader_dispatch,
 )
 from yleum_orchestrator.services.machine_environment import (
@@ -436,7 +438,14 @@ class MachineAdapter:
         succeeded = False
         restore_effects = {"started": False}
         try:
-            with machine_budget(request.timeout_seconds + cleanup_reserve):
+            with (
+                machine_budget(request.timeout_seconds + cleanup_reserve),
+                build_reader_dispatch_wait(
+                    request.task_role,
+                    remaining=machine_remaining_seconds,
+                    deadline=time.monotonic() + request.timeout_seconds,
+                ),
+            ):
                 async with asyncio.timeout(
                     machine_remaining_seconds(request.timeout_seconds + cleanup_reserve)
                 ):
@@ -817,6 +826,11 @@ class MachineAdapter:
         if role == "fast_check":
             try:
                 gap = await self._migration_dependency_gap(state)
+            except ReaderInventoryUnavailable:
+                # This precheck cannot change project SQL or start a build
+                # command. Close the parent intent before returning the 503.
+                await finish(exit_code=1, output="reader inventory unavailable before fast check")
+                raise
             except CellResourceError as exc:
                 return await finish(exit_code=1, output=str(exc))
             if gap:
@@ -863,7 +877,8 @@ class MachineAdapter:
                     timed_out=True,
                 )
             deadline = min(request_deadline, time.monotonic() + timeout)
-            operation = await machine.exec_start(argv, cwd, operation_mutation)
+            with limit_reader_dispatch_wait(deadline):
+                operation = await machine.exec_start(argv, cwd, operation_mutation)
             while True:
                 result = await machine.exec_status(operation, operation_mutation)
                 await machine.request_heartbeat(

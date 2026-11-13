@@ -297,7 +297,10 @@ intentionally retained. Never clear another release's row.
 
 ## Recovery commands
 
-Inside the running API image:
+Use the root-controlled host `api-maintenance.py` entry point to run the
+drain module against the exact live API revision. Resolve it first with
+`--describe-runtime`; do not use `docker exec` to start another Python process
+inside an admitted reader container.
 
 ```
 python -m yleum_api.services.generation_deployment_drain status <full-sha>
@@ -310,7 +313,7 @@ python -m yleum_api.services.generation_deployment_drain end <owning-full-sha>
 procedure above. The helper does not cancel work, mutate project data, steal a
 lock, or clear an unknown outcome.
 
-## Quiescence of a lost portable child-command start
+## Quiescence of a lost portable command start
 
 A `ProjectMachine` command can persist `starting` before Docker acknowledges
 `exec_create`. A later canonical pause does not manufacture its lost exec ID or
@@ -344,8 +347,12 @@ closed unless all of these conditions hold:
   meets the same intent requirements. Both records must match the manifest's
   current ready epoch, the derived child UUID, command digest and timestamps.
   Both original record hashes are bound to the same retirement receipt.
-  Other unresolved requests, adaptation, lifecycle, source-write and
-  command-receipt records continue to block the gate.
+- The reviewed adapter can also record a `fast_check` request before its
+  read-only migration dependency check. The parent must still be in its
+  initial phase, with zero progress, unchanged heartbeat and no child, even
+  a terminal one. This attests retirement only; it does not clear the startup
+  hold or replay the request. Other unresolved requests, adaptation,
+  lifecycle, source-write and command-receipt records still block drain.
 - No portable workspace container/helper remains. Only the exact owned
   auxiliary cell PostgreSQL/Redis services may remain after pause, with no
   unresolved exec. After destroy, no workspace container may remain.

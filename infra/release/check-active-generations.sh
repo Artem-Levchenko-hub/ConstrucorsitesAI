@@ -5,10 +5,16 @@
 set -euo pipefail
 
 if [ "${1:-}" = --compatible-target ]; then
-  [[ "${2:-}" =~ ^[0-9a-f]{40}$ ]] || exit 2
+  [[ "$#" = 2 && "${2:-}" =~ ^[0-9a-f]{40}$ ]] || exit 2
   # The same owned drain classification used by admission and the worker.
   # An unavailable/incompatible target never falls back to a permissive query.
-  exec docker exec yleum-prod-api python -m yleum_api.services.generation_deployment_drain check "$2"
+  maintenance=/opt/omnia/infra/release/api-maintenance.py
+  describe=$(python3 -c 'import base64,json; print(base64.b64encode(json.dumps(["", "--describe-runtime"]).encode()).decode())')
+  runtime=$(python3 "$maintenance" "$describe")
+  [[ "$runtime" =~ ^[0-9a-f]{40}$ ]] || exit 75
+  arguments=$(python3 -c 'import base64,json,sys; print(base64.b64encode(json.dumps(sys.argv[1:]).encode()).decode())' \
+    "$runtime" -m yleum_api.services.generation_deployment_drain check "$2")
+  exec python3 "$maintenance" "$arguments"
 fi
 strict_readers=0
 if [ "${1:-}" = --require-no-recovery-state ]; then

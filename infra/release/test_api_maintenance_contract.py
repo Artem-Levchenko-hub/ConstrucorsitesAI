@@ -450,6 +450,16 @@ class ReaderBoundaryTests(unittest.TestCase):
         observer.require_no_hidden_readers({9000: row}, [supervisor])
 
 
+class StandaloneReleaseGateTests(unittest.TestCase):
+    def test_target_check_uses_pinned_host_maintenance_without_container_exec(self):
+        source = (HERE / "check-active-generations.sh").read_text(encoding="utf-8")
+        branch = source.split('if [ "${1:-}" = --compatible-target ]; then', 1)[1].split("\nfi", 1)[0]
+        self.assertNotIn("docker exec", branch)
+        self.assertIn("api-maintenance.py", branch)
+        self.assertIn("--describe-runtime", branch)
+        self.assertIn("generation_deployment_drain", branch)
+
+
 @unittest.skipUnless(BASH, "a real local bash is required")
 class MaintenanceShellTests(unittest.TestCase):
     def execute(self, script, *, arguments=(), stdin=b""):

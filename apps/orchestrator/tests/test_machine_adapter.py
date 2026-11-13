@@ -534,6 +534,73 @@ async def test_fast_check_missing_database_dependency_is_feedback_before_command
     runtime._project_migrations.assert_not_awaited()
 
 
+@pytest.mark.parametrize("recovers", [True, False])
+async def test_fast_check_settles_reader_denial_after_request_journal(monkeypatch, tmp_path, recovers):
+    from yleum_orchestrator.services import generation_reader_inventory as readers
+
+    api = module()
+    workspace_id = uuid4()
+    state = SimpleNamespace(workspace_id=workspace_id)
+    request = WorkspaceAgentExecRequest(
+        generation_run_id=uuid4(), fencing_epoch=7, expected_revision="a" * 64,
+        cmd="omnia:fast_check", task_role="fast_check",
+    )
+    value = payload()
+    value["tasks"] = [{"name": "types", "role": "fast_check", "argv": ["pnpm", "typecheck"]}]
+    manifest = MachineManifest.model_validate(value)
+    commands = []
+    checks = []
+    now = 0.0
+
+    def guard():
+        if now == 0 or not recovers:
+            raise readers.ReaderInventoryUnavailable("reader inventory is incompatible or stale")
+
+    def wait(seconds):
+        nonlocal now
+        now += seconds
+
+    def start(argv, cwd, operation_id):
+        return readers.reader_dispatch(lambda: commands.append((argv, cwd, operation_id)) or "exec")
+
+    backend = SimpleNamespace(
+        ensure=lambda *_: None, exec_start=start,
+        exec_status=lambda _: {"running": False, "exit_code": 0, "output": "verified"},
+    )
+    machine = api.ProjectMachine(tmp_path, workspace_id, backend, lease_epoch=lambda: 7)
+    runtime = api.MachineAdapter(SimpleNamespace(), SimpleNamespace())
+    runtime.parts = lambda _: (machine, backend)
+
+    async def dependency_check(_state):
+        journal = machine.state()["operations"]
+        assert list(journal) == [str(request.operation_id)]
+        assert journal[str(request.operation_id)]["phase"] == "fast_check"
+        return await api.machine_effect(readers.reader_dispatch, lambda: checks.append("catalog"))
+
+    monkeypatch.setattr(runtime, "_migration_dependency_gap", dependency_check)
+    monkeypatch.setattr(readers, "require_if_configured", guard)
+    monkeypatch.setattr(readers, "monotonic", lambda: now)
+    monkeypatch.setattr(readers, "_wait_for_dispatch_retry", lambda _, seconds: wait(seconds))
+
+    if not recovers:
+        with pytest.raises(readers.ReaderInventoryUnavailable):
+            await runtime.execute(state, manifest, request)
+        journal = machine.state()["operations"]
+        assert list(journal) == [str(request.operation_id)]
+        parent = journal[str(request.operation_id)]
+        assert parent["state"] == "failed" and parent["result"]["exit_code"] == 1
+        assert checks == commands == []
+        return
+
+    result = await runtime.execute(state, manifest, request)
+    assert result.exit_code == 0 and now == 1
+    assert checks == ["catalog"]
+    assert [argv[:2] for argv, _, _ in commands] == [["node", "-e"], ["pnpm", "typecheck"]]
+    journal = machine.state()["operations"]
+    assert journal[str(request.operation_id)]["state"] == "completed"
+    assert all(journal[operation_id]["state"] == "completed" for _, _, operation_id in commands)
+
+
 def test_capabilities_advertise_dedicated_project_postgres():
     capabilities = module().MachineAdapter(SimpleNamespace(), SimpleNamespace()).capabilities()
     assert capabilities["portable_machine"] is True

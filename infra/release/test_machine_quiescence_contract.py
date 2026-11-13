@@ -105,6 +105,41 @@ class PendingFastCheckTests(unittest.TestCase):
         with self.assertRaises(self.checker.PhysicalDrainError):
             self.checker._pending_portable_commands(self.machine, sources=self.sources)
 
+    def test_fast_check_stopped_before_any_child_can_bind_current_retirement(self):
+        del self.machine["operations"][self.child_id]
+        request = self.machine["operations"][COMMAND]
+        request.update(phase="fast_check", heartbeat_at=request["started_at"], log_bytes=0)
+        before = copy.deepcopy(self.machine)
+        self.assertEqual(
+            self.checker._pending_portable_commands(self.machine, sources=self.sources),
+            {COMMAND: self.checker._digest(request)},
+        )
+        self.assertEqual(self.machine, before)
+        for field, value in (
+            ("phase", "typecheck"), ("startup_role", "full_build"), ("epoch", 6),
+            ("log_bytes", 1), ("heartbeat_at", "2026-11-12T11:51:01+00:00"),
+            ("heartbeat_at", request["started_at"].replace("+00:00", "Z")),
+            ("deadline_at", request["started_at"]), ("transport_response", {}),
+        ):
+            with self.subTest(field=field), self.assertRaises(self.checker.PhysicalDrainError):
+                machine = copy.deepcopy(self.machine)
+                machine["operations"][COMMAND][field] = value
+                self.checker._pending_portable_commands(machine, sources=self.sources)
+        with self.assertRaises(self.checker.PhysicalDrainError):
+            self.checker._pending_portable_commands(
+                self.machine, sources=self.checker._PORTABLE_QUIESCENCE_SOURCES,
+            )
+        with self.assertRaises(self.checker.PhysicalDrainError):
+            machine = copy.deepcopy(self.machine)
+            machine["manifest"]["tasks"][0]["role"] = "test"
+            self.checker._pending_portable_commands(machine, sources=self.sources)
+        for phase in ("typecheck", "controller:react-effect-lifetime:v1"):
+            with self.subTest(phase=phase), self.assertRaises(self.checker.PhysicalDrainError):
+                machine = copy.deepcopy(self.machine)
+                child_id = str(uuid5(UUID(COMMAND), phase))
+                machine["operations"][child_id] = {"kind": "command", "state": "completed"}
+                self.checker._pending_portable_commands(machine, sources=self.sources)
+
 
 class PortableQuiescenceSourcesTests(unittest.TestCase):
     """Bundle authority is pure: no root, controller imports, or Docker needed."""
@@ -515,20 +550,25 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             (Path(__file__).parent / "fixtures/source-guard-retry-quiescence-sources.json")
             .read_text()
         )
-        current = json.loads(
+        previous_lease = json.loads(
             (Path(__file__).parent / "fixtures/source-guard-lease-quiescence-sources.json")
             .read_text()
         )
+        current = self.checker._PORTABLE_QUIESCENCE_READER_WAIT_SOURCES
         self.checker._require_reviewed_portable_sources(previous)
+        self.checker._require_reviewed_portable_sources(previous_lease)
         baseline = json.loads(
             (Path(__file__).parent / "fixtures/bootstrap-recheck-quiescence-sources.json")
             .read_text()
         )
-        for name in ("services.machine_adapter", "services.docker_cell_resources"):
+        mixed = {name: previous_lease[name] for name in current
+                 if previous_lease[name] != current[name]}
+        mixed["services.docker_cell_resources"] = baseline["services.docker_cell_resources"]
+        for name, digest in mixed.items():
             with self.subTest(mixed=name), self.assertRaisesRegex(
                 self.checker.PhysicalDrainError, "quiescence_unsupported_source"
             ):
-                self.checker._require_reviewed_portable_sources({**current, name: baseline[name]})
+                self.checker._require_reviewed_portable_sources({**current, name: digest})
         with tempfile.TemporaryDirectory() as temporary:
             origins = {}
             for name in current:

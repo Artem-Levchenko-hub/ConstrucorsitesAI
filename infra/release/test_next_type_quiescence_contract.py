@@ -23,7 +23,8 @@ class NextTypeSourceClosureTests(unittest.TestCase):
         self.bootstrap_recheck = self.checker._PORTABLE_QUIESCENCE_BOOTSTRAP_RECHECK_SOURCES
         self.guard_retry = self.checker._PORTABLE_QUIESCENCE_SOURCE_GUARD_RETRY_SOURCES
         self.guard_recovery = self.checker._PORTABLE_QUIESCENCE_SOURCE_GUARD_RECOVERY_SOURCES
-        self.current = self.checker._PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES
+        self.guard_lease = self.checker._PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES
+        self.current = self.checker._PORTABLE_QUIESCENCE_READER_WAIT_SOURCES
 
     def test_historical_complete_bundle_is_preserved_and_still_supported(self):
         old_fixture = json.loads((self.directory / "fixtures/platform-bootstrap-v2-quiescence-sources.json").read_bytes())
@@ -74,12 +75,23 @@ class NextTypeSourceClosureTests(unittest.TestCase):
 
     def test_guard_lease_observation_updates_only_the_adapter(self):
         fixture = self.directory / "fixtures/source-guard-lease-quiescence-sources.json"
-        self.assertEqual(self.current, json.loads(fixture.read_bytes()))
-        self.assertEqual(set(self.current), set(self.guard_recovery))
+        self.assertEqual(self.guard_lease, json.loads(fixture.read_bytes()))
+        self.assertEqual(set(self.guard_lease), set(self.guard_recovery))
         self.assertEqual(
-            {key for key in self.current if self.current[key] != self.guard_recovery[key]},
+            {key for key in self.guard_lease if self.guard_lease[key] != self.guard_recovery[key]},
             {"services.machine_adapter"},
         )
+
+    def test_reader_wait_changes_only_the_fenced_command_and_dispatch_sources(self):
+        self.assertEqual(set(self.current), set(self.guard_lease))
+        changed = {key for key in self.current if self.current[key] != self.guard_lease[key]}
+        self.assertEqual(changed, {"services.generation_reader_inventory",
+                                   "services.machine_adapter", "routers.workspace"})
+        for key in changed:
+            with self.subTest(module=key), self.assertRaises(self.checker.PhysicalDrainError):
+                self.checker._require_reviewed_portable_sources(
+                    {**self.current, key: self.guard_lease[key]},
+                )
 
     def test_current_committed_source_closure_matches_linux_git_bytes(self):
         root = self.directory.parents[1] / "apps/orchestrator/src/yleum_orchestrator"

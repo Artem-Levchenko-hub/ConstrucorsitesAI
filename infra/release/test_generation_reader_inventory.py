@@ -710,11 +710,21 @@ class CompleteInventoryTests(unittest.TestCase):
             ["uvicorn", "foreign:app"],
             ["gunicorn", "foreign"],
         ):
-            with self.subTest(argv=argv), self.assertRaises(ValueError):
-                self.observer.require_no_hidden_readers(
-                    {**processes, 4: {**launcher, "host_pid": 4, "argv": argv}},
-                    ["/docker/owned"],
-                )
+            with self.subTest(argv=argv):
+                with self.assertRaises(self.observer.UnregisteredReaderProcess) as caught:
+                    self.observer.require_no_hidden_readers(
+                        {**processes, 4: {**launcher, "host_pid": 4, "argv": argv}},
+                        ["/docker/owned"],
+                    )
+                detail = caught.exception.diagnostic
+                self.assertEqual(detail, {"host_pid": 4, "parent_pid": launcher["parent"],
+                                          "interpreter": argv[0], "reader_roles": ["api"]})
+                self.assertEqual(self.observer.remote_unregistered_reader(
+                    json.dumps({"unregistered_reader": detail})
+                ), detail)
+                self.assertIsNone(self.observer.remote_unregistered_reader(
+                    json.dumps({"unregistered_reader": {**detail, "interpreter": argv[1]}})
+                ))
 
 
 class PhysicalWriterTests(unittest.TestCase):

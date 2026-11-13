@@ -9,12 +9,17 @@ import os
 import stat
 import threading
 import time
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager, suppress
+from collections.abc import AsyncIterator, Callable, Iterator
+from concurrent.futures import Future
+from contextlib import asynccontextmanager, contextmanager, suppress
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from pathlib import Path
+from time import monotonic
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
+import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from yleum_orchestrator.core.config import get_settings
@@ -378,9 +383,169 @@ def require_if_configured() -> None:
         require_readers()
 
 
+_TRANSIENT_READER_DENIALS = frozenset({
+    "reader readiness is unavailable",
+    "reader inventory is incompatible or stale",
+    "reader epoch changed",
+    "complete reader registration is unconfirmed",
+    "inventory changed during validation",
+})
+_BUILD_ROLES = frozenset({"bootstrap", "fast_check", "full_build", "build", "test"})
+_log = structlog.get_logger("yleum_orchestrator.reader_inventory")
+
+
+@dataclass
+class _DispatchWait:
+    seconds: float
+    owner: asyncio.Task[Any] | None
+    remaining: Callable[[float], float]
+    retry_deadline: float | None = None
+    closed: threading.Event = field(default_factory=threading.Event)
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def retry_budget(self, now: float) -> float:
+        with self.lock:
+            if self.retry_deadline is None:
+                self.retry_deadline = now + self.seconds
+            return self.retry_deadline - now
+
+    def within(self, deadline: float) -> bool:
+        return not self.closed.is_set() and monotonic() < deadline
+
+    def may_dispatch(self, deadline: float) -> bool:
+        # Cancellation may arrive while require_if_configured reads Redis.
+        # The final CPython task-state read must not schedule another callback.
+        owner = self.owner
+        return self.within(deadline) and (owner is None or not (owner.done() or owner.cancelling()))
+
+    def active(self, deadline: float) -> bool:
+        if not self.within(deadline):
+            return False
+        owner = self.owner
+        if owner is None:
+            return True
+        # The blocking Docker thread must check cancellation on the owner's
+        # loop even when an inner helper shields and drains that thread.
+        reply: Future[bool] = Future()
+        try:
+            owner.get_loop().call_soon_threadsafe(
+                lambda: reply.set_result(not owner.done() and not owner.cancelling())
+            )
+            active = reply.result(timeout=min(1.0, max(0.0, deadline - monotonic())))
+        except (RuntimeError, TimeoutError):
+            return False
+        return active and self.within(deadline)
+
+
+_DISPATCH_WAIT: ContextVar[_DispatchWait | None] = ContextVar("reader_dispatch_wait", default=None)
+_WAIT_DEADLINE: ContextVar[float | None] = ContextVar("reader_dispatch_wait_deadline", default=None)
+
+
+@contextmanager
+def limit_reader_dispatch_wait(deadline: float) -> Iterator[None]:
+    """Shorten only admission waiting; keep the Docker result and cleanup budget."""
+    outer = _WAIT_DEADLINE.get()
+    token = _WAIT_DEADLINE.set(deadline if outer is None else min(outer, deadline))
+    try:
+        yield
+    finally:
+        _WAIT_DEADLINE.reset(token)
+
+
+@contextmanager
+def wait_for_reader_dispatch(
+    seconds: float, *, remaining: Callable[[float], float] | None = None,
+) -> Iterator[None]:
+    """Bound admission waits inside one locked command, not a replay of it."""
+    if _DISPATCH_WAIT.get() is not None:
+        yield
+        return
+    try:
+        owner = asyncio.current_task()
+    except RuntimeError:
+        owner = None
+    wait = _DispatchWait(seconds, owner, remaining or (lambda limit: limit))
+    token = _DISPATCH_WAIT.set(wait)
+    try:
+        yield
+    finally:
+        wait.closed.set()
+        _DISPATCH_WAIT.reset(token)
+
+
+@contextmanager
+def build_reader_dispatch_wait(
+    role: str | None, *, remaining: Callable[[float], float], deadline: float,
+) -> Iterator[None]:
+    if role not in _BUILD_ROLES:
+        yield
+        return
+    with wait_for_reader_dispatch(TTL, remaining=remaining), limit_reader_dispatch_wait(deadline):
+        yield
+
+
+def _wait_for_dispatch_retry(wait: _DispatchWait, seconds: float) -> None:
+    wait.closed.wait(seconds)
+
+
+def _recheck_dispatch(wait: _DispatchWait, denial: ReaderInventoryUnavailable) -> int:
+    # Waiting is only supported in the blocking worker. A synchronous call on
+    # the asyncio loop must still return its original denial immediately.
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        raise denial
+    now = monotonic()
+    remaining = wait.retry_budget(now)
+    if remaining <= 0:
+        raise denial
+    work_deadline = _WAIT_DEADLINE.get()
+    if work_deadline is not None:
+        remaining = min(remaining, work_deadline - now)
+    if remaining <= 0:
+        raise denial
+    try:
+        deadline = now + wait.remaining(remaining)
+    except TimeoutError:
+        raise denial from None
+    _log.info("cell.reader_inventory_wait", reason=denial.message)
+    for _ in range(TTL):
+        if not wait.active(deadline):
+            break
+        _wait_for_dispatch_retry(wait, min(1.0, max(0.0, deadline - monotonic())))
+        if not wait.active(deadline):
+            break
+        try:
+            require_if_configured()
+        except ReaderInventoryUnavailable as error:
+            if error.message not in _TRANSIENT_READER_DENIALS:
+                raise
+            denial = error
+        else:
+            # No blocking loop handoff between the last guard and Docker.
+            if wait.may_dispatch(deadline):
+                return int((monotonic() - now) * 1000)
+            break
+    raise denial
+
+
 def reader_dispatch[Result](call: Callable[..., Result], *args: Any, **kwargs: Any) -> Result:
     """Revalidate at the physical call, including after queueing a worker thread."""
-    require_if_configured()
+    wait = _DISPATCH_WAIT.get()
+    if wait is not None and wait.closed.is_set():
+        raise ReaderInventoryUnavailable("reader command scope has ended")
+    try:
+        require_if_configured()
+    except ReaderInventoryUnavailable as denial:
+        if wait is None or denial.message not in _TRANSIENT_READER_DENIALS:
+            raise
+        wait_ms = _recheck_dispatch(wait, denial)
+        try:
+            return call(*args, **kwargs)
+        finally:
+            _log.info("cell.reader_inventory_restored", wait_ms=wait_ms)
     return call(*args, **kwargs)
 
 

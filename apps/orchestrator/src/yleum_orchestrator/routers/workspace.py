@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import re
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -93,13 +94,14 @@ from yleum_orchestrator.services.cell_draft_support import (
 from yleum_orchestrator.services.cell_state import CellWorkspaceState
 from yleum_orchestrator.services.docker_cell_resources import DockerCellResourceManager
 from yleum_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
+from yleum_orchestrator.services.generation_reader_inventory import build_reader_dispatch_wait
 from yleum_orchestrator.services.machine_startup import (
     MachineInventoryUnavailable,
     PrepareBinding,
     require_prepare_identity_clear,
     require_startup_admission,
 )
-from yleum_orchestrator.services.project_machine import machine_effect
+from yleum_orchestrator.services.project_machine import machine_effect, machine_remaining_seconds
 from yleum_orchestrator.services.workspace_provider_factory import (
     build_workspace_provider,
     settings_for_workspace,
@@ -714,11 +716,17 @@ async def exec_workspace_agent_command(
 
     try:
         async with manager.operation_lock.hold(workspace_id):
-            if request.track_receipt:
-                return await _tracked_agent_command_locked(manager, workspace_id, request)
-            if CommandJournal(manager.state_store.root, workspace_id).load(request.operation_id):
-                raise CellIndeterminateOperation("tracked command cannot downgrade to legacy")
-            return await _execute_agent_command_locked(manager, workspace_id, request)
+            with build_reader_dispatch_wait(
+                request.task_role,
+                remaining=machine_remaining_seconds,
+                deadline=time.monotonic() + request.timeout_seconds,
+            ):
+                if request.track_receipt:
+                    return await _tracked_agent_command_locked(manager, workspace_id, request)
+                journal = CommandJournal(manager.state_store.root, workspace_id)
+                if journal.load(request.operation_id):
+                    raise CellIndeterminateOperation("tracked command cannot downgrade to legacy")
+                return await _execute_agent_command_locked(manager, workspace_id, request)
     except (CellResourceError, ValueError) as exc:
         raise OrchestratorError(
             code="conflict", message="command is unresolved or conflicts", status_code=409,

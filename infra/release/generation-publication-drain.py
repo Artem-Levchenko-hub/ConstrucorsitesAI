@@ -214,6 +214,14 @@ _PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES = {
     **_PORTABLE_QUIESCENCE_SOURCE_GUARD_RECOVERY_SOURCES,
     "services.machine_adapter": "441c57fc35eaf1d4e7037c6b62687e8d680fe55969b518abaf84a89b496bd94d",
 }
+# Build-role dispatch now waits within the existing lock and rechecks authority
+# before calling Docker. The controller journals and child UUIDs are unchanged.
+_PORTABLE_QUIESCENCE_READER_WAIT_SOURCES = {
+    **_PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES,
+    "services.generation_reader_inventory": "bcefef4513c52439f90506cb96e79f53ed9d87b2c82b4cb6e8651ff6a04af42f",
+    "services.machine_adapter": "98fd7d44428611fdcdd36f1fbf51735e494d16fee759322e7d772e780bdd2b89",
+    "routers.workspace": "25e167c1832959ecafd47f970735a113d56e1ae7630b557f773209d9a270c742",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -233,6 +241,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_SOURCE_GUARD_RETRY_SOURCES,
     _PORTABLE_QUIESCENCE_SOURCE_GUARD_RECOVERY_SOURCES,
     _PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES,
+    _PORTABLE_QUIESCENCE_READER_WAIT_SOURCES,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.
@@ -355,8 +364,10 @@ def _quiescence_lock(state_parent: Path, workspace_id: str):
         os.close(fd)
 
 
-def _bind_pending_fast_check(machine: dict, request_id: str, record: dict, child: dict) -> None:
-    """Verify the reviewed typecheck wrapper and the child intent it last recorded."""
+def _bind_pending_fast_check(
+    machine: dict, request_id: str, record: dict, child: dict | None,
+) -> None:
+    """Verify the reviewed fast check before dispatch or at its typecheck child."""
     _kernel_need(
         set(record) == {
             "digest", "state", "epoch", "kind", "started_at", "heartbeat_at",
@@ -364,27 +375,43 @@ def _bind_pending_fast_check(machine: dict, request_id: str, record: dict, child
         }
         and record["state"] == "running"
         and record["startup_role"] == "fast_check"
-        and record["phase"] == "typecheck"
         and str(UUID(request_id)) == request_id
         and type(record["epoch"]) is int
         and type(machine.get("epoch")) is int
         and type(machine.get("ready_epoch")) is int
-        and record["epoch"] == child["epoch"] == machine["epoch"] == machine["ready_epoch"]
+        and record["epoch"] == machine["epoch"] == machine["ready_epoch"]
         and type(record["log_bytes"]) is int
         and record["log_bytes"] >= 0
         and type(record["digest"]) is str
         and re.fullmatch(r"[0-9a-f]{64}", record["digest"]),
         "quiescence_command_scope",
     )
-    start, heartbeat, child_start, deadline = (
+    start, heartbeat, deadline = (
         datetime.fromisoformat(value) for value in (
-            record["started_at"], record["heartbeat_at"], child["started_at"], record["deadline_at"],
+            record["started_at"], record["heartbeat_at"], record["deadline_at"],
         )
     )
     _kernel_need(
-        all(value.utcoffset() is not None for value in (start, heartbeat, child_start, deadline))
-        and start <= heartbeat <= child_start <= deadline
+        all(value.utcoffset() is not None for value in (start, heartbeat, deadline))
+        and start <= heartbeat <= deadline
         and start < deadline,
+        "quiescence_command_scope",
+    )
+    if child is None:
+        # The reviewed adapter creates this request before the read-only
+        # migration dependency check. It changes the phase before any child.
+        _kernel_need(
+            record["phase"] == "fast_check" and record["heartbeat_at"] == record["started_at"]
+            and record["log_bytes"] == 0
+            and type(machine.get("manifest")) is dict
+            and type(machine["manifest"].get("tasks")) is list,
+            "quiescence_command_scope",
+        )
+        return
+    child_start = datetime.fromisoformat(child["started_at"])
+    _kernel_need(
+        record["phase"] == "typecheck" and child["epoch"] == record["epoch"]
+        and child_start.utcoffset() is not None and heartbeat <= child_start <= deadline,
         "quiescence_command_scope",
     )
     manifest = machine.get("manifest")
@@ -456,18 +483,40 @@ def _pending_portable_commands(machine: dict, *, sources: dict[str, str]) -> dic
         pending[operation_id] = _digest(record)
     if requests:
         _kernel_need(
-            sources == _PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES
-            and len(requests) == len(pending) == 1,
+            sources in (_PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES,
+                        _PORTABLE_QUIESCENCE_READER_WAIT_SOURCES)
+            and len(requests) == 1 and len(pending) <= 1,
             "quiescence_command_scope",
         )
-        request_id, request = next(iter(requests.items()))
-        child_id = next(iter(pending))
-        _kernel_need(
-            type(request.get("phase")) is str
-            and str(uuid5(UUID(request_id), request["phase"])) == child_id,
-            "quiescence_command_scope",
-        )
-        _bind_pending_fast_check(machine, request_id, request, operations[child_id])
+        ((request_id, request),) = requests.items()
+        child = None
+        if pending:
+            (child_id,) = pending
+            _kernel_need(
+                type(request.get("phase")) is str
+                and str(uuid5(UUID(request_id), request["phase"])) == child_id,
+                "quiescence_command_scope",
+            )
+            child = operations[child_id]
+        _bind_pending_fast_check(machine, request_id, request, child)
+        if child is None:
+            # The pinned producer derives child IDs from manifest tasks or
+            # these reserved preflights. Check even already-terminal children.
+            names = {"controller:next-type-preparation:v1", "controller:react-effect-lifetime:v1"}
+            tasks = machine["manifest"]["tasks"]
+            _kernel_need(
+                0 < len(tasks) <= 1000 and all(
+                    type(task) is dict and type(task.get("name")) is str
+                    and re.fullmatch(r"[a-z][a-z0-9_-]{0,62}", task["name"])
+                    for task in tasks
+                ) and any(task.get("role") == "fast_check" for task in tasks),
+                "quiescence_command_scope",
+            )
+            names.update(task["name"] for task in tasks)
+            _kernel_need(
+                not any(str(uuid5(UUID(request_id), name)) in operations for name in names),
+                "quiescence_command_scope",
+            )
         pending[request_id] = _digest(request)
     _kernel_need(bool(pending), "quiescence_command_scope")
     return pending

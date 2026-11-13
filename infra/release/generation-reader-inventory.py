@@ -356,6 +356,9 @@ def command(argv: list[str], *, stdin: str | None = None, timeout: int = 20) -> 
         context = remote_failure_context(result.stderr)
         if context:
             print(canonical({"host": "commerce", "failure_context": context}), file=sys.stderr)
+        unregistered = remote_unregistered_reader(result.stderr)
+        if unregistered:
+            print(canonical({"host": "commerce", "unregistered_reader": unregistered}), file=sys.stderr)
         for diagnostic in remote_docker_diagnostics(result.stderr):
             print(canonical({"host": "commerce", "docker_observation_failure": diagnostic}),
                   file=sys.stderr)
@@ -466,6 +469,25 @@ def remote_failure_context(stderr: str) -> list[dict]:
         ):
             return context
     return []
+
+
+def remote_unregistered_reader(stderr: str) -> dict | None:
+    for line in stderr.splitlines():
+        try:
+            envelope = json.loads(line)
+        except ValueError:
+            continue
+        row = envelope.get("unregistered_reader") if isinstance(envelope, dict) else None
+        if (
+            type(row) is dict and set(row) == {"host_pid", "parent_pid", "interpreter", "reader_roles"}
+            and type(row["host_pid"]) is int and 0 < row["host_pid"] < 2**31
+            and type(row["parent_pid"]) is int and 0 <= row["parent_pid"] < 2**31
+            and type(row["interpreter"]) is str and row["interpreter"] in _INTERPRETERS | {"uv"}
+            and type(row["reader_roles"]) is list and len(row["reader_roles"]) <= 4
+            and all(type(role) is str and role in _READER_ROLES for role in row["reader_roles"])
+        ):
+            return row
+    return None
 
 
 class DockerCensusSummary(TypedDict):
@@ -698,33 +720,52 @@ def descendant(processes: dict[int, dict], pid: int, parent: int) -> bool:
     return False
 
 
+_INTERPRETERS = frozenset({"python", "uvicorn", "gunicorn", "hypercorn"})
+_READER_ROLES = frozenset(CONTAINERS) | {"orchestrator"}
+
+
+class UnregisteredReaderProcess(ValueError):
+    """An interpreter inside a reader group prevents a complete observation."""
+
+    def __init__(self, row: dict, executable: str, roles: list[str]) -> None:
+        super().__init__("reader group contains an unregistered interpreter")
+        self.diagnostic = {
+            "host_pid": row["host_pid"],
+            "parent_pid": row["parent"],
+            "interpreter": "python" if executable.startswith("python") else executable,
+            "reader_roles": roles,
+        }
+
+
+def process_groups(row: dict) -> list[str]:
+    return [line.split(":", 2)[-1] for line in row["cgroup"].splitlines()]
+
+
+def in_process_groups(paths: list[str], groups: list[str]) -> bool:
+    return any(path == group or path.startswith(group + "/") for path in paths for group in groups)
+
+
 def require_no_hidden_readers(processes: dict[int, dict], groups: list[str]) -> None:
     """An unregistered interpreter inside a reader supervisor is not ignored."""
     for row in processes.values():
         if row["role"] is not None or not row["argv"]:
             continue
-        paths = [line.split(":", 2)[-1] for line in row["cgroup"].splitlines()]
-        if not any(
-            path == group or path.startswith(group + "/")
-            for path in paths
-            for group in groups
-        ):
+        paths = process_groups(row)
+        if not in_process_groups(paths, groups):
             continue
         executable = Path(row["argv"][0]).name
-        need(
-            not (
-                executable.startswith("python")
-                or executable in {"uvicorn", "gunicorn", "hypercorn"}
+        unexpected = executable.startswith("python") or executable in _INTERPRETERS or (
+            executable == "uv" and not any(
+                other["role"] is not None
+                and descendant(processes, other["host_pid"], row["host_pid"])
+                for other in processes.values()
             )
         )
-        if executable == "uv":
-            need(
-                any(
-                    other["role"] is not None
-                    and descendant(processes, other["host_pid"], row["host_pid"])
-                    for other in processes.values()
-                )
-            )
+        if unexpected:
+            roles = sorted({other["role"] for other in processes.values()
+                            if other["role"] in _READER_ROLES
+                            and in_process_groups(paths, process_groups(other))})
+            raise UnregisteredReaderProcess(row, executable, roles)
 
 
 _INSPECTION_INSTANCE = "yleum-reader-inspection"
@@ -1839,7 +1880,9 @@ if __name__ == "__main__":
         # Never emit command/env/Redis exception bodies or private host data.
         print(
             canonical({"ready": False, "error_class": type(exc).__name__,
-                       "failure_context": failure_context(exc)}),
+                       "failure_context": failure_context(exc),
+                       **({"unregistered_reader": exc.diagnostic}
+                          if isinstance(exc, UnregisteredReaderProcess) else {})}),
             file=sys.stderr,
         )
         raise SystemExit(1) from None
