@@ -762,7 +762,11 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
         bootstrap_gate != "completed",
     )
     if not prepared:
-        assert saves[-1]["completed"]["agent_entry"] == entry
+        expected_entry = (
+            {**entry, "restored_files": {"src/core.ts": "trusted"}}
+            if bootstrap_gate == "isolated_retry" else entry
+        )
+        assert saves[-1]["completed"]["agent_entry"] == expected_entry
         if bootstrap_gate == "isolated_retry":
             assert saves[0]["completed"]["bootstrap_preparation"] == saved_preparation
             assert "agent_entry" not in saves[0]["completed"]
