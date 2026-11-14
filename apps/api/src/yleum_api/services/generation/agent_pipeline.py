@@ -492,18 +492,6 @@ async def run_agent_generation(
         runtime.continuation = continuation
         assert runtime.handle is not None
         await rebind_continuation(continuation)
-        if continuation.state.binding is None:
-            execution = continuation.state.execution
-            if execution.physical_state == "active" and (
-                execution.control_workspace_id != runtime.handle.control_workspace_id
-                or execution.control_fencing_epoch != runtime.handle.control_fencing_epoch
-            ):
-                raise RecoveryContractError("admitted Project Cell lease changed before binding")
-            await continuation.save(continuation.state.execution.model_copy(update={
-                "physical_state": "active",
-                "control_workspace_id": runtime.handle.control_workspace_id,
-                "control_fencing_epoch": runtime.handle.control_fencing_epoch,
-            }), context=continuation.context)
         if runtime.coordinator is not None:
             runtime.coordinator.continuation = continuation
         if runtime.handle is not None:

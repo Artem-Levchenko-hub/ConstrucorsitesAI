@@ -712,6 +712,7 @@ class ExecutionDriver:
     snapshot: Callable[[], Awaitable[tuple[RecoveryBinding, dict[str, str]]]]
     runtime_control: tuple[UUID | None, int | None] | None = None
     before_fresh_provider: Callable[[], Awaitable[None]] | None = None
+    prepare_environment: Callable[[str, str], Awaitable[None]] | None = None
     _reconcile_response: bool = field(init=False)
     _tool_position: int = field(default=0, init=False)
 

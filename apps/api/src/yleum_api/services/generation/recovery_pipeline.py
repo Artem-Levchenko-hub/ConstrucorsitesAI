@@ -23,6 +23,7 @@ from yleum_api.services.generation.recovery_contract import (
     RecoveryStateV2,
 )
 from yleum_api.services.generation.recovery_execution import ExecutionDriver
+from yleum_api.services.orchestrator_client import OrchestratorMachineInventoryUnavailable
 from yleum_api.services.project_cell_executor import ProjectCellExecutorHandle
 from yleum_api.services.promotion_permit import workspace_revision_digest
 
@@ -787,7 +788,80 @@ def attach_driver(
         context,
         snapshot,
         runtime_control=(handle.control_workspace_id, handle.control_fencing_epoch),
+        prepare_environment=getattr(handle, "prepare_environment", None),
     )
+
+
+async def _require_reacquired_lease(driver: ExecutionDriver) -> None:
+    from yleum_api.models.project_cell import ProjectCellOperation
+    from yleum_api.services.generation.recovery_execution import _owned_release_receipt
+
+    state = driver.state
+    execution = state.execution
+    workspace_id, fence = driver.runtime_control or (None, None)
+    saved_fence = execution.control_fencing_epoch
+    if (
+        execution.physical_state != "released" or execution.lease_cycle_seq == 0
+        or execution.release_operation_id is None or workspace_id is None
+        or workspace_id != execution.control_workspace_id
+        or saved_fence is None or fence is None or fence <= saved_fence
+    ):
+        raise RecoveryContractError("candidate has no newer lease after release")
+    async with driver.factory() as session:
+        release = await session.get(ProjectCellOperation, execution.release_operation_id)
+        release_fence = release.fencing_epoch if release is not None else None
+        # An interrupted release can retain its pre-dispatch fence. Claiming
+        # the old release advanced it once; the new lease must exceed the receipt.
+        if (
+            release_fence is None or saved_fence not in (release_fence, release_fence - 1)
+            or fence <= release_fence
+            or not _owned_release_receipt(
+                release, run_id=state.identity.run_id, workspace_id=workspace_id,
+                fence=release_fence,
+            )
+        ):
+            raise RecoveryContractError("candidate has no owned release receipt")
+
+
+async def _prepare_owned_environment(
+    driver: ExecutionDriver, error: OrchestratorMachineInventoryUnavailable,
+) -> None:
+    from yleum_api.services.generation.recovery_execution import _require_session_owner
+
+    prepare = driver.prepare_environment
+    if prepare is None or error.reason not in {"stopped", "missing", "prepare_pending"}:
+        raise error
+    # The controller startup journal binds this request to the current admission,
+    # source and fence. Its result cannot substitute for a proof read.
+    await _require_session_owner(driver.state.identity.run_id)
+    await prepare(error.workspace_revision, error.manifest_digest)
+
+
+async def _bind_initial_candidate(driver: ExecutionDriver) -> None:
+
+    state = driver.state
+    execution = state.execution
+    workspace_id, fence = driver.runtime_control or (None, None)
+    if (
+        execution.stage != "bootstrap" or execution.substep != "runtime_prepare"
+        or execution.logical_step_seq != 0 or execution.pending_effect_id is not None
+        or execution.provider_effect_id is not None or state.checkpoint is not None
+        or workspace_id is None or fence is None
+    ):
+        raise RecoveryContractError("initial candidate has no owned bootstrap lease")
+    saved_control = (execution.control_workspace_id, execution.control_fencing_epoch)
+    if execution.physical_state == "released":
+        await _require_reacquired_lease(driver)
+    elif execution.physical_state != "no_effects" and (
+        execution.physical_state != "active" or (workspace_id, fence) != saved_control
+    ):
+        raise RecoveryContractError("admitted Project Cell lease changed before binding")
+
+    try:
+        await driver.save(execution, context=driver.context)
+    except OrchestratorMachineInventoryUnavailable as error:
+        await _prepare_owned_environment(driver, error)
+        await driver.save(execution, context=driver.context)
 
 
 async def rebind_continuation(driver: ExecutionDriver) -> None:
@@ -809,14 +883,27 @@ async def rebind_continuation(driver: ExecutionDriver) -> None:
     from yleum_api.services.generation_deployment_drain import require_generation_admission
 
     state = driver.state
+    if state.binding is None:
+        await _bind_initial_candidate(driver)
+        return
     if state.execution.physical_state != "released":
         return
     old = state.binding
     try:
-        current, _ = await driver.snapshot()
+        try:
+            current, _ = await driver.snapshot()
+        except OrchestratorMachineInventoryUnavailable as error:
+            if (
+                driver.prepare_environment is None
+                or old.workspace_id != str(state.execution.control_workspace_id)
+                or error.workspace_revision != old.source_sha256
+            ):
+                raise
+            await _require_reacquired_lease(driver)
+            await _prepare_owned_environment(driver, error)
+            current, _ = await driver.snapshot()
         if (
-            old is None
-            or current.workspace_id != old.workspace_id
+            current.workspace_id != old.workspace_id
             or current.fencing_epoch <= old.fencing_epoch
             or driver.runtime_control is None
             or driver.runtime_control[0] != state.execution.control_workspace_id

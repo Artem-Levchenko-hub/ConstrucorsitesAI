@@ -549,6 +549,140 @@ async def test_pipeline_commits_bootstrap_context_before_first_runtime_effect(
             recovery_execution._SESSION_OWNER.reset(token)
 
 
+@pytest.mark.parametrize("reason", ["missing", "stopped", "prepare_pending", "unavailable"])
+async def test_first_recovery_binding_prepares_owned_environment_once(reason, monkeypatch):
+    from yleum_api.services.generation.recovery_contract import ExecutionCursor, RecoveryStateV2
+    from yleum_api.services.generation.recovery_pipeline import rebind_continuation
+    from yleum_api.services.orchestrator_client import OrchestratorMachineInventoryUnavailable
+
+    workspace_id = uuid4()
+    run_id = uuid4()
+    cursor = ExecutionCursor(
+        stage="bootstrap", substep="runtime_prepare", physical_state="active",
+        control_workspace_id=workspace_id, control_fencing_epoch=1,
+    )
+    state = RecoveryStateV2.model_construct(
+        identity=SimpleNamespace(run_id=run_id), execution=cursor,
+    )
+    require_owner = AsyncMock()
+    monkeypatch.setattr(recovery_execution, "_require_session_owner", require_owner)
+    error = OrchestratorMachineInventoryUnavailable(reason, "a" * 64, "b" * 64)
+    call_order = []
+
+    async def save(*args, **kwargs):
+        call_order.append("proof")
+        if "prepare" not in call_order:
+            raise error
+
+    async def prepare(revision, manifest_digest):
+        assert (revision, manifest_digest) == (error.workspace_revision, error.manifest_digest)
+        call_order.append("prepare")
+
+    driver = SimpleNamespace(
+        state=state, context={}, runtime_control=(workspace_id, 1),
+        prepare_environment=prepare, save=save,
+    )
+    if reason == "unavailable":
+        with pytest.raises(OrchestratorMachineInventoryUnavailable):
+            await rebind_continuation(driver)
+        assert call_order == ["proof"]
+        require_owner.assert_not_awaited()
+    else:
+        await rebind_continuation(driver)
+        assert call_order == ["proof", "prepare", "proof"]
+        require_owner.assert_awaited_once_with(run_id)
+
+
+@pytest.mark.parametrize("release_valid, saved_fence, next_fence, source", [
+    pytest.param(True, 2, 3, None, id="unbound-after-release"),
+    pytest.param(True, 1, 3, None, id="unbound-lost-unlink"),
+    pytest.param(False, 2, 3, None, id="foreign-release"),
+    pytest.param(True, 2, 2, None, id="same-fence"),
+    pytest.param(True, 1, 2, None, id="release-fence-with-lost-unlink"),
+    pytest.param(True, 2, 3, "same", id="bound-stopped"),
+    pytest.param(True, 2, 3, "changed", id="bound-source-drift"),
+])
+async def test_cold_recovery_requires_owned_release_and_source_before_preparing(
+    release_valid, saved_fence, next_fence, source, monkeypatch,
+):
+    from yleum_api.services.generation.recovery_contract import (
+        ExecutionCursor,
+        RecoveryBinding,
+        RecoveryContractError,
+        RecoveryStateV2,
+    )
+    from yleum_api.services.generation.recovery_pipeline import rebind_continuation
+    from yleum_api.services.orchestrator_client import (
+        OrchestratorMachineInventoryUnavailable,
+        ProjectCellResourceResponse,
+    )
+
+    workspace_id, run_id, operation_id = uuid4(), uuid4(), uuid4()
+    cursor = ExecutionCursor(
+        stage="bootstrap", substep="runtime_prepare", physical_state="released",
+        control_workspace_id=workspace_id, control_fencing_epoch=saved_fence,
+        release_operation_id=operation_id, lease_cycle_seq=1,
+    )
+    retained = RecoveryBinding(
+        source_sha256="a" * 64, schema_sha256="b" * 64, environment_sha256="c" * 64,
+        workspace_id=str(workspace_id), fencing_epoch=1,
+    ) if source else None
+    state = RecoveryStateV2.model_construct(
+        identity=SimpleNamespace(run_id=run_id), execution=cursor, binding=retained,
+    )
+    release = SimpleNamespace(
+        workspace_id=workspace_id, generation_run_id=run_id if release_valid else uuid4(),
+        kind="release", status="completed", fencing_epoch=2, finished_at=datetime.now(UTC),
+        result_payload=ProjectCellResourceResponse(
+            workspace_id=workspace_id, state="resources_ready", provider_ref="fixture",
+            fencing_epoch=2, checkpoint_ref=None, has_workspace=True, has_agent_home=True,
+            has_postgres=True, has_redis=True,
+        ).to_wire_json(),
+    )
+
+    class ReceiptSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def get(self, model, key):
+            assert key == operation_id
+            return release
+
+    class Deferred(Exception):
+        pass
+
+    prepare = AsyncMock()
+    monkeypatch.setattr(recovery_execution, "_require_session_owner", AsyncMock())
+    driver = SimpleNamespace(
+        state=state, context={}, runtime_control=(workspace_id, next_fence),
+        factory=ReceiptSession, save=AsyncMock(), prepare_environment=prepare,
+        wait=AsyncMock(side_effect=Deferred),
+    )
+    if retained is not None:
+        digest = retained.source_sha256 if source == "same" else "d" * 64
+        driver.snapshot = AsyncMock(side_effect=[
+            OrchestratorMachineInventoryUnavailable("stopped", digest, "e" * 64),
+            (retained.model_copy(update={"fencing_epoch": next_fence}), {}),
+        ])
+    if source == "changed":
+        with pytest.raises(Deferred):
+            await rebind_continuation(driver)
+        prepare.assert_not_awaited()
+        driver.save.assert_not_awaited()
+    elif release_valid and next_fence == 3:
+        await rebind_continuation(driver)
+        driver.save.assert_awaited_once_with(cursor, context={})
+        if retained is not None:
+            prepare.assert_awaited_once_with(retained.source_sha256, "e" * 64)
+    else:
+        with pytest.raises(RecoveryContractError, match=r"newer lease|owned release receipt"):
+            await rebind_continuation(driver)
+        driver.save.assert_not_awaited()
+
+
 @pytest.mark.parametrize("saved", [False, True])
 async def test_read_only_provider_cursor_never_creates_an_intent(
     db_session,
