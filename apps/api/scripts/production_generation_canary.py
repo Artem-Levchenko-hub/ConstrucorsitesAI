@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 from yleum_api.ops.production_canary import (
@@ -35,6 +37,8 @@ _FAILURE_REPORTS = {
     "public API returned an unexpected status": "Production API вернул ошибку.",
     "public API returned invalid JSON": "Production API вернул неверный ответ.",
     "public API returned an invalid payload": "Production API вернул неверный ответ.",
+    "login did not establish a MAX session": "Вход не установил сессию MAX.",
+    "account cannot create MAX projects": "QA-учётка не допущена к созданию проектов MAX.",
     "generation did not advance the project snapshot": (
         "Тестовая генерация не создала новый результат."
     ),
@@ -62,6 +66,7 @@ def _write_result(
     *,
     error: str | None = None,
     diagnostics: dict[str, object] | None = None,
+    auth_only: bool = False,
 ) -> None:
     """Record one safe result the workflow uploads as its diagnostics artifact.
 
@@ -74,6 +79,8 @@ def _write_result(
     if not result_file:
         return
     result: dict[str, object] = {"status": status}
+    if auth_only:
+        result["mode"] = "auth_only"
     if error is not None:
         result["error"] = error
     result.update(diagnostics if diagnostics is not None else _UNDIAGNOSED)
@@ -83,14 +90,30 @@ def _write_result(
     )
 
 
-def main() -> int:
+def main(argv: Sequence[str] = ()) -> int:
+    parser = argparse.ArgumentParser(description="Check production generation or QA authentication")
+    parser.add_argument("--auth-only", action="store_true", help="Verify login and MAX access")
+    auth_only: bool = parser.parse_args(argv).auth_only
     try:
-        config = CanaryConfig.from_env()
-        result = ProductionCanary(config, emit=_emit).run()
+        config = (
+            CanaryConfig.from_env(auth_only=True) if auth_only else CanaryConfig.from_env()
+        )
+        canary = ProductionCanary(config, emit=_emit)
+        details: dict[str, object] = {"stage": "cleanup", "code": "ok", "cleanup": "ok"}
+        if auth_only:
+            details["elapsed_seconds"] = canary.check_auth()
+        else:
+            result = canary.run()
+            details["elapsed_seconds"] = result.elapsed_seconds
+            details["releases"] = dict(sorted(result.releases.items()))
     except CanaryConfigurationError:
         _write_result(
             "failure",
-            error="Не удалось запустить тестовые генерации: неверная конфигурация.",
+            auth_only=auth_only,
+            error=(
+                "Не удалось проверить QA-вход: неверная конфигурация."
+                if auth_only else "Не удалось запустить тестовые генерации: неверная конфигурация."
+            ),
             diagnostics={
                 "stage": "unknown",
                 "code": "configuration_invalid",
@@ -101,25 +124,18 @@ def main() -> int:
         return 1
     except CanaryFailure as exc:
         error = _FAILURE_REPORTS.get(str(exc), "Техническая ошибка production-canary.")
-        _write_result("failure", error=error, diagnostics=exc.diagnostics())
+        _write_result("failure", error=error, diagnostics=exc.diagnostics(), auth_only=auth_only)
         print(exc.public_message, file=sys.stderr)
         return 1
     except Exception:
-        _write_result("failure", error="Техническая ошибка production-canary.")
+        _write_result(
+            "failure", error="Техническая ошибка production-canary.", auth_only=auth_only,
+        )
         print("production canary failed", file=sys.stderr)
         return 1
-    _write_result(
-        "success",
-        diagnostics={
-            "stage": "cleanup",
-            "code": "ok",
-            "cleanup": "ok",
-            "elapsed_seconds": result.elapsed_seconds,
-            "releases": dict(sorted(result.releases.items())),
-        },
-    )
+    _write_result("success", diagnostics=details, auth_only=auth_only)
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))

@@ -5,6 +5,10 @@ on:
     - cron: "17 2 * * *"
   workflow_dispatch:
     inputs:
+      auth_only:
+        description: Verify the protected QA login and MAX access without generating
+        type: boolean
+        default: false
       report_incident:
         description: Allow this manual run to open or close monitor issues
         type: boolean
@@ -45,6 +49,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
 
       - name: Verify protected canary configuration
+        if: github.event_name != 'workflow_dispatch' || !inputs.auth_only
         shell: bash
         env:
           PRODUCTION_CANARY_EMAIL: ${{ secrets.PRODUCTION_CANARY_EMAIL }}
@@ -73,7 +78,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Install browser for manual catalog acceptance
-        if: github.event_name == 'workflow_dispatch' && inputs.catalog_acceptance
+        if: github.event_name == 'workflow_dispatch' && !inputs.auth_only && inputs.catalog_acceptance
         working-directory: apps/api
         run: uv run --frozen playwright install --with-deps chromium
 
@@ -81,6 +86,7 @@ jobs:
         working-directory: apps/api
         shell: bash
         env:
+          AUTH_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.auth_only }}
           CATALOG_ACCEPTANCE: ${{ github.event_name == 'workflow_dispatch' && inputs.catalog_acceptance }}
           PRODUCTION_CANARY_BASE_URL: https://yleum.ru
           PRODUCTION_CANARY_PREVIEW_HOST_SUFFIXES: .dev.yleum.ru,.dev2.yleum.ru
@@ -95,7 +101,9 @@ jobs:
           PRODUCTION_CATALOG_ARTIFACT_DIR: ${{ runner.temp }}/production-catalog-evidence
         run: |
           set -euo pipefail
-          if [[ "${CATALOG_ACCEPTANCE}" == "true" ]]; then
+          if [[ "${AUTH_ONLY}" == "true" ]]; then
+            uv run --frozen python scripts/production_generation_canary.py --auth-only
+          elif [[ "${CATALOG_ACCEPTANCE}" == "true" ]]; then
             uv run --frozen python scripts/production_catalog_canary.py
           else
             uv run --frozen python scripts/production_generation_canary.py
@@ -114,7 +122,7 @@ jobs:
           retention-days: 30
 
       - name: Upload manual catalog acceptance evidence
-        if: always() && github.event_name == 'workflow_dispatch' && inputs.catalog_acceptance
+        if: always() && github.event_name == 'workflow_dispatch' && !inputs.auth_only && inputs.catalog_acceptance
         uses: actions/upload-artifact@v4
         with:
           name: production-catalog-evidence
@@ -125,7 +133,9 @@ jobs:
           retention-days: 30
 
       - name: Open one generation-canary incident
-        if: failure() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.report_incident))
+        if: >
+          failure() && (github.event_name == 'schedule' ||
+          (github.event_name == 'workflow_dispatch' && !inputs.auth_only && inputs.report_incident))
         uses: actions/github-script@v7
         with:
           script: |
@@ -152,7 +162,9 @@ jobs:
             }
 
       - name: Close generation-canary incident after recovery
-        if: success() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.report_incident))
+        if: >
+          success() && (github.event_name == 'schedule' ||
+          (github.event_name == 'workflow_dispatch' && !inputs.auth_only && inputs.report_incident))
         uses: actions/github-script@v7
         with:
           script: |

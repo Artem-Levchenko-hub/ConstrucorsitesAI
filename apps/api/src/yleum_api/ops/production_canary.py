@@ -4,8 +4,10 @@ import os
 import random
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from http.cookies import CookieError, SimpleCookie
 from typing import Any
 from urllib.parse import SplitResult, parse_qs, urlsplit, urlunsplit
 from uuid import UUID, uuid4
@@ -16,9 +18,13 @@ from yleum_api.core.release import normalize_release_sha
 
 COMPONENTS = ("web", "api", "worker", "generation_worker", "orchestrator")
 
+_MAX_ACCESS_PATH = "/api/max/account/access"
+_LOGOUT_PATH = "/api/auth/logout"
+
 STAGES = (
     "release_health",
     "login",
+    "max_access",
     "project_create",
     "build",
     "runtime_start",
@@ -37,6 +43,9 @@ DIAGNOSTIC_CODES = frozenset(
         "health_http_error",
         "health_invalid_json",
         "login_failed",
+        "auth_session_missing",
+        "max_access_denied",
+        "max_access_failed",
         "project_create_failed",
         "build_failed",
         "edit_failed",
@@ -58,6 +67,7 @@ _STAGE_REQUEST_CODES = {
     "release_health": ("health_http_error", "health_invalid_json"),
     "final_release_health": ("health_http_error", "health_invalid_json"),
     "login": ("login_failed", "api_invalid_response"),
+    "max_access": ("max_access_failed", "api_invalid_response"),
     "project_create": ("project_create_failed", "api_invalid_response"),
     "build": ("build_failed", "api_invalid_response"),
     "edit": ("edit_failed", "api_invalid_response"),
@@ -120,13 +130,15 @@ def _diagnostic_uuid(value: str | None) -> str | None:
 
 _REQUEST_METHODS = frozenset({"GET", "POST", "DELETE", "unknown"})
 _REQUEST_ROUTES = frozenset({
-    "web_health", "api_health", "auth_login", "project_create", "project_prompt",
+    "web_health", "api_health", "auth_login", "max_access",
+    "project_create", "project_prompt",
     "project_generation", "project_detail", "project_snapshot", "project_runtime",
     "project_runtime_start", "project_preview_session", "unknown",
 })
 _REQUEST_FAILURES = frozenset({
     "transport", "http_status", "invalid_json", "invalid_payload", "generation_identity",
     "generation_status", "generation_terminal", "response_mode", "runtime_state", "deadline",
+    "max_access_denied", "auth_session_missing",
 })
 _TRANSPORT_TYPES = (
     (httpx.ConnectTimeout, "connect_timeout"), (httpx.ReadTimeout, "read_timeout"),
@@ -152,8 +164,13 @@ _UUID_ROUTE = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 
 def _request_route(path: str) -> str:
     """Publish only an endpoint label; never a URL, query, token or arbitrary path."""
-    fixed = {"/web-health": "web_health", "/api/health": "api_health",
-             "/api/auth/login": "auth_login", "/api/projects": "project_create"}
+    fixed = {
+        "/web-health": "web_health",
+        "/api/health": "api_health",
+        "/api/auth/login": "auth_login",
+        _MAX_ACCESS_PATH: "max_access",
+        "/api/projects": "project_create",
+    }
     if path in fixed:
         return fixed[path]
     project = rf"/api/projects/{_UUID_ROUTE}"
@@ -398,7 +415,7 @@ class CanaryConfig:
     preview_host_suffixes: tuple[str, ...] = ()
 
     @classmethod
-    def from_env(cls) -> CanaryConfig:
+    def from_env(cls, *, auth_only: bool = False) -> CanaryConfig:
         required = (
             "PRODUCTION_CANARY_EMAIL",
             "PRODUCTION_CANARY_PASSWORD",
@@ -406,7 +423,7 @@ class CanaryConfig:
         missing = [name for name in required if not os.getenv(name)]
         if missing:
             raise CanaryConfigurationError(f"missing required environment: {', '.join(missing)}")
-        expected_releases = _expected_releases_from_env()
+        expected_releases = {} if auth_only else _expected_releases_from_env()
         base_url = os.getenv(
             "PRODUCTION_CANARY_BASE_URL",
             "https://constructor.lead-generator.ru",
@@ -491,6 +508,10 @@ class ProductionCanary:
         self._started_at = 0.0
         self._deadline = 0.0
         self._stage = "unknown"
+        self._login_attempted = False
+        self._logged_in = False
+        self._logout_cookie_mismatch = False
+        self._created_project_id: str | None = None
         self._project_id: str | None = None
         self._run_id: str | None = None
         self._last_request_info: dict[str, object] = {}
@@ -519,24 +540,98 @@ class ProductionCanary:
             event_hooks={"request": [add_api_origin]},
         )
 
-    def run(self) -> CanaryResult:
+    @contextmanager
+    def _managed_run(self) -> Iterator[None]:
         self._started_at = self._clock()
         self._deadline = self._started_at + self.config.overall_timeout_seconds
-        project_id: str | None = None
-        logged_in = False
-        result: CanaryResult | None = None
-        caught: BaseException | None = None
-        cleanup_failure: CanaryCleanupFailure | None = None
+        self._login_attempted = False
+        self._logged_in = False
+        self._logout_cookie_mismatch = False
+        self._created_project_id = None
+        self._project_id = None
+        self._run_id = None
+        failure: CanaryFailure | None = None
         try:
+            yield
+        except CanaryFailure as exc:
+            failure = exc
+            self._failure_event("stage_failure", "failed", exc)
+            raise
+        finally:
+            self._stage = "cleanup"
+            try:
+                # A login response can issue a cookie before JSON parsing fails.
+                login_cookie_received = self._login_attempted and bool(self._client.cookies)
+                logged_in = self._logged_in or login_cookie_received
+                cleanup_failure = self._cleanup(self._created_project_id, logged_in=logged_in)
+            except Exception:
+                cleanup_failure = CanaryCleanupFailure("canary cleanup failed")
+            if failure is not None:
+                self._finalize_failure(failure, cleanup_failed=cleanup_failure is not None)
+        if cleanup_failure is not None:
+            self._finalize_failure(cleanup_failure, cleanup_failed=True)
+            raise cleanup_failure
+
+    def _login(self) -> dict[str, object]:
+        self._stage = "login"
+        self._login_attempted = True
+        identity = self._request_json(
+            "POST",
+            "/api/auth/login",
+            json={"email": self.config.email, "password": self.config.password},
+        )
+        self._logged_in = True
+        return identity
+
+    def _session_cookie_for(self, method: str, path: str) -> str | None:
+        request = self._client.build_request(method, path)
+        if request.url.scheme != "https":
+            return None
+        try:
+            cookie = SimpleCookie(request.headers.get("Cookie", "")).get("omnia_session")
+        except CookieError:
+            return None
+        return cookie.value if cookie is not None else None
+
+    def _require_max_access_session(self) -> None:
+        access_cookie = self._session_cookie_for("GET", _MAX_ACCESS_PATH)
+        logout_cookie = self._session_cookie_for("POST", _LOGOUT_PATH)
+        self._logout_cookie_mismatch = bool(access_cookie) and access_cookie != logout_cookie
+        if not access_cookie or self._logout_cookie_mismatch:
+            raise self._response_failure(
+                "login did not establish a MAX session",
+                code="auth_session_missing", reason="auth_session_missing",
+            )
+
+    def check_auth(self) -> float:
+        """Verify the protected account through the public API without admitting work."""
+        with self._managed_run():
+            self._client.cookies.clear()
+            self._required_uuid(self._login(), "id", code="api_invalid_response")
+            self._require_max_access_session()
+            self._event("login", "ok")
+            self._stage = "max_access"
+            access = self._request_json("GET", _MAX_ACCESS_PATH)
+            allowed = access.get("can_create_project")
+            if allowed is False:
+                raise self._response_failure(
+                    "account cannot create MAX projects",
+                    code="max_access_denied", reason="max_access_denied",
+                )
+            if allowed is not True:
+                raise self._response_failure(
+                    "public API returned an invalid payload",
+                    code="api_invalid_response", reason="invalid_payload",
+                )
+            self._event("max_access", "ok")
+        self._event("canary", "ok")
+        return round(max(0.0, self._clock() - self._started_at), 3)
+
+    def run(self) -> CanaryResult:
+        with self._managed_run():
             self._stage = "release_health"
             releases = self._assert_release_health()
-            self._stage = "login"
-            self._request_json(
-                "POST",
-                "/api/auth/login",
-                json={"email": self.config.email, "password": self.config.password},
-            )
-            logged_in = True
+            self._login()
             self._event("login", "ok")
 
             self._stage = "project_create"
@@ -608,26 +703,6 @@ class ProductionCanary:
                 cleanup_complete=True,
                 elapsed_seconds=round(max(0.0, self._clock() - self._started_at), 3),
             )
-        except BaseException as exc:
-            caught = exc
-            if isinstance(exc, CanaryFailure):
-                self._failure_event("stage_failure", "failed", exc)
-        finally:
-            self._stage = "cleanup"
-            try:
-                cleanup_failure = self._cleanup(project_id, logged_in=logged_in)
-            except Exception:
-                cleanup_failure = CanaryCleanupFailure("canary cleanup failed")
-
-        if caught is not None:
-            if isinstance(caught, CanaryFailure):
-                self._finalize_failure(caught, cleanup_failed=cleanup_failure is not None)
-            raise caught
-        if cleanup_failure is not None:
-            self._finalize_failure(cleanup_failure, cleanup_failed=True)
-            raise cleanup_failure
-        if result is None:
-            raise self._fail("canary did not produce a result", code="canary_failed")
         self._event("canary", "ok", project_id=result.project_id)
         return result
 
@@ -647,8 +722,8 @@ class ProductionCanary:
             if logged_in:
                 try:
                     logged_out = self._request_has_status(
-                        "POST", "/api/auth/logout", expected_status=204,
-                    )
+                        "POST", _LOGOUT_PATH, expected_status=204,
+                    ) and not self._logout_cookie_mismatch
                 except Exception:
                     logged_out = False
                 if not logged_out:

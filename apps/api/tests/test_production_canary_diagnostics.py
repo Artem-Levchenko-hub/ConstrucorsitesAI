@@ -52,6 +52,7 @@ def _run_cli(
     *,
     clock: Callable[[], float] | None = None,
     sleep: Callable[[float], None] | None = None,
+    auth_only: bool = False,
 ) -> int:
     from scripts import production_generation_canary as cli
 
@@ -71,7 +72,128 @@ def _run_cli(
         monkeypatch.delenv("PRODUCTION_CANARY_RESULT_FILE", raising=False)
     else:
         monkeypatch.setenv("PRODUCTION_CANARY_RESULT_FILE", str(result_path))
-    return cli.main()
+    return cli.main(["--auth-only"] if auth_only else [])
+
+
+@pytest.mark.parametrize(("fault", "stage", "code", "paths"), [
+    ("ok", "cleanup", "ok", ["login", "access", "logout"]),
+    ("login_unauthorized", "login", "login_failed", ["login"]),
+    ("login_redirect", "login", "login_failed", ["login"]),
+    ("login_invalid_json", "login", "api_invalid_response", ["login", "logout"]),
+    ("login_invalid_id", "login", "api_invalid_response", ["login", "logout"]),
+    ("login_no_cookie", "login", "auth_session_missing", ["login", "logout"]),
+    ("login_wrong_cookie_path", "login", "auth_session_missing", ["login", "logout"]),
+    ("login_no_logout_cookie", "login", "auth_session_missing", ["login", "logout"]),
+    ("login_different_logout_cookie", "login", "auth_session_missing", ["login", "logout"]),
+    ("access_unauthorized", "max_access", "max_access_failed", ["login", "access", "logout"]),
+    ("access_false", "max_access", "max_access_denied", ["login", "access", "logout"]),
+    ("access_integer", "max_access", "api_invalid_response", ["login", "access", "logout"]),
+    ("logout_unavailable", "cleanup", "cleanup_failed", ["login", "access", "logout"]),
+])
+def test_auth_only_verifies_the_same_session_and_max_access_without_generation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    fault: str, stage: str, code: str, paths: list[str],
+) -> None:
+    canary_env(monkeypatch, PRODUCTION_CANARY_BASE_URL="https://canary.example.com")
+    for component in ("WEB", "API", "WORKER", "GENERATION_WORKER", "ORCHESTRATOR"):
+        monkeypatch.delenv(f"PRODUCTION_EXPECTED_{component}_RELEASE_SHA", raising=False)
+    identity = "50000000-0000-4000-8000-000000000001"
+    cookie = "omnia_session=private-auth-canary-cookie"
+    routes = {
+        "/api/auth/login": "login",
+        "/api/max/account/access": "access",
+        "/api/auth/logout": "logout",
+    }
+    seen = []
+
+    class AuthProduction(FakeProduction):
+        def handle(self, request: httpx.Request) -> httpx.Response:
+            route = routes[request.url.path]
+            seen.append(route)
+            assert request.url.scheme == "https"
+            assert str(request.url).removesuffix(request.url.path) == os.environ[
+                "PRODUCTION_CANARY_BASE_URL"
+            ]
+            if route in {"login", "logout"}:
+                assert request.method == "POST"
+                assert request.headers["Origin"] == os.environ["PRODUCTION_CANARY_BASE_URL"]
+            else:
+                assert request.method == "GET"
+            if route == "login":
+                assert "Cookie" not in request.headers
+                assert json.loads(request.content) == {
+                    "email": "canary@example.com", "password": "secret-password",
+                }
+                if fault == "login_unauthorized":
+                    return httpx.Response(401, text=identity)
+                if fault == "login_redirect":
+                    return httpx.Response(307, headers={"Location": "https://unexpected.invalid"})
+                path = {
+                    "login_wrong_cookie_path": "/api/auth",
+                    "login_no_logout_cookie": "/api/max",
+                    "login_different_logout_cookie": "/api/max",
+                }.get(fault, "/")
+                headers: dict[str, str] | list[tuple[str, str]] = {
+                    "Set-Cookie": f"{cookie}; Path={path}; Secure; HttpOnly",
+                }
+                if fault == "login_no_cookie":
+                    headers = {"Set-Cookie": "other=unrelated; Path=/; Secure; HttpOnly"}
+                if fault == "login_invalid_json":
+                    return httpx.Response(200, headers=headers, text=identity)
+                if fault == "login_invalid_id":
+                    return httpx.Response(200, headers=headers, json={"id": "not-a-user"})
+                if fault == "login_different_logout_cookie":
+                    headers = [
+                        ("Set-Cookie", f"{cookie}; Path={path}; Secure; HttpOnly"),
+                        ("Set-Cookie", f"{other_cookie}; Path=/api/auth; Secure; HttpOnly"),
+                    ]
+                return httpx.Response(200, headers=headers, json={"id": identity})
+            if route == "logout" and fault == "login_no_logout_cookie":
+                assert "Cookie" not in request.headers
+            elif route == "logout" and fault == "login_different_logout_cookie":
+                assert request.headers["Cookie"] == other_cookie
+            elif fault != "login_no_cookie":
+                assert request.headers["Cookie"] == cookie
+            assert "Authorization" not in request.headers
+            if route == "access":
+                if fault == "access_unauthorized":
+                    return httpx.Response(401, text=identity)
+                allowed = {"access_false": False, "access_integer": 1}.get(fault, True)
+                return httpx.Response(200, json={"can_create_project": allowed, "other": identity})
+            return httpx.Response(503 if fault == "logout_unavailable" else 204)
+
+    other_cookie = "omnia_session=private-different-cookie"
+    path = tmp_path / "auth-result.json"
+    assert _run_cli(AuthProduction(), monkeypatch, path, auth_only=True) == (fault != "ok")
+    raw = path.read_text(encoding="utf-8")
+    report = json.loads(raw)
+    assert (report["mode"], report["stage"], report["code"]) == ("auth_only", stage, code)
+    assert report["status"] == ("success" if fault == "ok" else "failure")
+    assert report["cleanup"] == ("failed" if fault in {
+        "login_no_logout_cookie", "login_different_logout_cookie", "logout_unavailable",
+    } else "ok")
+    assert seen == paths
+    output = capsys.readouterr()
+    for sensitive in (
+        "canary@example.com", "secret-password", cookie, other_cookie, identity, "not-a-user",
+    ):
+        assert sensitive not in raw + output.out + output.err
+
+
+def test_auth_only_requires_protected_credentials_before_any_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    canary_env(monkeypatch, PRODUCTION_CANARY_PASSWORD="")
+    production = FakeProduction()
+    path = tmp_path / "auth-result.json"
+
+    assert _run_cli(production, monkeypatch, path, auth_only=True) == 1
+
+    report = json.loads(path.read_text(encoding="utf-8"))
+    assert report["mode"] == "auth_only"
+    assert report["status"] == "failure"
+    assert report["code"] == "configuration_invalid"
+    assert production.calls == []
 
 
 def test_health_transport_error_is_its_own_cause_and_stops_before_generation(
@@ -288,7 +410,7 @@ def _canary_workflow() -> dict[str, Any]:
     return yaml.safe_load(workflow.read_text(encoding="utf-8"))
 
 
-@pytest.mark.parametrize("input_name", ["report_incident", "catalog_acceptance"])
+@pytest.mark.parametrize("input_name", ["report_incident", "catalog_acceptance", "auth_only"])
 def test_manual_canary_options_default_to_boolean_false(input_name) -> None:
     workflow = _canary_workflow()
     # PyYAML's YAML 1.1 loader reads GitHub's unquoted `on` key as True.
@@ -322,9 +444,9 @@ console.log(JSON.stringify(cases.map(test => Boolean(evaluate(
 
 @pytest.mark.parametrize(("step_name", "expected"), [
     ("Open one generation-canary incident", [False, True, False, False, False, False,
-                                           False, True, False]),
+                                           False, True, False, False, False]),
     ("Close generation-canary incident after recovery", [True, False, False, False, False,
-                                                        False, True, False, False]),
+                                                        False, True, False, False, False, False]),
 ])
 def test_manual_incident_mutations_require_explicit_opt_in(step_name, expected) -> None:
     workflow = _canary_workflow()
@@ -341,23 +463,35 @@ def test_manual_incident_mutations_require_explicit_opt_in(step_name, expected) 
             ("workflow_dispatch", True, "cancelled"),
         )
     ]
+    cases.extend(
+        {"event": "workflow_dispatch", "status": status,
+         "inputs": {"report_incident": True, "auth_only": True, "catalog_acceptance": True}}
+        for status in ("success", "failure")
+    )
     assert _workflow_decisions(step["if"], cases) == expected
 
 
-@pytest.mark.parametrize(("event", "catalog", "expected_cli"), [
-    ("schedule", True, "production_generation_canary.py"),
-    ("workflow_dispatch", False, "production_generation_canary.py"),
-    ("workflow_dispatch", True, "production_catalog_canary.py"),
+@pytest.mark.parametrize(("event", "catalog", "auth_only", "expected_cli"), [
+    ("schedule", False, False, "production_generation_canary.py"),
+    ("schedule", True, True, "production_generation_canary.py"),
+    ("workflow_dispatch", False, False, "production_generation_canary.py"),
+    ("workflow_dispatch", True, False, "production_catalog_canary.py"),
+    ("workflow_dispatch", False, True, "production_generation_canary.py --auth-only"),
+    ("workflow_dispatch", True, True, "production_generation_canary.py --auth-only"),
 ])
 @pytest.mark.parametrize("exit_code", [0, 17])
-def test_catalog_mode_routes_only_explicit_manual_runs_and_preserves_failure(
-    event, catalog, expected_cli, exit_code,
+def test_workflow_routes_only_explicit_manual_modes_and_preserves_failure(
+    event, catalog, auth_only, expected_cli, exit_code,
 ):
     workflow = _canary_workflow()
     step = next(step for step in workflow["jobs"]["canary"]["steps"]
                 if step.get("name") == "Run disposable build, preview, and edit canary")
-    cases = [{"event": event, "inputs": {"catalog_acceptance": catalog}, "status": "success"}]
+    cases = [{
+        "event": event, "inputs": {"catalog_acceptance": catalog, "auth_only": auth_only},
+        "status": "success",
+    }]
     enabled = _workflow_decisions(step["env"].get("CATALOG_ACCEPTANCE", "false"), cases)[0]
+    auth_enabled = _workflow_decisions(step["env"].get("AUTH_ONLY", "false"), cases)[0]
     bash = which("bash")
     git = which("git")
     if os.name == "nt" and git:
@@ -369,6 +503,7 @@ def test_catalog_mode_routes_only_explicit_manual_runs_and_preserves_failure(
     result = run([bash, "-c", """
 uv() { printf '%s\\n' "$*"; return "$TEST_CLI_EXIT"; }
 """ + step["run"]], env={**os.environ, "CATALOG_ACCEPTANCE": str(enabled).lower(),
+                         "AUTH_ONLY": str(auth_enabled).lower(),
                          "TEST_CLI_EXIT": str(exit_code)},
         capture_output=True, text=True, check=False, timeout=10)
     assert result.stdout.splitlines() == [f"run --frozen python scripts/{expected_cli}"]
@@ -405,6 +540,12 @@ def test_catalog_browser_and_evidence_are_manual_only_and_keep_the_production_bo
              )]
     assert _workflow_decisions(browser["if"], cases[:3]) == [False, False, True]
     assert _workflow_decisions(evidence["if"], cases) == [False, False, True, True]
+    auth_override = [{
+        "event": "workflow_dispatch", "inputs": {"catalog_acceptance": True, "auth_only": True},
+        "status": status,
+    } for status in ("success", "failure")]
+    assert _workflow_decisions(browser["if"], auth_override) == [False, False]
+    assert _workflow_decisions(evidence["if"], auth_override) == [False, False]
     canary = next(step for step in steps
                   if step.get("name") == "Run disposable build, preview, and edit canary")
     for name in ("PRODUCTION_CANARY_EMAIL", "PRODUCTION_CANARY_PASSWORD"):

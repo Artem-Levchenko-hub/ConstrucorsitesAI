@@ -10,15 +10,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from starlette.responses import Response
 
+from tests.test_app_integrations_api import _max_init_data
 from yleum_api.core.crypto import encrypt_strong
 from yleum_api.core.errors import ApiError
 from yleum_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
+from yleum_api.models.max_integration import MaxIntegration
+from yleum_api.models.max_staff import MaxStaffSettings
 from yleum_api.models.max_staff_checkout import MaxStaffPaymentAttempt
 from yleum_api.models.project import Project
 from yleum_api.models.project_cell import ProjectCellWorkspace
 from yleum_api.models.user import User
 from yleum_api.routers.max_staff_checkout import _receipt
-from yleum_api.services import max_staff, max_staff_checkout, max_staff_source
+from yleum_api.services import max_staff_checkout, max_staff_source
 from yleum_api.services.max_staff_checkout import (
     InvalidProviderPayment,
     _build_return_url,
@@ -190,21 +193,21 @@ async def checkout_context(db_session, test_engine, monkeypatch):
             provider="yookassa",
         )
     )
+    db_session.add(MaxStaffSettings(
+        project_id=project_id, owner_id=owner_id, orders_mode="yookassa",
+        orders_enabled_at=now - timedelta(minutes=1), prep_minutes=15,
+    ))
     await db_session.commit()
 
-    async def settings(_session, selected):
-        assert selected == project_id
-        return SimpleNamespace(owner_id=owner_id, orders_enabled_at=now - timedelta(minutes=1))
-
     async def read_order(_session, selected, selected_order, actor):
-        assert (selected, selected_order, actor) == (project_id, order_id, 42)
+        if (selected, selected_order, actor) != (project_id, order_id, 42):
+            raise ApiError("not_found", "Заказ не найден", 404)
         return max_staff_source.StaffCheckoutOrder(order_id, 1250, "RUB", now, 42)
 
     async def target(project):
         assert project.id == project_id
         return SimpleNamespace(url="https://checkout-test.apps.example/api/omnia/owner")
 
-    monkeypatch.setattr(max_staff, "get_order_checkout_settings", settings)
     monkeypatch.setattr(max_staff_source, "read_staff_checkout_order", read_order)
     monkeypatch.setattr(max_staff_checkout, "_target", target)
     return SimpleNamespace(
@@ -220,6 +223,100 @@ async def make_due(session, attempt_id):
     row = await session.get(MaxStaffPaymentAttempt, attempt_id, populate_existing=True)
     row.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
     await session.commit()
+
+
+async def test_checkout_api_confirms_only_the_signed_buyers_order_and_replays_without_create(
+    checkout_context, client, db_session, monkeypatch,
+):
+    ctx = checkout_context
+    bot_token = "synthetic-runtime-checkout"
+    db_session.add(MaxIntegration(
+        project_id=ctx.project, owner_id=ctx.owner, bot_token_enc=encrypt_strong(bot_token),
+        webhook_secret_enc=encrypt_strong("synthetic-runtime-webhook"),
+    ))
+    await db_session.commit()
+    route = f"/api/runtime/projects/{ctx.project}/orders/checkout"
+    body = {"order_id": str(ctx.order)}
+    buyer = {"X-MAX-Init-Data": _max_init_data(bot_token, 42)}
+    other_buyer = {"X-MAX-Init-Data": _max_init_data(bot_token, 43)}
+    wire: list[httpx.Request] = []
+    confirmation = "https://pay.example/checkout-synthetic"
+
+    async def provider(request: httpx.Request) -> httpx.Response:
+        wire.append(request)
+        assert request.url.host == "api.yookassa.ru"
+        assert request.headers["Authorization"] == "Bearer synthetic-only"
+        async with ctx.factory() as independent:
+            row = (await independent.scalars(select(MaxStaffPaymentAttempt))).one()
+            amount = {"value": "12.50", "currency": "RUB"}
+            assert (row.project_id, row.owner_id, row.actor_id, row.order_id) == (
+                ctx.project, ctx.owner, 42, ctx.order,
+            )
+            assert (row.amount_kopecks, row.currency) == (1250, "RUB")
+            if request.method == "POST":
+                assert request.url.path == "/v3/payments"
+                assert request.headers["Idempotence-Key"] == str(row.id)
+                assert json.loads(request.content) == row.request_body
+                assert row.request_body["amount"] == amount
+                assert row.request_body["metadata"] == {"yleum_staff_attempt_id": str(row.id)}
+                return httpx.Response(200, json=provider_payment(
+                    row, status="pending", paid=False, test=True,
+                    confirmation={"confirmation_url": confirmation},
+                ))
+            assert request.method == "GET" and request.url.path == "/v3/payments/payment-1234"
+            assert not request.content and "Idempotence-Key" not in request.headers
+            return httpx.Response(200, json=provider_payment(row, test=True))
+
+    http_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient",
+        lambda **kwargs: http_client(transport=httpx.MockTransport(provider), **kwargs),
+    )
+    rejected = await client.post(route, json=body, headers={
+        "X-MAX-Init-Data": _max_init_data("synthetic-wrong-bot", 42),
+    })
+    assert rejected.status_code == 401 and not wire
+
+    pending = await client.post(route, json=body, headers=buyer)
+    assert pending.status_code == 200, pending.text
+    assert [request.method for request in wire] == ["POST"]
+    pending_body = {
+        **body, "status": "pending", "test": True, "paid_at": None,
+        "confirmation_url": confirmation, "failure_reason": None,
+    }
+    assert pending.json() == pending_body
+    for path in (route, route + "/status"):
+        repeated = await client.post(path, json=body, headers=buyer)
+        assert repeated.status_code == 200 and repeated.json() == pending_body
+    assert [request.method for request in wire] == ["POST"]
+
+    await db_session.commit()
+    await max_staff_checkout.reconcile_due_staff_payments(ctx.factory)
+    paid = await client.post(route + "/status", json=body, headers=buyer)
+    assert paid.status_code == 200
+    paid_body = paid.json()
+    paid_at = datetime.fromisoformat(paid_body["paid_at"])
+    assert paid_at.tzinfo is not None
+    assert paid_body == {
+        **pending_body, "status": "succeeded", "confirmation_url": None,
+        "paid_at": paid_body["paid_at"],
+    }
+    for path in (route + "/status", route):
+        repeated = await client.post(path, json=body, headers=buyer)
+        assert repeated.status_code == 200 and repeated.json() == paid_body
+        assert repeated.headers["cache-control"] == "no-store"
+    for path in (route + "/status", route):
+        foreign = await client.post(path, json=body, headers=other_buyer)
+        assert foreign.status_code == 404
+        assert "payment-1234" not in foreign.text and confirmation not in foreign.text
+    assert [request.method for request in wire] == ["POST", "GET"]
+    rows = (await db_session.scalars(
+        select(MaxStaffPaymentAttempt).execution_options(populate_existing=True)
+    )).all()
+    assert len(rows) == 1
+    row = rows[0]
+    assert (row.order_id, row.status, row.is_test) == (ctx.order, "succeeded", True)
+    assert row.verified_at is not None and row.paid_at == paid_at
 
 
 async def test_concurrent_checkout_calls_create_one_provider_payment(
