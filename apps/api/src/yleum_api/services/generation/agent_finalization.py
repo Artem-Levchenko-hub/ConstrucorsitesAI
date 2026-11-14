@@ -531,7 +531,7 @@ async def finalize_max_candidate(
                 repaired.done or repaired.needs_finalization or repaired.files
             ):
                 raise RuntimeError("MAX_FINALIZATION_FAILED: source repair did not complete")
-            return repaired.done
+            return autonomous_repair and repaired.done
 
         try:
             options: _FinalizationOptions = {}

@@ -79,7 +79,9 @@ async def test_duplicate_pure_build_same_batch_executes_once(monkeypatch):
 
     from yleum_api.services.project_cell_proofs import ProofIdentity
 
-    turns = iter([turn(("build", {}), ("build", {})), turn(("done", {"summary": "ready"}))])
+    builds = turn(("build", {}), ("build", {}))
+    build_ids = [call["id"] for call in builds["content"]]
+    turns = iter([builds, turn(("done", {"summary": "ready"}))])
     monkeypatch.setattr(
         agent_native, "_call_messages", AsyncMock(side_effect=lambda *a, **k: next(turns))
     )
@@ -101,7 +103,7 @@ async def test_duplicate_pure_build_same_batch_executes_once(monkeypatch):
     assert execute.await_count == 1
     assert any(
         isinstance(message.get("content"), list)
-        and [item.get("tool_use_id") for item in message["content"]] == ["call-0", "call-1"]
+        and [item.get("tool_use_id") for item in message["content"]] == build_ids
         for message in result.transcript
     )
 
