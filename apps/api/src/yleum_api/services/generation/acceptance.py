@@ -771,6 +771,8 @@ class PromptAcceptance:
                     font_selections=[{key: str(font[key]) for key in ('id', 'sha256', 'role')}
                                      for font in self.font_selections] or None,
                 ),
+                compiled=(self.discovery_result is not None
+                          and self.discovery_result.action == DISCOVERY_BUILD),
             )
             capacity_dispatch_token = uuid4()
             if get_settings().use_generation_worker:

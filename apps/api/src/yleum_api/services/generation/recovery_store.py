@@ -25,7 +25,11 @@ from yleum_api.services.generation.recovery_contract import (
     RecoveryStateV3,
     decode_recovery,
 )
-from yleum_api.services.generation_runs import load_generation_dispatch, prompt_hash
+from yleum_api.services.generation_runs import (
+    compiled_dispatch_matches,
+    load_generation_dispatch,
+    prompt_hash,
+)
 from yleum_api.services.orchestrator_client import project_cell_agent_identity
 from yleum_api.services.promotion_permit import workspace_revision_digest
 
@@ -152,15 +156,38 @@ async def _baseline_sha(
     dispatch = load_generation_dispatch(run)
     from yleum_api.services.reference_images import request_identity
 
+    conflict = "recovery original prompt/baseline conflict"
     if (
         identity.prompt_hash != run.prompt_hash
-        or prompt_hash(request_identity(dispatch.prompt_text, dispatch.reference_images or [],
-                                        dispatch.font_selections or []))
-        != run.prompt_hash
         or dispatch.current_snapshot_id != identity.accepted_snapshot_id
         or project.current_snapshot_id != identity.accepted_snapshot_id
     ):
-        raise RecoveryContractError("recovery original prompt/baseline conflict")
+        raise RecoveryContractError(conflict)
+    references = dispatch.reference_images or []
+    fonts = dispatch.font_selections or []
+    compiled = compiled_dispatch_matches(run, dispatch)
+    if compiled is False:
+        raise RecoveryContractError(conflict)
+    if compiled or (
+        prompt_hash(request_identity(dispatch.prompt_text, references, fonts)) != run.prompt_hash
+    ):
+        # Admission owns the original message; only verified discovery may
+        # replace its text. Adaptation wraps the raw text in the admission hash.
+        from yleum_api.services.generation.request_binding import original_request_binding
+
+        if run.user_message_id != dispatch.user_message_id:
+            raise RecoveryContractError(conflict)
+        try:
+            original = await original_request_binding(
+                session, run, dispatch.prompt_text, project_id=project.id, run_id=run.id,
+            )
+        except ValueError as exc:
+            raise RecoveryContractError(conflict) from exc
+        if (
+            original.source_text != dispatch.prompt_text
+            and not compiled
+        ) or request_identity(original.text, references, fonts) != original.identity:
+            raise RecoveryContractError(conflict)
     baseline_sha: str | None = None
     # All facts consulted here stay locked until the writer commits its private
     # reference. Scope queries before locking to avoid taking foreign-project

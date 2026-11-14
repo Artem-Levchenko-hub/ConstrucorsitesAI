@@ -14,6 +14,7 @@ from yleum_api.services.reference_images import request_identity
 class BoundRequest:
     text: str
     identity: str
+    source_text: str
 
 
 def bound_message_request(
@@ -21,7 +22,7 @@ def bound_message_request(
 ) -> BoundRequest:
     if message is None or message.project_id != project_id or message.role != "user":
         raise ValueError("admission message binding conflicts")
-    text = message.content
+    source_text = text = message.content
     references = getattr(message, "reference_images", None) or []
     fonts = getattr(message, 'font_selections', None) or []
     identity = request_identity(text, references, fonts)
@@ -48,14 +49,14 @@ def bound_message_request(
             raise ValueError("admission adaptation binding conflicts") from None
     if hashlib.sha256(identity.encode()).hexdigest() != run.prompt_hash:
         raise ValueError("admission request identity conflicts")
-    return BoundRequest(text, identity)
+    return BoundRequest(text, identity, source_text)
 
 
 async def original_request_binding(
     session: Any, run: Any, prompt: str, *, project_id: UUID, run_id: UUID,
 ) -> BoundRequest:
     if not run.user_message_id and hashlib.sha256(prompt.encode()).hexdigest() == run.prompt_hash:
-        return BoundRequest(prompt, prompt)
+        return BoundRequest(prompt, prompt, prompt)
     message = (
         await session.get(Message, run.user_message_id, populate_existing=True)
         if run.user_message_id else None

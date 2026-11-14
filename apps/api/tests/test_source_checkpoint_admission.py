@@ -1,4 +1,5 @@
 """A real capacity CAS must precede private source recovery and the first model."""
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -22,11 +23,12 @@ from yleum_api.services.generation.contracts import (
     SourceBaseline,
     StackPrompt,
 )
-from yleum_api.services.generation.recovery_contract import CheckpointRef
+from yleum_api.services.generation.recovery_contract import CheckpointRef, RecoveryContractError
 from yleum_api.services.generation.source_checkpoint import persist_checkpoint
 from yleum_api.services.generation_runs import (
     GenerationDispatch,
     capacity_admitted_dispatch_token,
+    load_generation_dispatch,
     promote_generation_after_admission,
     prompt_hash,
     store_generation_dispatch,
@@ -261,11 +263,19 @@ async def test_real_admission_recovers_source_before_first_model(
     assert run.records == ["runtime", "admitted", "stack", "apply", "model"]
 
 
-@pytest.mark.parametrize("initial_status, lose_commit_ack", [
-    ("pending", False), ("queued_for_capacity", False), ("pending", True),
+@pytest.mark.parametrize("initial_status, lose_commit_ack, original_prompt, dispatch_change", [
+    pytest.param("pending", False, EXPANDED, None, id="pending"),
+    pytest.param("queued_for_capacity", False, EXPANDED, None, id="queued"),
+    pytest.param("pending", True, EXPANDED, None, id="lost-ack"),
+    pytest.param("pending", False, TASK, None, id="compiled-discovery"),
+    pytest.param("pending", False, TASK, "attachment", id="unbound-discovery-attachment"),
+    pytest.param("pending", False, TASK, "no-receipt", id="unattested-discovery"),
+    pytest.param("pending", False, TASK, "prompt", id="changed-compiled-discovery"),
+    pytest.param("pending", False, TASK, "raw-prompt", id="compiled-discovery-replaced-by-raw"),
 ])
 async def test_durable_recovery_initializes_after_real_max_admission(
-    admitted_checkpoint_case, test_engine, monkeypatch, initial_status, lose_commit_ack,
+    admitted_checkpoint_case, test_engine, monkeypatch,
+    initial_status, lose_commit_ack, original_prompt, dispatch_change,
 ):
     from tests.test_generation_recovery_readers import install_healthy_reader_inventory
 
@@ -273,8 +283,22 @@ async def test_durable_recovery_initializes_after_real_max_admission(
     case.current.status = initial_status
     case.current.execution_backend = "worker"
     request = await case.session.get(Message, case.current.user_message_id)
-    request.content = EXPANDED
+    request.content = original_prompt
     case.current.prompt_hash = prompt_hash(request.content)
+    dispatch = load_generation_dispatch(case.current)
+    if dispatch_change == "attachment":
+        dispatch = replace(
+            dispatch, reference_images=[{"id": str(uuid4()), "sha256": "a" * 64}],
+        )
+    store_generation_dispatch(case.current, dispatch, compiled=(
+        original_prompt != EXPANDED and dispatch_change != "no-receipt"
+    ))
+    if dispatch_change in {"prompt", "raw-prompt"}:
+        changed_prompt = original_prompt if dispatch_change == "raw-prompt" else "Changed expansion"
+        state = case.current.agent_state
+        case.current.agent_state = {**state, "dispatch": {
+            **state["dispatch"], "prompt_text": changed_prompt,
+        }}
     await case.session.commit()
     run = await run_until_first_model(case, monkeypatch)
     install_healthy_reader_inventory(monkeypatch, refresh=True)
@@ -316,12 +340,17 @@ async def test_durable_recovery_initializes_after_real_max_admission(
             assert recovery_execution.recovery_state(active) == initialized
             assert initialized.version == 3
             assert initialized.identity.run_id == case.current.id
+            assert initialized.requirements[0].text == original_prompt
             assert initialized.execution.physical_state == "active"
             assert initialized.execution.control_workspace_id is not None
             assert initialized.execution.control_fencing_epoch == 1
         raise InitializedRecovery
 
     monkeypatch.setattr(recovery_execution, "initialize_execution", expect_initialized)
+    expected = (
+        pytest.raises(RecoveryContractError, match="original prompt/baseline conflict")
+        if dispatch_change else pytest.raises(InitializedRecovery)
+    )
     async with test_engine.connect() as owner:
         key = int.from_bytes(case.current.id.bytes[-4:], "big", signed=True)
         await owner.execute(text("SELECT pg_advisory_lock(1195724366,:key)"), {"key": key})
@@ -330,7 +359,7 @@ async def test_durable_recovery_initializes_after_real_max_admission(
             recovery_execution.SessionOwnership(case.current.id, owner),
         )
         try:
-            with pytest.raises(InitializedRecovery):
+            with expected:
                 await run.invoke()
         finally:
             recovery_execution._SESSION_OWNER.reset(token)
@@ -339,6 +368,33 @@ async def test_durable_recovery_initializes_after_real_max_admission(
     assert run.records == ["runtime", "admitted"]
     assert lost_ack == lose_commit_ack
     run.model.assert_not_awaited()
+
+
+async def test_baseline_accepts_the_bound_raw_restoration_adaptation(admitted_checkpoint_case):
+    from yleum_api.schemas.message import RestorationAdaptationReference
+    from yleum_api.services.generation.recovery_contract import RecoveryIdentity, RecoveryState
+    from yleum_api.services.generation.recovery_store import _baseline_sha
+    from yleum_api.services.restoration_adaptation import adaptation_reservation_prompt
+
+    case = admitted_checkpoint_case
+    run = case.current
+    request = await case.session.get(Message, run.user_message_id)
+    request.content = EXPANDED
+    reference = RestorationAdaptationReference(
+        operation_id=uuid4(), expected_draft_snapshot_id=case.snapshot.id,
+    )
+    run.prompt_hash = prompt_hash(adaptation_reservation_prompt(request.content, reference))
+    run.agent_state = {**run.agent_state, "restoration_adaptation": {
+        "version": 1, "project_id": str(case.project.id), "owner_id": str(run.user_id),
+        "adaptation_run_id": str(run.id), "operation_id": str(reference.operation_id),
+        "base_draft_snapshot_id": str(case.snapshot.id),
+    }}
+    await case.session.commit()
+    state = RecoveryState(identity=RecoveryIdentity(
+        run_id=run.id, project_id=case.project.id, user_id=run.user_id,
+        accepted_snapshot_id=case.snapshot.id, supersedes_run_id=None, prompt_hash=run.prompt_hash,
+    ))
+    assert await _baseline_sha(case.session, run=run, project=case.project, state=state) == BASE
 
 
 async def test_restored_design_context_is_final_before_model(admitted_checkpoint_case, monkeypatch):

@@ -31,6 +31,7 @@ ACTIVE_GENERATION_STATUSES = (
 INTERRUPTED_GENERATION_STATUSES = ("pending", "running", "cancel_requested")
 PREVIOUS_CELL_RECONCILIATION_ATTEMPTS = 4
 PREVIOUS_CELL_ENSURE_RECONCILIATION_REQUIRED = "Previous Project Cell ensure needs reconciliation"
+_COMPILED_DISPATCH_KEY = "compiled_generation_dispatch_v1"
 
 
 def note_generation_release(run: GenerationRun) -> None:
@@ -507,11 +508,32 @@ def load_generation_dispatch(run: GenerationRun) -> GenerationDispatch:
     return dispatch
 
 
-def store_generation_dispatch(run: GenerationRun, dispatch: GenerationDispatch) -> None:
+def _compiled_dispatch_receipt(run: GenerationRun, dispatch: GenerationDispatch) -> dict[str, str]:
+    return {
+        "original_request_sha256": run.prompt_hash,
+        "compiled_prompt_sha256": prompt_hash(dispatch.prompt_text),
+    }
+
+
+def compiled_dispatch_matches(run: GenerationRun, dispatch: GenerationDispatch) -> bool | None:
+    """Return None when the stored dispatch did not come from discovery."""
+    state = run.agent_state or {}
+    if _COMPILED_DISPATCH_KEY not in state:
+        return None
+    return state.get(_COMPILED_DISPATCH_KEY) == _compiled_dispatch_receipt(run, dispatch)
+
+
+def store_generation_dispatch(
+    run: GenerationRun, dispatch: GenerationDispatch, *, compiled: bool = False,
+) -> None:
     if dispatch.project_id != run.project_id or dispatch.user_id != run.user_id:
         raise ValueError("generation dispatch ownership mismatch")
     state = dict(run.agent_state or {})
     state["dispatch"] = dispatch.to_json()
+    if compiled:
+        state[_COMPILED_DISPATCH_KEY] = _compiled_dispatch_receipt(run, dispatch)
+    else:
+        state.pop(_COMPILED_DISPATCH_KEY, None)
     run.agent_state = state
 
 
