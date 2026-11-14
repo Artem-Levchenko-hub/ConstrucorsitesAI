@@ -337,13 +337,70 @@ async def recovery_failure_outcome(
         return "preserve"
 
 
+async def require_initial_execution_owner(run_id: UUID) -> None:
+    settings = get_settings()
+    if not (
+        settings.generation_provider_attempts_enabled
+        and settings.generation_response_retention_enabled
+    ):
+        raise RecoveryContractError("executable recovery dependencies are disabled")
+    await _require_session_owner(run_id)
+
+
+async def _initial_cursor(
+    session: AsyncSession, run: GenerationRun, ensure_operation_id: UUID | None,
+) -> ExecutionCursor:
+    if ensure_operation_id is None:
+        return ExecutionCursor(
+            stage="bootstrap", substep="runtime_prepare", physical_state="no_effects",
+        )
+
+    from yleum_api.services.orchestrator_client import (
+        OrchestratorUnavailable,
+        ProjectCellResourceResponse,
+    )
+
+    operation = await session.get(ProjectCellOperation, ensure_operation_id)
+    if (
+        operation is None or operation.generation_run_id != run.id or operation.kind != "ensure"
+        or operation.status != "completed" or operation.finished_at is None
+        or operation.fencing_epoch is None or not operation.result_payload
+    ):
+        raise RecoveryContractError("initial runtime ensure receipt is missing")
+    try:
+        receipt = ProjectCellResourceResponse.from_json(operation.result_payload)
+    except OrchestratorUnavailable as exc:
+        raise RecoveryContractError("initial runtime ensure receipt is invalid") from exc
+    workspace = await session.get(
+        ProjectCellWorkspace, operation.workspace_id, with_for_update=True, populate_existing=True,
+    )
+    if (
+        workspace is None or workspace.owner_id != run.user_id
+        or workspace.project_id != run.project_id
+        or workspace.generation_run_id != run.id or workspace.deleted_at is not None
+        or workspace.state != "ready" or workspace.fencing_epoch != operation.fencing_epoch
+        or receipt.workspace_id != workspace.id or receipt.fencing_epoch != workspace.fencing_epoch
+        or receipt.state != "resources_ready" or receipt.provider_ref is None
+        or receipt.provider_ref != workspace.provider_ref
+        or not all((
+            receipt.has_workspace, receipt.has_agent_home, receipt.has_postgres, receipt.has_redis,
+        ))
+    ):
+        raise RecoveryContractError("initial runtime lease does not match its ensure receipt")
+    return ExecutionCursor(
+        stage="bootstrap", substep="runtime_prepare", physical_state="active",
+        control_workspace_id=workspace.id, control_fencing_epoch=workspace.fencing_epoch,
+    )
+
+
 async def initialize_execution(
     factory: async_sessionmaker[AsyncSession],
     *,
     run_id: UUID,
     context: Callable[[], dict[str, Any]],
+    ensure_operation_id: UUID | None = None,
 ) -> RecoveryStateV2 | None:
-    """Persist the original executable entry before runtime preparation.
+    """Persist the original executable entry before model-facing preparation.
 
     This creates V2, or explicit opt-in V3. An existing record must enter through
     its committed continuation cursor, never through the original pipeline.
@@ -364,12 +421,7 @@ async def initialize_execution(
         if not execution_enabled(hint.project_id):
             return None
         settings = get_settings()
-        if not (
-            settings.generation_provider_attempts_enabled
-            and settings.generation_response_retention_enabled
-        ):
-            raise RecoveryContractError("executable recovery dependencies are disabled")
-        await _require_session_owner(run_id)
+        await require_initial_execution_owner(run_id)
         await require_generation_admission(session)
         run, project = await _locked_owner(
             session,
@@ -410,9 +462,7 @@ async def initialize_execution(
             identity=identity,
             continuation_claim=claim,
             requirements=frozen_requirements(run),
-            execution=ExecutionCursor(
-                stage="bootstrap", substep="runtime_prepare", physical_state="no_effects"
-            ),
+            execution=await _initial_cursor(session, run, ensure_operation_id),
             **clock_fields,
         )
         await _baseline_sha(session, run=run, project=project, state=state)
@@ -424,7 +474,25 @@ async def initialize_execution(
             }
         )
         run.agent_state = {**run.agent_state, RECOVERY_KEY: state.model_dump(mode="json")}
-        await session.commit()  # An unknown acknowledgement cannot enter runtime preparation.
+        try:
+            await session.commit()
+        except Exception:
+            if ensure_operation_id is None:
+                raise
+            await session.rollback()
+            # A lost acknowledgement is safe only when this exact entry and
+            # its still-owned physical lease can both be read back.
+            await require_initial_execution_owner(run_id)
+            async with factory() as observed:
+                current, _ = await _locked_owner(
+                    observed, run_id=run_id, project_id=state.identity.project_id,
+                    user_id=state.identity.user_id,
+                )
+                if recovery_state(current) != state:
+                    raise
+                cursor = await _initial_cursor(observed, current, ensure_operation_id)
+                if cursor != state.execution.model_copy(update={"execution_context_ref": None}):
+                    raise
         return state
 
 

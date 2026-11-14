@@ -5,12 +5,14 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tests.test_generation_runs import _owner_and_project
 from yleum_api.core.config import get_settings
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
+from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.services.generation import agent_pipeline, agent_runtime, recovery_execution
 from yleum_api.services.generation.contracts import (
@@ -20,14 +22,17 @@ from yleum_api.services.generation.contracts import (
     SourceBaseline,
     StackPrompt,
 )
+from yleum_api.services.generation.recovery_contract import CheckpointRef
 from yleum_api.services.generation.source_checkpoint import persist_checkpoint
 from yleum_api.services.generation_runs import (
     GenerationDispatch,
+    capacity_admitted_dispatch_token,
     promote_generation_after_admission,
     prompt_hash,
     store_generation_dispatch,
     write_capacity_dispatch_claim,
 )
+from yleum_api.services.orchestrator_client import ProjectCellResourceResponse
 
 BASE = "a" * 40
 TASK = "Original saved product with orders"
@@ -86,7 +91,7 @@ async def admitted_checkpoint_case(db_session, test_engine, monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "use_design_intelligence_plugin", False)
     monkeypatch.setattr(settings, "use_max_finalization_coordinator", False)
-    monkeypatch.setattr(recovery_execution, "execution_enabled", lambda _project: False)
+    monkeypatch.setattr(settings, "generation_recovery_execution_enabled", False)
     return SimpleNamespace(factory=factory, session=db_session, current=current, previous=previous,
         project=project, snapshot=snapshot, ids=ids, facts=facts, baseline=baseline)
 
@@ -96,6 +101,10 @@ class ReachedFirstModel(Exception):
 
 
 class AdmissionStopped(Exception):
+    pass
+
+
+class InitializedRecovery(Exception):
     pass
 
 
@@ -160,6 +169,29 @@ async def run_until_first_model(case, monkeypatch, *, outcome="admitted", design
             raise AdmissionStopped(actual)
         assert case.current.status == "running"
         records.append("admitted")
+        if (on_admitted := kwargs.get("on_admitted")) is not None:
+            workspace = ProjectCellWorkspace(
+                project_id=case.project.id, owner_id=case.current.user_id,
+                generation_run_id=case.current.id, provider="docker_owner_canary",
+                provider_ref="test-provider", state="ready", fencing_epoch=1,
+            )
+            case.session.add(workspace)
+            await case.session.flush()
+            response = ProjectCellResourceResponse.from_json({
+                "workspace_id": str(workspace.id), "state": "resources_ready",
+                "provider_ref": workspace.provider_ref, "fencing_epoch": workspace.fencing_epoch,
+                "has_workspace": True, "has_agent_home": True, "has_postgres": True,
+                "has_redis": True,
+            })
+            ensure = ProjectCellOperation(
+                workspace_id=workspace.id, generation_run_id=case.current.id,
+                idempotency_key="test-live-ensure", request_digest="a" * 64,
+                kind="ensure", status="completed", fencing_epoch=workspace.fencing_epoch,
+                result_payload=response.to_wire_json(), finished_at=datetime.now(UTC),
+            )
+            case.session.add(ensure)
+            await case.session.commit()
+            await on_admitted(ensure.id)
         return dict(project_cell_handle=handle, base_agent_executor=handle.execute,
             max_shell_enabled=False, active_max_locked_files=frozenset(), agent_result=None)
 
@@ -227,6 +259,86 @@ async def test_real_admission_recovers_source_before_first_model(
         await run.invoke()
     run.model.assert_awaited_once()
     assert run.records == ["runtime", "admitted", "stack", "apply", "model"]
+
+
+@pytest.mark.parametrize("initial_status, lose_commit_ack", [
+    ("pending", False), ("queued_for_capacity", False), ("pending", True),
+])
+async def test_durable_recovery_initializes_after_real_max_admission(
+    admitted_checkpoint_case, test_engine, monkeypatch, initial_status, lose_commit_ack,
+):
+    from tests.test_generation_recovery_readers import install_healthy_reader_inventory
+
+    case = admitted_checkpoint_case
+    case.current.status = initial_status
+    case.current.execution_backend = "worker"
+    request = await case.session.get(Message, case.current.user_message_id)
+    request.content = EXPANDED
+    case.current.prompt_hash = prompt_hash(request.content)
+    await case.session.commit()
+    run = await run_until_first_model(case, monkeypatch)
+    install_healthy_reader_inventory(monkeypatch, refresh=True)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "generation_recovery_execution_enabled", True)
+    monkeypatch.setattr(settings, "generation_recovery_mode", "canary")
+    monkeypatch.setattr(settings, "generation_recovery_canary_project_ids", str(case.project.id))
+    monkeypatch.setattr(settings, "generation_provider_attempts_enabled", True)
+    monkeypatch.setattr(settings, "generation_response_retention_enabled", True)
+    monkeypatch.setattr(settings, "generation_recovery_soft_windows_enabled", True)
+    monkeypatch.setattr(recovery_execution, "store_execution_context", AsyncMock(
+        return_value=CheckpointRef(object_key="owned/context", sha256="b" * 64),
+    ))
+    initialize = recovery_execution.initialize_execution
+    lost_ack = False
+
+    class AdmissionSession(AsyncSession):
+        async def commit(self):
+            nonlocal lost_ack
+            loses_this_ack = lose_commit_ack and not lost_ack and any(
+                isinstance(row, GenerationRun) and recovery_execution.has_recovery_state(row)
+                for row in self.dirty
+            )
+            await super().commit()
+            if loses_this_ack:
+                lost_ack = True
+                raise ConnectionError("lost admission commit acknowledgement")
+
+    admission_factory = async_sessionmaker(
+        test_engine, class_=AdmissionSession, expire_on_commit=False,
+    )
+
+    async def expect_initialized(_factory, **kwargs):
+        initialized = await initialize(admission_factory, **kwargs)
+        async with case.factory() as session:
+            active = await session.get(GenerationRun, case.current.id)
+            assert active.status == "running"
+            assert capacity_admitted_dispatch_token(active) == run.kwargs["capacity_dispatch_token"]
+            assert recovery_execution.recovery_state(active) == initialized
+            assert initialized.version == 3
+            assert initialized.identity.run_id == case.current.id
+            assert initialized.execution.physical_state == "active"
+            assert initialized.execution.control_workspace_id is not None
+            assert initialized.execution.control_fencing_epoch == 1
+        raise InitializedRecovery
+
+    monkeypatch.setattr(recovery_execution, "initialize_execution", expect_initialized)
+    async with test_engine.connect() as owner:
+        key = int.from_bytes(case.current.id.bytes[-4:], "big", signed=True)
+        await owner.execute(text("SELECT pg_advisory_lock(1195724366,:key)"), {"key": key})
+        await owner.commit()
+        token = recovery_execution._SESSION_OWNER.set(
+            recovery_execution.SessionOwnership(case.current.id, owner),
+        )
+        try:
+            with pytest.raises(InitializedRecovery):
+                await run.invoke()
+        finally:
+            recovery_execution._SESSION_OWNER.reset(token)
+            await owner.execute(text("SELECT pg_advisory_unlock(1195724366,:key)"), {"key": key})
+            await owner.commit()
+    assert run.records == ["runtime", "admitted"]
+    assert lost_ack == lose_commit_ack
+    run.model.assert_not_awaited()
 
 
 async def test_restored_design_context_is_final_before_model(admitted_checkpoint_case, monkeypatch):

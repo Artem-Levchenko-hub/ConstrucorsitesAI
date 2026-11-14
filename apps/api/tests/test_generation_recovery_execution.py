@@ -416,7 +416,10 @@ async def test_pipeline_commits_bootstrap_context_before_first_runtime_effect(
         ProjectGenerationFacts,
         SourceBaseline,
     )
-    from yleum_api.services.generation_runs import load_generation_dispatch
+    from yleum_api.services.generation_runs import (
+        load_generation_dispatch,
+        mark_capacity_dispatch_admitted,
+    )
 
     run = await _queued_dispatch(db_session)
     run.status = "running"
@@ -462,7 +465,11 @@ async def test_pipeline_commits_bootstrap_context_before_first_runtime_effect(
     class ObservedBoundary(Exception):
         pass
 
+    dispatch_token = uuid4()
+    seen_dispatch_tokens = []
+
     async def runtime_effect(**kwargs):
+        seen_dispatch_tokens.append(kwargs["capacity_dispatch_token"])
         async with factory() as check:
             current = await check.get(GenerationRun, run.id)
             state = recovery_execution.recovery_state(current)
@@ -522,6 +529,7 @@ async def test_pipeline_commits_bootstrap_context_before_first_runtime_effect(
                         phase="waiting_dependency", next_check_at=datetime.now(UTC).isoformat()
                     )
                     current.agent_state = {**current.agent_state, "recovery_v1": raw}
+                    mark_capacity_dispatch_admitted(current, token=dispatch_token)
                     await session.commit()
                     claim = await recovery_execution.claim_continuation(
                         session,
@@ -536,6 +544,7 @@ async def test_pipeline_commits_bootstrap_context_before_first_runtime_effect(
                 with pytest.raises(ObservedBoundary):
                     await recovery_execution.resume_generation(claim)
                 agent_pipeline.classify_agent_turn.assert_awaited_once()
+                assert seen_dispatch_tokens == [None, dispatch_token]
         finally:
             recovery_execution._SESSION_OWNER.reset(token)
 

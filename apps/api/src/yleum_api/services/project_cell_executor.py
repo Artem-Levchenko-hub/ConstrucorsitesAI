@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import posixpath
 import re
 from collections.abc import Awaitable, Callable
@@ -26,6 +27,7 @@ from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorks
 from yleum_api.models.user import User
 from yleum_api.services.agent_builder import Action, Executor
 from yleum_api.services.exact_edit import validate_exact_edit
+from yleum_api.services.generation.recovery_contract import RecoveryStateV2
 from yleum_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
     PREVIOUS_CELL_ENSURE_RECONCILIATION_REQUIRED,
@@ -912,6 +914,9 @@ async def _wait_for_previous_cell_reconciliation(
             await asyncio.sleep(min(1.0, remaining))
 
 
+CellAdmissionCallback = Callable[[UUID], Awaitable[RecoveryStateV2 | None]]
+
+
 async def maybe_create_project_cell_executor(
     *,
     project_id: UUID,
@@ -923,6 +928,7 @@ async def maybe_create_project_cell_executor(
     vision_context: str = "",
     agent_emit: Callable[[dict[str, object]], Awaitable[None]] | None = None,
     capacity_dispatch_token: UUID | None = None,
+    on_admitted: CellAdmissionCallback | None = None,
 ) -> ProjectCellExecutorHandle | None:
     if project_template != "max_miniapp":
         return None
@@ -1068,7 +1074,6 @@ async def maybe_create_project_cell_executor(
                 raise ProjectCellStateConflict("Generation is no longer active")
             workspace.generation_run_id = run.id
             profile_version = await resolve_workspace_profile(session, workspace, profile_version)
-            from yleum_api.services.generation.recovery_contract import RecoveryStateV2
             from yleum_api.services.generation.recovery_execution import recovery_state
 
             recovery = recovery_state(run)
@@ -1163,13 +1168,34 @@ async def maybe_create_project_cell_executor(
         provider_ref=response.provider_ref,
         fencing_epoch=response.fencing_epoch,
     )
+    admitted_state = None
+    if on_admitted is not None:
+        from yleum_api.services.generation.recovery_execution import _require_session_owner
+
+        try:
+            admitted_state = await on_admitted(outcome.operation_id)
+            if admitted_state is None:
+                raise ProjectCellExecutorUnavailable("Admitted cell lacks its executable entry")
+        except BaseException:
+            # The executor has not opened the runtime or an adaptation candidate.
+            # Release only while this worker still owns the session lock.
+            try:
+                await _require_session_owner(generation_run_id, compatibility=False)
+                await _release_generation_lease(
+                    session_factory=session_factory, workspace_id=workspace_id,
+                    generation_run_id=generation_run_id, profile_version=profile_version,
+                )
+            except Exception:
+                logging.getLogger(__name__).exception("Initial Project Cell lease release failed")
+            raise
     signal_capacity_admitted(generation_run_id)
     adaptation_workspace: RestorationAdaptationWorkspace | None = None
     agent_workspace_id = workspace_id
-    from yleum_api.services.generation.recovery_contract import RecoveryStateV2
     from yleum_api.services.generation.recovery_execution import recovery_state
 
-    durable_adaptation = restoration_adaptation and isinstance(recovery_state(run), RecoveryStateV2)
+    durable_adaptation = restoration_adaptation and (
+        admitted_state is not None or isinstance(recovery_state(run), RecoveryStateV2)
+    )
 
     async def _abort_adaptation_setup() -> None:
         if durable_adaptation:

@@ -185,8 +185,8 @@ def frozen_requirements(run: GenerationRun) -> tuple[RecoveryRequirement, ...]:
 async def freeze_for_run(
     session: AsyncSession, *, run_id: UUID, project_id: UUID, user_id: UUID,
     prompt: str, template: str,
-) -> None:
-    """Freeze before planner/agent work; this never executes acceptance or a model."""
+) -> str:
+    """Freeze before planner/agent work and return the status read under the owner lock."""
     project = await session.get(Project, project_id, populate_existing=True, with_for_update=True)
     run = await session.get(GenerationRun, run_id, populate_existing=True, with_for_update=True)
     behavior.need(project is not None and project.owner_id == user_id and run is not None
@@ -197,16 +197,19 @@ async def freeze_for_run(
 
     request = await original_request_binding(session, run, prompt,
                                             project_id=project_id, run_id=run_id)
+    status = run.status
     if STATE_KEY in (run.agent_state or {}):
         # Discovery/project context may evolve after initialization; the saved
         # contract remains authoritative, rather than recompiling it on retry.
         frozen_requirements(run)
-        return
-    spec = FidelitySpec.from_dict(project.discovery_spec)
-    store_frozen_requirements(run, request.identity, spec,
-        behavior.required_contract(request.text, template=template, request_sha256=run.prompt_hash),
-        semantic_prompt=request.text)
-    await session.commit()
+    else:
+        spec = FidelitySpec.from_dict(project.discovery_spec)
+        named = behavior.required_contract(
+            request.text, template=template, request_sha256=run.prompt_hash,
+        )
+        store_frozen_requirements(run, request.identity, spec, named, semantic_prompt=request.text)
+        await session.commit()
+    return status
 
 
 async def load_requirement_witness(

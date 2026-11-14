@@ -149,6 +149,7 @@ async def _prepare_max_runtime_context(
     max_model_locked_files: frozenset[str],
     max_security_locked_files: frozenset[str],
     capacity_dispatch_token: UUID | None = None,
+    on_admitted: project_cell_executor.CellAdmissionCallback | None = None,
 ) -> dict[str, Any]:
     project_cell_handle: ProjectCellExecutorHandle | None = None
     max_shell_enabled = False
@@ -174,6 +175,7 @@ async def _prepare_max_runtime_context(
                 },
             ),
             capacity_dispatch_token=capacity_dispatch_token,
+            on_admitted=on_admitted,
         )
     except project_cell_executor.ProjectCellExecutorUnavailable as cell_exc:
         await agent_emit(

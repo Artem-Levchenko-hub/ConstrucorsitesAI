@@ -87,7 +87,10 @@ from yleum_api.services.generation.source_checkpoint import (
     adjacent_checkpoint,
     persist_checkpoint,
 )
-from yleum_api.services.generation_runs import record_generation_product_failure
+from yleum_api.services.generation_runs import (
+    capacity_admitted_dispatch_token,
+    record_generation_product_failure,
+)
 from yleum_api.services.project_cell_errors import ProjectCellInfrastructureError
 
 _log = logging.getLogger("yleum_api.routers.messages")
@@ -157,6 +160,7 @@ async def resume_agent_generation(claim: ContinuationClaim) -> None:
             return  # Exact SQL terminal receipt; no source preparation or publication replay.
         baseline_sha = await _baseline_sha(session, run=run, project=project, state=state)
         dispatch = load_generation_dispatch(run)
+        dispatch_token = capacity_admitted_dispatch_token(run)
         await session.commit()
     saved = await load_execution_context(
         state.identity, state.execution.execution_context_ref, binding=state.binding,
@@ -208,7 +212,7 @@ async def resume_agent_generation(claim: ContinuationClaim) -> None:
         await run_agent_generation(
             _consume_free_generation=partial(consume_free_generation, is_free=data["is_free"],
                                              user_id=ids.user_id),
-            baseline=baseline, capacity_dispatch_token=None, factory=factory,
+            baseline=baseline, capacity_dispatch_token=dispatch_token, factory=factory,
             force_model=data["force_model"], ids=ids, is_free=data["is_free"],
             model_id=data["model_id"], orchestrate=data["orchestrate"],
             progress=GenerationProgress(
@@ -253,29 +257,64 @@ async def run_agent_generation(
     selected_elements: list[dict[str, Any]] | None,
     _resume_state: RecoveryStateV2 | None = None,
 ) -> None:
+    from yleum_api.services.generation.recovery_execution import (
+        execution_enabled,
+        initialize_execution,
+        require_initial_execution_owner,
+    )
     from yleum_api.services.generation.recovery_requirements import freeze_for_run
+
+    prepare_runtime = partial(
+        prepare_agent_runtime,
+        ids=ids,
+        project_info=project_info,
+        runtime=runtime,
+        progress=progress,
+        factory=factory,
+        _agent_res=None,
+        capacity_dispatch_token=capacity_dispatch_token,
+    )
+    fresh_max = _resume_state is None and project_info.template == "max_miniapp"
+    prepared_runtime = None
+
+    async def initialize_entry(ensure_operation_id: UUID | None = None) -> RecoveryStateV2 | None:
+        nonlocal _resume_state
+        _resume_state = await initialize_execution(
+            factory, run_id=ids.run_id, ensure_operation_id=ensure_operation_id, context=lambda: {
+                "schema_version": 1, "entry": "pipeline",
+                "pipeline": {
+                    "ids": {key: str(value) for key, value in asdict(ids).items()},
+                    "baseline": {
+                        "snapshot_id": str(baseline.snapshot_id) if baseline.snapshot_id else None,
+                        "sha": baseline.sha, "files": baseline.files,
+                    },
+                    "project_info": asdict(project_info), "prompt_text": prompt_text,
+                    "force_model": force_model, "is_free": is_free, "model_id": model_id,
+                    "orchestrate": orchestrate, "selected_elements": selected_elements,
+                },
+                "completed": {}, "active_frame": None,
+            },
+        )
+        return _resume_state
 
     if _resume_state is None:
         async with factory() as scope_session:
-            await freeze_for_run(
+            run_status = await freeze_for_run(
                 scope_session, run_id=ids.run_id, project_id=ids.project_id,
                 user_id=ids.user_id, prompt=prompt_text, template=project_info.template,
             )
-    from yleum_api.services.generation.recovery_execution import initialize_execution
-
-    if _resume_state is None:
-        _resume_state = await initialize_execution(factory, run_id=ids.run_id, context=lambda: {
-        "schema_version": 1, "entry": "pipeline",
-        "pipeline": {
-            "ids": {key: str(value) for key, value in asdict(ids).items()},
-            "baseline": {"snapshot_id": str(baseline.snapshot_id) if baseline.snapshot_id else None,
-                         "sha": baseline.sha, "files": baseline.files},
-            "project_info": asdict(project_info), "prompt_text": prompt_text,
-            "force_model": force_model, "is_free": is_free, "model_id": model_id,
-            "orchestrate": orchestrate, "selected_elements": selected_elements,
-        },
-        "completed": {}, "active_frame": None,
-        })
+        if (
+            fresh_max and run_status in {"pending", "queued_for_capacity"}
+            and execution_enabled(ids.project_id)
+        ):
+            # A pending claim must pass the real cell admission CAS. Commit its
+            # active recovery lease before the executor opens the runtime.
+            await require_initial_execution_owner(ids.run_id)
+            prepared_runtime = await prepare_runtime(
+                prompt_text=prompt_text, _design_contract=None, on_admitted=initialize_entry,
+            )
+        else:
+            await initialize_entry()
     from yleum_api.services.generation.recovery_execution import load_execution_context
     from yleum_api.services.generation.recovery_pipeline import (
         BootstrapPreparation,
@@ -343,25 +382,11 @@ async def run_agent_generation(
     # NB: `is_first_build` lives in the POST handler (post_prompt), NOT in
     # this worker fn — use the in-scope `current_snapshot_id` (None on a
     # brand-new project's first build) so this never NameErrors.
-    _agent_res: agent_builder.AgentResult | None = None
-    prepare_runtime = partial(
-        prepare_agent_runtime,
-        ids=ids,
-        project_info=project_info,
-        runtime=runtime,
-        progress=progress,
-        factory=factory,
-        _agent_res=_agent_res,
-        capacity_dispatch_token=capacity_dispatch_token,
-    )
-    # A fresh legacy MAX dispatch is still pending/queued here. The runtime's
-    # capacity CAS must admit it before the strict checkpoint reader can record
-    # provenance. V2 keeps its committed bootstrap/cold-entry ordering intact.
-    admit_before_checkpoint = _resume_state is None and project_info.template == "max_miniapp"
-    prepared_runtime = (
-        await prepare_runtime(prompt_text=prompt_text, _design_contract=None)
-        if admit_before_checkpoint else None
-    )
+    # A fresh legacy entry also needs its runtime before recording adjacent
+    # source provenance. A cold durable entry still uses its saved context.
+    if fresh_max and _resume_state is None and prepared_runtime is None:
+        prepared_runtime = await prepare_runtime(prompt_text=prompt_text, _design_contract=None)
+    prepared_before_design = prepared_runtime is not None
     resumed: tuple[SourceCheckpoint, str] | None = None
     if prepared_entry is not None:
         (prompt_text, _is_continue, _is_edit,
@@ -455,7 +480,7 @@ async def run_agent_generation(
             prompt_text=prompt_text, _design_contract=_design_contract,
         )
     bindings, _agent_res = prepared_runtime
-    if admit_before_checkpoint:
+    if prepared_before_design:
         # Provisioning is model-free; all later model-facing preparation uses
         # the recovered task/design, never the short or expanded retry prompt.
         bindings.vision_context = (
@@ -467,7 +492,13 @@ async def run_agent_generation(
         runtime.continuation = continuation
         assert runtime.handle is not None
         await rebind_continuation(continuation)
-        if continuation.state.execution.physical_state == "no_effects":
+        if continuation.state.binding is None:
+            execution = continuation.state.execution
+            if execution.physical_state == "active" and (
+                execution.control_workspace_id != runtime.handle.control_workspace_id
+                or execution.control_fencing_epoch != runtime.handle.control_fencing_epoch
+            ):
+                raise RecoveryContractError("admitted Project Cell lease changed before binding")
             await continuation.save(continuation.state.execution.model_copy(update={
                 "physical_state": "active",
                 "control_workspace_id": runtime.handle.control_workspace_id,

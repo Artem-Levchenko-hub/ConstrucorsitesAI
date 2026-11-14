@@ -22,6 +22,7 @@ from yleum_api.services.generation.contracts import (
 from yleum_api.services.generation.meal_acceptance_receipts import MealDriver
 from yleum_api.services.generation.progress import GenerationProgress
 from yleum_api.services.generation.recovery_actions import VerifiedProgressCollector
+from yleum_api.services.generation.recovery_contract import RecoveryStateV2
 from yleum_api.services.generation.runtime import (
     _execute_max_agent_action,
     _prepare_max_runtime_context,
@@ -198,6 +199,7 @@ async def prepare_agent_runtime(
     _agent_res: agent_builder.AgentResult | None,
     capacity_dispatch_token: UUID | None,
     behavior_driver: ControllerBehaviorDriver | NotesDriver | MealDriver | None = None,
+    on_admitted: Callable[[UUID], Awaitable[RecoveryStateV2 | None]] | None = None,
 ) -> tuple[AgentRuntimeBindings, agent_builder.AgentResult | None]:
     _agent_emit = progress.emit_agent_event
     _vision_context = _design_contract.vision_context if _design_contract else prompt_text
@@ -267,6 +269,7 @@ async def prepare_agent_runtime(
             max_model_locked_files=MAX_MODEL_LOCKED_FILES,
             max_security_locked_files=MAX_SECURITY_LOCKED_FILES,
             capacity_dispatch_token=capacity_dispatch_token,
+            on_admitted=on_admitted,
         )
         runtime.handle = _max_runtime["project_cell_handle"]
         bindings.base_executor = _max_runtime["base_agent_executor"]
