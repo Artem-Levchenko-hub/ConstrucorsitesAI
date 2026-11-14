@@ -1809,6 +1809,7 @@ async def test_contextual_edit_bounds_discovery_before_unchanged_full_export(
             plan=SimpleNamespace(stack_guide="", skills=None, user=prompt, steps=24,
                                  model="claude-sonnet-5"),
             operations=SimpleNamespace(execute=execute, emit=None),
+            allow_autonomous_source_repair=coordinated,
         )
 
     if behavior in {"endless_reads", "prose", "unchanged_write", "unexpected_bash"}:
