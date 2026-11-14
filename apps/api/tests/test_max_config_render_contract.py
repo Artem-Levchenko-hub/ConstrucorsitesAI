@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
 from yleum_api.core import config as core_config
 from yleum_api.core.config import Settings
@@ -57,6 +59,21 @@ _LEGACY_DEPENDENCY_HASHES = {
 # Reviewed portable variant: only db:push/db:generate are removed. Keep an
 # exact package pin, rather than exempting portable scripts or dependencies.
 _PORTABLE_PACKAGE_HASH = "45181196afc31d10c92ec49543a529839ab8cc5ea1da07c0869419d89fe7c764"
+
+
+_CHECKOUT_RECEIPT_HELPER = "src/lib/omnia/checkout-receipt.ts"
+_CHECKOUT_RECEIPT_OVERRIDES = json.loads(
+    (
+        Path(__file__).parents[2]
+        / "orchestrator/tests/fixtures/max_template_checkout_receipt_overrides.json"
+    ).read_text(encoding="utf-8")
+)
+assert set(_CHECKOUT_RECEIPT_OVERRIDES) == {
+    "src/app/api/omnia/integrations/[...path]/route.ts",
+    "src/components/MaxAppProvider.tsx",
+    _CHECKOUT_RECEIPT_HELPER,
+    "src/lib/omnia/integration-client.ts",
+}
 
 
 _LEGACY_PREVIEW_HASHES = {
@@ -178,7 +195,9 @@ def _normalize_managed_order_receipts(files):
             )
         else:
             assert entry["sha256"] == action[path]["sha256"]
-        assert hashlib.sha256(actual.encode()).hexdigest() == entry["sha256"], path
+        assert hashlib.sha256(actual.encode()).hexdigest() == (
+            _CHECKOUT_RECEIPT_OVERRIDES[path]["sha256"]
+        ), path
         normalized[path] = (
             baseline["source"].replace(
                 'const PROJECT_ID = process.env.OMNIA_PROJECT_ID || "";', declaration, 1
@@ -281,7 +300,8 @@ def _normalize_preview_renewal(files):
             assert identity == "" or str(UUID(identity)) == identity
             declaration = match.group(0)
             actual = actual.replace(declaration, sentinel, 1)
-        assert hashlib.sha256(actual.encode("utf-8")).hexdigest() == entry["sha256"], path
+        reviewed_entry = _CHECKOUT_RECEIPT_OVERRIDES.get(path, entry)
+        assert hashlib.sha256(actual.encode("utf-8")).hexdigest() == reviewed_entry["sha256"], path
         if path == added:
             normalized.pop(path)
         else:
@@ -382,9 +402,33 @@ def _normalize_owner_management(files):
     return normalized
 
 
+def _normalize_checkout_receipt(files):
+    source = files[_CHECKOUT_RECEIPT_HELPER]
+    assert _CHECKOUT_RECEIPT_HELPER in max_project_kit.MAX_SECURITY_LOCKED_FILES
+    for name, marker in (
+        ("realKey", "__YLEUM_CHECKOUT_RECEIPT_PUBLIC_KEY__"),
+        ("fixtureKey", "__YLEUM_MEAL_FIXTURE_PUBLIC_KEY__"),
+    ):
+        declarations = re.findall(rf'^const {name} = ("[^"\n]*");$', source, re.M)
+        assert len(declarations) == 1
+        key = json.loads(declarations[0])
+        # An unconfigured issuer renders an empty pin to fail verification closed.
+        if key:
+            assert isinstance(load_pem_public_key(key.encode("ascii")), Ed25519PublicKey)
+        source = source.replace(
+            f"const {name} = {declarations[0]};", f'const {name} = "{marker}";', 1,
+        )
+    assert hashlib.sha256(source.encode()).hexdigest() == (
+        _CHECKOUT_RECEIPT_OVERRIDES[_CHECKOUT_RECEIPT_HELPER]["sha256"]
+    ), _CHECKOUT_RECEIPT_HELPER
+    normalized = dict(files)
+    normalized.pop(_CHECKOUT_RECEIPT_HELPER)
+    return normalized
+
+
 def _reviewed_render_signature(files, *, portable=False):
     """Validate reviewed overrides before fingerprinting the historical SDK view."""
-    files = _normalize_catalog(_normalize_owner_management(files))
+    files = _normalize_checkout_receipt(_normalize_catalog(_normalize_owner_management(files)))
     fixture_root = Path(__file__).parent / "fixtures"
     legacy = json.loads(
         (fixture_root / "max_config_render_legacy_dependencies.json").read_text(encoding="utf-8")
@@ -826,6 +870,7 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         "src/lib/omnia/analytics.ts",
         "src/lib/omnia/consent.ts",
         "src/app/api/omnia/consents/route.ts",
+        _CHECKOUT_RECEIPT_HELPER,
         "src/lib/omnia/integration-client.ts",
         "src/app/api/omnia/integrations/[...path]/route.ts",
     ],

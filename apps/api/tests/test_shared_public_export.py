@@ -85,6 +85,13 @@ SOURCE_MAPPING = json.loads(
     ).read_text(encoding="utf-8")
 )
 
+CHECKOUT_RECEIPT_OVERRIDES = json.loads(
+    (
+        Path(__file__).resolve().parents[2]
+        / "orchestrator/tests/fixtures/max_template_checkout_receipt_overrides.json"
+    ).read_text(encoding="utf-8")
+)
+
 
 @pytest.mark.parametrize("template", GOLDEN["templates"])
 def test_real_template_export_keeps_standalone_public_assets_and_generated_overrides(template):
@@ -138,6 +145,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             expected.update(CONSENT_OVERRIDES)
             expected.update(CATALOG_OVERRIDES)
             expected.update(OWNER_OVERRIDES)
+            expected.update(CHECKOUT_RECEIPT_OVERRIDES)
         for relative in expected:
             shared_public = relative in {
                 "public/omnia-inspector.js",
@@ -177,6 +185,8 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             str(fixtures / "max_template_consent_overrides.json"),
             "--owner-management-overrides",
             str(fixtures / "max_template_owner_management_overrides.json"),
+            "--checkout-receipt-overrides",
+            str(fixtures / "max_template_checkout_receipt_overrides.json"),
             "--catalog-overrides",
             str(fixtures / "max_template_catalog_overrides.json"),
             "--compliance-overrides",
@@ -210,6 +220,8 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
         str(fixtures / "max_template_consent_overrides.json"),
         "--owner-management-overrides",
         str(fixtures / "max_template_owner_management_overrides.json"),
+        "--checkout-receipt-overrides",
+        str(fixtures / "max_template_checkout_receipt_overrides.json"),
         "--catalog-overrides",
         str(fixtures / "max_template_catalog_overrides.json"),
         "--compliance-overrides",
@@ -263,7 +275,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
         )
         assert expected_error in rejected.stderr
 
-    # New receipt helper and changed routes remain an explicit four-file contract.
+    # The analytics override is limited to the reviewed files.
     for extra_path in ("src/lib/omnia/unreviewed.ts", None):
         bad_analytics = dict(ANALYTICS_OVERRIDES)
         if extra_path:
@@ -369,6 +381,61 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             else f"max-miniapp-nextjs/{owner_path}"
         )
         assert expected_error in rejected.stderr
+    checkout_index = valid_args.index("--checkout-receipt-overrides")
+    checkout_helper = "src/lib/omnia/checkout-receipt.ts"
+    for mutation in ("extra", "missing", "omitted"):
+        checkout_overrides = dict(CHECKOUT_RECEIPT_OVERRIDES)
+        if mutation == "extra":
+            checkout_overrides["src/lib/omnia/unreviewed.ts"] = {"sha256": "0" * 64}
+        if mutation == "missing":
+            del checkout_overrides[checkout_helper]
+        untrusted_checkout = tmp_path / "untrusted-checkout.json"
+        untrusted_checkout.write_text(json.dumps(checkout_overrides), encoding="utf-8")
+        invalid_args = valid_args.copy()
+        if mutation == "omitted":
+            del invalid_args[checkout_index:checkout_index + 2]
+        else:
+            invalid_args[checkout_index + 1] = str(untrusted_checkout)
+        rejected = subprocess.run(
+            invalid_args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30,
+        )
+        assert rejected.returncode != 0
+        assert (
+            "incomplete standalone export" if mutation == "omitted"
+            else "unexpected MAX checkout receipt override paths"
+        ) in rejected.stderr
+
+    provider = "src/components/MaxAppProvider.tsx"
+    invalid_predecessor = tmp_path / "untrusted-checkout-predecessor.json"
+    invalid_predecessor.write_text(json.dumps({
+        **PREVIEW_RENEWAL_OVERRIDES,
+        provider: CHECKOUT_RECEIPT_OVERRIDES[provider],
+    }), encoding="utf-8")
+    invalid_args = valid_args.copy()
+    invalid_args[7] = str(invalid_predecessor)
+    rejected = subprocess.run(
+        invalid_args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30,
+    )
+    assert rejected.returncode != 0
+    assert f"unexpected checkout predecessor: {provider}" in rejected.stderr
+
+    helper = mounted / "max-miniapp-nextjs" / checkout_helper
+    source = helper.read_bytes()
+    for mutation in ("missing", "drift"):
+        if mutation == "missing":
+            helper.unlink()
+        else:
+            helper.write_bytes(source + b"\n// unreviewed receipt verifier drift\n")
+        rejected = subprocess.run(
+            valid_args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30,
+        )
+        assert rejected.returncode != 0
+        assert (
+            "incomplete standalone export" if mutation == "missing"
+            else f"max-miniapp-nextjs/{checkout_helper}"
+        ) in rejected.stderr
+        helper.write_bytes(source)
+
     # The footer exception is exactly one reviewed path, never a source bypass.
     compliance_path = "src/components/YleumCompliance.tsx"
     compliance = json.loads(

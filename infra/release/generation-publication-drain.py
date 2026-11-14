@@ -222,6 +222,16 @@ _PORTABLE_QUIESCENCE_READER_WAIT_SOURCES = {
     "services.machine_adapter": "98fd7d44428611fdcdd36f1fbf51735e494d16fee759322e7d772e780bdd2b89",
     "routers.workspace": "25e167c1832959ecafd47f970735a113d56e1ae7630b557f773209d9a270c742",
 }
+# The Meal probe mints a draft session under the existing workspace lock and
+# generation fence. It reuses the ready-preview path and its process inventory.
+_PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES = {
+    **_PORTABLE_QUIESCENCE_READER_WAIT_SOURCES,
+    "routers.workspace": "5ca6c97f48cda7011e242c86970b5ebec56abf7ba2e935dcb9e180990aa2be1f",
+    "schemas.workspace": "6bf206e34d5d35717d2e518be87944915df876e666fdbc7219ad5e037e5c6db1",
+    "services.generation_reader_inventory": (
+        "230b53167ab847a4fdb9ce23460a1d3da6d5cde7c0c754a81a70221da9bb0161"
+    ),
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -242,6 +252,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_SOURCE_GUARD_RECOVERY_SOURCES,
     _PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES,
     _PORTABLE_QUIESCENCE_READER_WAIT_SOURCES,
+    _PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.
@@ -484,7 +495,8 @@ def _pending_portable_commands(machine: dict, *, sources: dict[str, str]) -> dic
     if requests:
         _kernel_need(
             sources in (_PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES,
-                        _PORTABLE_QUIESCENCE_READER_WAIT_SOURCES)
+                        _PORTABLE_QUIESCENCE_READER_WAIT_SOURCES,
+                        _PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES)
             and len(requests) == 1 and len(pending) <= 1,
             "quiescence_command_scope",
         )

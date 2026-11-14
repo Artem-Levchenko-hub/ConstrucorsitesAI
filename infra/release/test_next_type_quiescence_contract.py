@@ -24,7 +24,8 @@ class NextTypeSourceClosureTests(unittest.TestCase):
         self.guard_retry = self.checker._PORTABLE_QUIESCENCE_SOURCE_GUARD_RETRY_SOURCES
         self.guard_recovery = self.checker._PORTABLE_QUIESCENCE_SOURCE_GUARD_RECOVERY_SOURCES
         self.guard_lease = self.checker._PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES
-        self.current = self.checker._PORTABLE_QUIESCENCE_READER_WAIT_SOURCES
+        self.reader_wait = self.checker._PORTABLE_QUIESCENCE_READER_WAIT_SOURCES
+        self.current = self.checker._PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES
 
     def test_historical_complete_bundle_is_preserved_and_still_supported(self):
         old_fixture = json.loads((self.directory / "fixtures/platform-bootstrap-v2-quiescence-sources.json").read_bytes())
@@ -83,14 +84,26 @@ class NextTypeSourceClosureTests(unittest.TestCase):
         )
 
     def test_reader_wait_changes_only_the_fenced_command_and_dispatch_sources(self):
-        self.assertEqual(set(self.current), set(self.guard_lease))
-        changed = {key for key in self.current if self.current[key] != self.guard_lease[key]}
+        self.assertEqual(set(self.reader_wait), set(self.guard_lease))
+        changed = {key for key in self.reader_wait if self.reader_wait[key] != self.guard_lease[key]}
         self.assertEqual(changed, {"services.generation_reader_inventory",
                                    "services.machine_adapter", "routers.workspace"})
         for key in changed:
             with self.subTest(module=key), self.assertRaises(self.checker.PhysicalDrainError):
                 self.checker._require_reviewed_portable_sources(
-                    {**self.current, key: self.guard_lease[key]},
+                    {**self.reader_wait, key: self.guard_lease[key]},
+                )
+
+    def test_meal_acceptance_pins_exact_successor_of_reader_wait(self):
+        self.checker._require_reviewed_portable_sources(self.reader_wait)
+        self.assertEqual(set(self.current), set(self.reader_wait))
+        changed = {key for key in self.current if self.current[key] != self.reader_wait[key]}
+        self.assertEqual(changed, {"routers.workspace", "schemas.workspace",
+                                   "services.generation_reader_inventory"})
+        for key in changed:
+            with self.subTest(module=key), self.assertRaises(self.checker.PhysicalDrainError):
+                self.checker._require_reviewed_portable_sources(
+                    {**self.current, key: self.reader_wait[key]},
                 )
 
     def test_current_committed_source_closure_matches_linux_git_bytes(self):

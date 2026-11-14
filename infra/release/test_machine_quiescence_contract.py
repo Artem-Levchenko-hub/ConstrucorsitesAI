@@ -170,10 +170,15 @@ class PendingFastCheckTests(unittest.TestCase):
         request = self.machine["operations"][COMMAND]
         request.update(phase="fast_check", heartbeat_at=request["started_at"], log_bytes=0)
         before = copy.deepcopy(self.machine)
-        self.assertEqual(
-            self.checker._pending_portable_commands(self.machine, sources=self.sources),
-            {COMMAND: self.checker._digest(request)},
-        )
+        for sources in (
+            self.sources,
+            self.checker._PORTABLE_QUIESCENCE_READER_WAIT_SOURCES,
+            self.checker._PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES,
+        ):
+            self.assertEqual(
+                self.checker._pending_portable_commands(self.machine, sources=sources),
+                {COMMAND: self.checker._digest(request)},
+            )
         self.assertEqual(self.machine, before)
         for field, value in (
             ("phase", "typecheck"), ("startup_role", "full_build"), ("epoch", 6),
@@ -614,7 +619,7 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             (Path(__file__).parent / "fixtures/source-guard-lease-quiescence-sources.json")
             .read_text()
         )
-        current = self.checker._PORTABLE_QUIESCENCE_READER_WAIT_SOURCES
+        current = self.checker._PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES
         self.checker._require_reviewed_portable_sources(previous)
         self.checker._require_reviewed_portable_sources(previous_lease)
         baseline = json.loads(

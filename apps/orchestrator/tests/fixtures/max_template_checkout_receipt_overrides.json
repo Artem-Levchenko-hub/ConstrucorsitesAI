@@ -1,0 +1,18 @@
+{
+  "src/app/api/omnia/integrations/[...path]/route.ts": {
+    "sha256": "2dc780aa4490a43be9648b200756bb648fab124e4cd81725fc410bc863865121",
+    "mode": "100644"
+  },
+  "src/components/MaxAppProvider.tsx": {
+    "sha256": "f77686edf83ebeab527aa9d4cc3b06889d1e15c21e02c01ab31018b4b4a211fc",
+    "mode": "100644"
+  },
+  "src/lib/omnia/checkout-receipt.ts": {
+    "sha256": "bae2db44d2383c0804060043f4256d16d77c0b42cc1bf83751cdcafe2beafa2e",
+    "mode": "100644"
+  },
+  "src/lib/omnia/integration-client.ts": {
+    "sha256": "5dc0407f27b4bf6c1a6324b38750587a371e6266330f2845521b8fd13a52994b",
+    "mode": "100644"
+  }
+}

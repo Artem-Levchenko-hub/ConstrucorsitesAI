@@ -92,6 +92,20 @@ _OWNER_MANAGEMENT_OVERRIDE_PATHS = {
 }
 
 
+_CHECKOUT_RECEIPT_PREDECESSOR_HASHES = {
+    "src/app/api/omnia/integrations/[...path]/route.ts": (
+        "da97b4817ed5238bc6f183f43b6f02d6b265e3db9e474db2aa2210a559ce699e"
+    ),
+    "src/components/MaxAppProvider.tsx": (
+        "af61352a0ff2b5154f5c8b45140243ec1079f90b9eff16369af6e830bfe0fa5c"
+    ),
+    "src/lib/omnia/integration-client.ts": (
+        "b96f0a90ee28a53dbdc79ff284ee3a3ae9836b80669881e16fde1e4b91e6ff1f"
+    ),
+}
+_CHECKOUT_RECEIPT_HELPER = "src/lib/omnia/checkout-receipt.ts"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("golden", type=Path)
@@ -105,6 +119,7 @@ def main() -> None:
     parser.add_argument("--compliance-overrides", type=Path)
     parser.add_argument("--catalog-overrides", type=Path)
     parser.add_argument("--owner-management-overrides", type=Path)
+    parser.add_argument("--checkout-receipt-overrides", type=Path)
     args = parser.parse_args()
     golden = json.loads(args.golden.read_text(encoding="utf-8"))["templates"]
     overrides = json.loads(args.readme_overrides.read_text(encoding="utf-8"))
@@ -159,6 +174,17 @@ def main() -> None:
         assert analytics_overrides["src/lib/omnia/analytics.ts"]["sha256"] == (
             "760cf529cc3ec4872eb1ce2418fdebe6421932e56f9932b4f33a9adb93993a14"
         ), "max-miniapp-nextjs/src/lib/omnia/analytics.ts"
+    checkout_overrides = {}
+    if args.checkout_receipt_overrides is not None:
+        checkout_overrides = json.loads(args.checkout_receipt_overrides.read_text(encoding="utf-8"))
+        assert set(checkout_overrides) == {
+            *_CHECKOUT_RECEIPT_PREDECESSOR_HASHES, _CHECKOUT_RECEIPT_HELPER,
+        }, "unexpected MAX checkout receipt override paths"
+        predecessors = preview_renewal_overrides | action_write_overrides | consent_overrides
+        for path, sha256 in _CHECKOUT_RECEIPT_PREDECESSOR_HASHES.items():
+            assert predecessors[path]["sha256"] == sha256, (
+                f"unexpected checkout predecessor: {path}"
+            )
     for name, complete_tree in golden.items():
         if name == "max-miniapp-nextjs":
             complete_tree = (
@@ -169,6 +195,7 @@ def main() -> None:
                 | consent_overrides
                 | catalog_overrides
                 | owner_overrides
+                | checkout_overrides
             )
         omissions = _EXPORT_OMISSIONS[name]
         assert omissions <= complete_tree.keys(), f"unknown frozen export omissions: {name}"
@@ -186,6 +213,7 @@ def main() -> None:
                 entry = compliance_overrides.get(relative, entry)
                 entry = catalog_overrides.get(relative, entry)
                 entry = owner_overrides.get(relative, entry)
+                entry = checkout_overrides.get(relative, entry)
             content = exported[relative]
             data = content.encode("utf-8") if isinstance(content, str) else content
             assert hashlib.sha256(data).hexdigest() == entry["sha256"], f"{name}/{relative}"
