@@ -113,6 +113,7 @@ async def test_first_ordinary_max_output_limit_without_writes_still_enters_repai
         _max_seed_files=starter, _max_shell_enabled=False, baseline=baseline,
         ids=None, is_free=False, project_info=project, prompt_text="Рацион на месяц",
         runtime=runtime, plan=None, operations=operations,
+        allow_autonomous_source_repair=True,
     )
     handoff, first, _, _ = await agent_recovery.recover_stopped_candidate(
         _agent_res=candidate, _max_has_generated_snapshot=False, _max_seed_files=starter,

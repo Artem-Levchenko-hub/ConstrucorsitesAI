@@ -736,6 +736,7 @@ async def run_agent_generation(
             operations=_operations,
             source_checkpoint=save_source_checkpoint,
             workspace_context_files=workspace_context_files,
+            allow_autonomous_source_repair=autonomous_max_repair,
         )
         if continuation is not None:
             await complete_agent_turn(

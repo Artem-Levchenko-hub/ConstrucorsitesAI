@@ -18,7 +18,6 @@ from yleum_api.services.generation.contracts import (
     GenerationRuntime,
     ProjectGenerationFacts,
     SourceBaseline,
-    uses_autonomous_max_source_repair,
     uses_single_max_source_repair,
 )
 from yleum_api.services.generation.file_transforms import _merge_seeded_agent_files
@@ -375,6 +374,7 @@ async def execute_agent_turn(
     operations: AgentOperations,
     source_checkpoint: Callable[[agent_builder.AgentResult], Awaitable[None]] | None = None,
     workspace_context_files: dict[str, str] | None = None,
+    allow_autonomous_source_repair: bool = False,
 ) -> tuple[agent_builder.AgentResult, str | None]:
     if runtime.coordinator is not None:
         from yleum_api.services.max_behavior_proof import freeze_for_turn
@@ -688,7 +688,7 @@ async def execute_agent_turn(
     if _agent_res.stop_reason == "checkpoint_error":
         return _agent_res, _provider_failure
     if edit_source_changed is not None and not edit_source_changed() and not _provider_failure:
-        if not uses_autonomous_max_source_repair(runtime) or _agent_res.stop_reason in {
+        if not allow_autonomous_source_repair or _agent_res.stop_reason in {
             "infra_error", "error",
         }:
             raise RuntimeError("edit produced no source changes")
@@ -735,7 +735,7 @@ async def execute_agent_turn(
             transcript=_agent_res.transcript,
             stop_reason=(
                 "output_limit" if _agent_res.stop_reason == "output_limit"
-                and uses_autonomous_max_source_repair(runtime) else "no_ai_write"
+                and allow_autonomous_source_repair else "no_ai_write"
             ),
             evidence=_agent_res.evidence,
             segments=_agent_res.segments,
