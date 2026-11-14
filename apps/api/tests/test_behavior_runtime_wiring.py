@@ -58,7 +58,7 @@ async def test_normal_generation_controller_installs_trusted_driver_without_prob
     monkeypatch.setattr(max_finalization, "MaxFinalizationCoordinator", coordinator)
     await agent_runtime.prepare_agent_runtime(
         ids=NS(project_id=uuid4(), user_id=uuid4(), run_id=uuid4()),
-        project_info=NS(slug="owned-fixture"),
+        project_info=NS(slug="owned-fixture", template="max_miniapp"),
         runtime=runtime,
         progress=NS(emit_agent_event=AsyncMock(), record_generation_event=AsyncMock()),
         factory=object(),
