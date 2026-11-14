@@ -434,6 +434,96 @@ def private_boundary():
         thread.join(timeout=3)
 
 
+def test_private_meal_acceptance_session_uses_only_its_verified_cookie(private_boundary):
+    request, received, config = private_boundary
+    actor_id = "mealqa_" + "a" * 32
+    value = cookie(config["secret"], {
+        "id": actor_id, "expiresAt": int(time.time()) + 60, "firstName": "ignored",
+    })
+    headers = {"Cookie": "__Host-max_session=" + value, "X-Omnia-User-ID": "forged"}
+    status, body, response_headers = request("/api/max/session", headers)
+    assert status == 200
+    assert json.loads(body) == {"user": {"id": actor_id}, "mode": "acceptance"}
+    assert dict(response_headers)["Content-Type"] == "application/json; charset=utf-8"
+    assert dict(response_headers)["Cache-Control"] == "no-store"
+    assert "Set-Cookie" not in dict(response_headers)
+    assert not received
+
+    # The private exception never applies to alternate targets, verbs, or a
+    # caller-provided identity. The fixture's unbound core fails these requests.
+    for path, method in (
+        ("/api/max/session?actor=forged", "GET"),
+        ("/api/max/session?", "GET"),
+        ("/api/max/%73ession", "GET"),
+        ("/api/max/session", "POST"),
+        ("/api/max/session", "HEAD"),
+    ):
+        assert request(path, headers, method)[0] == 502
+    assert request("/api/max/session", {"X-Omnia-User-ID": actor_id})[0] == 502
+    for user_id, secret, expiry in (
+        (actor_id, "unrelated", int(time.time()) + 60),
+        (actor_id, config["secret"], 1),
+        ("mealqa_invalid", config["secret"], int(time.time()) + 60),
+        ("preview", config["secret"], int(time.time()) + 60),
+        ("123", config["secret"], int(time.time()) + 60),
+    ):
+        value = cookie(secret, {"id": user_id, "expiresAt": expiry})
+        assert request("/api/max/session", {"Cookie": "__Host-max_session=" + value})[0] == 502
+
+
+def test_public_meal_acceptance_cookie_never_bootstraps_session(public_boundary):
+    request, received = public_boundary
+    signed = cookie("public-test-secret", {
+        "id": "mealqa_" + "a" * 32, "expiresAt": int(time.time()) + 60,
+    })
+    headers = {"Cookie": "__Host-max_session=" + signed}
+    assert request("/api/max/session", headers)[0] == 502
+    assert request("/__omnia/identity", headers)[0] == 401
+    assert not received
+
+
+def test_browser_meal_acceptance_cookie_resumes_on_the_draft_origin(private_boundary):
+    playwright = pytest.importorskip("playwright.sync_api")
+    request, received, config = private_boundary
+    origin = "https://draft.example.test"
+    actor_id = "mealqa_" + "b" * 32
+    value = cookie(config["secret"], {"id": actor_id, "expiresAt": int(time.time()) + 60})
+
+    def handle(route):
+        url = route.request.url
+        if not url.startswith(origin + "/"):
+            return route.abort()
+        status, body, headers = request(
+            url[len(origin):], route.request.all_headers(), route.request.method,
+        )
+        return route.fulfill(status=status, body=body, headers={
+            "content-type": dict(headers).get("Content-Type", "text/html; charset=utf-8"),
+            "cache-control": dict(headers).get("Cache-Control", "no-store"),
+        })
+
+    with playwright.sync_playwright() as p:
+        browser = p.chromium.launch()
+        try:
+            context = browser.new_context()
+            context.route("**/*", handle)
+            context.add_cookies([{
+                "name": "__Host-max_session", "value": value, "url": origin + "/",
+                "secure": True, "httpOnly": True, "sameSite": "Lax",
+            }])
+            page = context.new_page()
+            page.goto(origin + "/")
+            page.get_by_text("private product HTML").wait_for()
+            assert page.evaluate("() => document.cookie") == ""
+            for _ in range(2):
+                assert page.evaluate(
+                    "async () => (await fetch('/api/max/session')).json()",
+                ) == {"user": {"id": actor_id}, "mode": "acceptance"}
+                page.reload()
+            assert received == ["/"] * 3
+        finally:
+            browser.close()
+
+
 def test_private_document_returns_only_trusted_recovery_shell(private_boundary):
     request, received, _ = private_boundary
     status, body, raw_headers = request("/orders?filter=%3Cscript%3E", {

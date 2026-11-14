@@ -1810,6 +1810,127 @@ async def test_portable_session_requires_published_ingress(monkeypatch, tmp_path
     assert ("bootstrap_url" in response.json()) is publish_ok
 
 
+async def test_meal_acceptance_session_is_private_portable_and_lease_bound(
+    monkeypatch, tmp_path,
+) -> None:
+    from yleum_orchestrator.services.machine_boundary import authenticated_session
+
+    workspace_id = uuid4()
+    provider, manager, _docker, run_id = await _ready_provider(tmp_path, workspace_id)
+    origin = f"https://{workspace._draft_preview_slug(workspace_id)}.preview.example"
+    signer = "synthetic-boundary-signing-key"
+    probes = []
+
+    async def publish(_manager, current_id):
+        assert current_id == workspace_id
+        probes.append(current_id)
+        return origin
+
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: provider)
+    monkeypatch.setattr(workspace, "_publish_draft_preview", publish)
+    monkeypatch.setattr(workspace.nginx_writer, "dev_url", lambda _slug: origin)
+    monkeypatch.setattr(workspace.nginx_writer, "dev_host", lambda _slug: urlparse(origin).hostname)
+    route = f"/internal/workspaces/{workspace_id}/draft/meal-acceptance-session"
+    headers = {"X-Internal-Token": "test-internal-token-not-a-real-secret"}
+    fixture_id = uuid4()
+    request = {
+        "generation_run_id": str(run_id), "fencing_epoch": 4,
+        "operation_id": str(uuid4()), "fixture_id": str(fixture_id),
+    }
+    async with _client() as client:
+        assert (await client.post(route, json=request)).status_code in {401, 403}
+        assert (await client.post(route, headers=headers, json=request)).status_code == 409
+        monkeypatch.setattr(workspace, "_portable_active", lambda *_: True)
+        monkeypatch.setattr(workspace, "_require_portable_runtime", lambda _: SimpleNamespace(
+            preview=lambda state: ("running", "172.30.0.2"),
+            secret=lambda _: signer,
+        ))
+        assert (await client.post(
+            route, headers=headers, json=request | {"fencing_epoch": 3},
+        )).status_code == 409
+        assert (await client.post(
+            route, headers=headers, json=request | {"fencing_epoch": True},
+        )).status_code == 422
+        assert (await client.post(
+            route, headers=headers, json=request | {"fixture_id": "invalid"},
+        )).status_code == 422
+        assert (await client.post(
+            route, headers=headers, json={k: v for k, v in request.items() if k != "fixture_id"},
+        )).status_code == 422
+        assert (await client.post(
+            route, headers=headers, json=request | {"generation_run_id": str(uuid4())},
+        )).status_code == 409
+        assert probes == []
+        response = await client.post(route, headers=headers, json=request)
+        repeat = await client.post(route, headers=headers, json=request)
+        new_operation = await client.post(
+            route, headers=headers, json=request | {"operation_id": str(uuid4())},
+        )
+        new_fixture = await client.post(
+            route, headers=headers, json=request | {"fixture_id": str(uuid4())},
+        )
+        assert manager.state_store.load(workspace_id).active_generation_run_id == run_id
+        await manager.release_generation(
+            workspace_id, workspace.LifecycleMutation(uuid4(), 5, "b" * 64),
+            generation_run_id=run_id,
+        )
+        assert (await client.post(route, headers=headers, json=request)).status_code == 409
+        edit_run_id = uuid4()
+        next_spec = _default_workspace_spec(workspace_id, generation_run_id=edit_run_id)
+        await provider.ensure(next_spec, workspace.LifecycleMutation(uuid4(), 6, "c" * 64))
+        edit = await client.post(
+            route, headers=headers, json=request | {
+                "generation_run_id": str(edit_run_id), "fencing_epoch": 6,
+                "operation_id": str(uuid4()),
+            },
+        )
+
+    assert response.status_code == repeat.status_code == new_operation.status_code == 200
+    assert new_fixture.status_code == edit.status_code == 200
+    assert probes == [workspace_id] * 5
+    assert response.headers["cache-control"] == "no-store"
+    payload = response.json()
+    assert payload["workspace_id"] == str(workspace_id)
+    assert payload["preview_url"] == origin
+    assert set(payload) == {
+        "workspace_id", "preview_url", "buyer_id", "buyer_cookie",
+        "other_id", "other_cookie", "expires_at",
+    }
+    assert signer not in response.text
+    assert payload["buyer_id"] != payload["other_id"]
+    assert payload["buyer_cookie"] != payload["other_cookie"]
+    for actor in ("buyer", "other"):
+        actor_id = payload[f"{actor}_id"]
+        assert actor_id.startswith("mealqa_") and len(actor_id) == 39
+        assert actor_id == repeat.json()[f"{actor}_id"]
+        assert actor_id == new_operation.json()[f"{actor}_id"] == edit.json()[f"{actor}_id"]
+        assert actor_id != new_fixture.json()[f"{actor}_id"]
+        cookie = "__Host-max_session=" + payload[f"{actor}_cookie"]
+        user, _value = authenticated_session(cookie, signer, public=False)
+        assert user is not None and user["id"] == actor_id
+        assert authenticated_session(cookie, signer, public=True) == (None, "")
+        assert authenticated_session(cookie, "another-workspace", public=False) == (None, "")
+
+
+def test_meal_fixture_actor_ids_are_project_scoped_across_workspaces() -> None:
+    workspace_id, project_id, fixture_id = uuid4(), uuid4(), uuid4()
+    first = workspace._meal_acceptance_session(
+        workspace_id, project_id, fixture_id, "https://first.example", "private-first",
+    )
+    same_project = workspace._meal_acceptance_session(
+        uuid4(), project_id, fixture_id, "https://second.example", "private-second",
+    )
+    different_project = workspace._meal_acceptance_session(
+        workspace_id, uuid4(), fixture_id, "https://third.example", "private-third",
+    )
+    assert (first.buyer_id, first.other_id) == (same_project.buyer_id, same_project.other_id)
+    assert {first.buyer_id, first.other_id}.isdisjoint(
+        {different_project.buyer_id, different_project.other_id},
+    )
+    assert first.buyer_cookie != same_project.buyer_cookie
+    assert first.other_cookie != same_project.other_cookie
+
+
 @pytest.mark.parametrize("released", [False, True])
 async def test_owner_preview_survives_release_without_restoring_agent_write_access(
     monkeypatch, tmp_path, released,

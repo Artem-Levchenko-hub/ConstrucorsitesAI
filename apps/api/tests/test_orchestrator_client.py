@@ -825,6 +825,61 @@ async def test_owner_cell_preview_is_bound_to_workspace_and_owner_not_generation
         )
 
 
+async def test_meal_cell_session_is_fenced_and_redacts_both_cookies(monkeypatch) -> None:
+    workspace_id, run_id, operation_id, fixture_id = uuid4(), uuid4(), uuid4(), uuid4()
+    observed: dict[str, object] = {}
+    buyer_cookie, other_cookie = "c" * 72 + "." + "a" * 43, "d" * 72 + "." + "b" * 43
+    payload = {
+        "workspace_id": str(workspace_id),
+        "preview_url": _cell_preview_payload(workspace_id)["preview_url"],
+        "buyer_id": "mealqa_" + uuid4().hex,
+        "buyer_cookie": buyer_cookie,
+        "other_id": "mealqa_" + uuid4().hex,
+        "other_cookie": other_cookie,
+        "expires_at": "2030-01-01T00:00:00Z",
+    }
+
+    async def fake_request(method, path, **kwargs):
+        observed.update(method=method, path=path, **kwargs)
+        return payload
+
+    monkeypatch.setattr(orchestrator_client, "_request", fake_request)
+
+    async def request():
+        return await orchestrator_client.project_cell_create_meal_acceptance_session(
+            workspace_id, generation_run_id=run_id, fencing_epoch=7, operation_id=operation_id,
+            fixture_id=fixture_id,
+        )
+
+    response = await request()
+    assert (response.buyer_cookie, response.other_cookie) == (buyer_cookie, other_cookie)
+    assert buyer_cookie not in repr(response) and other_cookie not in repr(response)
+    assert observed == {
+        "method": "POST",
+        "path": f"/internal/workspaces/{workspace_id}/draft/meal-acceptance-session",
+        "json": {
+            "generation_run_id": str(run_id), "fencing_epoch": 7,
+            "operation_id": str(operation_id),
+            "fixture_id": str(fixture_id),
+        },
+    }
+    payload["other_id"] = "123"
+    with pytest.raises(OrchestratorUnavailable, match="invalid meal session"):
+        await request()
+    payload["other_id"] = "mealqa_" + uuid4().hex
+    payload["preview_url"] += "?sig=" + buyer_cookie
+    with pytest.raises(OrchestratorUnavailable, match="invalid meal session") as error:
+        await request()
+    assert error.value.__cause__ is None and buyer_cookie not in str(error.value)
+    other_workspace_id = uuid4()
+    payload.update(
+        workspace_id=str(other_workspace_id),
+        preview_url=_cell_preview_payload(other_workspace_id)["preview_url"],
+    )
+    with pytest.raises(OrchestratorUnavailable, match="different meal cell"):
+        await request()
+
+
 @pytest.mark.parametrize(
     "patch",
     [

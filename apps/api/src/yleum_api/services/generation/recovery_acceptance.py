@@ -14,6 +14,13 @@ from yleum_api.core.config import get_settings
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.project import Project
 from yleum_api.services import max_behavior_proof as behavior
+from yleum_api.services.generation.meal_acceptance import (
+    PROFILE as MEAL_PROFILE,
+)
+from yleum_api.services.generation.meal_acceptance import (
+    RECEIPT_PREFIX as MEAL_RECEIPT_PREFIX,
+)
+from yleum_api.services.generation.meal_acceptance import reviewed_meal_contract
 from yleum_api.services.generation.recovery_contract import (
     RecoveryBinding,
     RecoveryContractError,
@@ -67,6 +74,22 @@ class AcceptanceSealV2(AcceptanceSeal):
         return value
 
 
+class MealAcceptanceSeal(AcceptanceSeal):
+    version: Literal[3] = 3  # type: ignore[assignment]
+    profile: Literal["meal_acceptance_v1"] = "meal_acceptance_v1"
+    contract_digest: Sha256
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def exact_version(cls, value: object) -> object:
+        if type(value) is not int or value != 3:
+            raise ValueError("unsupported meal acceptance seal version")
+        return value
+
+
+Acceptance = AcceptanceSeal | AcceptanceSealV2 | MealAcceptanceSeal
+
+
 @dataclass(frozen=True)
 class AcceptanceVerdict:
     ready: bool
@@ -88,7 +111,8 @@ def check_requirement_acceptance(
         matching = [w for w in witnesses if w.requirement_id == requirement.id]
         supported_kind = requirement.check_kind == "named_behavior" or (
             requirement.check_kind == "manual"
-            and any(w.receipt_id.startswith("notes_acceptance:") for w in matching)
+            and any(w.receipt_id.startswith(("notes_acceptance:", MEAL_RECEIPT_PREFIX))
+                    for w in matching)
         )
         if not matching or not supported_kind:
             missing.append(requirement.id)
@@ -159,7 +183,16 @@ async def require_current_acceptance(
 
     receipt: Any
     notes = reviewed_contract(run, project.template)
-    if notes is not None:
+    meal = reviewed_meal_contract(run, project.template)
+    if meal is not None:
+        from yleum_api.services.generation.meal_acceptance_receipts import stored_meal_receipt
+
+        try:
+            receipt = stored_meal_receipt(run, meal)
+        except RecoveryContractError:
+            raise RequirementAcceptanceIncomplete(AcceptanceVerdict(
+                False, (meal.requirement_id,), ())) from None
+    elif notes is not None:
         try:
             receipt = saved_receipt(run, notes)
         except RecoveryContractError:
@@ -167,12 +200,14 @@ async def require_current_acceptance(
                 False, tuple(r.id for r in requirements if r.required), ())) from None
     else:
         receipt = (run.agent_state or {}).get(behavior.RECEIPT_KEY)
-    prefix = "notes_acceptance:" if notes is not None else "named_behavior:"
+    prefix = (MEAL_RECEIPT_PREFIX if meal is not None else
+              "notes_acceptance:" if notes is not None else "named_behavior:")
     witnesses = []
+    reviewed = notes is not None or meal is not None
     for requirement in requirements:
         if (
             requirement.required
-            and (requirement.check_kind == "named_behavior" or notes is not None)
+            and (requirement.check_kind == "named_behavior" or reviewed)
             and isinstance(receipt, dict)
         ):
             ref = receipt.get("receipt_digest")
@@ -217,7 +252,10 @@ def acceptance_seal(
         "build_ref": receipt["binding"]["build_ref"],
         "receipt_digest": receipt["receipt_digest"],
     }
-    if receipt.get("profile") == "notes_acceptance_v1":
+    if receipt.get("contract", {}).get("profile") == MEAL_PROFILE:
+        result.update(version=3, profile=MEAL_PROFILE,
+                      contract_digest=behavior.digest(receipt["contract"]))
+    elif receipt.get("profile") == "notes_acceptance_v1":
         result.update(version=2, profile="notes_acceptance_v1",
                       contract_digest=behavior.digest(receipt["contract"]))
     return result
@@ -246,7 +284,7 @@ def validate_acceptance_seal(
     run: GenerationRun,
     *,
     binding: RecoveryBinding,
-    seal: AcceptanceSeal | AcceptanceSealV2,
+    seal: Acceptance,
 ) -> dict[str, Any]:
     """Pure check of already-sealed publication data; never grants execution."""
     import json
@@ -255,6 +293,24 @@ def validate_acceptance_seal(
     state = recovery_state(run)
     if not isinstance(state, RecoveryStateV2) or state.requirements != requirements:
         raise RecoveryContractError("functional publication frozen scope changed")
+    if isinstance(seal, MealAcceptanceSeal):
+        from yleum_api.services.generation.meal_acceptance import STATE_KEY as MEAL_KEY
+        from yleum_api.services.generation.meal_acceptance_receipts import stored_meal_receipt
+
+        record = run.agent_state.get(MEAL_KEY)
+        raw = record.get("receipt") if isinstance(record, dict) else None
+        stored_contract = raw.get("contract") if isinstance(raw, dict) else None
+        template = stored_contract.get("template") if isinstance(stored_contract, dict) else ""
+        meal = reviewed_meal_contract(run, template) if isinstance(template, str) else None
+        if meal is None:
+            raise RecoveryContractError("publication meal obligations unsupported")
+        receipt = stored_meal_receipt(run, meal)
+        expected_meal = MealAcceptanceSeal.model_validate_json(
+            json.dumps(acceptance_seal(run, binding=binding, receipt=receipt)), strict=True,
+        )
+        if seal != expected_meal:
+            raise RecoveryContractError("functional publication meal scope changed")
+        return receipt
     if isinstance(seal, AcceptanceSealV2):
         from yleum_api.services.generation.notes_acceptance import reviewed_contract
         from yleum_api.services.generation.notes_acceptance_receipts import saved_receipt
@@ -297,7 +353,7 @@ async def validate_historical_acceptance(
     *,
     run: GenerationRun,
     binding: RecoveryBinding,
-    seal: AcceptanceSeal | AcceptanceSealV2,
+    seal: Acceptance,
 ) -> None:
     """Validate the gated publication's sealed evidence after physical lease release.
 
@@ -312,6 +368,11 @@ async def validate_historical_acceptance(
     from yleum_api.services.project_cell_proofs import proof_identity_from_model
 
     receipt = validate_acceptance_seal(run, binding=binding, seal=seal)
+    if isinstance(seal, MealAcceptanceSeal):
+        from yleum_api.services.generation.meal_acceptance_receipts import validate_owned_meal
+
+        await validate_owned_meal(session, run=run, binding=binding, historical=True)
+        return
     if isinstance(seal, AcceptanceSealV2):
         from yleum_api.services.generation.notes_acceptance_receipts import validate_owned_notes
 

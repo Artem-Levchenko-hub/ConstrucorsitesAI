@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict
-from typing import Any, cast
+from typing import Any, Protocol, cast
 from uuid import UUID, uuid5
 
 from yleum_api.services.max_behavior_proof import (
-    BehaviorDriverInput,
     BehaviorProofError,
     CandidateBehaviorBinding,
+    CandidateContract,
     CompiledAssetWitness,
     ObservedAsset,
     _binding,
@@ -30,6 +30,14 @@ from yleum_api.services.promotion_permit import MAX_FULL_BUILD_CONTRACT_VERSION
 COLLECTOR_SOURCE_SHA256 = "41f29604614e6c7bb291bdd6f9696b01a47722441e76a71b66fe0ee6c5d84bfb"
 
 _HEX = re.compile(r"[0-9a-f]{64}")
+
+
+class CompilationRequest(Protocol):
+    @property
+    def binding(self) -> CandidateBehaviorBinding: ...
+
+    @property
+    def contract(self) -> CandidateContract: ...
 
 
 def compilation_operation_id(bound: CandidateBehaviorBinding) -> UUID:
@@ -56,7 +64,7 @@ def _identity(current: object, bound: CandidateBehaviorBinding) -> ProofIdentity
 
 
 async def resolve_retained_compilation(
-    handle: Any, request: BehaviorDriverInput
+    handle: Any, request: CompilationRequest
 ) -> CompiledAssetWitness:
     _binding(request.binding, request.contract)
     need(

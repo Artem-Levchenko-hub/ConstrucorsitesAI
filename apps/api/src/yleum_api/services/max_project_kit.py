@@ -10,6 +10,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from uuid import UUID
 
+from yleum_api.core.config import get_settings
+from yleum_api.core.errors import ApiError
 from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.services.max_content_delivery import public_business_config
 from yleum_api.services.max_legacy_order_management import (
@@ -21,7 +23,8 @@ from yleum_api.services.max_management_contract import build_management_contract
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 35
+MAX_MANAGED_KIT_VERSION = 36
+# v36 adds the verification-only signed order receipt to managed source.
 # v35 adds exact staff reads and order-linked checkout to managed source.
 # v34 sanitizes catalog selection, adopts legacy orders and recovers pending intents.
 # v33 adds explicit owner management and typed business resources in product DB.
@@ -89,6 +92,23 @@ def _template_file(relative_path: str) -> str:
         if candidate.is_file():
             return candidate.read_text(encoding="utf-8")
     raise RuntimeError(f"MAX managed template file is unavailable: {relative_path}")
+
+
+def _checkout_verifier(project_id: UUID | str | None) -> str:
+    from yleum_api.services.generation.meal_acceptance import fixture_public_key_pem
+    from yleum_api.services.max_checkout_receipt import checkout_receipt_public_key_pem
+
+    real, fixture = "", ""
+    try:
+        real = checkout_receipt_public_key_pem()
+        if project_id is not None:
+            fixture = fixture_public_key_pem(project_id, get_settings().jwt_secret.get_secret_value())
+    except (ApiError, ValueError):
+        # Unconfigured signing must not prevent existing applications building.
+        pass
+    return _template_file("src/lib/omnia/checkout-receipt.ts").replace(
+        '"__YLEUM_CHECKOUT_RECEIPT_PUBLIC_KEY__"', json.dumps(real),
+    ).replace('"__YLEUM_MEAL_FIXTURE_PUBLIC_KEY__"', json.dumps(fixture))
 
 
 _MAX_SAST_TEMPLATE_TESTS = (
@@ -263,6 +283,7 @@ export function GET() {
         "src/lib/omnia/integration-client.ts": _template_file(
             "src/lib/omnia/integration-client.ts"
         ),
+        "src/lib/omnia/checkout-receipt.ts": _checkout_verifier(project_id),
         "src/app/api/omnia/integrations/[...path]/route.ts": _template_file(
             "src/app/api/omnia/integrations/[...path]/route.ts"
         ).replace('process.env.OMNIA_PROJECT_ID || ""', project_literal, 1),
@@ -420,6 +441,7 @@ MAX_SECURITY_LOCKED_FILES = frozenset(
         "src/lib/omnia/consent.ts",
         "src/app/api/omnia/config/route.ts",
         "src/lib/omnia/integration-client.ts",
+        "src/lib/omnia/checkout-receipt.ts",
         "src/app/api/omnia/integrations/[...path]/route.ts",
         "src/app/legal/privacy/page.tsx",
         "src/app/legal/terms/page.tsx",

@@ -35,6 +35,8 @@ _PUBLIC_ANONYMOUS = {
     "/api/max/session", "/api/max/webhook", "/api/omnia/config", "/api/omnia/health",
 }
 _SESSION_COOKIE = "__Host-max_session"
+_MAX_SESSION_PATH = "/api/max/session"
+_MEAL_ACCEPTANCE_ACTOR = re.compile(r"mealqa_[0-9a-f]{32}")
 _EMBEDDED_COOKIES = ("__Host-max_session_embedded", "__Host-max_session_partitioned")
 _PUBLIC_FRAMING = "frame-ancestors 'self' https://web.max.ru https://max.ru"
 _CACHE_POLICY = {
@@ -446,9 +448,14 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
     def do_HEAD(self) -> None:
         self._forward()
 
-    def _reply(self, status: int, body: bytes = b"") -> None:
+    def _reply(
+        self, status: int, body: bytes = b"", *, content_type: str | None = None,
+    ) -> None:
         self.send_response(status)
         self.send_header("Cache-Control", "no-store")
+        if content_type is not None:
+            self.send_header("Content-Type", content_type)
+            self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         if self.command != "HEAD":
@@ -581,6 +588,18 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
         user, session_value = authenticated_session(
             self.headers.get("Cookie", ""), config["secret"], public=public,
         )
+        if (
+            not public and user is not None and self.command == "GET" and length == 0
+            and self.path == raw_target == _MAX_SESSION_PATH
+            and _MEAL_ACCEPTANCE_ACTOR.fullmatch(user["id"]) is not None
+        ):
+            # The generated app cannot vouch for an actor. This route uses the
+            # exact same verified draft cookie as the product header boundary.
+            return self._reply(
+                200,
+                json.dumps({"user": {"id": user["id"]}, "mode": "acceptance"}).encode(),
+                content_type="application/json; charset=utf-8",
+            )
         if (
             public and self.command not in {"GET", "HEAD", "OPTIONS"}
             and path != "/api/max/webhook" and not owner_rpc

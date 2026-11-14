@@ -32,6 +32,7 @@ SLOTS = frozenset(
 )
 API_CAPABILITIES = (
     "acceptance:2",
+    "acceptance:3",
     "adaptation-cleanup:1",
     "adaptation-recovery:1",
     "context:1",

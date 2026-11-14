@@ -57,6 +57,10 @@ _SAFE_CODES = frozenset(
         "BEHAVIOR_RECEIPT_UNVERIFIED",
         "BEHAVIOR_CANDIDATE_BINDING_INVALID",
         "BEHAVIOR_ADAPTATION_ADAPTER_UNSUPPORTED",
+        "MEAL_ACCEPTANCE_FAILED",
+        "MEAL_ACCEPTANCE_OUTCOME_UNKNOWN",
+        "MEAL_ACCEPTANCE_SESSION_UNAVAILABLE",
+        "REQUIREMENT_ACCEPTANCE_INCOMPLETE",
     }
 )
 
@@ -594,7 +598,7 @@ def _compiled(witness: object, binding: CandidateBehaviorBinding) -> CompiledAss
     return witness
 
 
-def _binding(binding: CandidateBehaviorBinding, contract: NamedBehaviorContract) -> None:
+def _binding(binding: CandidateBehaviorBinding, contract: CandidateContract) -> None:
     need(
         type(binding) is CandidateBehaviorBinding
         and all(

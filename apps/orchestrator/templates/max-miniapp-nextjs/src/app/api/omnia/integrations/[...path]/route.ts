@@ -26,6 +26,7 @@ const upstreamOperations = {
   "order-details": ["orders/details", "POST"],
   "order-checkout": ["orders/checkout", "POST"],
   "order-checkout-status": ["orders/checkout/status", "POST"],
+  "order-checkout-receipt": ["orders/checkout/receipt", "POST"],
   ai: ["ai", "POST"],
 } as const;
 const managedOrderId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -85,7 +86,8 @@ export async function POST(request: NextRequest, context: Context) {
         { status: error instanceof ConsentBridgeError ? error.status : 503 });
     }
   }
-  const checkout = operation === "order-checkout" || operation === "order-checkout-status";
+  const checkout = operation === "order-checkout" || operation === "order-checkout-status" ||
+    operation === "order-checkout-receipt";
   if (checkout && (!user || !/^[1-9][0-9]{0,19}$/.test(user.id))) {
     return NextResponse.json({ error: { code: "unauthorized", message: "Откройте приложение внутри MAX" } }, { status: 401 });
   }

@@ -107,6 +107,7 @@ def test_checkout_sdk_does_not_request_a_status_for_an_ambiguous_return_id():
 
 @pytest.mark.parametrize("operation,tail", [
     ("order-checkout", "checkout"), ("order-checkout-status", "checkout/status"),
+    ("order-checkout-receipt", "checkout/receipt"),
 ])
 def test_checkout_proxy_signs_only_the_managed_order_path_and_payload(operation, tail):
     response = run("proxy", operation=operation, payload={"order_id": ORDER_ID},
@@ -130,6 +131,7 @@ def test_unrelated_generic_payments_keep_their_existing_wire_contract(operation,
     assert sent["method"] == "POST" and json.loads(sent["body"]) == payload
 
 
+@pytest.mark.parametrize("operation", ["order-checkout", "order-checkout-receipt"])
 @pytest.mark.parametrize("expected,actor,payload,status", [
     ("42", None, {"order_id": ORDER_ID}, 401),
     ("42", "43", {"order_id": ORDER_ID}, 409),
@@ -138,9 +140,9 @@ def test_unrelated_generic_payments_keep_their_existing_wire_contract(operation,
     ("42", "42", {"order_id": ORDER_ID, "status": "succeeded"}, 400),
 ])
 def test_checkout_proxy_rejects_actor_switch_or_injected_amount_and_status(
-    expected, actor, payload, status,
+    operation, expected, actor, payload, status,
 ):
-    response = run("proxy", operation="order-checkout", payload=payload, project=ORDER_ID,
+    response = run("proxy", operation=operation, payload=payload, project=ORDER_ID,
                    actor=actor, expectedActor=expected, initData="raw-fallback")
     assert response == {"status": status, "sent": []}
 

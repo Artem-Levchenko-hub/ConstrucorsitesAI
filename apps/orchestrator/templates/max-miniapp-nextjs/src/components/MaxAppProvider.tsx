@@ -220,11 +220,13 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
         editor_origins?: string[];
       };
       if (!owner.isCurrent(attempt)) return;
-      const ownerPreview = !initData && body.mode === "preview" && body.user?.id === "preview";
-      const validUser = body.user && (
-        ownerPreview ||
-        (!recovered && body.mode !== "preview" && typeof body.user.id === "string" && /^[1-9][0-9]{0,19}$/.test(body.user.id))
-      );
+      const actor = body.user?.id;
+      const ownerPreview = !initData && body.mode === "preview" && actor === "preview";
+      const acceptance = !initData && !recovered && body.mode === "acceptance" &&
+        typeof actor === "string" && actor.length === 39 && /^mealqa_[0-9a-f]{32}$/.test(actor);
+      const maxUser = !recovered && body.mode !== "preview" && body.mode !== "acceptance" &&
+        typeof actor === "string" && /^[1-9][0-9]{0,19}$/.test(actor);
+      const validUser = ownerPreview || acceptance || maxUser;
       if (!response.ok || !body.user || !validUser) {
         if (response.status === 401) {
           if (!initData) {

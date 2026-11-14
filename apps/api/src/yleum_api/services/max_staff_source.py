@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from yleum_api.core.errors import ApiError
 from yleum_api.models.project import Project
 from yleum_api.schemas.max_management import (
+    OwnerRecordItem,
     OwnerRecordPublic,
     OwnerRecordsPagePublic,
     OwnerRecordsQuery,
@@ -29,6 +30,8 @@ class StaffCheckoutOrder:
     currency: Literal["RUB"]
     created_at: datetime
     actor_id: int
+    owner_id: UUID | None = None
+    items: tuple[OwnerRecordItem, ...] = ()
 
 
 def _needs_publication() -> ApiError:
@@ -147,10 +150,11 @@ async def read_staff_checkout_order(
     project = await session.get(Project, project_id, populate_existing=True)
     if project is None or project.id != project_id:
         raise ApiError("not_found", "Проект не найден", 404)
+    owner_id = project.owner_id
     record = await max_management.get_record(
         session,
         project.id,
-        project.owner_id,
+        owner_id,
         order_id,
         ResourceId.orders,
         actor=str(max_user_id),
@@ -163,4 +167,7 @@ async def read_staff_checkout_order(
         currency=record.currency,
         created_at=record.created_at,
         actor_id=max_user_id,
+        owner_id=owner_id,
+        # The managed snapshot trigger protects the stored line payload.
+        items=tuple(record.items),
     )

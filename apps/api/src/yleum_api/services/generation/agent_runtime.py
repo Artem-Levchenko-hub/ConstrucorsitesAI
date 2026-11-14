@@ -19,6 +19,7 @@ from yleum_api.services.generation.contracts import (
     GenerationRuntime,
     ProjectGenerationFacts,
 )
+from yleum_api.services.generation.meal_acceptance_receipts import MealDriver
 from yleum_api.services.generation.progress import GenerationProgress
 from yleum_api.services.generation.recovery_actions import VerifiedProgressCollector
 from yleum_api.services.generation.runtime import (
@@ -40,6 +41,7 @@ async def require_named_behavior_readiness(
     factory: async_sessionmaker[AsyncSession], ids: GenerationIds,
 ) -> None:
     """Reject unprovable named requests before paid work; this is not a receipt."""
+    from yleum_api.services.behavior_driver_configuration import meal_canary_request
     from yleum_api.services.max_behavior_proof import (
         STATE_KEY,
         BehaviorProofError,
@@ -50,6 +52,10 @@ async def require_named_behavior_readiness(
     )
 
     coordinator = runtime.coordinator
+    driver = getattr(coordinator, "behavior_driver", None)
+    requires_meal = meal_canary_request(get_settings(), ids.project_id, prompt, template)
+    if requires_meal and type(driver) is not MealDriver:
+        raise RuntimeError("BEHAVIOR_READINESS_UNAVAILABLE: MEAL_DRIVER_UNAVAILABLE")
     contract = (
         await freeze_for_turn(coordinator, prompt, template=template)
         if coordinator is not None else required_contract(prompt, template=template)
@@ -73,7 +79,6 @@ async def require_named_behavior_readiness(
                 need(contract.request_sha256 == run.prompt_hash, "BEHAVIOR_REQUEST_BINDING_INVALID")
     if contract is None:
         return
-    driver = getattr(coordinator, "behavior_driver", None)
     try:
         need(driver is not None, "BEHAVIOR_DRIVER_UNAVAILABLE")
         need(
@@ -192,7 +197,7 @@ async def prepare_agent_runtime(
     _design_contract: Any,
     _agent_res: agent_builder.AgentResult | None,
     capacity_dispatch_token: UUID | None,
-    behavior_driver: ControllerBehaviorDriver | NotesDriver | None = None,
+    behavior_driver: ControllerBehaviorDriver | NotesDriver | MealDriver | None = None,
 ) -> tuple[AgentRuntimeBindings, agent_builder.AgentResult | None]:
     _agent_emit = progress.emit_agent_event
     _vision_context = _design_contract.vision_context if _design_contract else prompt_text
@@ -281,11 +286,19 @@ async def prepare_agent_runtime(
             if behavior_driver is None:
                 from yleum_api.services.behavior_driver_configuration import (
                     configured_behavior_driver,
+                    meal_canary_request,
                 )
                 from yleum_api.services.max_behavior_proof import BehaviorProofError
 
                 try:
-                    behavior_driver = configured_behavior_driver(runtime.handle, get_settings())
+                    settings = get_settings()
+                    behavior_driver = configured_behavior_driver(
+                        runtime.handle,
+                        settings,
+                        meal_canary=meal_canary_request(
+                            settings, ids.project_id, prompt_text, project_info.template,
+                        ),
+                    )
                 except BehaviorProofError:
                     # Invalid operator setup cannot become a model fallback.
                     # Generic/API-only requests keep their ordinary path; named

@@ -180,6 +180,7 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
         "src/lib/omnia/consent.ts",
         "src/app/api/omnia/config/route.ts",
         "src/lib/omnia/integration-client.ts",
+        "src/lib/omnia/checkout-receipt.ts",
         "src/app/api/omnia/integrations/[...path]/route.ts",
         "src/app/legal/privacy/page.tsx",
         "src/app/legal/terms/page.tsx",
@@ -971,12 +972,15 @@ def test_managed_kit_refresh_exposes_authenticated_lead_receipt_read() -> None:
 
 
 def test_managed_kit_refresh_includes_linked_checkout_and_exact_record_reads() -> None:
-    assert MAX_MANAGED_KIT_VERSION == 35
+    assert MAX_MANAGED_KIT_VERSION == 36
     managed = render_max_managed_files(_config(), uuid4())
     sdk = managed["src/lib/omnia/integration-client.ts"]
     assert all(name in sdk for name in (
-        "createYleumOrderCheckout", "getYleumOrderCheckout", "getReturnedYleumCheckoutOrderId",
+        "createYleumOrderCheckout", "getYleumOrderCheckout", "getYleumOrderCheckoutReceipt",
+        "getReturnedYleumCheckoutOrderId",
     ))
     integration_route = managed["src/app/api/omnia/integrations/[...path]/route.ts"]
     assert '"orders/checkout/status"' in integration_route
+    assert '"orders/checkout/receipt"' in integration_route
+    assert "src/lib/omnia/checkout-receipt.ts" in MAX_SECURITY_LOCKED_FILES
     assert "staff_read" in managed["src/app/api/omnia/owner/route.ts"]

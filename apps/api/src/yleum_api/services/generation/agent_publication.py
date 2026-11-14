@@ -28,8 +28,10 @@ from yleum_api.services.generation.contracts import (
 from yleum_api.services.generation.progress import GenerationProgress
 from yleum_api.services.generation.publication import _snapshot_payload
 from yleum_api.services.generation.recovery_acceptance import (
+    Acceptance,
     AcceptanceSeal,
     AcceptanceSealV2,
+    MealAcceptanceSeal,
     acceptance_required,
     require_current_acceptance,
     validate_acceptance_seal,
@@ -73,7 +75,7 @@ class PublicationBinding(BaseModel):
 
 class PublicationBindingV2(PublicationBinding):
     kind: Literal["publication_v2"] = "publication_v2"  # type: ignore[assignment]
-    acceptance: AcceptanceSeal | AcceptanceSealV2
+    acceptance: Acceptance
     acceptance_sha256: Sha256
 
 
@@ -298,7 +300,11 @@ async def _begin_publication(
             project_id=run.project_id, binding=state.binding)
         if seal is None:
             raise RecoveryContractError("executable publication acceptance missing")
-        seal_type = AcceptanceSealV2 if seal.get("version") == 2 else AcceptanceSeal
+        seal_type: type[AcceptanceSeal] = AcceptanceSeal
+        if seal.get("version") == 2:
+            seal_type = AcceptanceSealV2
+        elif seal.get("version") == 3:
+            seal_type = MealAcceptanceSeal
         typed_seal = seal_type.model_validate_json(json.dumps(seal), strict=True)
         binding = PublicationBindingV2(
             identity=state.identity,

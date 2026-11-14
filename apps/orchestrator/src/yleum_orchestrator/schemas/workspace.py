@@ -236,6 +236,24 @@ class WorkspaceDraftPreviewSessionResponse(BaseModel):
     expires_at: str
 
 
+class WorkspaceMealAcceptanceSessionRequest(WorkspaceDraftPreviewSessionRequest):
+    fencing_epoch: int = Field(strict=True, gt=0)
+    operation_id: UUID
+    fixture_id: UUID
+
+
+class WorkspaceMealAcceptanceSessionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: UUID
+    preview_url: str
+    buyer_id: str
+    buyer_cookie: str = Field(repr=False)
+    other_id: str
+    other_cookie: str = Field(repr=False)
+    expires_at: str
+
+
 class WorkspaceOwnerBusinessConfigRequest(WorkspaceOwnerPreviewSessionRequest):
     version: int = Field(ge=0, strict=True)
     config: dict[str, object]

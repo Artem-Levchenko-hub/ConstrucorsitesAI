@@ -23,7 +23,7 @@ export class YleumIntegrationError extends Error {
 }
 
 async function invoke<T>(
-  path: "status" | "payments" | "payment-status" | "leads" | "lead-list" | "lead-status" | "lead-receipt" | "catalog" | "orders" | "order-list" | "order-status" | "order-details" | "order-checkout" | "order-checkout-status" | "ai",
+  path: "status" | "payments" | "payment-status" | "leads" | "lead-list" | "lead-status" | "lead-receipt" | "catalog" | "orders" | "order-list" | "order-status" | "order-details" | "order-checkout" | "order-checkout-status" | "order-checkout-receipt" | "ai",
   payload: Record<string, unknown> = {},
   scope?: IdentityScope,
 ): Promise<T> {
@@ -184,6 +184,25 @@ export function createYleumOrderCheckout(orderId: string, returnUrl?: string): P
 /** Read an existing attempt without creating a payment. */
 export function getYleumOrderCheckout(orderId: string): Promise<YleumOrderCheckout> {
   return orderCheckout("order-checkout-status", orderId);
+}
+
+/** Read proof of an already verified payment for the product backend. */
+export async function getYleumOrderCheckoutReceipt(orderId: string): Promise<string> {
+  if (typeof orderId !== "string" || !MANAGED_ORDER_ID.test(orderId)) {
+    throw new YleumIntegrationError("Некорректный номер заказа", "invalid_request", 400);
+  }
+  const scope = captureIdentityScope();
+  if (scope.mode !== "max") {
+    throw new YleumIntegrationError("Откройте опубликованное приложение внутри MAX", "unauthorized", 401);
+  }
+  const result = await invoke<{receipt?: unknown} | null>(
+    "order-checkout-receipt", {order_id: orderId.toLowerCase()}, scope,
+  );
+  if (typeof result?.receipt !== "string" || result.receipt.length > 4096 ||
+    !/^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{86}$/.test(result.receipt)) {
+    throw new YleumIntegrationError("Не удалось подтвердить оплату заказа", "unavailable", 503);
+  }
+  return result.receipt;
 }
 
 /** The URL is only a lookup key. Confirm status via getYleumOrderCheckout. */

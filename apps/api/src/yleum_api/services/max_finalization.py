@@ -36,6 +36,10 @@ from yleum_api.services import repo
 from yleum_api.services.agent_progress import bounded_redacted_diagnostic
 from yleum_api.services.functional_gate import Check, FunctionalVerdict, summarize
 from yleum_api.services.generation.continuation import SourceNoveltyTracker, source_fingerprint
+from yleum_api.services.generation.meal_acceptance_receipts import (
+    MealDriver,
+    require_meal_observation,
+)
 from yleum_api.services.generation.notes_acceptance_receipts import require_notes_observation
 from yleum_api.services.generation.recovery_acceptance import require_coordinator_acceptance
 from yleum_api.services.generation.recovery_actions import recovery_binding
@@ -341,7 +345,7 @@ class MaxFinalizationCoordinator:
         project_slug: str,
         executor: ProjectCellExecutorHandle,
         emit: Callable[[str, Mapping[str, object]], Awaitable[None]] | None = None,
-        behavior_driver: ControllerBehaviorDriver | NotesDriver | None = None,
+        behavior_driver: ControllerBehaviorDriver | NotesDriver | MealDriver | None = None,
         continuation: ExecutionDriver | None = None,
     ) -> None:
         if executor.current_identity is None or executor.run_role is None:
@@ -2789,6 +2793,7 @@ class MaxFinalizationCoordinator:
         require_promotion_permit(permit, current_identity=await self._identity())
         await require_candidate_behavior(self, candidate, identity, build_ref)
         await require_notes_observation(self, candidate, identity, build_ref)
+        await require_meal_observation(self, candidate, identity, build_ref)
         await require_coordinator_acceptance(self, identity)
         require_promotion_permit(permit, current_identity=await self._identity())
 

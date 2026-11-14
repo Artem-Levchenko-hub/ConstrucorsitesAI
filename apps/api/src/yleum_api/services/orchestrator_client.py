@@ -1364,21 +1364,8 @@ def _validate_project_cell_preview_session(session: ProjectCellPreviewSession) -
     preview = urlsplit(session.preview_url)
     bootstrap = urlsplit(session.bootstrap_url)
     query = parse_qsl(bootstrap.query, keep_blank_values=True)
-    from yleum_api.services.orchestrator_hosts import registry
-
-    expected_hosts = {
-        f"cell-{session.workspace_id.hex[:12]}-dev.{suffix}"
-        for suffix in registry().preview_suffixes()
-    }
     if (
-        preview.scheme != "https"
-        or preview.hostname not in expected_hosts
-        or preview.username is not None
-        or preview.password is not None
-        or preview.port is not None
-        or preview.path not in {"", "/"}
-        or preview.query
-        or preview.fragment
+        not _valid_cell_preview_origin(session.workspace_id, session.preview_url)
         or (bootstrap.scheme, bootstrap.netloc) != (preview.scheme, preview.netloc)
         or bootstrap.path != "/api/omnia/preview-session"
         or bootstrap.fragment
@@ -1388,6 +1375,75 @@ def _validate_project_cell_preview_session(session: ProjectCellPreviewSession) -
         or datetime.fromisoformat(session.expires_at).tzinfo is None
     ):
         raise ValueError("invalid Project Cell preview session")
+
+
+def _valid_cell_preview_origin(workspace_id: UUID, url: str) -> bool:
+    from yleum_api.services.orchestrator_hosts import registry
+
+    preview = urlsplit(url)
+    expected_hosts = {
+        f"cell-{workspace_id.hex[:12]}-dev.{suffix}"
+        for suffix in registry().preview_suffixes()
+    }
+    return (
+        preview.scheme == "https"
+        and preview.hostname in expected_hosts
+        and preview.username is None
+        and preview.password is None
+        and preview.port is None
+        and preview.path in {"", "/"}
+        and not preview.query
+        and not preview.fragment
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCellMealAcceptanceSession:
+    workspace_id: UUID
+    preview_url: str
+    buyer_id: str
+    buyer_cookie: str = field(repr=False)
+    other_id: str
+    other_cookie: str = field(repr=False)
+    expires_at: str
+
+    def __post_init__(self) -> None:
+        if (
+            not _valid_cell_preview_origin(self.workspace_id, self.preview_url)
+            or self.buyer_id == self.other_id
+            or self.buyer_cookie == self.other_cookie
+            or any(
+                re.fullmatch(r"mealqa_[0-9a-f]{32}", actor) is None
+                for actor in (self.buyer_id, self.other_id)
+            )
+            or any(
+                re.fullmatch(r"[A-Za-z0-9_-]{30,512}\.[A-Za-z0-9_-]{43}", cookie) is None
+                for cookie in (self.buyer_cookie, self.other_cookie)
+            )
+            or datetime.fromisoformat(self.expires_at).tzinfo is None
+        ):
+            raise ValueError("invalid meal acceptance session")
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> ProjectCellMealAcceptanceSession:
+        fields = {
+            "workspace_id", "preview_url", "buyer_id", "buyer_cookie", "other_id", "other_cookie",
+            "expires_at",
+        }
+        try:
+            if set(payload) != fields or any(type(payload[key]) is not str for key in fields):
+                raise ValueError("invalid meal acceptance fields")
+            return cls(
+                workspace_id=UUID(payload["workspace_id"]),
+                preview_url=payload["preview_url"],
+                buyer_id=payload["buyer_id"],
+                buyer_cookie=payload["buyer_cookie"],
+                other_id=payload["other_id"],
+                other_cookie=payload["other_cookie"],
+                expires_at=payload["expires_at"],
+            )
+        except (TypeError, ValueError):
+            raise OrchestratorUnavailable("Orchestrator returned an invalid meal session") from None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2632,6 +2688,32 @@ async def project_cell_create_preview_session(
     response = ProjectCellPreviewSession.from_json(payload)
     if response.workspace_id != workspace_id:
         raise OrchestratorUnavailable("Orchestrator returned a different cell preview")
+    return response
+
+
+async def project_cell_create_meal_acceptance_session(
+    workspace_id: UUID,
+    *,
+    generation_run_id: UUID,
+    fencing_epoch: int,
+    operation_id: UUID,
+    fixture_id: UUID,
+) -> ProjectCellMealAcceptanceSession:
+    """Obtain synthetic draft actors through the active server generation lease."""
+    _validate_fencing_epoch(fencing_epoch)
+    payload = await _request(
+        "POST",
+        f"/internal/workspaces/{workspace_id}/draft/meal-acceptance-session",
+        json={
+            "generation_run_id": str(generation_run_id),
+            "fencing_epoch": fencing_epoch,
+            "operation_id": str(operation_id),
+            "fixture_id": str(fixture_id),
+        },
+    )
+    response = ProjectCellMealAcceptanceSession.from_json(payload)
+    if response.workspace_id != workspace_id:
+        raise OrchestratorUnavailable("Orchestrator returned a different meal cell session")
     return response
 
 

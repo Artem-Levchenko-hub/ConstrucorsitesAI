@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import re
 import time
+from base64 import urlsafe_b64encode
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, NoReturn
-from uuid import UUID
+from urllib.parse import urlsplit
+from uuid import UUID, uuid5
 
 from fastapi import APIRouter, Header, Query, Response
 
@@ -80,6 +83,8 @@ from yleum_orchestrator.schemas.workspace import (
     WorkspaceDraftResetRequest,
     WorkspaceEnsureRequest,
     WorkspaceIdentityDigest,
+    WorkspaceMealAcceptanceSessionRequest,
+    WorkspaceMealAcceptanceSessionResponse,
     WorkspaceObserveRequest,
     WorkspaceOwnerBusinessConfigRequest,
     WorkspaceOwnerPreviewSessionRequest,
@@ -1488,6 +1493,90 @@ async def create_workspace_draft_preview_session(
 
 
 @router.post(
+    "/workspaces/{workspace_id}/draft/meal-acceptance-session",
+    response_model=WorkspaceMealAcceptanceSessionResponse,
+)
+async def create_workspace_meal_acceptance_session(
+    workspace_id: UUID,
+    request: WorkspaceMealAcceptanceSessionRequest,
+    response: Response,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> WorkspaceMealAcceptanceSessionResponse:
+    """Mint short-lived synthetic actors for one controller-owned draft check."""
+    verify_internal_token(x_internal_token)
+    response.headers["Cache-Control"] = "no-store"
+    provider = _workspace_provider(workspace_id)
+    manager = _require_docker_resource_manager(provider)
+    async with manager.operation_lock.hold(workspace_id):
+        state, _volume_name = await _workspace_volume_identity(manager, workspace_id)
+        _require_generation_lease_match(
+            state,
+            generation_run_id=request.generation_run_id,
+            fencing_epoch=request.fencing_epoch,
+        )
+        if not isinstance(state.project_id, UUID):
+            raise OrchestratorError(
+                code="conflict", message="meal acceptance project identity is unavailable",
+                status_code=409,
+            )
+        if not _portable_active(manager, workspace_id):
+            raise OrchestratorError(
+                code="conflict",
+                message="meal acceptance requires a portable draft",
+                status_code=409,
+            )
+        preview_url, secret = await _ready_portable_draft_preview(manager, state)
+        parsed = urlsplit(preview_url)
+        if (
+            parsed.scheme != "https"
+            or parsed.netloc != nginx_writer.dev_host(_draft_preview_slug(workspace_id))
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or not isinstance(secret, str)
+            or len(secret) < 16
+        ):
+            raise OrchestratorError(
+                code="container_failure", message="meal acceptance draft is unavailable",
+                status_code=503,
+            )
+        return _meal_acceptance_session(
+            workspace_id, state.project_id, request.fixture_id, preview_url, secret,
+        )
+
+
+def _meal_acceptance_session(
+    workspace_id: UUID,
+    project_id: UUID,
+    fixture_id: UUID,
+    preview_url: str,
+    secret: str,
+) -> WorkspaceMealAcceptanceSessionResponse:
+    actor_scope = f"meal-acceptance:v1:{fixture_id}"
+    buyer_id = "mealqa_" + uuid5(project_id, f"{actor_scope}:buyer").hex
+    other_id = "mealqa_" + uuid5(project_id, f"{actor_scope}:other").hex
+    expires_at = datetime.now(UTC) + _MAX_PREVIEW_BOOTSTRAP_TTL
+    expires = int(expires_at.timestamp())
+
+    def sign(actor_id: str) -> str:
+        # Same id/expiresAt HMAC cookie as the private adaptation health probe.
+        body = json.dumps({"id": actor_id, "expiresAt": expires}, separators=(",", ":"))
+        encoded = urlsafe_b64encode(body.encode()).rstrip(b"=")
+        signature = urlsafe_b64encode(hmac.digest(secret.encode(), encoded, "sha256"))
+        return f"{encoded.decode('ascii')}.{signature.rstrip(b'=').decode('ascii')}"
+
+    return WorkspaceMealAcceptanceSessionResponse(
+        workspace_id=workspace_id,
+        preview_url=preview_url,
+        buyer_id=buyer_id,
+        buyer_cookie=sign(buyer_id),
+        other_id=other_id,
+        other_cookie=sign(other_id),
+        expires_at=expires_at.isoformat().replace("+00:00", "Z"),
+    )
+
+
+@router.post(
     "/workspaces/{workspace_id}/draft/owner-preview-session",
     response_model=WorkspaceDraftPreviewSessionResponse,
 )
@@ -1521,17 +1610,7 @@ async def _draft_preview_session(
     workspace_id = state.workspace_id
     exec_spec = _workspace_exec_spec(state, state_path=manager.profile.state_path)
     if _portable_active(manager, workspace_id):
-        runtime = _require_portable_runtime(manager)
-        preview = runtime.preview(state)
-        if preview is None or preview[0] != "running":
-            raise OrchestratorError(
-                code="conflict", message="draft runtime is not running", status_code=409
-            )
-        # A coordinator full build starts the gateway without the legacy draft
-        # apply path. Reconcile ingress before minting a URL for runtime proof;
-        # an internal running container alone does not make this origin live.
-        await _publish_draft_preview(manager, workspace_id)
-        auth_secret = runtime.secret(workspace_id)
+        preview_url, auth_secret = await _ready_portable_draft_preview(manager, state)
     else:
         draft = await manager.inspect_draft_runtime(workspace_id)
         if draft is None or draft.state != "running":
@@ -1547,7 +1626,7 @@ async def _draft_preview_session(
         auth_secret = manager._draft_auth_secret(
             manager.credential_store.load_or_create(workspace_id).postgres_password
         )
-    preview_url = _draft_preview_url(workspace_id)
+        preview_url = _draft_preview_url(workspace_id)
     if not preview_url.startswith("https://"):
         raise OrchestratorError(
             code="container_failure",
@@ -1574,6 +1653,21 @@ async def _draft_preview_session(
         bootstrap_url=bootstrap_url,
         expires_at=expires_at.isoformat().replace("+00:00", "Z"),
     )
+
+
+async def _ready_portable_draft_preview(
+    manager: DockerCellResourceManager, state: CellWorkspaceState,
+) -> tuple[str, str]:
+    runtime = _require_portable_runtime(manager)
+    preview = runtime.preview(state)
+    if preview is None or preview[0] != "running":
+        raise OrchestratorError(
+            code="conflict", message="draft runtime is not running", status_code=409,
+        )
+    # An internal running container alone does not make the browser origin live.
+    await _publish_draft_preview(manager, state.workspace_id)
+    secret: str = runtime.secret(state.workspace_id)
+    return _draft_preview_url(state.workspace_id), secret
 
 
 @router.post(

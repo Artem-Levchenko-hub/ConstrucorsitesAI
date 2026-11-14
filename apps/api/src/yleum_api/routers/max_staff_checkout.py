@@ -11,6 +11,7 @@ from yleum_api.core.deps import SessionDep
 from yleum_api.core.errors import ApiError
 from yleum_api.models.max_staff_checkout import MaxStaffPaymentAttempt
 from yleum_api.routers.integration_runtime import _runtime_context
+from yleum_api.services.max_checkout_receipt import issue_checkout_receipt
 from yleum_api.services.max_staff_checkout import create_staff_checkout, get_staff_checkout
 
 router = APIRouter(prefix="/api/runtime/projects", tags=["max-staff-checkout"])
@@ -31,6 +32,24 @@ class CheckoutPublic(BaseModel):
     failure_reason: Literal["receipt_required"] | None
     test: bool | None
     paid_at: datetime | None
+
+
+class CheckoutReceiptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    order_id: UUID
+
+
+class CheckoutReceiptPublic(BaseModel):
+    receipt: str
+
+
+async def _checkout_actor(
+    session: SessionDep, project_id: UUID, request: Request, init_data: str,
+) -> int:
+    actor = await _runtime_context(session, project_id, init_data, request)
+    if not 0 < actor.max_user_id < 2**63:
+        raise ApiError("max_init_data_invalid", "Не удалось подтвердить запуск из MAX", 401)
+    return actor.max_user_id
 
 
 def _receipt(attempt: MaxStaffPaymentAttempt, response: Response) -> CheckoutPublic:
@@ -56,17 +75,15 @@ async def checkout(
     response: Response,
     x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")] = "",
 ) -> CheckoutPublic:
-    actor = await _runtime_context(
-        session, project_id, x_max_init_data or payload.init_data, request
+    actor_id = await _checkout_actor(
+        session, project_id, request, x_max_init_data or payload.init_data,
     )
-    if not 0 < actor.max_user_id < 2**63:
-        raise ApiError("max_init_data_invalid", "Не удалось подтвердить запуск из MAX", 401)
     return _receipt(
         await create_staff_checkout(
             session,
             project_id,
             payload.order_id,
-            actor.max_user_id,
+            actor_id,
             payload.return_url,
         ),
         response,
@@ -82,11 +99,24 @@ async def checkout_status(
     response: Response,
     x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")] = "",
 ) -> CheckoutPublic:
-    actor = await _runtime_context(
-        session, project_id, x_max_init_data or payload.init_data, request
+    actor_id = await _checkout_actor(
+        session, project_id, request, x_max_init_data or payload.init_data,
     )
-    if not 0 < actor.max_user_id < 2**63:
-        raise ApiError("max_init_data_invalid", "Не удалось подтвердить запуск из MAX", 401)
     return _receipt(
-        await get_staff_checkout(session, project_id, payload.order_id, actor.max_user_id), response
+        await get_staff_checkout(session, project_id, payload.order_id, actor_id), response
     )
+
+
+@router.post("/{project_id}/orders/checkout/receipt", response_model=CheckoutReceiptPublic)
+async def checkout_receipt(
+    project_id: UUID,
+    payload: CheckoutReceiptRequest,
+    session: SessionDep,
+    request: Request,
+    response: Response,
+    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")] = "",
+) -> CheckoutReceiptPublic:
+    actor_id = await _checkout_actor(session, project_id, request, x_max_init_data)
+    token = await issue_checkout_receipt(session, project_id, payload.order_id, actor_id)
+    response.headers["Cache-Control"] = "private, no-store"
+    return CheckoutReceiptPublic(receipt=token)

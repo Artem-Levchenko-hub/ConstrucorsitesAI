@@ -216,6 +216,53 @@ describe("canonical MAX provider session recovery", () => {
     expect(container.querySelector("[data-product]")).toBeNull();
     expect(container.querySelector('[role="alert"]')).not.toBeNull();
   });
+  it("opens the product for an explicit synthetic session in a standalone browser", async () => {
+    const actor = "mealqa_" + "a".repeat(32);
+    const fetch = vi.fn(async (input: RequestInfo | URL) => String(input) === "/api/max/session"
+      ? Response.json({ mode: "acceptance", user: { id: actor } })
+      : Response.json({ saved: true }));
+    await render(fetch, "", "private.example.com");
+    expect(container.querySelector("[data-product]")?.textContent).toBe(`max:${actor}`);
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-save]")?.click());
+    expect(fetch.mock.calls.map(([input]) => String(input))).toEqual([
+      "/api/max/session", "/api/tasks/own",
+    ]);
+  });
+  it.each([
+    { mode: "acceptance", user: { id: "123" } },
+    { mode: "acceptance", user: { id: "mealqa_invalid" } },
+    { mode: "acceptance", user: { id: "preview" } },
+    { user: { id: "mealqa_" + "a".repeat(32) } },
+  ])("rejects unrecognized or incorrectly labeled acceptance identity %j", async body => {
+    await render(vi.fn(async () => Response.json(body)));
+    expect(container.querySelector("[data-product]")).toBeNull();
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+  });
+  it("does not reuse a synthetic session as MAX launch authentication", async () => {
+    const actor = "mealqa_" + "a".repeat(32);
+    await render(vi.fn(async () => Response.json({ mode: "acceptance", user: { id: actor } })),
+      "synthetic-launch");
+    expect(container.querySelector("[data-product]")).toBeNull();
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+  });
+  it("does not substitute a synthetic session after owner preview recovery", async () => {
+    const actor = "mealqa_" + "a".repeat(32);
+    let bootstrapped = false;
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/max/session") {
+        return bootstrapped
+          ? Response.json({ mode: "acceptance", user: { id: actor } })
+          : new Response(null, { status: 401 });
+      }
+      bootstrapped = true;
+      return Response.json({ mode: "preview", user: { id: "preview" } });
+    });
+    const { boundary } = ownerFrame(fetch);
+    await act(async () => root.render(loadProvider(fetch, "", undefined, boundary)));
+    expect(bootstrapped).toBe(true);
+    expect(container.querySelector("[data-product]")).toBeNull();
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+  });
   it("keeps unknown server failures visible without attempting iframe recovery", async () => {
     const fetch = vi.fn(async () => new Response(null, { status: 503 }));
     const { boundary, parent } = ownerFrame(fetch);

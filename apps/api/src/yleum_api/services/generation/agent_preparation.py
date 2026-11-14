@@ -247,6 +247,11 @@ async def prepare_stack_prompt(
         runtime.handle,
         integration_guide=_integration_guide,
     )
+    if _orch_name == "max-miniapp-nextjs":
+        from yleum_api.services.generation.meal_acceptance import MEAL_AGENT_GUIDE, mode_for_prompt
+
+        if mode_for_prompt(prompt_text) is not None:
+            _stack_guide += "\n\n" + MEAL_AGENT_GUIDE
     # K1 knowledge layer: inject the stack's .omnia/skills (security/a11y/
     # perf canons aligned with the gates) when enabled. None → unchanged.
     _skills = (

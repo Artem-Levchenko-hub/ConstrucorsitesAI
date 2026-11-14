@@ -229,9 +229,21 @@ async def load_requirement_witness(
     _need(requirement is not None, "requirement missing")
     assert requirement is not None
     if requirement.check_kind != "named_behavior":
+        from yleum_api.services.generation.meal_acceptance import (
+            RECEIPT_PREFIX,
+            reviewed_meal_contract,
+        )
+        from yleum_api.services.generation.meal_acceptance_receipts import validate_owned_meal
         from yleum_api.services.generation.notes_acceptance import reviewed_contract
         from yleum_api.services.generation.notes_acceptance_receipts import validate_owned_notes
 
+        meal = reviewed_meal_contract(run, project.template)
+        if meal is not None:
+            _need(requirement.id == meal.requirement_id, "meal requirement out of scope")
+            meal_receipt = await validate_owned_meal(session, run=run, binding=binding)
+            _need(receipt_id == RECEIPT_PREFIX + meal_receipt["receipt_digest"],
+                  "meal receipt reference changed")
+            return _trusted_witness(run, requirement, binding, manifest, receipt_id)
         contract = reviewed_contract(run, project.template)
         _need(contract is not None and requirement.id in contract.requirements,
               "requirement has no supported functional receipt")
