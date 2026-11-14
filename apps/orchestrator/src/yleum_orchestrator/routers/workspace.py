@@ -13,7 +13,6 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, NoReturn
-from urllib.parse import urlsplit
 from uuid import UUID, uuid5
 
 from fastapi import APIRouter, Header, Query, Response
@@ -1526,13 +1525,9 @@ async def create_workspace_meal_acceptance_session(
                 status_code=409,
             )
         preview_url, secret = await _ready_portable_draft_preview(manager, state)
-        parsed = urlsplit(preview_url)
+        expected_origin = f"https://{nginx_writer.dev_host(_draft_preview_slug(workspace_id))}"
         if (
-            parsed.scheme != "https"
-            or parsed.netloc != nginx_writer.dev_host(_draft_preview_slug(workspace_id))
-            or parsed.path
-            or parsed.query
-            or parsed.fragment
+            preview_url != expected_origin
             or not isinstance(secret, str)
             or len(secret) < 16
         ):

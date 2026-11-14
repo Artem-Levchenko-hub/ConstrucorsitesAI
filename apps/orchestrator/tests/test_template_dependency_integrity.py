@@ -98,9 +98,22 @@ def test_every_src_import_is_declared(template: Path) -> None:
         _assert_src_imports_declared(standalone)
 
 
+@pytest.mark.parametrize("specifier", ["server-only", "server-only/missing"])
+def test_next_only_supplies_exact_marker_import(tmp_path: Path, specifier: str) -> None:
+    (tmp_path / "package.json").write_text('{"dependencies":{"next":"15.5.24"}}', encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/page.ts").write_text(f'import "{specifier}";\n', encoding="utf-8")
+    if specifier == "server-only":
+        _assert_src_imports_declared(tmp_path)
+    else:
+        with pytest.raises(AssertionError, match="server-only"):
+            _assert_src_imports_declared(tmp_path)
+
+
 def _assert_src_imports_declared(template: Path) -> None:
     data = json.loads((template / "package.json").read_text(encoding="utf-8"))
-    declared = set(data.get("dependencies", {})) | set(data.get("devDependencies", {}))
+    runtime = set(data.get("dependencies", {}))
+    declared = runtime | set(data.get("devDependencies", {}))
 
     src = template / "src"
     missing: dict[str, str] = {}
@@ -110,6 +123,9 @@ def _assert_src_imports_declared(template: Path) -> None:
         if "node_modules" in f.parts:
             continue
         for spec in _IMPORT_RE.findall(f.read_text(encoding="utf-8", errors="ignore")):
+            # The installed Next compiler supplies these exact specifiers and types.
+            if "next" in runtime and spec in {"client-only", "server-only"}:
+                continue
             pkg = _package_of(spec)
             if pkg and pkg not in declared:
                 missing.setdefault(pkg, str(f.relative_to(template)))

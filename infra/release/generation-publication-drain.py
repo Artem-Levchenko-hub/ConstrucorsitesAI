@@ -226,7 +226,7 @@ _PORTABLE_QUIESCENCE_READER_WAIT_SOURCES = {
 # generation fence. It reuses the ready-preview path and its process inventory.
 _PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES = {
     **_PORTABLE_QUIESCENCE_READER_WAIT_SOURCES,
-    "routers.workspace": "5ca6c97f48cda7011e242c86970b5ebec56abf7ba2e935dcb9e180990aa2be1f",
+    "routers.workspace": "9cb7dd32a7ce10a3772fd001afb4279e7cd4ad7189e877bbf045ae0100f262f0",
     "schemas.workspace": "6bf206e34d5d35717d2e518be87944915df876e666fdbc7219ad5e037e5c6db1",
     "services.generation_reader_inventory": (
         "230b53167ab847a4fdb9ce23460a1d3da6d5cde7c0c754a81a70221da9bb0161"
