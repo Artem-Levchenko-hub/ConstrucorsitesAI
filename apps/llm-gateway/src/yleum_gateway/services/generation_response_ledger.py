@@ -8,7 +8,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from yleum_gateway.core.db import get_pool
-from yleum_gateway.services.generation_attempts import _owned
+from yleum_gateway.services.generation_attempts import _owned, matches
 from yleum_gateway.services.generation_identity import GenerationProviderIdentity
 from yleum_gateway.services.generation_response_store import (
     CHUNK_BYTES,
@@ -59,13 +59,6 @@ def _now() -> float:
 def require_fresh_capacity(expires_at: int | None) -> None:
     if type(expires_at) is not int or _now() >= expires_at:
         raise ResponseIndeterminate("generation storage capacity observation expired")
-
-
-def matches(row: Any, identity: GenerationProviderIdentity) -> bool:
-    return row is not None and all(
-        row[key] == getattr(identity, key)
-        for key in ("run_id", "project_id", "user_id", "prompt_hash", "request_sha256", "version")
-    )
 
 
 async def validate_current_identity(identity: GenerationProviderIdentity) -> None:

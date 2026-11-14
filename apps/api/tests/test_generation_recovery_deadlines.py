@@ -498,7 +498,7 @@ async def proof_clock(clock_owner, monkeypatch):
         deadline_at=now + timedelta(minutes=1),
         log_bytes=0,
     )
-    detail = "TS2554: expected an argument"
+    detail = "src/app/page.tsx(5,3): error TS2554: expected an argument"
     result = ProjectCellProofResult(
         id=uuid4(),
         proof_id=proof.id,
@@ -576,6 +576,213 @@ async def test_first_repair_window_requires_live_owned_terminal_red(proof_clock,
             assert not await grant_window(c.driver, repair_receipt_id=p.result.id)
             assert c.driver.state.clock.segment_seq == 1
     assert c.driver.state.execution.budget == budget
+
+
+@pytest.mark.parametrize("stage, fault", [
+    ("edit", None), ("repair", None), ("edit", "no_red"), ("edit", "no_green"),
+    ("edit", "old_red"), ("repair", "old_red"), ("edit", "foreign_green"),
+    ("edit", "nonterminal_red"), ("repair", "nonterminal_green"), ("edit", "config_changed"),
+    ("edit", "same_source"), ("edit", "active_window"), ("edit", "wrong_current_source"),
+    ("edit", "missing_behavior"), ("edit", "tampered_behavior"), ("edit", "resume"),
+    ("edit", "mutating_red"), ("edit", "infra_red"), ("edit", "unclassified_red"),
+])
+async def test_compiler_progress_grants_one_current_source_window(
+    proof_clock, monkeypatch, stage, fault,
+):
+    import hashlib
+    from dataclasses import asdict, replace
+
+    from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.models.project_cell import (
+        ProjectCellActivityLease,
+        ProjectCellProof,
+        ProjectCellProofResult,
+    )
+    from yleum_api.services import max_behavior_proof as behavior
+    from yleum_api.services.build_spec import FidelitySpec
+    from yleum_api.services.generation import recovery_requirements
+    from yleum_api.services.generation.recovery_clock import grant_window
+    from yleum_api.services.generation.recovery_execution import (
+        ExecutionDriver,
+        GenerationYielded,
+        claim_continuation,
+        recovery_state,
+    )
+    from yleum_api.services.orchestrator_client import ProjectCellWorkspaceIdentity
+    from yleum_api.services.project_cell_proofs import ProofDimension
+
+    p = proof_clock
+    c = p.owner
+    now = datetime.now(UTC)
+    expiry = now + timedelta(minutes=20) if fault == "active_window" else (
+        now - timedelta(seconds=1)
+    )
+    red_age = 30 if fault == "old_red" else 2
+    red_at = now - timedelta(minutes=red_age)
+    p.lease.started_at = p.lease.finished_at = red_at
+    p.result.created_at = red_at
+    if fault == "no_red":
+        await c.session.delete(p.result)
+    if fault == "nonterminal_red":
+        p.lease.finished_at = None
+    if fault == "mutating_red":
+        p.result.redacted_detail = "command changed the frozen proof identity\nfixture"
+        p.result.detail_digest = hashlib.sha256(p.result.redacted_detail.encode()).hexdigest()
+    if fault == "infra_red":
+        p.result.redacted_detail = "Build failed: ECONNRESET"
+        p.result.detail_digest = hashlib.sha256(p.result.redacted_detail.encode()).hexdigest()
+    if fault == "unclassified_red":
+        p.result.redacted_detail = "Build failed for an unknown reason"
+        p.result.detail_digest = hashlib.sha256(p.result.redacted_detail.encode()).hexdigest()
+    green = replace(
+        p.identity,
+        workspace_revision=p.identity.workspace_revision if fault == "same_source" else "f" * 64,
+        fencing_epoch=8 if fault == "foreign_green" else p.identity.fencing_epoch,
+        dependency_digest="1" * 64 if fault == "config_changed" else p.identity.dependency_digest,
+    )
+    # A real journal permits only one terminal receipt for exact source/scope.
+    # With the same source, use one RED receipt and no eligible newer GREEN.
+    proof = ProjectCellProof(id=uuid4(), **asdict(green), proof_key=green.proof_key)
+    lease = ProjectCellActivityLease(
+        operation_id=uuid4(), workspace_id=p.workspace.id, generation_run_id=c.run.id,
+        kind="command", state="completed", fencing_epoch=green.fencing_epoch,
+        proof_key=green.proof_key, phase="fast_check", started_at=now, heartbeat_at=now,
+        finished_at=None if fault == "nonterminal_green" else now,
+        deadline_at=now + timedelta(minutes=1), log_bytes=0,
+    )
+    result = ProjectCellProofResult(
+        id=uuid4(), proof_id=proof.id, workspace_id=p.workspace.id, dimension="fast_check",
+        dimension_key=green.dimension_key(ProofDimension.FAST_CHECK), outcome="green",
+        operation_id=lease.operation_id, artifact_ref=None,
+        detail_digest=hashlib.sha256(b"").hexdigest(), redacted_detail="", created_at=now,
+    )
+    if fault not in {"no_green", "same_source"}:
+        c.session.add_all([proof, lease, result])
+    before = c.driver.state
+    before = before.model_copy(update={
+        "binding": p.binding.model_copy(update={"source_sha256": green.workspace_revision}),
+        "clock": before.clock.model_copy(update={
+            "stage": stage, "segment_deadline": expiry, "repair_granted": stage == "repair",
+        }),
+    })
+    if fault in {"missing_behavior", "tampered_behavior"}:
+        named = behavior.required_contract("task_density_v1", template="max_miniapp")
+        c.run.prompt_hash = named.request_sha256
+        recovery_requirements.store_frozen_requirements(
+            c.run, "task_density_v1", FidelitySpec(), named,
+        )
+        if fault == "tampered_behavior":
+            c.run.agent_state = {
+                **c.run.agent_state, behavior.RECEIPT_KEY: {"receipt_digest": "bad"},
+            }
+        before = before.model_copy(update={
+            "identity": before.identity.model_copy(update={"prompt_hash": c.run.prompt_hash}),
+            "requirements": recovery_requirements.frozen_requirements(c.run),
+        })
+    c.driver.state = before
+    c.run.agent_state = {**c.run.agent_state, "recovery_v1": before.model_dump(mode="json")}
+    await c.session.commit()
+
+    async def active_identity(*_args, **_kwargs):
+        physical_source = "0" * 64 if fault == "wrong_current_source" else green.workspace_revision
+        return ProjectCellWorkspaceIdentity(
+            physical_source, green.dependency_digest, green.schema_data_digest,
+            green.cell_manifest_digest, green.base_image_digest, green.build_config_digest,
+        )
+
+    monkeypatch.setattr(recovery_requirements, "project_cell_agent_identity", active_identity)
+    async with c.owned():
+        if fault in {"wrong_current_source", "tampered_behavior"}:
+            with pytest.raises(ValueError):
+                await grant_window(c.driver)
+            assert not c.driver.state.clock.compiler_granted
+            return
+        allowed = fault in {None, "missing_behavior", "resume"}
+        if fault == "resume":
+            with pytest.raises(GenerationYielded) as yielded:
+                await c.driver.soft_boundary(exhausted=True)
+            assert yielded.value.run_id == c.run.id
+            assert c.driver.state.phase == "waiting_dependency"
+            await _release_clock_workspace(c, p.workspace, monkeypatch, yielded.value)
+            stopped = c.driver.state
+            assert not stopped.clock.interval_open
+            async with c.factory() as session:
+                claim = await claim_continuation(
+                    session, run_id=c.run.id, expected_attempt=0, worker_id="clock-restart",
+                    now=datetime.now(UTC) + timedelta(minutes=1),
+                )
+                assert claim is not None and claim.run_id == c.run.id
+                await session.commit()
+            async with c.factory() as session:
+                resumed = recovery_state(await session.get(GenerationRun, c.run.id))
+            assert resumed.clock.segment_used_ms == stopped.clock.segment_used_ms
+            assert resumed.clock.segment_used_ms < resumed.clock.window_ms
+            assert resumed.clock.segment_seq == 1 and resumed.clock.compiler_granted
+            assert resumed.execution.budget == before.execution.budget
+            return
+        assert await grant_window(c.driver) == allowed
+        if not allowed:
+            assert c.driver.state.clock.segment_seq == before.clock.segment_seq
+            assert not c.driver.state.clock.compiler_granted
+            return
+        assert c.driver.state.identity == before.identity
+        assert c.driver.state.execution.budget == before.execution.budget
+        assert c.driver.state.clock.stage == stage
+        assert c.driver.state.clock.segment_seq == before.clock.segment_seq + 1
+        assert c.driver.state.clock.segment_deadline > now
+        assert c.driver.state.clock.compiler_granted
+        async with c.factory() as session:
+            persisted = recovery_state(await session.get(GenerationRun, c.run.id))
+        assert persisted.clock.compiler_granted
+        cold = ExecutionDriver(c.factory, persisted, {}, c.driver.snapshot)
+        if fault == "missing_behavior":
+            with pytest.raises(ValueError, match="semantic receipt unavailable"):
+                await grant_window(cold)
+        else:
+            assert not await grant_window(cold)
+        assert cold.state.clock.segment_seq == before.clock.segment_seq + 1
+
+
+async def _release_clock_workspace(c, workspace, monkeypatch, primary_error):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from yleum_api.services import project_cell_executor as cell
+    from yleum_api.services.generation import lifecycle
+    from yleum_api.services.orchestrator_client import ProjectCellResourceResponse
+    from yleum_api.services.project_cells import (
+        claim_cell_operation_committed,
+        complete_cell_operation,
+    )
+
+    # Only the controller's external response is synthetic. Release ownership,
+    # persistence and quiescence use the production SQL code paths.
+    async def controller_release(factory, operation_id, _client):
+        claimed = await claim_cell_operation_committed(factory, operation_id)
+        response = ProjectCellResourceResponse(
+            workspace_id=claimed.workspace_id, state="resources_ready", provider_ref="clock-test",
+            fencing_epoch=claimed.fencing_epoch, checkpoint_ref=None, has_workspace=True,
+            has_agent_home=True, has_postgres=True, has_redis=True,
+        )
+        async with factory() as session:
+            await complete_cell_operation(session, operation_id, response.to_wire_json())
+            await session.commit()
+        return SimpleNamespace(status="completed", response=response)
+
+    async def release():
+        await cell._release_generation_lease(
+            session_factory=c.factory, workspace_id=workspace.id, generation_run_id=c.run.id,
+            profile_version="profile-v1",
+        )
+
+    monkeypatch.setattr(cell, "execute_cell_operation", controller_release)
+    monkeypatch.setattr(lifecycle, "clear_stream_state", AsyncMock())
+    runtime = SimpleNamespace(
+        deadline_task=None, handle=SimpleNamespace(release=release), continuation=c.driver,
+    )
+    await lifecycle.cleanup_generation_runtime(
+        runtime, c.run.project_id, c.run.assistant_message_id, primary_error=primary_error,
+    )
 
 
 @pytest.mark.parametrize("outcome", ["confirmed", "tampered", "unknown_ack"])
@@ -730,7 +937,7 @@ async def response_schema(db_session, test_engine):
             await connection.run_sync(cleanup)
 
 
-@pytest.mark.parametrize("edge", [None, "partial_tool", "early_check"])
+@pytest.mark.parametrize("edge", [None, "partial_tool", "early_check", "transcript_rejection"])
 async def test_v3_cold_public_pipeline_keeps_tools_and_paid_allowance_once(
     db_session,
     test_engine,

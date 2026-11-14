@@ -19,6 +19,7 @@ from yleum_api.services.generation.contracts import (
     ProjectGenerationFacts,
     SourceBaseline,
     VerificationRecovery,
+    uses_autonomous_max_source_repair,
     uses_single_max_source_repair,
 )
 from yleum_api.services.generation.recovery_trace import bounded_recovery_diagnostic
@@ -41,6 +42,10 @@ _REPAIRABLE_AGENT_STOPS = frozenset({
     "managed_source_contract_unresolved", "max_segments", "max_steps", "max_steps_red",
     "no_progress", "provider_stopped_red",
 })
+_AUTONOMOUS_AGENT_STOPS = _REPAIRABLE_AGENT_STOPS | {
+    "exploring", "finalization_reserve", "incomplete_response", "looping", "no_ai_write",
+    "output_limit", "stalled",
+}
 
 
 def _rollback_failure(detail: object) -> RuntimeError:
@@ -79,6 +84,15 @@ async def recover_stopped_candidate(
     _must_restore_previous = not _agent_res.done and not _agent_res.needs_finalization
     _source_only = getattr(runtime, "coordinator", None) is not None
     _first_max_without_product = not _max_has_generated_snapshot
+    autonomous_repair = uses_autonomous_max_source_repair(runtime)
+    repairable_stop = (
+        autonomous_repair
+        and _agent_res.stop_reason in _AUTONOMOUS_AGENT_STOPS
+        and (not _provider_failure or _agent_res.stop_reason == "output_limit")
+    )
+    needs_verified_repair = repairable_stop and not _agent_res.done and (
+        _agent_res.stop_reason in {"output_limit", "incomplete_response"}
+    )
     # A settled length limit left no executable batch, but earlier writes are
     # still valid repair input. A new task can finish the missing home screen.
     repair_missing_home = (
@@ -93,14 +107,19 @@ async def recover_stopped_candidate(
     )
     if (
         allow_source_repair
-        and _must_restore_previous
-        and _agent_res.files
+        and (_must_restore_previous or needs_verified_repair)
+        and (_agent_res.files or repairable_stop)
         and (
-            (not _provider_failure and _agent_res.stop_reason in _REPAIRABLE_AGENT_STOPS)
-            or repair_missing_home
+            repairable_stop
+            or (
+                getattr(operations, "continuation", None) is None
+                and uses_single_max_source_repair(runtime)
+                and (
+                    (not _provider_failure and _agent_res.stop_reason in _REPAIRABLE_AGENT_STOPS)
+                    or repair_missing_home
+                )
+            )
         )
-        and getattr(operations, "continuation", None) is None
-        and uses_single_max_source_repair(runtime)
     ):
         # Keep the exact draft for the coordinator. A stopped turn still needs
         # a repair even when the incomplete product happens to compile.
@@ -278,6 +297,13 @@ async def recover_rejected_candidate(
 ) -> VerificationRecovery:
     repair_failure: Exception | None = None
     single_repair = uses_single_max_source_repair(runtime)
+    if uses_autonomous_max_source_repair(runtime) and (
+        _agent_res.done or _agent_res.needs_finalization
+    ):
+        # The finalization owner handles an authoritative red check on this draft.
+        return VerificationRecovery(
+            False, _agent_res, files, _runtime_ok, _typecheck_ok, accumulated,
+        )
     if (
         (get_settings().use_native_agent or single_repair)
         and runtime.coordinator is not None

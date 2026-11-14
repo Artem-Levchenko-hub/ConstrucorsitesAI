@@ -203,6 +203,20 @@ async def load_source_write(
     return SourceWriteOperation(effect_id, operation_id, identity, binding, context, True)
 
 
+async def is_reconciling_source_write(
+    driver: execution.ExecutionDriver, *, name: str, args: dict[str, Any],
+) -> bool:
+    """An exact existing physical write permits receipt reads under a cold cursor."""
+    cursor = reconciliation._TOOL_EFFECT.get()
+    if cursor is None or not cursor.reconcile_only:
+        return False
+    identity = driver.state.identity
+    return await load_source_write(
+        driver.factory, run_id=identity.run_id, project_id=identity.project_id,
+        user_id=identity.user_id, input_digest=digest({"name": name, "args": args}),
+    ) is not None
+
+
 async def require_source_write_reconciliation(
     factory: async_sessionmaker[AsyncSession],
     *,

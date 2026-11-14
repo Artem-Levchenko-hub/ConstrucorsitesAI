@@ -3,6 +3,7 @@ import json
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -14,8 +15,8 @@ _GATEWAY_SRC = Path(__file__).resolve().parents[2] / "llm-gateway" / "src"
 
 def turn(*calls, stop="tool_use"):
     return {"stop_reason": stop, "content": [
-        {"type": "tool_use", "id": f"call-{i}", "name": name, "input": args}
-        for i, (name, args) in enumerate(calls)
+        {"type": "tool_use", "id": f"call-{uuid4().hex}", "name": name, "input": args}
+        for name, args in calls
     ]}
 
 
@@ -28,6 +29,13 @@ def turn(*calls, stop="tool_use"):
     turn(("write_file", [])),
     turn(("write_file", {"path": "a", "content": None})),
     {"stop_reason": "max_tokens", "content": [{"type": "text", "text": "unfinished"}]},
+    {"stop_reason": "tool_use", "content": [
+        {"type": "tool_use", "id": "duplicate", "name": "bash", "input": {"cmd": "NEVER_EXECUTE"}},
+        {"type": "tool_use", "id": "duplicate", "name": "read_file", "input": {"path": "a"}},
+    ]},
+    {"stop_reason": "tool_use", "content": [
+        {"type": "tool_use", "id": "", "name": "bash", "input": {"cmd": "NEVER_EXECUTE"}},
+    ]},
 ])
 async def test_bad_response_does_not_execute_any_call_and_recovers_with_small_edit(
     monkeypatch, tmp_path, bad,

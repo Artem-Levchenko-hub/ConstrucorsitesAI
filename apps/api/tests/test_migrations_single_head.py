@@ -31,7 +31,7 @@ from yleum_api.core.config import get_settings
 
 _VERSIONS = Path(__file__).resolve().parent.parent / "migrations" / "versions"
 _API_ROOT = Path(__file__).resolve().parents[1]
-_CURRENT_HEAD = "0105_max_nutrition_ai"
+_CURRENT_HEAD = "0106_native_transcript_refusal"
 _RECOVERY_REVISION = "0088_generation_recovery_effects"
 # Migrations use either bare (`revision = "x"`) or annotated
 # (`revision: str = "x"`, `down_revision: Union[str, None] = "x"`) declarations —
@@ -208,7 +208,8 @@ def test_security_and_analytics_extend_the_only_migration_head() -> None:
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
     assert heads == [_CURRENT_HEAD]
-    assert chain[_CURRENT_HEAD] == "0104_max_catalog_delivery"
+    assert chain[_CURRENT_HEAD] == "0105_max_nutrition_ai"
+    assert chain["0105_max_nutrition_ai"] == "0104_max_catalog_delivery"
     assert chain["0104_max_catalog_delivery"] == "0103_max_staff_workspace"
     assert chain["0103_max_staff_workspace"] == "0102_support_service"
     assert chain["0102_support_service"] == "0101_max_analytics_event_types"
@@ -305,6 +306,41 @@ def test_recovery_effect_migration_retains_evidence_on_downgrade(
         command.downgrade(database.config, parent)
         assert database.fetchval("SELECT version_num FROM alembic_version") == parent
         assert {str(row["tablename"]) for row in database.fetch(relation_query)} == before
+
+
+@pytest.mark.parametrize("with_refusal", [False, True])
+def test_native_transcript_migration_retains_dispatch_evidence_on_downgrade(
+    project_cell_migration_database: ProjectCellMigrationDatabase, with_refusal: bool,
+) -> None:
+    database = project_cell_migration_database
+    parent = "0105_max_nutrition_ai"
+    database.upgrade(parent)
+    query = (
+        "SELECT conname, pg_get_constraintdef(oid) AS check_clause FROM pg_constraint "
+        "WHERE conrelid='generation_provider_attempts'::regclass ORDER BY conname"
+    )
+    before = [dict(row) for row in database.fetch(query)]
+    database.upgrade(_CURRENT_HEAD)
+    if with_refusal:
+        attempt, run, project, user, token = [str(uuid4()) for _ in range(5)]
+        asyncio.run(_execute(database.dsn, (
+            "INSERT INTO generation_provider_attempts "
+            "(attempt_id,run_id,project_id,user_id,dispatch_token,prompt_hash,request_sha256,"
+            "phase,terminal_reason) "
+            f"VALUES ('{attempt}','{run}','{project}','{user}','{token}',"
+            "repeat('a',64),repeat('b',64),'closed','native_transcript_rejected')"
+        )))
+        with pytest.raises(RuntimeError, match="native_transcript_refusal_evidence_present"):
+            command.downgrade(database.config, parent)
+        assert database.fetchval("SELECT version_num FROM alembic_version") == _CURRENT_HEAD
+        assert (
+            database.fetchval("SELECT terminal_reason FROM generation_provider_attempts")
+            == "native_transcript_rejected"
+        )
+    else:
+        command.downgrade(database.config, parent)
+        assert database.fetchval("SELECT version_num FROM alembic_version") == parent
+        assert [dict(row) for row in database.fetch(query)] == before
 
 
 def test_consent_upgrade_preserves_existing_data_without_enabling_projects(

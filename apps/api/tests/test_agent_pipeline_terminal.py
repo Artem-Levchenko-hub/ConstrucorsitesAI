@@ -91,6 +91,40 @@ async def test_first_provider_rejection_exits_before_extra_repair_or_finalizatio
         )
 
 
+async def test_first_ordinary_max_output_limit_without_writes_still_enters_repair(monkeypatch):
+    monkeypatch.setattr("yleum_api.services.max_behavior_proof.freeze_for_turn", AsyncMock())
+    runtime = GenerationRuntime(
+        coordinator=SimpleNamespace(),
+        handle=SimpleNamespace(
+            is_portable=lambda: True, snapshot_files=AsyncMock(),
+            export_files=AsyncMock(return_value={}),
+        ),
+    )
+    operations = SimpleNamespace(emit=AsyncMock(), snapshot_files=None, continuation=None)
+    starter = {"src/app/layout.tsx": "platform layout"}
+    baseline = SourceBaseline(None, None, {})
+    project = SimpleNamespace(template="max_miniapp", slug="qa")
+    candidate = AgentResult(
+        done=False, summary="Settled truncation", files={}, steps=10,
+        stop_reason="output_limit",
+    )
+    candidate, cause = await agent_generation.execute_agent_turn(
+        _agent_res=candidate, _is_edit=False, _max_has_generated_snapshot=False,
+        _max_seed_files=starter, _max_shell_enabled=False, baseline=baseline,
+        ids=None, is_free=False, project_info=project, prompt_text="Рацион на месяц",
+        runtime=runtime, plan=None, operations=operations,
+    )
+    handoff, first, _, _ = await agent_recovery.recover_stopped_candidate(
+        _agent_res=candidate, _max_has_generated_snapshot=False, _max_seed_files=starter,
+        _provider_failure=cause, _render_current_max_starter_files=AsyncMock(),
+        baseline=baseline, ids=None, project_info=project, runtime=runtime,
+        operations=operations, allow_source_repair=True,
+    )
+    assert first and handoff.needs_finalization and not handoff.done
+    assert handoff.continuation_reason == "output_limit"
+    assert handoff.files == {}
+
+
 @pytest.fixture
 def pipeline_turn(monkeypatch):
     async def run(*, candidate, done=True, native=True, verification_failed=False,

@@ -94,12 +94,24 @@ async def recover_generation_response(
             raise ValueError
         value = response.json()
         if (
-            not isinstance(value, dict) or value.get("version") != 1
+            not isinstance(value, dict) or type(value.get("version")) is not int
+            or value["version"] != 1
             or value.get("identity") != identity.to_wire()
         ):
             raise ValueError
         if value.get("state") == "pending" and set(value) == {"version", "identity", "state"}:
             return None
+        if (
+            value.get("state") == "rejected"
+            and set(value) == {"version", "identity", "state", "error"}
+            and is_durable_native_transcript_refusal(value["error"])
+        ):
+            from yleum_api.services.generation.provider_attempts import (
+                require_native_transcript_refusal,
+            )
+
+            await require_native_transcript_refusal(identity)
+            raise NativeTranscriptRefusal()
         result = value.get("response")
         if value.get("state") != "stored" or not isinstance(result, dict):
             raise ValueError
@@ -249,6 +261,33 @@ class LLMOutputTruncated(LLMError):
             finish_reason="length", requested_max_tokens=requested_max_tokens,
             completion_tokens=completion_tokens,
         )
+
+
+class NativeTranscriptRefusal(LLMError):
+    """An owned attempt closed at gateway validation before provider dispatch."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Локальный шлюз отклонил структуру истории запроса.",
+            code="native_transcript_rejected", http_status=400,
+            provider_charge_ambiguous=False,
+        )
+
+
+def is_durable_native_transcript_refusal(error: object) -> bool:
+    if (
+        not isinstance(error, dict) or error.get("type") != "invalid_request_error"
+        or set(error) - {"type", "details", "message"}
+    ):
+        return False
+    details = error.get("details")
+    return (
+        isinstance(details, dict)
+        and set(details) == {"kind", "reason", "provider_charge_ambiguous", "durable"}
+        and details["kind"] == details["reason"] == "native_transcript_rejected"
+        and details["provider_charge_ambiguous"] is False
+        and details["durable"] is True
+    )
 
 
 _GATEWAY_ERROR_CODES = {

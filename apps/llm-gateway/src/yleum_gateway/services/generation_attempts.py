@@ -17,6 +17,8 @@ from yleum_gateway.services.generation_identity import (
     request_digest,
 )
 
+NATIVE_TRANSCRIPT_REJECTED = "native_transcript_rejected"
+
 
 class AttemptConflict(GatewayError):
     """Dispatch was not confirmed; never fall through to legacy provider admission."""
@@ -94,21 +96,64 @@ async def _owned(conn: Any, attempt_id: UUID, *, nowait: bool = False) -> Any:
     )
 
 
+def matches(row: Any, identity: GenerationProviderIdentity) -> bool:
+    return row is not None and all(
+        row[key] == getattr(identity, key)
+        for key in ("run_id", "project_id", "user_id", "prompt_hash", "request_sha256", "version")
+    )
+
+
+def is_native_transcript_rejected(row: Any) -> bool:
+    return (
+        row["phase"] == "closed"
+        and row["terminal_reason"] == NATIVE_TRANSCRIPT_REJECTED
+        and row["provider_call_id"] is None
+        and row["response_manifest_key"] is None
+        and row["response_sha256"] is None
+    )
+
+
+def native_transcript_rejection_details() -> dict[str, bool | str]:
+    return {
+        "kind": NATIVE_TRANSCRIPT_REJECTED, "reason": NATIVE_TRANSCRIPT_REJECTED,
+        "provider_charge_ambiguous": False, "durable": True,
+    }
+
+
+async def close_native_transcript_rejection(identity: GenerationProviderIdentity) -> None:
+    """Fence a signed local rejection against both dispatch and receipt admission."""
+    try:
+        async with get_pool().acquire() as conn, conn.transaction():
+            row = await _owned(conn, identity.attempt_id)
+            if not matches(row, identity) or await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM generation_responses WHERE attempt_id=$1)",
+                identity.attempt_id,
+            ):
+                raise AttemptConflict("generation transcript refusal conflicts")
+            if is_native_transcript_rejected(row):
+                return
+            if (
+                row["phase"] != "reserved" or row["terminal_reason"] is not None
+                or row["provider_call_id"] is not None or row["response_manifest_key"] is not None
+                or row["response_sha256"] is not None
+            ):
+                raise AttemptConflict("generation transcript refusal conflicts")
+            changed = await conn.execute(
+                "UPDATE generation_provider_attempts SET phase='closed', terminal_reason=$2, "
+                "updated_at=now() WHERE attempt_id=$1 AND phase='reserved'",
+                identity.attempt_id, NATIVE_TRANSCRIPT_REJECTED,
+            )
+            if changed != "UPDATE 1":
+                raise AttemptConflict("generation transcript refusal conflicts")
+    except Exception:
+        raise AttemptConflict("generation transcript refusal was not confirmed") from None
+
+
 async def reserve_generation_attempt(identity: GenerationProviderIdentity) -> AttemptAdmission:
     try:
         async with get_pool().acquire() as conn, conn.transaction():
             row = await _owned(conn, identity.attempt_id)
-            if row is None or any(
-                row[key] != getattr(identity, key)
-                for key in (
-                    "run_id",
-                    "project_id",
-                    "user_id",
-                    "prompt_hash",
-                    "request_sha256",
-                    "version",
-                )
-            ):
+            if not matches(row, identity):
                 return AttemptAdmission("conflict")
             if row["phase"] != "reserved":
                 # Task8 alone can verify and serve retained private body bytes.

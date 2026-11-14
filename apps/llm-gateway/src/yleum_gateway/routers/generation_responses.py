@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.generation_response_auth import HEADER, verify_generation_response_token
+from yleum_gateway.services.generation_attempts import native_transcript_rejection_details
 from yleum_gateway.services.generation_response_store import (
     load_generation_response,
     reconcile_generation_response,
@@ -58,6 +59,11 @@ async def generation_response(attempt_id: UUID, request: Request) -> dict[str, A
         data = await load_generation_response(identity)
         result: dict[str, Any] = {"version": 1, "identity": identity.to_wire(), "state": "pending"}
         if data is None:
+            return result
+        if data == "rejected":
+            result.update(state="rejected", error={
+                "type": "invalid_request_error", "details": native_transcript_rejection_details(),
+            })
             return result
         lines = data.splitlines()
         first = json.loads(lines[0])

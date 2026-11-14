@@ -6,10 +6,12 @@ import hashlib
 import time
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yleum_api.services.generation.recovery_contract import (
@@ -185,8 +187,112 @@ async def update_owned_clock(
     driver.state = updated
 
 
+async def _current_compiler_progress(session: AsyncSession, state: RecoveryStateV3) -> bool:
+    """Verify a source-changing RED to GREEN from this window's command journal."""
+    from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.models.project import Project
+    from yleum_api.models.project_cell import (
+        ProjectCellActivityLease,
+        ProjectCellProof,
+        ProjectCellProofResult,
+    )
+    from yleum_api.services.generation.native_strategy import compiler_failure
+    from yleum_api.services.generation.recovery_requirements import load_compiler_witness
+    from yleum_api.services.generation.source_error_classification import (
+        source_check_is_repairable,
+        source_diagnostic_has_infrastructure_error,
+    )
+    from yleum_api.services.generation_deadline import (
+        is_restoration_adaptation,
+        source_edit_deadline,
+    )
+    from yleum_api.services.project_cell_proofs import ProofDimension, proof_identity_from_model
+
+    clock, binding = state.clock, state.binding
+    if clock.compiler_granted or clock.stage == "proof" or binding is None:
+        return False
+    window_start = clock.segment_deadline - timedelta(milliseconds=clock.window_ms)
+    now = datetime.now(UTC)
+    if now < source_edit_deadline(clock.segment_deadline, started_at=window_start):
+        return False
+    run = await session.get(GenerationRun, state.identity.run_id)
+    project = await session.get(Project, state.identity.project_id)
+    if run is None or project is None or project.template != "max_miniapp" or (
+        is_restoration_adaptation(run)
+    ):
+        return False
+
+    proof, result, lease = ProjectCellProof, ProjectCellProofResult, ProjectCellActivityLease
+    workspace_id = UUID(binding.workspace_id)
+    journal = (
+        select(proof, result, lease)
+        .join(result, result.proof_id == proof.id)
+        .join(lease, lease.operation_id == result.operation_id)
+        .where(
+            proof.workspace_id == workspace_id, result.workspace_id == workspace_id,
+            lease.workspace_id == workspace_id, proof.generation_run_id == state.identity.run_id,
+            lease.generation_run_id == state.identity.run_id,
+            proof.fencing_epoch == binding.fencing_epoch,
+            lease.fencing_epoch == proof.fencing_epoch,
+            lease.proof_key == proof.proof_key,
+            lease.kind == "command", lease.phase == "fast_check",
+            result.dimension == "fast_check", lease.finished_at.is_not(None),
+            lease.finished_at >= lease.started_at,
+            proof.schema_data_digest == binding.schema_sha256,
+            proof.base_image_digest == binding.environment_sha256,
+            proof.toolchain_digest == binding.environment_sha256,
+        )
+    )
+    green = (await session.execute(journal.where(
+        proof.workspace_revision == binding.source_sha256,
+        result.outcome == "green", lease.state == "completed",
+        lease.started_at >= window_start, lease.finished_at <= now,
+    ).order_by(lease.finished_at.desc()).limit(1))).first()
+    if green is None:
+        return False
+
+    checked = green[0]
+    earlier = (await session.execute(journal.where(
+        proof.workspace_revision != binding.source_sha256,
+        proof.dependency_digest == checked.dependency_digest,
+        proof.cell_manifest_digest == checked.cell_manifest_digest,
+        proof.resource_profile_version == checked.resource_profile_version,
+        proof.build_config_digest == checked.build_config_digest,
+        result.outcome == "red", lease.state == "failed",
+        lease.started_at >= window_start, lease.finished_at < green[2].started_at,
+    ).order_by(lease.finished_at.desc()).limit(1))).first()
+    if earlier is None:
+        return False
+    historical = proof_identity_from_model(earlier[0])
+    red = earlier[1]
+    if (
+        historical.proof_key != earlier[0].proof_key
+        or red.dimension_key != historical.dimension_key(ProofDimension.FAST_CHECK)
+        or red.detail_digest != hashlib.sha256(red.redacted_detail.encode()).hexdigest()
+        # The coordinator records this RED when the command changes the
+        # candidate identity, even if the failure was unrelated to compilation.
+        or red.redacted_detail.startswith("command changed the frozen proof identity")
+        or source_diagnostic_has_infrastructure_error(red.redacted_detail)
+        or not (
+            compiler_failure(red.redacted_detail) is not None
+            or source_check_is_repairable(red.dimension, red.outcome, red.redacted_detail)
+        )
+    ):
+        return False
+
+    # Historical evidence cannot certify the current workspace. The normal
+    # current-result loader revalidates the live source, environment and fence.
+    current = await load_compiler_witness(
+        session, run_id=state.identity.run_id, receipt_id=green[1].id, binding=binding,
+    )
+    return (
+        current.passed and current.dimension == "fast_check"
+        and current.comparison_sha256 == replace(historical, workspace_revision="0" * 64).proof_key
+    )
+
+
 async def grant_window(driver: ExecutionDriver, *, repair_receipt_id: UUID | None = None) -> bool:
-    """Reload functional/terminal evidence; consume a whole named bundle once."""
+    """Consume each independently verified window grant at most once."""
     from yleum_api.models.generation_run import GenerationRun
     from yleum_api.services import max_behavior_proof as behavior
     from yleum_api.services.generation.recovery_requirements import (
@@ -204,6 +310,7 @@ async def grant_window(driver: ExecutionDriver, *, repair_receipt_id: UUID | Non
         ids = clock.consumed_requirement_ids
         stage = clock.stage
         repair = clock.repair_granted
+        compiler = clock.compiler_granted
         if repair_receipt_id is not None:
             if repair:
                 return state
@@ -220,31 +327,37 @@ async def grant_window(driver: ExecutionDriver, *, repair_receipt_id: UUID | Non
             requirements = [
                 r for r in state.requirements if r.required and r.check_kind == "named_behavior"
             ]
-            if not any(r.id not in ids for r in requirements):
-                return state
-            run = await session.get(GenerationRun, state.identity.run_id)
-            raw = run.agent_state.get(behavior.RECEIPT_KEY) if run else None
-            if not isinstance(raw, dict) or type(raw.get("receipt_digest")) is not str:
+            named_pending = any(r.id not in ids for r in requirements)
+            run = await session.get(GenerationRun, state.identity.run_id) if named_pending else None
+            if run is not None and behavior.RECEIPT_KEY in run.agent_state:
+                raw = run.agent_state[behavior.RECEIPT_KEY]
+                if not isinstance(raw, dict) or type(raw.get("receipt_digest")) is not str:
+                    raise RecoveryContractError("semantic receipt invalid")
+                try:
+                    for requirement in requirements:
+                        await load_requirement_witness(
+                            session,
+                            run_id=state.identity.run_id,
+                            requirement_id=requirement.id,
+                            receipt_id="named_behavior:" + raw["receipt_digest"],
+                            binding=state.binding,
+                        )
+                except behavior.BehaviorProofError as exc:
+                    raise RecoveryContractError("semantic receipt unavailable or invalid") from exc
+                ids = tuple(sorted(set(ids) | {r.id for r in requirements}))
+                # A fully covered supported request proceeds to verification. The
+                # grant must not create a gratuitous new model turn.
+                stage = (
+                    "edit"
+                    if any(r.required and r.check_kind == "manual" for r in state.requirements)
+                    else "proof"
+                )
+            elif await _current_compiler_progress(session, state):
+                compiler = True
+            elif named_pending:
                 raise RecoveryContractError("semantic receipt unavailable")
-            try:
-                for requirement in requirements:
-                    await load_requirement_witness(
-                        session,
-                        run_id=state.identity.run_id,
-                        requirement_id=requirement.id,
-                        receipt_id="named_behavior:" + raw["receipt_digest"],
-                        binding=state.binding,
-                    )
-            except behavior.BehaviorProofError as exc:
-                raise RecoveryContractError("semantic receipt unavailable or invalid") from exc
-            ids = tuple(sorted(set(ids) | {r.id for r in requirements}))
-            # A fully covered supported request proceeds to verification. The
-            # grant must not create a gratuitous new model turn.
-            stage = (
-                "edit"
-                if any(r.required and r.check_kind == "manual" for r in state.requirements)
-                else "proof"
-            )
+            else:
+                return state
         granted = True
         return state.model_copy(
             update={
@@ -256,6 +369,7 @@ async def grant_window(driver: ExecutionDriver, *, repair_receipt_id: UUID | Non
                         "segment_deadline": datetime.now(UTC)
                         + timedelta(milliseconds=clock.window_ms),
                         "repair_granted": repair,
+                        "compiler_granted": compiler,
                         "consumed_requirement_ids": ids,
                     }
                 )

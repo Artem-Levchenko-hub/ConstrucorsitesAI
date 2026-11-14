@@ -63,6 +63,41 @@ async def test_three_productive_repairs_reach_real_compiler_success(loop):
     assert len(repairs) == 3 and len(builds) == 4
 
 
+async def test_autonomous_repair_changes_strategy_after_no_write_and_finishes_same_candidate(loop):
+    coordinator, files, builds, _ = loop
+    original = dict(files)
+    repairs = []
+
+    async def repair(detail):
+        repairs.append(detail)
+        assert files == original
+        if len(repairs) == 2:
+            files["src/app.py"] = "first = 1\nsecond = 2\nthird = 3\n"
+
+    outcome = await coordinator.finalize_with_repair(
+        prompt="Fix syntax", repair=repair, autonomous_source_repair=True,
+    )
+
+    assert outcome.status is MaxFinalizationStatus.COMPLETE
+    assert len(repairs) == 2
+    assert len(builds) == 2
+    assert builds[0] == original
+    assert builds[-1] == files
+
+
+async def test_autonomous_repair_exhausts_attempts_on_unchanged_source(loop):
+    coordinator, _, builds, _ = loop
+    repair = AsyncMock()
+
+    outcome = await coordinator.finalize_with_repair(
+        prompt="Fix syntax", repair=repair, autonomous_source_repair=True,
+    )
+
+    assert outcome.status is MaxFinalizationStatus.NEEDS_EDIT
+    assert repair.await_count == 3
+    assert len(builds) == 1
+
+
 @pytest.mark.parametrize("fix_every_error", [True, False])
 async def test_single_repair_checks_again_and_returns_the_actual_verdict(loop, fix_every_error):
     coordinator, files, builds, _ = loop

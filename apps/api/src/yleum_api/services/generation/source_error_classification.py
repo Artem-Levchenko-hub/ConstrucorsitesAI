@@ -46,6 +46,12 @@ _INFRA = re.compile(
     r"EAI_AGAIN|ENOTFOUND|EACCES|EPERM|worker_lost)\b|out of memory|heap limit|"
     r"command timed out|connection refused|network (?:error|unreachable)|fetch failed"
 )
+
+
+def source_diagnostic_has_infrastructure_error(detail: str) -> bool:
+    return _INFRA.search(detail) is not None
+
+
 _IMPORT = re.compile(
     r"(?m)^(?P<file>[^\r\n]+)\r?\nModule not found: Can't resolve "
     r"(?P<quote>['\"])(?P<target>[^'\"\r\n]+)(?P=quote)\r?$"
@@ -173,7 +179,7 @@ def classify_source_failure(
     """Never infer completion/ownership from logs; never mutate diagnostic or source."""
     if not command_finished or workspace_revision_digest(files) != frozen_source_sha256:
         return SourceFailure()
-    if _INFRA.search(detail):
+    if source_diagnostic_has_infrastructure_error(detail):
         return SourceFailure("infrastructure")
     for pattern in (_IMPORT, _TS_MISSING, _NEXT_MISSING):
         for match in pattern.finditer(detail):

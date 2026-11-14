@@ -17,7 +17,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -886,8 +886,8 @@ def _turn(*tools: tuple[str, dict[str, Any]]) -> dict[str, Any]:
     return {
         "stop_reason": "tool_use",
         "content": [
-            {"type": "tool_use", "id": f"tu_{i}", "name": name, "input": args}
-            for i, (name, args) in enumerate(tools)
+            {"type": "tool_use", "id": f"tu_{uuid4().hex}", "name": name, "input": args}
+            for name, args in tools
         ],
     }
 
@@ -914,9 +914,12 @@ async def test_native_done_before_later_source_mutation_requires_fresh_build(
         if calls == 1:
             return _turn(("build", {}))
         if calls == 2:
-            return _turn(("done", {"summary": "ready"}), (mutation, mutation_args))
+            response = _turn(("done", {"summary": "ready"}), (mutation, mutation_args))
+            response["content"][0]["id"] = "done-before-mutation"
+            return response
         done_result = next(
-            result for result in convo[-1]["content"] if result.get("tool_use_id") == "tu_0"
+            result for result in convo[-1]["content"]
+            if result.get("tool_use_id") == "done-before-mutation"
         )
         observed_done_results.append(dict(done_result))
         raise RuntimeError("PROVIDER_AUTH_FAILED: synthetic refusal")
@@ -1065,7 +1068,11 @@ async def test_native_continuation_does_not_force_rewrite_existing_max_entry(
     ) -> dict[str, Any]:
         nonlocal calls
         calls += 1
-        assert kwargs["tools"] == agent_native._MAX_TOOLS_CACHED
+        if calls < 3:
+            assert kwargs["tools"] == agent_native._MAX_TOOLS_CACHED
+        else:
+            assert kwargs["tool_choice"] != agent_native._MAX_ENTRY_WRITE_CHOICE
+            assert any(tool["name"] == "edit_file" for tool in kwargs["tools"])
         return _turn(("read_file", {"path": "src/app/page.tsx"}))
 
     monkeypatch.setattr(agent_native, "_call_messages", fake_call)
@@ -1227,7 +1234,7 @@ async def test_first_max_build_locks_discovery_tools_until_first_write(
         if calls["n"] <= agent_native._MAX_PREWRITE_DISCOVERY_TURNS:
             assert kwargs["tools"] == agent_native._MAX_TOOLS_CACHED
             assert kwargs["tool_choice"] is None
-            return _turn(("read_file", {"path": "src/app/layout.tsx"}))
+            return _turn(("read_file", {"path": "src/app/layout.tsx", "start_line": calls["n"]}))
         if calls["n"] == agent_native._MAX_PREWRITE_DISCOVERY_TURNS + 1:
             forced_tools = kwargs["tools"]
             assert [tool["name"] for tool in forced_tools] == ["write_file"]
@@ -1805,8 +1812,14 @@ async def test_contextual_edit_bounds_discovery_before_unchanged_full_export(
         )
 
     if behavior in {"endless_reads", "prose", "unchanged_write", "unexpected_bash"}:
-        with pytest.raises(RuntimeError, match="edit produced no source changes"):
-            await run()
+        if coordinated:
+            result, failure = await run()
+            assert failure is None
+            assert result.stop_reason == "no_progress"
+            assert not result.done and not result.needs_finalization
+        else:
+            with pytest.raises(RuntimeError, match="edit produced no source changes"):
+                await run()
         assert calls <= 6
         assert "build" not in actions
         assert workspace == initial
@@ -1820,7 +1833,9 @@ async def test_contextual_edit_bounds_discovery_before_unchanged_full_export(
         assert workspace["src/lib/auth.ts"] == "auth"
     if behavior != "bash":
         assert feedback
-        names, choice, schema = tool_schemas[4]
+        names, choice, schema = next(
+            turn for turn in tool_schemas if turn[0] == {"write_file", "edit_file"}
+        )
         assert names == {"write_file", "edit_file"}
         assert choice == {"type": "any"}
         assert all("enum" not in tool["input_schema"]["properties"]["path"] for tool in schema)

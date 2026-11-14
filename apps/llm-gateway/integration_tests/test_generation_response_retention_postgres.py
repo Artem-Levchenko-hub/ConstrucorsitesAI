@@ -38,6 +38,123 @@ async def test_body_lifecycle_is_separate_from_financial_attempt(pool):
         )
 
 
+@pytest.mark.parametrize("mode", ["unit-identity", "unit-signed", "unit-wrong-purpose", "unit-wrong-identity", "retained"])
+async def test_durable_local_transcript_rejection_does_not_authorize_a_new_dispatch(
+    pool, monkeypatch, mode,
+):
+    from dataclasses import replace
+    from unittest.mock import AsyncMock
+
+    import httpx
+    from fastapi import FastAPI
+
+    from yleum_gateway.core import db
+    from yleum_gateway.core import generation_response_auth as auth
+    from yleum_gateway.core.config import reset_settings_cache
+    from yleum_gateway.routers import generation_responses, messages_native
+    from yleum_gateway.services import generation_attempts, generation_response_capture
+    from yleum_gateway.services.generation_identity import request_digest
+
+    route = "/v1/messages"
+    authenticated = mode == "retained"
+    durable = mode in {"retained", "unit-signed"}
+    body = {
+        "model": "claude-sonnet-5.5",
+        "messages": [{"role": "assistant", "content": [
+            {"type": "tool_use", "id": "read-one", "name": "read_file", "input": {}},
+        ]}],
+    }
+    identity = replace(await intent(pool), request_sha256=request_digest(route, body))
+    body["metadata"] = {
+        "run_id": str(identity.run_id), "project_id": str(identity.project_id),
+        "generation_provider_identity": identity.to_wire(),
+    }
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE generation_provider_attempts SET request_sha256=$2 WHERE attempt_id=$1",
+            identity.attempt_id, identity.request_sha256,
+        )
+    monkeypatch.setenv("GENERATION_PROVIDER_ATTEMPTS_ENABLED", "true")
+    monkeypatch.setenv("GENERATION_RESPONSE_RETENTION_ENABLED", str(authenticated).lower())
+    monkeypatch.setenv("GENERATION_RESPONSE_SIGNING_SECRET", "synthetic-native-refusal-secret-over-32-bytes")
+    monkeypatch.setattr(messages_native, "native_messages_route", lambda: ("synthetic", "https://provider.test/v1"))
+    monkeypatch.setattr(db, "get_pool", lambda: pool)
+    monkeypatch.setattr(generation_attempts, "get_pool", lambda: pool)
+    preflight = AsyncMock(side_effect=AssertionError("local rejection reached provider admission"))
+    monkeypatch.setattr(generation_response_capture, "preflight_response_store", preflight)
+    reset_settings_cache()
+    try:
+        app = FastAPI()
+        app.include_router(messages_native.router)
+        app.include_router(generation_responses.router)
+        base = "http://gateway.test"
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url=base) as client:
+            if authenticated:
+                unsigned = await client.post(route, json=body)
+                assert unsigned.status_code == 403
+            record = {auth.HEADER: auth.mint_generation_response_token(
+                identity, purpose="generation_response.record",
+            )} if authenticated else {}
+            if mode.startswith("unit-") and mode != "unit-identity":
+                signer = replace(identity, request_sha256="c" * 64) if mode == "unit-wrong-identity" else identity
+                record["x-generation-transcript-authorization"] = auth.mint_generation_response_token(
+                    signer, purpose="generation_response.record" if mode == "unit-wrong-purpose"
+                    else "generation_attempt.refusal",
+                )
+            refused = await client.post(route, json=body, headers=record)
+            repeated = await client.post(route, json=body, headers=record)
+            read = {auth.HEADER: auth.mint_generation_response_token(
+                identity, purpose="generation_response.read",
+            )}
+            read_path = f"/_internal/generation-responses/{identity.attempt_id}"
+            retained = await client.get(read_path, headers=read)
+            if authenticated:
+                wrong_digest = replace(identity, request_sha256="c" * 64)
+                mismatched = await client.get(read_path, headers={
+                    auth.HEADER: auth.mint_generation_response_token(
+                        wrong_digest, purpose="generation_response.read",
+                    ),
+                })
+                assert mismatched.status_code == 409
+            transformed = await client.post(route, json={
+                **body, "messages": [{"role": "user", "content": "new valid context"}],
+            }, headers=record)
+        assert refused.status_code == 400
+        assert repeated.status_code == 400 and repeated.json() == refused.json()
+        details = {
+            "kind": "native_transcript_rejected",
+            "reason": "native_transcript_rejected" if durable else "unresolved_tool_calls",
+            "provider_charge_ambiguous": False, **({"durable": True} if durable else {}),
+        }
+        assert refused.json()["error"]["details"] == details
+        if authenticated:
+            assert retained.status_code == 200
+            assert retained.json() == {
+                "version": 1, "identity": identity.to_wire(), "state": "rejected",
+                "error": {"type": "invalid_request_error", "details": details},
+            }
+        else:
+            assert retained.status_code == 503
+        if durable:
+            assert (await generation_attempts.reserve_generation_attempt(identity)).action == "pending"
+        assert transformed.status_code == 409
+        preflight.assert_not_awaited()
+    finally:
+        reset_settings_cache()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT phase,provider_call_id,terminal_reason FROM generation_provider_attempts WHERE attempt_id=$1",
+            identity.attempt_id,
+        )
+        assert tuple(row.values()) == (
+            ("closed", None, "native_transcript_rejected") if durable else ("reserved", None, None)
+        )
+        assert await conn.fetchval("SELECT count(*) FROM provider_calls WHERE run_id=$1", identity.run_id) == 0
+        assert await conn.fetchval(
+            "SELECT count(*) FROM generation_responses WHERE attempt_id=$1", identity.attempt_id,
+        ) == 0
+
+
 async def test_concurrent_initial_reservations_never_overspend(pool, monkeypatch):
     from yleum_gateway.services import generation_response_ledger as service
 
@@ -1116,3 +1233,111 @@ async def test_native_preconnect_releases_body_hold_only_after_committed_receipt
     await test_actual_routes_retention_financial_chain_and_one_physical_post(
         pool, monkeypatch, "native", "preconnect" if confirmed else "preconnect_unconfirmed"
     )
+
+
+@pytest.mark.parametrize("contender", ["provider", "receiver"])
+@pytest.mark.parametrize("first", ["reject", "contender"])
+async def test_native_refusal_serializes_with_provider_and_receiver_admission(
+    pool, monkeypatch, contender, first,
+):
+    from yleum_gateway.services import generation_attempts as attempts
+    from yleum_gateway.services import generation_response_ledger as ledger
+
+    identity = await intent(pool)
+    monkeypatch.setattr(attempts, "get_pool", lambda: pool)
+    monkeypatch.setattr(ledger, "get_pool", lambda: pool)
+    admission = await attempts.reserve_generation_attempt(identity)
+    assert admission.dispatch_token is not None
+    locked, contender_started, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    original = attempts._owned
+
+    async def gate(*args, **kwargs):
+        task = asyncio.current_task()
+        assert task is not None
+        if task.get_name() != first:
+            contender_started.set()
+        row = await original(*args, **kwargs)
+        if task.get_name() == first:
+            locked.set()
+            await release.wait()
+        return row
+
+    async def reject():
+        await attempts.close_native_transcript_rejection(identity)
+
+    async def admit():
+        if contender == "provider":
+            return await attempts.mark_attempt_dispatching(
+                identity.attempt_id, dispatch_token=admission.dispatch_token,
+                route="/v1/messages", model="claude-sonnet-5.5", user_id=identity.user_id,
+                project_id=identity.project_id, run_id=identity.run_id,
+            )
+        return await ledger.admit_response(identity, ledger.CapacitySnapshot(
+            "refusal-race-" + uuid4().hex, 2_200_000, 10_000_000, uuid4(), uuid4(),
+            expires_at=int(datetime.now(UTC).timestamp()) + 15,
+        ))
+
+    monkeypatch.setattr(attempts, "_owned", gate)
+    monkeypatch.setattr(ledger, "_owned", gate)
+    calls = {"reject": reject, "contender": admit}
+    second = "contender" if first == "reject" else "reject"
+    async with asyncio.timeout(5):
+        first_call = asyncio.create_task(calls[first](), name=first)
+        await locked.wait()
+        second_call = asyncio.create_task(calls[second](), name=second)
+        await contender_started.wait()
+        release.set()
+        winner, loser = await asyncio.gather(first_call, second_call, return_exceptions=True)
+    assert not isinstance(winner, BaseException)
+    assert isinstance(loser, (attempts.AttemptConflict, ledger.ResponseIndeterminate))
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT phase,terminal_reason,provider_call_id FROM generation_provider_attempts WHERE attempt_id=$1",
+            identity.attempt_id,
+        )
+        receipt_exists = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM generation_responses WHERE attempt_id=$1)", identity.attempt_id,
+        )
+        if first == "reject":
+            assert tuple(row.values()) == ("closed", "native_transcript_rejected", None)
+            assert not receipt_exists
+        elif contender == "receiver":
+            assert tuple(row.values()) == ("reserved", None, None)
+            assert receipt_exists
+        else:
+            assert tuple(row.values()) == ("dispatching", None, winner)
+            assert not receipt_exists
+
+
+async def test_native_refusal_constraint_rejects_other_null_call_and_paid_refusal_states(pool, monkeypatch):
+    import asyncpg
+
+    from yleum_gateway.services import generation_attempts as attempts
+
+    identity = await intent(pool)
+    async with pool.acquire() as conn:
+        for change in (
+            "phase='closed', terminal_reason=NULL",
+            "phase='closed', terminal_reason='preconnect'",
+            "phase='closed', terminal_reason='native_transcript_rejected', response_sha256='invalid'",
+            "terminal_reason='native_transcript_rejected'",
+        ):
+            with pytest.raises(asyncpg.CheckViolationError):
+                await conn.execute(
+                    f"UPDATE generation_provider_attempts SET {change} WHERE attempt_id=$1",
+                    identity.attempt_id,
+                )
+    monkeypatch.setattr(attempts, "get_pool", lambda: pool)
+    admission = await attempts.reserve_generation_attempt(identity)
+    assert admission.dispatch_token is not None
+    await attempts.mark_attempt_dispatching(
+        identity.attempt_id, dispatch_token=admission.dispatch_token,
+        route="/v1/messages", model="claude-sonnet-5.5", user_id=identity.user_id,
+        project_id=identity.project_id, run_id=identity.run_id,
+    )
+    async with pool.acquire() as conn:
+        with pytest.raises(asyncpg.CheckViolationError):
+            await conn.execute(
+                "UPDATE generation_provider_attempts SET phase='closed', terminal_reason='native_transcript_rejected' "
+                "WHERE attempt_id=$1", identity.attempt_id,
+            )

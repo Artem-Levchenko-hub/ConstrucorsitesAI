@@ -96,6 +96,19 @@ def uses_single_max_source_repair(runtime: GenerationRuntime) -> bool:
     )
 
 
+def uses_autonomous_max_source_repair(runtime: GenerationRuntime) -> bool:
+    """Current portable MAX runs have an authoritative source snapshot."""
+    handle = getattr(runtime, "handle", None)
+    return (
+        getattr(runtime, "coordinator", None) is not None
+        and handle is not None
+        and getattr(handle, "prove_restoration_adaptation", None) is None
+        and callable(getattr(handle, "snapshot_files", None))
+        and callable(getattr(handle, "is_portable", None))
+        and handle.is_portable() is True
+    )
+
+
 @dataclass(frozen=True)
 class AgentPromptPlan:
     system: str

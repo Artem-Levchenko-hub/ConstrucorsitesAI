@@ -8,7 +8,7 @@ import json
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from uuid import UUID
 
 from yleum_gateway.core.errors import GatewayError
@@ -148,8 +148,8 @@ class ChunkWriter:
 
 async def load_generation_response(
     identity: Any, *, objects: ObjectStore | None = None
-) -> bytes | None:
-    """Only a current owned reserved intent is confirmed absence; never generic 404."""
+) -> bytes | Literal["rejected"] | None:
+    """Load a paid body, a committed local refusal, or an owned pending intent."""
     return await _read_generation_response(identity, objects=objects, reconcile=False)
 
 
@@ -162,10 +162,13 @@ async def reconcile_generation_response(
 
 async def _read_generation_response(
     identity: Any, *, objects: ObjectStore | None, reconcile: bool,
-) -> bytes | None:
+) -> bytes | Literal["rejected"] | None:
     from yleum_gateway.core.db import get_pool
-    from yleum_gateway.services.generation_attempts import _owned
-    from yleum_gateway.services.generation_response_ledger import matches
+    from yleum_gateway.services.generation_attempts import (
+        _owned,
+        is_native_transcript_rejected,
+        matches,
+    )
     from yleum_gateway.services.generation_response_objects import PrivateObjects
 
     try:
@@ -181,6 +184,8 @@ async def _read_generation_response(
             )
             if body is None and attempt["phase"] == "reserved":
                 return None
+            if body is None and is_native_transcript_rejected(attempt):
+                return None if reconcile else "rejected"
             if (
                 body is None
                 or body["state"] != "complete"

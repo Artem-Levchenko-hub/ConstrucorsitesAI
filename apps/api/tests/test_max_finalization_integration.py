@@ -49,6 +49,51 @@ async def test_finalization_returns_missing_capability_to_same_workspace_editor(
     assert harness.roles.count(ProjectCellCommandRole.FULL_BUILD) == 1
 
 
+@pytest.mark.parametrize("first_change", [None, "unfinished_product", "auxiliary", "styles"])
+async def test_interrupted_max_draft_changes_strategy_and_promotes_in_same_run(
+    db_session, test_engine, first_change,
+):
+    harness = await _new_harness(db_session, test_engine)
+    run_id = harness.coordinator.generation_run_id
+    original = dict(harness.files)
+    passes = []
+
+    async def repair(detail):
+        passes.append(detail)
+        assert "incomplete_response" in detail
+        assert ProjectCellCommandRole.FULL_BUILD not in harness.roles
+        count = await db_session.scalar(select(func.count()).select_from(ProjectCellCandidate))
+        assert count == 0
+        if len(passes) == 1:
+            assert harness.files == original
+            if first_change == "unfinished_product":
+                harness.files["src/app/page.tsx"] += "\n// unfinished repair"
+            if first_change == "auxiliary":
+                harness.files["tests/meal.test.ts"] = "// no product change"
+            if first_change == "styles":
+                harness.files["src/app/globals.css"] = "main { padding: 12px; }"
+                return True
+            return first_change == "auxiliary"
+        harness.files["src/app/page.tsx"] = (
+            "export default function Page(){return <main>Рацион на месяц</main>}"
+        )
+        return True
+
+    async def preflight():
+        return None
+
+    outcome = await harness.coordinator.finalize_with_repair(
+        prompt="Build tracker", repair=repair, source_preflight=preflight,
+        interrupted_source_reason="incomplete_response", autonomous_source_repair=True,
+    )
+
+    assert len(passes) == (1 if first_change == "styles" else 2)
+    assert harness.roles.count(ProjectCellCommandRole.FULL_BUILD) == 1
+    assert outcome.status is MaxFinalizationStatus.COMPLETE
+    candidate = await db_session.scalar(select(ProjectCellCandidate))
+    assert candidate is not None and candidate.generation_run_id == run_id
+
+
 @pytest.mark.parametrize("page,prompt,missing", [
     (PAGE, PROMPT, "setFilter"),
     (SORT_PAGE, SORT_PROMPT, "setSortOrder"),

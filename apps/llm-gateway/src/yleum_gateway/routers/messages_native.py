@@ -44,6 +44,7 @@ from yleum_gateway.providers import inflight_budget, llmgw
 from yleum_gateway.providers.native_stream import (
     RECEIPT_RESERVE_SECONDS,
     StreamReceiptError,
+    aitunnel_output_cap,
     collect_response,
     collected_stream_payload,
     open_aitunnel_response,
@@ -86,6 +87,13 @@ _REQUEST_ERROR_MESSAGES = {
     "request_too_large": "Provider rejected an oversized request",
 }
 _NATIVE_LOG_STAGES = {"build_plan", "native_agent", "verification", "source_repair"}
+_NATIVE_TRANSCRIPT_REPAIR_REASONS = frozenset({
+    "invalid_message_content",
+    "unresolved_tool_calls", "missing_tool_result_id", "unexpected_tool_result",
+    "duplicate_tool_call_id", "missing_tool_call_id", "missing_tool_call_name",
+    "invalid_tool_arguments_type", "invalid_tool_arguments_json", "non_object_tool_arguments",
+    "invalid_tool_calls",
+})
 
 
 def _request_error_type(response: httpx.Response) -> str | None:
@@ -133,18 +141,19 @@ def _native_log_fields(scope: dict[str, Any], retry_count: int) -> dict[str, str
 
 def _native_request_rejected(
     message: str, *, phase: str, reason: str, scope: dict[str, Any],
-    field: str | None = None, retry_count: int = 0,
+    field: str | None = None, retry_count: int = 0, details: dict[str, Any] | None = None,
 ) -> Response:
     log.warning(
         "native_messages.request_rejected", http_status=400, error_origin="gateway",
         phase=phase, reason=reason, field=field, **_native_log_fields(scope, retry_count),
     )
-    return _err(400, "invalid_request_error", message)
+    return _err(400, "invalid_request_error", message, details=details)
 
 
 def _unconfirmed_provider_outcome(
     upstream_status: int | None = None, *, provider_scope: str | None = None,
     provider_call_id: UUID | None = None, transport_stage: str | None = None,
+    transport_evidence: dict[str, Any] | None = None,
 ) -> Response:
     """Known HTTP status is diagnostic evidence, never replay permission."""
     details: dict[str, Any] = {}
@@ -156,6 +165,13 @@ def _unconfirmed_provider_outcome(
         details["provider_call_id"] = str(provider_call_id)
     if transport_stage in {"connect", "sending", "awaiting_headers", "headers", "body", "complete"}:
         details["transport_stage"] = transport_stage
+    if provider_scope == "aitunnel" and transport_evidence is not None:
+        outcome = transport_evidence.get("provider_stream_outcome")
+        if outcome in ("output_limit", "error"):
+            details.update(provider_stream_outcome=outcome, retry_safe=False)
+            cap = transport_evidence.get("provider_output_cap_tokens")
+            if type(cap) is int:
+                details["provider_output_cap_tokens"] = cap
     if details:
         details["provider_charge_ambiguous"] = True
         if "upstream_http_status" in details:
@@ -766,7 +782,7 @@ async def _dispatch_native_provider(
                 provider_call_id, identity=identity,
                 status="failed" if safe_to_retry or expired_before_dispatch else "ambiguous",
                 reason="preconnect" if safe_to_retry else None,
-                error_type=type(exc).__name__,
+                error_type=exc.reason.value if isinstance(exc, StreamReceiptError) else type(exc).__name__,
                 **receipt_evidence(transport_evidence, **text_failover.scope_options(provider_scope)),
             )
             if isinstance(exc, DispatchDeadlineError) and recorded:
@@ -799,6 +815,7 @@ async def _dispatch_native_provider(
             return _unconfirmed_provider_outcome(
                 observed_status, provider_scope=provider_scope,
                 provider_call_id=provider_call_id, transport_stage=transport_stage,
+                transport_evidence=transport_evidence,
             )
 
         if upstream.status_code >= 400:
@@ -1023,9 +1040,19 @@ async def _native_messages_execute(
         validate_native_chat_request(payload)
     except NativeRequestValidationError as exc:
         # Invalid converted transcripts must fail before admission or a paid POST.
+        details: dict[str, Any] | None = None
+        if exc.reason in _NATIVE_TRANSCRIPT_REPAIR_REASONS:
+            from yleum_gateway.services.generation_response_capture import (
+                record_native_transcript_rejection,
+            )
+
+            details = await record_native_transcript_rejection(identity, route_path, request) or {
+                "kind": generation_attempts.NATIVE_TRANSCRIPT_REJECTED,
+                "reason": exc.reason, "provider_charge_ambiguous": False,
+            }
         return _native_request_rejected(
             "Invalid native provider request", phase="transcript_validation", reason=exc.reason,
-            field=exc.field, scope=dispatch_options, retry_count=retry_count,
+            field=exc.field, scope=dispatch_options, retry_count=retry_count, details=details,
         )
 
     # Fail closed before the provider call. A native build must never keep
@@ -1205,6 +1232,9 @@ async def _native_messages_execute(
         "cancel_epoch": runner_claims.cancel_epoch if runner_claims is not None else None,
         "jti": runner_claims.jti if runner_claims is not None else None,
     }
+    cap = aitunnel_output_cap(upstream, budget, provider_scope=provider_scope)
+    if cap is not None:
+        adapted["metadata"]["provider_output_cap_tokens"] = cap
     try:
         file_logger.log_request(
             {

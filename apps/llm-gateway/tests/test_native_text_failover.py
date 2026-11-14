@@ -215,7 +215,7 @@ def test_native_source_repair_preserves_output_budget(client, monkeypatch, max_t
         if request.url.host == "api.llmgw.ru":
             return httpx.Response(200, json={**common, "usage": usage, "choices": [
                 {"finish_reason": "stop", "message": {"content": "result"}},
-            ]})
+            ]}, headers={"X-AITunnel-Output-Capped": "1042"})
         chunks = [
             {**common, "choices": [{"index": 0, "delta": {"content": "result"}, "finish_reason": None}]},
             {**common, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
@@ -238,7 +238,115 @@ def test_native_source_repair_preserves_output_budget(client, monkeypatch, max_t
     assert payload["max_tokens"] == max_tokens
     assert payload.get("stream", False) is (scope == "aitunnel")
     assert response.json()["content"][0]["text"] == "result"
+    assert "provider_output_cap_tokens" not in response.json()["metadata"]
     assert billing.charge.await_count == 1
+
+
+@pytest.mark.parametrize(("outcome", "cap_header", "expected_cap"), [
+    ("settled_length", "1042", 1042),
+    ("settled_length", "128000", None),
+    ("settled_length", "1042, 1000", None),
+    ("missing_usage", "1042", 1042),
+    ("missing_usage", None, None),
+    ("stream_error", "1042", 1042),
+    ("first_stream_error", None, None),
+])
+def test_aitunnel_source_repair_distinguishes_capped_output_and_stream_error(
+    client, monkeypatch, outcome, cap_header, expected_cap,
+):
+    request_id = "chat-0J9fQk2vXc8LrT1mNbZa4e"
+    common = {"id": request_id, "model": "claude-sonnet-5.5"}
+    attempts = []
+    stream_error = outcome in ("stream_error", "first_stream_error")
+
+    def wire(request):
+        attempts.append(json.loads(request.content))
+        events = [
+            {**common, "choices": [{"index": 0, "delta": {"tool_calls": [{
+                "index": 0, "id": "tool-1", "function": {"name": "write_file", "arguments": '{"path":'},
+            }]}}]},
+            {**common, "choices": [{"index": 0, "delta": {},
+                                    "finish_reason": "error" if stream_error else "length"}]},
+        ]
+        if outcome == "settled_length":
+            events.append({**common, "choices": [], "usage": {
+                "prompt_tokens": 10, "completion_tokens": 1042, "cost_rub": 0.2,
+            }})
+        if stream_error:
+            events[-1]["error"] = {"code": 502, "type": "provider_unavailable", "request_id": request_id}
+        if outcome == "first_stream_error":
+            events = events[-1:]
+        return httpx.Response(200, headers={
+            "content-type": "text/event-stream",
+            **({"X-Request-Id": request_id} if outcome != "first_stream_error" else {}),
+            **({"X-AITunnel-Output-Capped": cap_header} if cap_header is not None else {}),
+        }, text="".join("data: " + json.dumps(event) + "\n\n" for event in events) + "data: [DONE]\n\n")
+
+    monkeypatch.setattr(text_failover, "select_scope", AsyncMock(return_value="aitunnel"))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(wire))
+    response = client.post("/v1/messages", json={
+        "model": "claude-sonnet-5.5", "user": str(uuid4()), "max_tokens": 128_000,
+        "messages": [{"role": "user", "content": "synthetic"}],
+        "metadata": {"stage": "source_repair", "run_id": str(uuid4()), "project_id": str(uuid4())},
+    })
+
+    assert len(attempts) == 1
+    provider_calls.start_call.assert_awaited_once()
+    provider_calls.finish_call.assert_awaited_once()
+    assert provider_calls.finish_call.await_args.kwargs["provider_request_id"] == request_id
+    body = response.json()
+    if outcome == "settled_length":
+        assert response.status_code == 200
+        assert body["metadata"].get("provider_output_cap_tokens") == expected_cap
+        assert body["provider_finish_reason"] == "length"
+        assert body["stop_reason"] == "max_tokens"
+        assert body["content"] == []
+        billing.charge.assert_awaited_once()
+    else:
+        assert response.status_code == 503
+        assert body["error"]["type"] == "billing_unavailable"
+        details = body["error"]["details"]
+        assert details["provider_stream_outcome"] == ("error" if stream_error else "output_limit")
+        assert details.get("provider_output_cap_tokens") == expected_cap
+        assert details["provider_charge_ambiguous"] is True
+        assert details["retry_safe"] is False
+        assert "upstream_http_status" not in details
+        assert provider_calls.finish_call.await_args.kwargs["status"] == "ambiguous"
+        assert provider_calls.finish_call.await_args.kwargs["error_type"] == (
+            "receipt_upstream_error" if stream_error else "receipt_incomplete"
+        )
+        billing.charge.assert_not_awaited()
+
+
+@pytest.mark.parametrize("error_type", ["insufficient_balance", "budget_exceeded"])
+def test_aitunnel_ordinary_repair_402_keeps_one_attempt(client, monkeypatch, error_type):
+    request_id = "chat-0J9fQk2vXc8LrT1mNbZa4e"
+    sent = []
+
+    def wire(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(402, json={"error": {
+            "code": 402, "type": error_type, "message": "synthetic provider funds error",
+            "metadata": {"available_rub": 0.1, "required_rub": 0.2}, "request_id": request_id,
+        }}, headers={"x-request-id": request_id})
+
+    monkeypatch.setattr(text_failover, "select_scope", AsyncMock(return_value="aitunnel"))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(wire))
+    response = client.post("/v1/messages", json={
+        "model": "claude-sonnet-5.5", "user": str(uuid4()), "max_tokens": 128_000,
+        "messages": [{"role": "user", "content": "synthetic"}],
+        "metadata": {"stage": "source_repair", "run_id": str(uuid4()), "project_id": str(uuid4())},
+    })
+    assert response.status_code == 402
+    assert [item["max_tokens"] for item in sent] == [128_000]
+    details = response.json()["error"]["details"]
+    assert details["upstream_http_status"] == 402
+    assert details.get("retry_safe", False) is False
+    assert "provider_stream_outcome" not in details
+    provider_calls.finish_call.assert_awaited_once()
+    assert provider_calls.finish_call.await_args.kwargs["provider_request_id"] == request_id
+    assert provider_calls.finish_call.await_args.kwargs["status"] == "failed"
+    billing.charge.assert_not_awaited()
 
 
 def test_legacy_native_skips_both_providers_when_shared_budget_is_exhausted(client, monkeypatch):

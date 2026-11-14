@@ -44,11 +44,13 @@ _ENUMS = {
     },
     "provider_refusal_category": {"access", "funds", "rate_limit", "unknown"},
     "provider_scope": {"llmgw", "aitunnel"},
+    "provider_stream_outcome": {"output_limit", "error"},
 }
 _INTEGER_RANGES = {
     "requested_max_tokens": (1, 2_000_000), "prompt_tokens": (0, 2_000_000),
     "completion_tokens": (0, 2_000_000), "total_tokens": (0, 4_000_000),
     "http_status": (100, 599), "upstream_http_status": (400, 599),
+    "provider_output_cap_tokens": (1, 2_000_000),
     "attempt": (0, 4),
     "fence": (0, 2**63 - 1),
 }

@@ -20,11 +20,16 @@ from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.generation_response_auth import (
     CAPACITY_HEADER,
     HEADER,
+    TRANSCRIPT_HEADER,
     mint_capacity_token,
     verify_capacity_snapshot,
     verify_generation_response_token,
 )
-from yleum_gateway.services.generation_attempts import parse_attempt
+from yleum_gateway.services.generation_attempts import (
+    close_native_transcript_rejection,
+    native_transcript_rejection_details,
+    parse_attempt,
+)
 from yleum_gateway.services.generation_identity import GenerationProviderIdentity
 from yleum_gateway.services.generation_response_ledger import (
     CapacitySnapshot,
@@ -133,6 +138,26 @@ def dispatch_capacity_guard() -> Iterator[None]:
 
 def retention_active() -> bool:
     return _CURRENT.get() is not None
+
+
+async def record_native_transcript_rejection(
+    identity: GenerationProviderIdentity | None, route: str, request: Request,
+) -> dict[str, bool | str] | None:
+    capture = _CURRENT.get()
+    if capture is None:
+        assertions = request.headers.getlist(TRANSCRIPT_HEADER)
+        if identity is None or len(assertions) != 1:
+            return None
+        try:
+            signed = verify_generation_response_token(assertions[0], purpose="generation_attempt.refusal")
+        except ValueError:
+            return None
+        if signed != identity:
+            return None
+    elif identity is None or capture.identity != identity or capture.route != route or capture.ledger is not None:
+        raise ResponseIndeterminate("generation transcript refusal ownership conflicts")
+    await close_native_transcript_rejection(identity)
+    return native_transcript_rejection_details()
 
 
 def remember_json_response(body: dict[str, Any]) -> None:

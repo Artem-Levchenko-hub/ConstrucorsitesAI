@@ -12,6 +12,108 @@ from yleum_api.services.generation import response_auth
 from yleum_api.services.generation.provider_identity import GenerationProviderIdentity
 
 IDENTITY = GenerationProviderIdentity(*(UUID(int=i) for i in range(1, 5)), "a" * 64, "b" * 64)
+TRANSCRIPT_REJECTION = {
+    "type": "invalid_request_error",
+    "details": {
+        "kind": "native_transcript_rejected", "reason": "native_transcript_rejected",
+        "provider_charge_ambiguous": False, "durable": True,
+    },
+}
+
+
+@pytest.mark.parametrize("edge", ["fresh", "cold", "unit_without_retention"])
+@pytest.mark.parametrize("proof", ["closed", "reserved", "wrong_binding"])
+async def test_owned_native_transcript_refusal_live_and_cold(
+    db_session, test_engine, monkeypatch, edge, proof,
+):
+    from unittest.mock import AsyncMock
+    from uuid import uuid4
+
+    from sqlalchemy import text
+
+    from tests.test_generation_recovery_execution import _queued_dispatch
+    from yleum_api.models.generation_provider_attempt import GenerationProviderAttempt
+    from yleum_api.services import agent_native
+    from yleum_api.services.generation import provider_attempts, recovery_quiescence
+
+    run = await _queued_dispatch(db_session)
+    run.status = "running"
+    identity = GenerationProviderIdentity(
+        run.id, run.project_id, run.user_id, uuid4(), run.prompt_hash, "b" * 64,
+    )
+    attempt = GenerationProviderAttempt(
+        attempt_id=identity.attempt_id, run_id=run.id, project_id=run.project_id,
+        user_id=run.user_id, prompt_hash=run.prompt_hash, dispatch_token=uuid4(),
+        request_sha256="c" * 64 if proof == "wrong_binding" else identity.request_sha256,
+        phase="reserved" if proof == "reserved" else "closed",
+        terminal_reason=None if proof == "reserved" else "native_transcript_rejected",
+    )
+    db_session.add(attempt)
+    # The ORM-only fixture omits this ledger; no receiver is admitted by this path.
+    await db_session.execute(text(
+        "CREATE TABLE generation_responses (attempt_id UUID PRIMARY KEY)"
+    ))
+    await db_session.commit()
+
+    settings = SimpleNamespace(
+        generation_response_retention_enabled=edge != "unit_without_retention",
+        generation_response_signing_secret=SecretStr("synthetic-test-secret-32-bytes-long"),
+        llm_gateway_url="http://gateway.test",
+    )
+    monkeypatch.setattr("yleum_api.core.config.get_settings", lambda: settings)
+    monkeypatch.setattr(llm_client, "get_settings", lambda: settings)
+    monkeypatch.setattr(provider_attempts, "get_engine", lambda: test_engine)
+    monkeypatch.setattr(
+        provider_attempts, "prepare_generation_attempt", AsyncMock(return_value=identity),
+    )
+    requests = []
+
+    def reply(request):
+        requests.append(request.method)
+        purpose = {
+            "cold": "generation_response.read", "fresh": "generation_response.record",
+            "unit_without_retention": "generation_attempt.refusal",
+        }[edge]
+        header = (
+            response_auth.TRANSCRIPT_HEADER if edge == "unit_without_retention"
+            else response_auth.HEADER
+        )
+        assert response_auth.verify_generation_response_token(
+            request.headers[header], purpose=purpose,
+        ) == identity
+        if edge == "cold":
+            return httpx.Response(200, json={
+                "version": 1, "identity": identity.to_wire(), "state": "rejected",
+                "error": TRANSCRIPT_REJECTION,
+            })
+        return httpx.Response(400, json={"type": "error", "error": TRANSCRIPT_REJECTION})
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: original(transport=httpx.MockTransport(reply), **kw),
+    )
+    expected = llm_client.NativeTranscriptRefusal if proof == "closed" else (
+        llm_client.LLMError if edge == "cold" else ValueError
+    )
+    try:
+        with pytest.raises(expected) as failure:
+            if edge == "cold":
+                await llm_client.require_recovered_response(identity)
+            else:
+                async with httpx.AsyncClient() as client:
+                    await agent_native._call_messages(
+                        client, "http://gateway.test/v1/messages", [], "system",
+                    )
+        if proof == "closed":
+            assert failure.value.provider_charge_ambiguous is False
+            assert failure.value.retry_safe is False
+            assert await recovery_quiescence._provider_stopped(db_session, run)
+        elif edge == "cold":
+            assert failure.value.provider_charge_ambiguous is True
+        assert requests == (["GET"] if edge == "cold" else ["POST"])
+    finally:
+        await db_session.execute(text("DROP TABLE generation_responses"))
+        await db_session.commit()
 
 
 @pytest.mark.parametrize("edge", ["complete", "sse", "native"])
@@ -39,6 +141,8 @@ async def test_resumed_logical_provider_step_reads_without_any_completion_post(
     monkeypatch.setattr(
         provider_attempts, "prepare_generation_attempt", AsyncMock(return_value=IDENTITY)
     )
+    # This transport-only test supplies no committed provider wire to advance.
+    monkeypatch.setattr(provider_attempts, "resume_generation_wire", AsyncMock(return_value=None))
     body = (
         {
             "content": [

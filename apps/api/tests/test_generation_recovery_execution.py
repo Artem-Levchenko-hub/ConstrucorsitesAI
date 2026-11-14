@@ -2333,9 +2333,10 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
     )
     from yleum_api.services.promotion_permit import workspace_revision_digest
 
+    transcript_rejection = damage == "transcript_rejection"
     partial_tool = damage == "partial_tool"
     early_check = damage == "early_check"
-    if partial_tool or early_check:
+    if partial_tool or early_check or transcript_rejection:
         damage = None
     expected_posts = 1 if partial_tool else 2
     expected_steps = 1 if partial_tool else 2
@@ -2475,6 +2476,7 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
             )
 
         async def execute(action):
+            nonlocal tree_sha, identity
             if early_check and action.name == "build":
                 driver = active_drivers[-1]
                 operation_id = uuid4()
@@ -2490,9 +2492,16 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
                 if len(checks) == 1:
                     await driver.wait()  # Role confirmed, next model frame not yet saved.
                 return result
-            assert action.name in ({"read_file", "write_file"} if early_check else {"read_file"})
+            assert action.name in (
+                {"read_file", "write_file"}
+                if early_check or transcript_rejection else {"read_file"}
+            )
             effects.append(action.args["path"])
             if action.name == "write_file":
+                if transcript_rejection:
+                    files[action.args["path"]] = action.args["content"]
+                    tree_sha = workspace_revision_digest(files)
+                    identity = replace(identity, workspace_revision=tree_sha)
                 assert action.args["content"] == files[action.args["path"]]
             return {"ok": True, "content": files[action.args["path"]]}
 
@@ -2644,6 +2653,10 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
             response["content"][0].update(name="write_file", input={
                 "path": first_path, "content": files[first_path],
             })
+        if transcript_rejection:
+            response["content"][0].update(name="write_file", input={
+                "path": "src/app/page.tsx", "content": "confirmed recovery draft",
+            })
         return response
 
     async def receiver_completed(request):
@@ -2659,6 +2672,11 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
         attempt_id = UUID(identity_payload["attempt_id"])
         async with factory() as session:
             attempt = await session.get(GenerationProviderAttempt, attempt_id)
+            if transcript_rejection and len(posts) == 1:
+                attempt.phase = "closed"
+                attempt.terminal_reason = "native_transcript_rejected"
+                await session.commit()
+                return
             call = ProviderCall(
                 id=uuid4(), provider_scope="llmgw", route="/synthetic", requested_model="synthetic",
                 expense_owner="user", user_id=run.user_id, project_id=run.project_id,
@@ -2695,6 +2713,18 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
         assert request.method == "POST"
         posts.append(request)
         await receiver_completed(request)
+        if transcript_rejection:
+            if len(posts) == 1:
+                raise httpx.ReadError("synthetic local refusal ACK lost", request=request)
+            assert len(posts) == 2
+            first, next_request = (json.loads(post.content) for post in posts)
+            first_identity = first["metadata"]["generation_provider_identity"]
+            next_identity = next_request["metadata"]["generation_provider_identity"]
+            assert first_identity["run_id"] == next_identity["run_id"] == str(run.id)
+            assert first_identity["attempt_id"] != next_identity["attempt_id"]
+            assert first_identity["request_sha256"] != next_identity["request_sha256"]
+            assert len(next_request["messages"]) == 1
+            return httpx.Response(200, json=wire_answer(2))
         if not partial_tool and not early_check and len(posts) == expected_posts:
             raise httpx.ReadError("synthetic accepted-response ACK lost", request=request)
         assert len(posts) <= (2 if early_check else 1)
@@ -2704,6 +2734,13 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
         recovered.append(attempt)
         entered.set()
         await unblock.wait()
+        if transcript_rejection:
+            from yleum_api.services.generation.provider_attempts import (
+                require_native_transcript_refusal,
+            )
+
+            await require_native_transcript_refusal(attempt)
+            raise llm_client.NativeTranscriptRefusal()
         return wire_answer(1 if partial_tool or early_check else 2)
 
     client = httpx.AsyncClient
@@ -2728,7 +2765,8 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
     )
     plan = AgentPromptPlan(
         "system", dispatch.prompt_text, "synthetic", None, expected_steps,
-        "seed", "MAX VERIFICATION OVERRIDE" if early_check else None, "system", None, False,
+        "seed", "MAX VERIFICATION OVERRIDE" if early_check or transcript_rejection else None,
+        "system", None, False,
     )
     prepared = PreparedAgentEntry(
         (dispatch.prompt_text, False, False, False),
@@ -2833,7 +2871,11 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
             recovery_execution._SESSION_OWNER.reset(token)
             await owner.execute(text("SELECT pg_advisory_unlock_all()"))
             await owner.commit()
-    assert len(posts) == (1 if early_check else expected_posts) and effects == [first_path]
+    wanted_effects = (
+        ["src/app/page.tsx"] if transcript_rejection else [first_path, "src/second.ts"]
+    )
+    assert len(posts) == (1 if early_check or transcript_rejection else expected_posts)
+    assert effects == ([] if transcript_rejection else [first_path])
     if early_check:
         assert len(checks) == 1
     await db_session.refresh(run)
@@ -2875,7 +2917,7 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
         if not first.done():
             first.cancel()
         await asyncio.gather(first, return_exceptions=True)
-    assert effects == [first_path, "src/second.ts"], (
+    assert effects == wanted_effects, (
         f"cold pipeline source handoff: posts={len(posts)} checks={len(checks)} "
         f"recovered={len(recovered)} finalization={finalization}"
     )
@@ -2908,7 +2950,7 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
         run.agent_state = {**run.agent_state, "recovery_v1": due.model_dump(mode="json")}
         await db_session.commit()
     assert await generation.execute_dispatch(run.id)
-    assert effects == [first_path, "src/second.ts"]
+    assert effects == wanted_effects
     assert len(posts) == expected_posts and len(recovered) == 1 and len(finalization) == 2
     if not initially_prepared:
         assert bootstrap_calls == ["classification", "stack", "prompt", "seed"]
@@ -2924,6 +2966,12 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
     assert again.execution.budget == after.execution.budget
     assert again.execution.lease_cycle_seq == 2 and again.execution.stage == "finalization"
     assert run.execution_started_at == started and run.finished_at is None
+    if transcript_rejection:
+        from yleum_api.models.generation_provider_attempt import GenerationProviderAttempt
+
+        attempts = (await db_session.scalars(select(GenerationProviderAttempt))).all()
+        assert len(attempts) == 2 and all(item.parent_attempt_id is None for item in attempts)
+        assert sum(item.provider_call_id is not None for item in attempts) == 1
 
 
 @pytest.mark.parametrize("cancel", [False, True])

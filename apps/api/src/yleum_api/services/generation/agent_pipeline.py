@@ -72,6 +72,7 @@ from yleum_api.services.generation.contracts import (
     GenerationRuntime,
     ProjectGenerationFacts,
     SourceBaseline,
+    uses_autonomous_max_source_repair,
     uses_single_max_source_repair,
 )
 from yleum_api.services.generation.progress import GenerationProgress
@@ -659,7 +660,8 @@ async def run_agent_generation(
             }), context={**continuation.context, "completed": completed})
     progress_collector = getattr(runtime, "verified_progress", None)
     single_max_repair = uses_single_max_source_repair(runtime)
-    progress.defer_verification_errors = single_max_repair
+    autonomous_max_repair = uses_autonomous_max_source_repair(runtime)
+    progress.defer_verification_errors = single_max_repair or autonomous_max_repair
     _operations = AgentOperations(
         response_recovery=getattr(runtime, "response_recovery", None),
         take_verified_progress=(
@@ -784,7 +786,7 @@ async def run_agent_generation(
             project_info=project_info,
             runtime=runtime,
             operations=_operations,
-            allow_source_repair=single_max_repair,
+            allow_source_repair=single_max_repair or autonomous_max_repair,
         )
 
 
@@ -841,7 +843,7 @@ async def run_agent_generation(
 
         # Managed MAX checks consume the same repair allowance as finalization.
         # Keep the older edit fallback only for flows outside that contract.
-        if not single_max_repair:
+        if not (single_max_repair or autonomous_max_repair):
             (
                 accumulated,
                 _runtime_ok,
@@ -982,7 +984,7 @@ async def run_agent_generation(
 
     _catalog_runtime = _stack.orchestrator_template == "max-miniapp-nextjs"
     _source_handoff = _agent_res.stop_reason in agent_builder.SOURCE_HANDOFF_REASONS
-    _restore_core_on_rejection = _source_handoff or single_max_repair
+    _restore_core_on_rejection = _source_handoff or single_max_repair or autonomous_max_repair
     (
         _max_finalization_proof,
         files,
@@ -1047,7 +1049,8 @@ async def run_agent_generation(
     )
     _terminal_error: str | None = None
     if _product_failure is not None and (
-        _source_change.failure is not None or get_settings().use_native_agent or single_max_repair
+        _source_change.failure is not None or get_settings().use_native_agent
+        or single_max_repair or autonomous_max_repair
     ):
         # Persist before the assistant becomes final. The next-submit
         # admission path and tracked-task finalizer must see the same
@@ -1126,7 +1129,9 @@ async def run_agent_generation(
     # routes back into the build loop on the live container. Published AFTER
     # the msg.content=accumulated overwrite above (else it'd be wiped) and
     # BEFORE llm.done so the card both persists and animates in.
-    if source_change_allows_partial_save(_source_change) and _agent_needs_continue_card(
+    if not autonomous_max_repair and source_change_allows_partial_save(
+        _source_change,
+    ) and _agent_needs_continue_card(
         _agent_res, product_failure=_product_failure
     ):
         await app_errors.publish(

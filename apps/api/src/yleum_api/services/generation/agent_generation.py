@@ -5,6 +5,7 @@ import logging
 import posixpath
 import re
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import replace
 from typing import Any
 
 from yleum_api.core.config import get_settings
@@ -17,6 +18,7 @@ from yleum_api.services.generation.contracts import (
     GenerationRuntime,
     ProjectGenerationFacts,
     SourceBaseline,
+    uses_autonomous_max_source_repair,
     uses_single_max_source_repair,
 )
 from yleum_api.services.generation.file_transforms import _merge_seeded_agent_files
@@ -686,9 +688,16 @@ async def execute_agent_turn(
     if _agent_res.stop_reason == "checkpoint_error":
         return _agent_res, _provider_failure
     if edit_source_changed is not None and not edit_source_changed() and not _provider_failure:
-        # A full unchanged export is not a write. Stop before legacy probes,
-        # looped-but-serves reporting, production finalization or publication.
-        raise RuntimeError("edit produced no source changes")
+        if not uses_autonomous_max_source_repair(runtime) or _agent_res.stop_reason in {
+            "infra_error", "error",
+        }:
+            raise RuntimeError("edit produced no source changes")
+        stop = _agent_res.stop_reason
+        _agent_res = replace(
+            _agent_res, done=False, needs_finalization=False, proof_checkpoint=None,
+            stop_reason=stop if stop == "incomplete_response" else "no_progress",
+            summary="The requested edit has not changed the source.",
+        )
     # A green starter is not a generated product. Empty export_files describes
     # only this invocation's writes; a validated restored product may already
     # contain the original request's attributable work. Keep that distinction
@@ -724,7 +733,10 @@ async def execute_agent_turn(
             files={},
             steps=_agent_res.steps,
             transcript=_agent_res.transcript,
-            stop_reason="no_ai_write",
+            stop_reason=(
+                "output_limit" if _agent_res.stop_reason == "output_limit"
+                and uses_autonomous_max_source_repair(runtime) else "no_ai_write"
+            ),
             evidence=_agent_res.evidence,
             segments=_agent_res.segments,
         )

@@ -227,6 +227,46 @@ async def _require_committed_identity(
         raise ValueError("provider continuation has no exact committed identity")
 
 
+async def native_transcript_attempt_closed(
+    session: AsyncSession, attempt: GenerationProviderAttempt,
+) -> bool:
+    """Check the gateway's terminal proof without a financial call or receiver."""
+    if (
+        attempt.version != 1 or attempt.phase != "closed"
+        or attempt.terminal_reason != "native_transcript_rejected"
+        or any(value is not None for value in (
+            attempt.provider_call_id, attempt.response_manifest_key, attempt.response_sha256,
+        ))
+    ):
+        return False
+    receiver_exists = await session.scalar(text(
+        "SELECT EXISTS(SELECT 1 FROM generation_responses WHERE attempt_id=:attempt)"
+    ), {"attempt": attempt.attempt_id})
+    return receiver_exists is False
+
+
+async def require_native_transcript_refusal(identity: GenerationProviderIdentity) -> None:
+    """Reload the exact affirmative refusal before allowing changed request bytes."""
+    from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.models.project import Project
+
+    async with async_sessionmaker(get_engine(), expire_on_commit=False)() as session:
+        run = await session.get(GenerationRun, identity.run_id)
+        project = await session.get(Project, identity.project_id)
+        attempt = await session.get(GenerationProviderAttempt, identity.attempt_id)
+        if (
+            run is None or run.status != "running" or project is None or attempt is None
+            or (run.project_id, run.user_id, run.prompt_hash, project.owner_id)
+            != (identity.project_id, identity.user_id, identity.prompt_hash, identity.user_id)
+            or (attempt.run_id, attempt.project_id, attempt.user_id, attempt.prompt_hash,
+                attempt.request_sha256)
+            != (identity.run_id, identity.project_id, identity.user_id, identity.prompt_hash,
+                identity.request_sha256)
+            or not await native_transcript_attempt_closed(session, attempt)
+        ):
+            raise ValueError("native transcript refusal is not confirmed for the owned attempt")
+
+
 async def require_closed_provider_parent(
     session: AsyncSession, parent: GenerationProviderIdentity, identity: GenerationProviderIdentity,
 ) -> None:

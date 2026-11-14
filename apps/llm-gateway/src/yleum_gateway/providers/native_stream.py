@@ -7,6 +7,7 @@ transport errors and cancellation, even when no complete response can be used.
 import asyncio
 import json
 import math
+import re
 import time
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, aclosing, asynccontextmanager
@@ -40,6 +41,20 @@ _FINISH_REASONS = {
     "stop", "tool_calls", "length", "content_filter", "end_turn", "tool_use",
     "max_tokens", "refusal", "pause_turn", "stop_sequence",
 }
+
+
+def aitunnel_output_cap(
+    response: httpx.Response, max_tokens: object, *, provider_scope: str,
+) -> int | None:
+    if provider_scope != "aitunnel" or response.status_code != 200:
+        return None
+    values = response.headers.get_list("x-aitunnel-output-capped")
+    if len(values) != 1 or not re.fullmatch(r"[1-9][0-9]{0,6}", values[0]):
+        return None
+    cap = int(values[0])
+    if cap > 2_000_000 or (type(max_tokens) is int and cap >= max_tokens):
+        return None
+    return cap
 
 
 def provider_request_deadline(value: str | None, started_at: float, *, reserve: float) -> float:
@@ -222,7 +237,14 @@ class _Collector:
             raise StreamReceiptError(ReceiptFailure.INVALID_EVENT) from exc
         if not isinstance(event, dict):
             raise StreamReceiptError(ReceiptFailure.INVALID_EVENT)
-        if event.get("error") is not None:
+        error = event.get("error")
+        if error is not None:
+            if self.provider_scope == "aitunnel":
+                self.evidence["provider_stream_outcome"] = "error"
+                if self.evidence.get("provider_request_id") is None and isinstance(error, dict):
+                    request_id = aitunnel_request_id({"x-request-id": error.get("request_id")})
+                    if request_id is not None and event.get("id", request_id) == request_id:
+                        self.evidence["provider_request_id"] = request_id
             raise StreamReceiptError(ReceiptFailure.UPSTREAM_ERROR)
         _record_protocol_facts(self.evidence, event)
         for key in ("id", "model"):
@@ -299,8 +321,12 @@ class _Collector:
             self.finish = reason
 
     def result(self) -> dict[str, Any]:
-        if (not self.done or self.finish is None or self.usage is None
-                or not all(key in self.identity for key in ("id", "model"))):
+        if not self.done or self.finish is None or not all(key in self.identity for key in ("id", "model")):
+            raise StreamReceiptError(ReceiptFailure.INCOMPLETE)
+        if self.usage is None:
+            if self.provider_scope == "aitunnel" and self.finish == "length":
+                # AITunnel can cap a paid stream without sending usage.
+                self.evidence["provider_stream_outcome"] = "output_limit"
             raise StreamReceiptError(ReceiptFailure.INCOMPLETE)
         for key in ("prompt_tokens", "completion_tokens"):
             value = self.usage.get(key)
@@ -395,6 +421,9 @@ async def collect_response(
             progress.record("headers", "headers_received_ms")
             if type(response.status_code) is int and 400 <= response.status_code <= 599:
                 evidence["upstream_http_status"] = response.status_code
+            cap = aitunnel_output_cap(response, payload.get("max_tokens"), provider_scope=provider_scope)
+            if cap is not None:
+                evidence["provider_output_cap_tokens"] = cap
             if provider_scope == "llmgw":
                 provider_header_id = response.headers.get("x-llmgw-request-id")
                 collector.provider_header_id = _identity(provider_header_id) if provider_header_id else None

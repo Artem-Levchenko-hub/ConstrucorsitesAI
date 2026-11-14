@@ -6,10 +6,10 @@ import json
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
-from typing import Any, Literal, cast
+from typing import Annotated, Any, Literal, cast
 from uuid import UUID, uuid5
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.services.agent_builder import AgentResult
@@ -621,6 +621,16 @@ class FinalizationProgress(BaseModel):
     feedback: tuple[str, ...] = ()
     pending_detail: str | None = None
     pending_targeted: bool = False
+    pending_fast_check: bool = Field(default=False, exclude_if=lambda value: value is False)
+    no_progress_passes: Annotated[int, Field(ge=0)] = Field(
+        default=0, exclude_if=lambda value: value == 0,
+    )
+    interrupted_product_sha256: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$", exclude_if=lambda value: value is None,
+    )
+    completed_repair_sha256: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$", exclude_if=lambda value: value is None,
+    )
     no_progress: bool = False
 
     @field_validator("source_history")

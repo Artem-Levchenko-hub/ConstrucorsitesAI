@@ -20,6 +20,7 @@ from yleum_api.services.generation.contracts import (
     GenerationIds,
     GenerationRuntime,
     SourceBaseline,
+    uses_autonomous_max_source_repair,
     uses_single_max_source_repair,
 )
 from yleum_api.services.generation.recovery_trace import bounded_recovery_diagnostic
@@ -51,6 +52,14 @@ _NO_SOURCE_CHANGE_FAILURE = "edit produced no source changes"
 _NO_SOURCE_CHANGE_MESSAGE = (
     "Не удалось применить правку: итоговый код не изменился. "
     "Повтори запрос или уточни, что именно нужно изменить."
+)
+_REPAIR_APPROACHES = (
+    "Use the current diagnostic to apply one small source change, then verify it.",
+    "Change approach. Use existing working components or interfaces and fix one failing "
+    "user action with the smallest runnable change. Avoid repeating the previous proposal.",
+    "Start from the current files and original requirement. Isolate the remaining failure "
+    "in a small component or testable function, connect it to the product and run its check. "
+    "Keep previous working behavior and data.",
 )
 
 
@@ -99,6 +108,7 @@ class _FinalizationOptions(TypedDict, total=False):
     source_preflight: Callable[[], Awaitable[str | None]]
     max_source_repairs: int
     interrupted_source_reason: str
+    autonomous_source_repair: bool
 
 
 def source_change_allows_partial_save(verdict: EditSourceChangeVerdict) -> bool:
@@ -227,6 +237,8 @@ async def run_native_source_repair(
     edit_deadline: datetime | None,
     source_failure: SourceFailure | None = None,
     feedback: str = "",
+    require_edit_from: Mapping[str, str] | None = None,
+    catalog_runtime: bool = False,
 ) -> agent_builder.AgentResult:
     """Reuse the guarded editor's progress windows without accepting proof."""
     from yleum_api.services import agent_native
@@ -240,7 +252,10 @@ async def run_native_source_repair(
     continuation = getattr(operations, "continuation", None)
     accounting = getattr(operations, "response_recovery", None)
     model_baseline = baseline
-    single_repair = continuation is None and uses_single_max_source_repair(runtime)
+    autonomous_repair = uses_autonomous_max_source_repair(runtime)
+    single_repair = (
+        not autonomous_repair and continuation is None and uses_single_max_source_repair(runtime)
+    )
     if continuation is not None:
         from yleum_api.services.generation.recovery_contract import IncompleteResponseBudget
         from yleum_api.services.generation.recovery_pipeline import (
@@ -298,17 +313,33 @@ async def run_native_source_repair(
                 if action.path not in allowed or (
                     action.path not in baseline and not guarded_write
                 ):
+                    if continuation is not None:
+                        from yleum_api.services.generation.recovery_tool_receipts import (
+                            is_reconciling_source_write,
+                        )
+
+                        if await is_reconciling_source_write(
+                            continuation, name=action.name, args=action.args,
+                        ):
+                            return await operations.execute(action)
                     return {"ok": False, "detail": "Source repair path is not authorized."}
             elif action.name not in {"read_file", "list_dir", "grep", "build", "done"}:
                 return {"ok": False, "detail": "Source repair action is not authorized."}
             return await operations.execute(action)
 
         execute = targeted_execute
+
+    def completion(written: Mapping[str, str], _evidence: Mapping[str, int]) -> str | None:
+        effective = {**baseline, **written}
+        if require_edit_from is not None and unchanged_candidate_before_finalization(
+            baseline_files=require_edit_from, workspace_files=effective,
+            requires_source_change=True, message="", catalog_runtime=catalog_runtime,
+        ) is not None:
+            return "Apply the requested edit to the existing product before done."
+        return max_source_completion_gap(prompt_text, effective, portable=True)
+
     repair_execute, repair_completion = await guard_native_source_contract(
-        runtime, ids, execute,
-        lambda written, evidence: max_source_completion_gap(
-            prompt_text, {**baseline, **written}, portable=True,
-        ),
+        runtime, ids, execute, completion,
     )
     checkpoint = getattr(operations, "checkpoint", None)
     snapshot = getattr(operations, "snapshot_files", None) or getattr(
@@ -342,7 +373,8 @@ async def run_native_source_repair(
             max_steps=plan.steps,
             max_segments=(
                 None
-                if not single_repair and runtime.coordinator is not None
+                if not single_repair and (continuation is not None or not autonomous_repair)
+                and runtime.coordinator is not None
                 and getattr(get_settings(), "agent_progressive_continuation", False)
                 else 1
             ),
@@ -354,24 +386,18 @@ async def run_native_source_repair(
         )
     except SourceCheckpointError as exc:
         raise RuntimeError(exc.candidate.summary) from None
-    if result.stop_reason == "output_limit" and not result.needs_finalization:
+    if (
+        not autonomous_repair and result.stop_reason == "output_limit"
+        and not result.needs_finalization
+    ):
         raise RuntimeError(
             "Provider response rejected (output_limit); finalization repair was not verified."
         )
     if result.stop_reason in {"provider_error", "infra_error", "error"}:
         raise RuntimeError(result.summary)
-    if single_repair and get_settings().use_sast_gate and get_settings().sast_gate_blocking:
-        from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
-        from yleum_api.services.sast_gate import check_sast
-
+    if single_repair:
         assert runtime.handle is not None
-        repaired_source = await runtime.handle.snapshot_files()
-        sast = check_sast(max_sast_source_view({
-            path: content for path, content in repaired_source.items()
-            if path not in MAX_SECURITY_LOCKED_FILES
-        }, is_max=True))
-        if not sast.safe:
-            raise RuntimeError("MAX_FINALIZATION_FAILED: repaired source failed security checks")
+        _require_blocking_sast(await runtime.handle.snapshot_files(), repairing=True)
     if continuation is not None:
         from yleum_api.services.generation.recovery_pipeline import finish_source_repair
         await finish_source_repair(
@@ -379,6 +405,20 @@ async def run_native_source_repair(
             accounting.budget if accounting is not None else entry.response_budget,
         )
     return result
+
+
+def _require_blocking_sast(files: Mapping[str, str], *, repairing: bool = False) -> None:
+    settings = get_settings()
+    if not (settings.use_sast_gate and settings.sast_gate_blocking):
+        return
+    from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
+    from yleum_api.services.sast_gate import check_sast
+
+    if not check_sast(max_sast_source_view({
+        path: content for path, content in files.items() if path not in MAX_SECURITY_LOCKED_FILES
+    }, is_max=True)).safe:
+        subject = "repaired source" if repairing else "source"
+        raise RuntimeError(f"MAX_FINALIZATION_FAILED: {subject} failed security checks")
 
 
 async def finalize_max_candidate(
@@ -405,35 +445,47 @@ async def finalize_max_candidate(
         from yleum_api.services.max_finalization import MaxFinalizationStatus
 
         assert runtime.handle is not None
-
-        # A healthy unchanged tree cannot prove that the requested edit happened.
-        # Check before spending minutes on a production build or running SQL.
-        if (
+        continuation = getattr(operations, "continuation", None)
+        autonomous_repair = uses_autonomous_max_source_repair(runtime)
+        single_repair = (
+            not autonomous_repair
+            and continuation is None
+            and uses_single_max_source_repair(runtime)
+        )
+        check_edit = (
             (_is_edit or _max_has_generated_snapshot)
             and runtime.handle.prove_restoration_adaptation is None
-        ):
-            unchanged = unchanged_candidate_before_finalization(
+        )
+        requires_edit = check_edit and source_change_required(prompt_text)
+
+        async def unchanged_candidate() -> EditSourceChangeVerdict | None:
+            assert runtime.handle is not None
+            return unchanged_candidate_before_finalization(
                 baseline_files=baseline.files,
                 workspace_files=await runtime.handle.snapshot_files(),
-                requires_source_change=source_change_required(prompt_text),
+                requires_source_change=requires_edit,
                 message=accumulated,
                 catalog_runtime=catalog_runtime,
             )
+
+        # A healthy unchanged tree cannot prove that the requested edit happened.
+        # Check before spending minutes on a production build or running SQL.
+        if check_edit:
+            unchanged = await unchanged_candidate()
             if unchanged is not None:
-                if unchanged.failure:
+                if unchanged.failure and not autonomous_repair:
                     raise RuntimeError(unchanged.failure)
-                return FinalizedAgentSource(None, {}, unchanged.message)
+                if unchanged.failure is None:
+                    return FinalizedAgentSource(None, {}, unchanged.message)
 
         _repair_history: list[str] = []
-        continuation = getattr(operations, "continuation", None)
-        single_repair = continuation is None and uses_single_max_source_repair(runtime)
 
         async def _repair_finalization_source(
             detail: str, source_failure: SourceFailure | None = None,
-        ) -> None:
+        ) -> bool:
             assert runtime.handle is not None
             assert runtime.coordinator is not None
-            baseline = await runtime.handle.snapshot_files()
+            repair_files = await runtime.handle.snapshot_files()
             history = _repair_history
             if continuation is not None:
                 from yleum_api.services.generation.recovery_pipeline import FinalizationProgress
@@ -443,50 +495,67 @@ async def finalize_max_candidate(
                 history = list(progress.feedback[:-1])
             # Each repair opens a fresh transcript, so the agent cannot see what it
             # already changed or what the earlier passes were told. Hand both over.
-            _changed = sorted(set(baseline) - set(files)) + sorted(
-                path for path in set(baseline) & set(files) if baseline[path] != files[path]
+            _changed = sorted(set(repair_files) - set(files)) + sorted(
+                path for path in set(repair_files) & set(files) if repair_files[path] != files[path]
             )
             _carry = "".join(
                 f"\n\nEARLIER CHECK FEEDBACK (pass {index}, already addressed or not):\n{text}"
-                for index, text in enumerate(history, start=1)
+                for index, text in enumerate(history[-3:], start=max(1, len(history) - 2))
             ) + (
                 "\n\nFILES YOU ALREADY CHANGED IN THIS RUN: " + ", ".join(_changed[:40])
                 if _changed
                 else ""
             )
+            strategy = _REPAIR_APPROACHES[min(len(history), len(_REPAIR_APPROACHES) - 1)]
+            strategy = strategy + "\n" if autonomous_repair else ""
             if continuation is None:
                 _repair_history.append(detail)
             repaired = await run_native_source_repair(
                 task=(
                     f"{plan.user}\n\nFINAL SOURCE CHECK FEEDBACK:\n{detail}{_carry}\n"
+                    f"{strategy}"
                     "Fix the existing product in this same workspace. Preserve working "
                     "features and data. Do not repeat SQL effects already completed. "
                     "Make real source changes, run build, then done."
                 ),
-                prompt_text=prompt_text, baseline=baseline, runtime=runtime, ids=ids,
+                prompt_text=prompt_text, baseline=repair_files, runtime=runtime, ids=ids,
                 plan=plan, operations=operations, is_free=is_free,
                 shell_enabled=_max_shell_enabled,
                 edit_deadline=await runtime.coordinator.source_edit_deadline(repair=True),
                 source_failure=source_failure,
                 feedback=detail,
+                require_edit_from=baseline.files if autonomous_repair and requires_edit else None,
+                catalog_runtime=catalog_runtime,
             )
             if single_repair and not (
                 repaired.done or repaired.needs_finalization or repaired.files
             ):
                 raise RuntimeError("MAX_FINALIZATION_FAILED: source repair did not complete")
+            return repaired.done
 
         try:
             options: _FinalizationOptions = {}
             if continuation is not None:
                 options["continuation"] = continuation
+            if autonomous_repair:
+                options["autonomous_source_repair"] = True
             if single_repair:
                 options["max_source_repairs"] = int(
                     not getattr(runtime, "source_repair_started", False)
                 )
-            if source_handoff:
+            if source_handoff or autonomous_repair:
                 from yleum_api.services.generation.agent_runtime import migration_feedback
 
-                options["source_preflight"] = lambda: migration_feedback(runtime, ids)
+                async def source_preflight() -> str | None:
+                    if autonomous_repair:
+                        assert runtime.handle is not None
+                        _require_blocking_sast(await runtime.handle.snapshot_files())
+                    gap = await migration_feedback(runtime, ids)
+                    if gap is None and requires_edit and await unchanged_candidate() is not None:
+                        return "Apply the requested edit to the source before release."
+                    return gap
+
+                options["source_preflight"] = source_preflight
                 if interrupted_source_reason is not None:
                     options["interrupted_source_reason"] = interrupted_source_reason
             _finalization = await runtime.coordinator.finalize_with_repair(
@@ -553,7 +622,7 @@ async def finalize_max_candidate(
                             or "MAX core restore did not pass runtime verification"
                         ))
             except Exception as _repair_rollback_exc:
-                if source_handoff or single_repair:
+                if source_handoff or single_repair or autonomous_repair:
                     raise_if_terminal_cell_error(_repair_rollback_exc)
                     failure = FinalizationRollbackUnverified(
                         exc, _repair_rollback_exc, run_id=getattr(ids, "run_id", None),

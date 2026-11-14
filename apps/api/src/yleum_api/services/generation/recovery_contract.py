@@ -377,6 +377,7 @@ class RecoveryClock(_Record):
     interval_open: bool = True
     interval_charged_ms: Nonnegative = 0
     repair_granted: bool = False
+    compiler_granted: bool = Field(default=False, exclude_if=lambda value: value is False)
     consumed_requirement_ids: tuple[Nonblank, ...] = ()
     dependency_failures: Nonnegative = 0
     wait_dependency: Literal["credentials", "funds", "provider"] | None = None

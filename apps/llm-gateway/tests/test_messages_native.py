@@ -1182,6 +1182,13 @@ def test_transport_failure_logs_safe_class_and_correlation(client, monkeypatch, 
 @pytest.mark.parametrize(("patch", "phase", "reason", "field"), [
     (
         {"messages": [
+            {"role": "assistant", "content": [{"type": "thinking", "thinking": "synthetic-private"}]},
+            {"role": "user", "content": "Finish the recorded work"},
+        ]},
+        "transcript_validation", "invalid_message_content", "messages[0].content",
+    ),
+    (
+        {"messages": [
             {"role": "assistant", "content": [{
                 "type": "tool_use", "id": "synthetic-private-id", "name": "read_file", "input": {},
             }]},
@@ -1213,7 +1220,14 @@ def test_local_bad_request_logs_safe_reason_before_provider_admission(
         response = client.post("/v1/messages", json=request)
 
     assert response.status_code == 400
-    assert response.json()["error"]["type"] == "invalid_request_error"
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    if phase == "transcript_validation":
+        assert error["details"] == {
+            "kind": "native_transcript_rejected", "reason": reason, "provider_charge_ambiguous": False,
+        }
+    else:
+        assert "details" not in error
     assert [event for event in logs if event["event"] == "native_messages.request_rejected"] == [{
         "event": "native_messages.request_rejected", "log_level": "warning",
         "http_status": 400, "error_origin": "gateway", "route": "/v1/messages",

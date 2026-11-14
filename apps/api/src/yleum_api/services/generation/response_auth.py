@@ -14,11 +14,14 @@ from yleum_api.services.generation.provider_identity import GenerationProviderId
 
 ResponsePurpose = Literal[
     "generation_response.record", "generation_response.read", "generation_response.reconcile",
+    "generation_attempt.refusal",
 ]
 _RESPONSE_PURPOSES = frozenset((
     "generation_response.record", "generation_response.read", "generation_response.reconcile",
+    "generation_attempt.refusal",
 ))
 HEADER = "x-generation-response-authorization"
+TRANSCRIPT_HEADER = "x-generation-transcript-authorization"
 _DOMAIN = b"yleum:generation-response:v1"
 
 
@@ -282,4 +285,23 @@ def record_headers(
     return {
         **(headers or {}),
         HEADER: mint_generation_response_token(identity, purpose="generation_response.record"),
+    }
+
+
+def native_attempt_headers(
+    identity: GenerationProviderIdentity | None, headers: dict[str, str] | None,
+) -> dict[str, str] | None:
+    from yleum_api.core.config import get_settings
+
+    recorded = record_headers(identity, headers)
+    if identity is None or (recorded is not None and HEADER in recorded):
+        return recorded
+    secret = getattr(get_settings(), "generation_response_signing_secret", None)
+    if secret is None or len(key := secret.get_secret_value()) < 32:
+        return recorded
+    return {
+        **(recorded or {}),
+        TRANSCRIPT_HEADER: mint_generation_response_token(
+            identity, purpose="generation_attempt.refusal", secret=key,
+        ),
     }

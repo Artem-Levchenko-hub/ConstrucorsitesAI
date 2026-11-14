@@ -35,7 +35,7 @@ from yleum_api.models.snapshot import Snapshot
 from yleum_api.services import repo
 from yleum_api.services.agent_progress import bounded_redacted_diagnostic
 from yleum_api.services.functional_gate import Check, FunctionalVerdict, summarize
-from yleum_api.services.generation.continuation import SourceNoveltyTracker
+from yleum_api.services.generation.continuation import SourceNoveltyTracker, source_fingerprint
 from yleum_api.services.generation.notes_acceptance_receipts import require_notes_observation
 from yleum_api.services.generation.recovery_acceptance import require_coordinator_acceptance
 from yleum_api.services.generation.recovery_actions import recovery_binding
@@ -69,7 +69,8 @@ from yleum_api.services.max_behavior_proof import (
     require_candidate_behavior,
     require_saved_candidate_behavior,
 )
-from yleum_api.services.max_generation_contract import max_source_completion_gap
+from yleum_api.services.max_generation_contract import _is_product_source, max_source_completion_gap
+from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
 from yleum_api.services.max_runtime_probe import MaxRuntimeProbe
 from yleum_api.services.notes_acceptance_browser import NotesDriver
 from yleum_api.services.orchestrator_client import (
@@ -126,9 +127,27 @@ from yleum_api.services.versioning_capabilities import capability_gap
 _MAX_DETAIL_BYTES = 4096
 # A repair is one model turn plus a build; starting it with less time only burns the rest.
 _MIN_REPAIR_SECONDS = 60
+_MAX_AUTONOMOUS_REPAIRS = 5
+_MAX_REPAIR_STRATEGIES_WITHOUT_PROGRESS = 3
 # How often the watchdog looks again while a sealed hand-off runs under its own ceiling.
 _SEALED_RECHECK_SECONDS = 15.0
 _FULL_BUILD_DETAIL_PREFIX = f"[build-contract:{MAX_FULL_BUILD_CONTRACT_VERSION}]"
+
+
+def _product_source_fingerprint(files: Mapping[str, str]) -> str:
+    return source_fingerprint({
+        path: source for path, source in files.items()
+        if path not in MAX_SECURITY_LOCKED_FILES
+        and (_is_product_source(path) or path == "src/app/globals.css")
+    })
+
+
+def _completed_repair_fingerprint(
+    files: Mapping[str, str], interrupted_product: str, completed: bool,
+) -> str | None:
+    if completed and _product_source_fingerprint(files) != interrupted_product:
+        return source_fingerprint(files)
+    return None
 _FULL_BUILD_STARTUP_TRANSITION = "[full-build-startup-transition:v1]"
 
 
@@ -762,24 +781,23 @@ class MaxFinalizationCoordinator:
         self,
         *,
         prompt: str,
-        repair: Callable[[str], Awaitable[None]],
-        repair_source: Callable[[str, SourceFailure], Awaitable[None]] | None = None,
+        repair: Callable[[str], Awaitable[bool | None]],
+        repair_source: Callable[[str, SourceFailure], Awaitable[bool | None]] | None = None,
         continuation: ExecutionDriver | None = None,
         source_preflight: Callable[[], Awaitable[str | None]] | None = None,
         max_source_repairs: int | None = None,
         interrupted_source_reason: str | None = None,
+        autonomous_source_repair: bool = False,
     ) -> MaxFinalizationOutcome:
-        """Continue repairs while actual source or verified gate evidence is novel.
-
-        Only NEEDS_EDIT is repairable. Existing deadlines/reserves, fatal errors,
-        cancellation and promotion checks remain authoritative. Repeated source
-        states cannot buy another pass without a newly verified gate dimension.
-        Ordinary MAX may cap attempts without changing the durable replay protocol.
-        """
-        if continuation is not None and (
+        """Verify the current draft and give a source failure a bounded change of strategy."""
+        if continuation is not None and not autonomous_source_repair and (
             source_preflight is not None or max_source_repairs is not None
         ):
             raise MaxFinalizationConflict("durable execution has its own verification protocol")
+        if autonomous_source_repair:
+            max_source_repairs = (
+                _MAX_AUTONOMOUS_REPAIRS if max_source_repairs is None else max_source_repairs
+            )
         if continuation is not None:
             await continuation.account_work()
         await self._raise_persisted_infrastructure_failure()
@@ -793,9 +811,15 @@ class MaxFinalizationCoordinator:
         progress = SourceNoveltyTracker(files)
         durable = None
         repairs = 0
+        no_progress_passes = 0
+        interrupted_product = (
+            _product_source_fingerprint(files) if interrupted_source_reason is not None else None
+        )
+        completed_repair = None
         if continuation is not None:
             from yleum_api.services.generation.recovery_pipeline import (
                 FinalizationProgress,
+                _result_from_data,
                 pending_source_repair,
                 save_finalization_progress,
             )
@@ -807,48 +831,100 @@ class MaxFinalizationCoordinator:
                 else FinalizationProgress(source_history=progress.source_history())
             )
             progress = SourceNoveltyTracker.from_source_history(durable.source_history)
+            repairs = len(durable.feedback) - int(durable.pending_detail is not None)
+            no_progress_passes = durable.no_progress_passes
+            interrupted_product = durable.interrupted_product_sha256 or interrupted_product
+            completed_repair = durable.completed_repair_sha256
             if durable.no_progress:
                 raise MaxFinalizationConflict("source repair made no new progress")
             if durable.pending_detail is not None:
                 pending = pending_source_repair(continuation)
+                repair_completed = False
                 if pending is None or pending.status != "complete":
-                    fresh_failure = await self.revalidate_pending_repair(
-                        targeted=durable.pending_targeted,
-                    )
-                    await self._invoke_source_repair(
+                    if durable.pending_fast_check:
+                        current_check = await self.fast_check()
+                        if current_check.dimension != ProofDimension.FAST_CHECK.value:
+                            raise MaxFinalizationConflict(
+                                "pending repair prerequisite is not confirmed",
+                            )
+                        fresh_failure = None
+                        if durable.pending_targeted:
+                            fresh_failure = SourceFailure()
+                            if current_check.outcome == ProofOutcome.RED.value:
+                                current_failure = await self.source_failure(current_check)
+                                if current_failure is not None:
+                                    fresh_failure = current_failure
+                        elif (
+                            current_check.outcome == ProofOutcome.RED.value
+                            and not source_check_is_repairable(
+                                current_check.dimension, current_check.outcome,
+                                current_check.redacted_detail,
+                            )
+                        ):
+                            # A changed diagnostic must not give a retained broad
+                            # tool response authority to write on a new failure.
+                            fresh_failure = SourceFailure()
+                        await self._grant_initial_repair_window(continuation, current_check)
+                    else:
+                        fresh_failure = await self.revalidate_pending_repair(
+                            targeted=durable.pending_targeted,
+                        )
+                    repair_completed = await self._invoke_source_repair(
                         detail=durable.pending_detail,
                         repair=repair,
                         repair_source=repair_source,
                         failure=fresh_failure,
                     )
+                elif autonomous_source_repair:
+                    repair_completed = _result_from_data(pending.result).done
                 files = await self.executor.snapshot_files()
+                if autonomous_source_repair and interrupted_product is not None:
+                    completed_repair = _completed_repair_fingerprint(
+                        files, interrupted_product, repair_completed,
+                    )
                 # Serialized proof credit is deliberately absent. Historical
                 # green receipts cannot buy another repair after a restart.
                 novel = progress.observe(files)
+                repairs += 1
+                no_progress_passes = 0 if novel else no_progress_passes + 1
                 durable = durable.model_copy(
                     update={
                         "source_history": progress.source_history(),
                         "pending_detail": None,
                         "pending_targeted": False,
-                        "no_progress": not novel,
+                        "pending_fast_check": False,
+                        "no_progress_passes": no_progress_passes,
+                        "interrupted_product_sha256": interrupted_product,
+                        "completed_repair_sha256": completed_repair,
+                        "no_progress": not novel and not autonomous_source_repair,
                     }
                 )
                 await save_finalization_progress(continuation, durable, consume_repair=True)
-                if not novel:
+                if durable.no_progress:
                     raise MaxFinalizationConflict("source repair made no new progress")
         options: _SourceCheckOptions = {}
         if source_preflight is not None:
             options["source_preflight"] = source_preflight
-            if interrupted_source_reason is not None:
-                options["interrupted_source_reason"] = interrupted_source_reason
+        outcome: MaxFinalizationOutcome | None = None
         while True:
-            outcome = await self.finalize(files=files, prompt=prompt, **options)
-            options.pop("interrupted_source_reason", None)
+            if interrupted_source_reason is not None:
+                if not autonomous_source_repair or completed_repair != source_fingerprint(files):
+                    if source_preflight is not None:
+                        options["interrupted_source_reason"] = interrupted_source_reason
+                else:
+                    options.pop("interrupted_source_reason", None)
+            if outcome is None:
+                outcome = await self.finalize(files=files, prompt=prompt, **options)
+            if not autonomous_source_repair:
+                interrupted_source_reason = None
+                options.pop("interrupted_source_reason", None)
             if outcome.status is not MaxFinalizationStatus.NEEDS_EDIT:
                 if continuation is not None:
                     await continuation.account_work()
                 return outcome
             if max_source_repairs is not None and repairs >= max_source_repairs:
+                return outcome
+            if no_progress_passes >= _MAX_REPAIR_STRATEGIES_WITHOUT_PROGRESS:
                 return outcome
             # Existing proof hits are baseline evidence, not progress from this repair.
             progress.observe(files, verified_receipts=await self._repair_progress_receipts(files))
@@ -880,13 +956,18 @@ class MaxFinalizationCoordinator:
                         "feedback": (*durable.feedback, outcome.redacted_detail),
                         "pending_detail": outcome.redacted_detail,
                         "pending_targeted": targeted,
+                        "pending_fast_check": autonomous_source_repair and (
+                            source_preflight is not None
+                            and outcome.proof.full_build is None
+                        ),
+                        "interrupted_product_sha256": interrupted_product,
                     }
                 )
                 await save_finalization_progress(continuation, durable)
                 await self._grant_initial_repair_window(
                     continuation, outcome.proof.full_build or outcome.proof.fast_check,
                 )
-            await self._invoke_source_repair(
+            repair_completed = await self._invoke_source_repair(
                 detail=outcome.redacted_detail,
                 repair=repair,
                 repair_source=repair_source,
@@ -894,6 +975,11 @@ class MaxFinalizationCoordinator:
             )
             repairs += 1
             updated = await self.executor.snapshot_files()
+            previous_completion = completed_repair
+            if autonomous_source_repair and interrupted_product is not None:
+                completed_repair = _completed_repair_fingerprint(
+                    updated, interrupted_product, repair_completed,
+                )
             # A one-shot repair must actually change the draft. A new receipt
             # for identical source cannot turn an incomplete turn into success.
             verified = (
@@ -901,6 +987,7 @@ class MaxFinalizationCoordinator:
                 if max_source_repairs is None else frozenset()
             )
             novel = progress.observe(updated, verified_receipts=verified)
+            no_progress_passes = 0 if novel else no_progress_passes + 1
             if continuation is not None:
                 assert durable is not None
                 durable = durable.model_copy(
@@ -908,12 +995,19 @@ class MaxFinalizationCoordinator:
                         "source_history": progress.source_history(),
                         "pending_detail": None,
                         "pending_targeted": False,
-                        "no_progress": not novel,
+                        "pending_fast_check": False,
+                        "no_progress_passes": no_progress_passes,
+                        "completed_repair_sha256": completed_repair,
+                        "no_progress": not novel and not autonomous_source_repair,
                     }
                 )
                 await save_finalization_progress(continuation, durable, consume_repair=True)
-            if not novel:
+            if not novel and not autonomous_source_repair:
                 return outcome
+            if updated != files or novel or completed_repair != previous_completion:
+                # A cached result describes only the current source, not an ABA
+                # candidate or a tree that was edited during a repair.
+                outcome = None
             files = updated
 
     async def _grant_initial_repair_window(
@@ -934,10 +1028,10 @@ class MaxFinalizationCoordinator:
         self,
         *,
         detail: str,
-        repair: Callable[[str], Awaitable[None]],
-        repair_source: Callable[[str, SourceFailure], Awaitable[None]] | None,
+        repair: Callable[[str], Awaitable[bool | None]],
+        repair_source: Callable[[str, SourceFailure], Awaitable[bool | None]] | None,
         failure: SourceFailure | None,
-    ) -> None:
+    ) -> bool:
         continuation: ExecutionDriver | None = getattr(self, "continuation", None)
         async with self.session_factory() as session:
             run = await self._locked_run(session)
@@ -953,6 +1047,8 @@ class MaxFinalizationCoordinator:
             started_at=run.started_at or run.created_at,
             reserve_seconds=180,
         )
+        if continuation is not None:
+            repair_end = continuation.soft_edit_deadline(repair_end) or repair_end
         remaining = (repair_end - datetime.now(UTC)).total_seconds()
         if remaining < _MIN_REPAIR_SECONDS:
             if continuation is not None:
@@ -963,9 +1059,8 @@ class MaxFinalizationCoordinator:
                 if failure is not None:
                     if repair_source is None:
                         raise MaxFinalizationConflict("fresh source repair guard is unavailable")
-                    await repair_source(detail, failure)
-                else:
-                    await repair(detail)
+                    return await repair_source(detail, failure) is True
+                return await repair(detail) is True
         except TimeoutError as exc:
             if continuation is not None:
                 await continuation.soft_boundary(exhausted=True)

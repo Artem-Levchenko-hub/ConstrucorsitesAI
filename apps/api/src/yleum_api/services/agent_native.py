@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 import structlog
-from pydantic import BaseModel, ConfigDict, NonNegativeInt
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt
 
 from yleum_api.core.config import get_settings
 from yleum_api.services.agent_build_feedback import render_model_observation
@@ -46,6 +46,15 @@ from yleum_api.services.generation.continuation import (
     RecoveryObserver,
     SourceNoveltyTracker,
     shadow_recovery_executor,
+    source_fingerprint,
+)
+from yleum_api.services.generation.native_strategy import (
+    INSPECTION_TOOLS,
+    NativeRecoveryMode,
+    compiler_failure,
+    inspection_signature,
+    recovery_message,
+    repeated_inspection,
 )
 from yleum_api.services.generation.recovery_actions import (
     ProgressReader,
@@ -70,8 +79,10 @@ from yleum_api.services.generation.source_repair_context import (
 from yleum_api.services.generation_failure import failure_for_error
 from yleum_api.services.integration_providers import PROVIDER_MAP
 from yleum_api.services.llm_client import (
+    NativeTranscriptRefusal,
     _native_preconnect_details,
     _overload_refusal_details,
+    is_durable_native_transcript_refusal,
     rate_limit_retry_delay,
 )
 from yleum_api.services.max_management_generation import ManagedSourceGap
@@ -105,6 +116,18 @@ class _NativeLoopFrame(BaseModel):
     invalidated_proofs: list[str]
     unverified_response_problem: str | None
     response_budget: IncompleteResponseBudget
+    inspection_history: list[str] = Field(
+        default_factory=list, max_length=4, exclude_if=lambda value: not value,
+    )
+    inspection_focus: list[str] = Field(
+        default_factory=list, max_length=4, exclude_if=lambda value: not value,
+    )
+    inspection_source: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    recovery_mode: NativeRecoveryMode | None = Field(default=None, exclude_if=lambda v: v is None)
+    source_diagnostic: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    compiler_signature: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    recovery_output_cap: int | None = Field(default=None, exclude_if=lambda v: v is None)
+    transcript_recovery_used: bool = Field(default=False, exclude_if=lambda value: value is False)
     request: dict[str, Any]
 
 
@@ -153,6 +176,7 @@ _MODEL = "claude-sonnet-5"
 # uses the provider default and does not send the legacy manual thinking budget.
 _MAX_TOKENS = 20000
 _THINKING_BUDGET = 8000
+_MAX_OBSERVED_OUTPUT_CAP = 2_000_000
 _MAX_TOOL_RESULT_CHARS = 20000
 _HTTP_TIMEOUT_S = 300.0
 # Bounded transport retry inside one turn; never restart a whole run. The budget is
@@ -215,6 +239,37 @@ def _gateway_native_error(response: httpx.Response, url: str) -> dict[str, Any] 
     return error
 
 
+_TRANSCRIPT_REJECTION_REASONS = frozenset({
+    "invalid_message_content",
+    "unresolved_tool_calls", "missing_tool_result_id", "unexpected_tool_result",
+    "duplicate_tool_call_id", "missing_tool_call_id", "missing_tool_call_name",
+    "invalid_tool_arguments_type", "invalid_tool_arguments_json", "non_object_tool_arguments",
+    "invalid_tool_calls",
+})
+
+
+class _NativeTranscriptRejected(RuntimeError):
+    """A trusted local 400 allows a transformed request, never a transport retry."""
+
+
+def _gateway_rejected_transcript(response: httpx.Response, url: str) -> bool:
+    if response.status_code != 400:
+        return False
+    error = _gateway_native_error(response, url)
+    if (error is None or error.get("type") != "invalid_request_error"
+            or error.get("code", "invalid_request_error") != "invalid_request_error"):
+        return False
+    details = error.get("details")
+    return (
+        isinstance(details, dict)
+        and set(details) == {"kind", "reason", "provider_charge_ambiguous"}
+        and details["kind"] == "native_transcript_rejected"
+        and isinstance(details["reason"], str)
+        and details["reason"] in _TRANSCRIPT_REJECTION_REASONS
+        and details["provider_charge_ambiguous"] is False
+    )
+
+
 def _gateway_preconnect_policy(response: httpx.Response, url: str) -> str | None:
     """Accept only the internal gateway's closed, post-journal refusal proof."""
     if response.status_code != 502:
@@ -243,18 +298,32 @@ def _gateway_ambiguous_billing_details(
     details = error.get("details")
     required = {"provider_charge_ambiguous"}
     optional = {"provider_scope", "transport_stage", "provider_call_id"}
+    stream_fields = {"provider_stream_outcome", "provider_output_cap_tokens"}
     if (not isinstance(details, dict) or not required <= set(details)
-            or set(details) - required - optional - {"upstream_http_status", "retry_safe"}):
+            or set(details) - required - optional - stream_fields
+            - {"upstream_http_status", "retry_safe"}):
         return None
     context = {key: details[key] for key in optional if key in details}
     if provider_error_context(context) != context:
         return None
     status = details.get("upstream_http_status")
-    valid_evidence = (
-        type(status) is int and 400 <= status <= 599 and details.get("retry_safe") is False
-        if "upstream_http_status" in details
-        else {"provider_scope", "provider_call_id"} <= set(context)
-    )
+    stream = details.get("provider_stream_outcome")
+    cap = details.get("provider_output_cap_tokens")
+    if stream_fields & set(details) and (
+        context.get("provider_scope") != "aitunnel"
+        or stream not in ("error", "output_limit") or details.get("retry_safe") is not False
+        or ("provider_output_cap_tokens" in details
+            and (type(cap) is not int or not 1 <= cap <= _MAX_OBSERVED_OUTPUT_CAP))
+    ):
+        return None
+    if "upstream_http_status" in details:
+        valid_evidence = (
+            type(status) is int and 400 <= status <= 599 and details.get("retry_safe") is False
+        )
+    else:
+        valid_evidence = (
+            stream is not None or {"provider_scope", "provider_call_id"} <= context.keys()
+        )
     return details if (
         valid_evidence
         and details["provider_charge_ambiguous"] is True
@@ -311,12 +380,17 @@ class _NativeProviderBillingError(_NativeProviderServerError):
     def __init__(self, http_status: int, details: dict[str, Any]) -> None:
         super().__init__(http_status, context=details)
         self.observed_status = details.get("upstream_http_status")
+        self.stream_context = {
+            key: details[key] for key in ("provider_stream_outcome", "provider_output_cap_tokens")
+            if key in details
+        }
         self.args = (_BILLING_UNAVAILABLE_MESSAGE,)
 
     def diagnostics(self) -> dict[str, Any]:
         result = super().diagnostics()
         if self.observed_status is not None:
             result.update(upstream_http_status=self.observed_status, error_origin="provider")
+        result.update(self.stream_context)
         return result
 
 
@@ -873,19 +947,37 @@ def _tool_use_to_action(block: dict[str, Any], *, portable_cell: bool = False) -
     return Action(name=str(block.get("name", "")), args=args, raw="")
 
 
-def _incomplete_tool_response(resp: dict[str, Any], content: list[Any]) -> str | None:
+def _incomplete_tool_response(
+    resp: dict[str, Any], content: list[Any], *,
+    request_history: list[dict[str, Any]] | None = None,
+) -> str | None:
     if resp.get("stop_reason") == "max_tokens" or resp.get("provider_finish_reason") == "length":
         return "output_limit"
     schemas = {tool["name"]: tool["input_schema"] for tool in _TOOLS}
+    seen_ids = {
+        block["id"]
+        for message in request_history or ()
+        if message.get("role") == "assistant" and isinstance(message.get("content"), list)
+        for block in message["content"]
+        if isinstance(block, dict) and block.get("type") == "tool_use"
+        and isinstance(block.get("id"), str)
+    }
     for block in content:
         if not isinstance(block, dict) or block.get("type") != "tool_use":
             continue
+        call_id, name = block.get("id"), block.get("name")
+        if (
+            not isinstance(call_id, str) or not call_id.strip() or call_id in seen_ids
+            or not isinstance(name, str) or not name.strip()
+        ):
+            return "invalid_tool_envelope"
+        seen_ids.add(call_id)
         args = block.get("input")
         if block.get("input_error") or not isinstance(args, dict):
             return "invalid_tool_arguments"
         # Existing done calls may omit human-facing summary; the completion
         # proof gate, not prose, authorizes finishing. It executes no tool.
-        schema = {} if block.get("name") == "done" else schemas.get(block.get("name"), {})
+        schema = {} if name == "done" else schemas.get(name, {})
         required = schema.get("required", [])
         if any(key not in args for key in required):
             return "missing_tool_arguments"
@@ -897,6 +989,17 @@ def _incomplete_tool_response(resp: dict[str, Any], content: list[Any]) -> str |
         ):
             return "invalid_tool_arguments"
     return None
+
+
+def _observed_output_cap(response: dict[str, Any], current: int | None) -> int | None:
+    metadata = response.get("metadata")
+    if not isinstance(metadata, dict) or metadata.get("provider_scope") != "aitunnel":
+        return None
+    cap = metadata.get("provider_output_cap_tokens")
+    if (type(cap) is not int or not 1 <= cap <= _MAX_OBSERVED_OUTPUT_CAP
+            or (current is not None and cap >= current)):
+        return None
+    return cap
 
 
 def _obs_to_tool_result(tool_use_id: str, obs: dict[str, Any]) -> dict[str, Any]:
@@ -1262,7 +1365,11 @@ async def _call_messages(
     Anthropic response dict, or raises the last error."""
     import asyncio
 
-    from yleum_api.services.generation.response_auth import record_headers
+    from yleum_api.services.generation.response_auth import (
+        HEADER,
+        TRANSCRIPT_HEADER,
+        native_attempt_headers,
+    )
 
     output_tokens = (
         max_tokens if max_tokens is not None else agent_output_tokens(model, fallback=_MAX_TOKENS)
@@ -1296,6 +1403,7 @@ async def _call_messages(
         attach_identity,
         confirm_generation_preconnect,
         prepare_generation_attempt,
+        require_native_transcript_refusal,
         reserve_generation_wire,
         resume_generation_wire,
     )
@@ -1356,6 +1464,8 @@ async def _call_messages(
             from yleum_api.services.llm_client import LLMError, require_recovered_response
             try:
                 retained = await require_recovered_response(generation_attempt)
+            except NativeTranscriptRefusal:
+                raise  # Proof consumes the old logical step; the exact wire stays closed.
             except LLMError as failure:
                 resumed = await resume_generation_wire(
                     generation_attempt, allow_provider_refusal=(
@@ -1386,7 +1496,7 @@ async def _call_messages(
         wire = await reserve_generation_wire(generation_attempt, wire_attempt=attempt)
         accepted_headers = False
         attach_identity(payload, generation_attempt)
-        request_headers = record_headers(generation_attempt, request_headers)
+        request_headers = native_attempt_headers(generation_attempt, request_headers)
         # Exponential with a cap: back off harder from a provider that is already
         # struggling, but never spend a whole minute inside one pause.
         delay = min(45.0, 4.0 * (2**attempt))
@@ -1494,6 +1604,18 @@ async def _call_messages(
                     f"provider_refusal_{category}" if category is not None
                     else "provider_http_402"
                 )
+            if r.status_code == 400:
+                if generation_attempt is None and _gateway_rejected_transcript(r, url):
+                    raise _NativeTranscriptRejected(
+                        str(_terminal_provider_error("provider_http_400")),
+                    )
+                if (
+                    generation_attempt is not None and request_headers is not None
+                    and (HEADER in request_headers or TRANSCRIPT_HEADER in request_headers)
+                    and is_durable_native_transcript_refusal(_gateway_native_error(r, url))
+                ):
+                    await require_native_transcript_refusal(generation_attempt)
+                    raise NativeTranscriptRefusal()
             if r.status_code in {400, 404, 413, 422}:
                 # Repeating the same rejected request cannot fix its contract.
                 # Keep only the HTTP class; never infer quota or expose its body.
@@ -1618,6 +1740,7 @@ async def _run_native_segment(
     settings = get_settings()
     url = messages_url or f"{settings.llm_gateway_url.rstrip('/')}/v1/messages"
 
+    from yleum_api.services.generation.recovery_tool_receipts import is_reconciling_source_write
     from yleum_api.services.reference_images import user_content
 
     convo: list[dict[str, Any]] = [
@@ -1646,6 +1769,14 @@ async def _run_native_segment(
     response_recovery = response_recovery or ResponseRecovery()
     execute = verified_progress_executor(execute, response_recovery, take_verified_progress)
     unverified_response_problem: str | None = None
+    inspection_history: list[str] = []
+    inspection_focus: list[str] = []
+    inspection_source: str | None = None
+    recovery_mode: NativeRecoveryMode | None = None
+    source_diagnostic: str | None = None
+    compiler_signature: str | None = None
+    recovery_output_cap: int | None = None
+    transcript_recovery_used = False
 
     effective_max_steps = min(_HARD_MAX_STEPS, max(1, int(max_steps)))
     max_runtime = "MAX VERIFICATION OVERRIDE" in system
@@ -1682,6 +1813,14 @@ async def _run_native_segment(
         proof_after_write = set(saved_frame.proof_after_write)
         invalidated_proofs = set(saved_frame.invalidated_proofs)
         unverified_response_problem = saved_frame.unverified_response_problem
+        inspection_history = saved_frame.inspection_history
+        inspection_focus = saved_frame.inspection_focus
+        inspection_source = saved_frame.inspection_source
+        recovery_mode = saved_frame.recovery_mode
+        source_diagnostic = saved_frame.source_diagnostic
+        compiler_signature = saved_frame.compiler_signature
+        recovery_output_cap = saved_frame.recovery_output_cap
+        transcript_recovery_used = saved_frame.transcript_recovery_used
         response_recovery.budget = IncompleteResponseBudget(
             total=max(response_recovery.budget.total, saved_frame.response_budget.total),
             since_progress=max(
@@ -1728,10 +1867,25 @@ async def _run_native_segment(
         else:
             no_write_turns += 1
 
+    async def _current_source() -> dict[str, str]:
+        if snapshot_files is not None:
+            return await snapshot_files()
+        return {**baseline_files, **written}
+
     def _remember_build_check(observation: dict[str, Any]) -> None:
         nonlocal last_build_ok, wrote_since_build, managed_build_gap, unverified_response_problem
+        nonlocal source_diagnostic, compiler_signature, recovery_mode
         last_build_ok = bool(observation.get("ok"))
         wrote_since_build = False
+        source_diagnostic = None if last_build_ok else bounded_recovery_diagnostic(
+            render_model_observation(observation, max_body_chars=4000, prefer_content=True),
+            max_bytes=2000,
+        )
+        if max_runtime:
+            failed = compiler_failure(source_diagnostic) if source_diagnostic else None
+            if failed is not None and failed[1] == compiler_signature:
+                recovery_mode = "compiler"
+            compiler_signature = failed[1] if failed is not None else None
         build_gap = observation.get("managed_source_gap")
         managed_build_gap = (
             build_gap
@@ -1821,7 +1975,11 @@ async def _run_native_segment(
                     "Неполный ответ модели не был исправлен и проверен. "
                     "Сохранён предыдущий результат."
                 ), files=written, steps=steps, transcript=convo,
-                stop_reason="output_limit" if reason == "output_limit" else "error",
+                stop_reason=(
+                    "incomplete_response"
+                    if coordinated_max and unverified_response_problem != "output_limit"
+                    else "output_limit" if reason == "output_limit" else "error"
+                ),
                 evidence=_evidence(),
             )
         if max_runtime and get_settings().use_max_finalization_coordinator:
@@ -2007,6 +2165,17 @@ async def _run_native_segment(
                     "source now, fix known errors and call done. Final production checks "
                     "have reserved time; do not start new exploration or optional features."
                 )})
+            active_recovery = recovery_mode
+            current_source: dict[str, str] | None = None
+            if active_recovery is not None and not restoring:
+                current_source = await _current_source()
+                if active_recovery == "inspection" and (
+                    inspection_source != source_fingerprint(current_source)
+                ):
+                    active_recovery = None
+                    inspection_history.clear()
+                    inspection_focus.clear()
+                    inspection_source = None
             force_max_entry_write = (
                 max_runtime
                 and completion_check is not None
@@ -2014,7 +2183,7 @@ async def _run_native_segment(
                 and _MAX_PRODUCT_ENTRY_PATH not in written
                 and (
                     no_write_turns >= _MAX_PREWRITE_DISCOVERY_TURNS
-                    or non_entry_writes_before_entry > 0
+                    or non_entry_writes_before_entry > 0 or active_recovery is not None
                 )
             )
             repair_write_required = (
@@ -2030,6 +2199,7 @@ async def _run_native_segment(
             strategies = _directed_strategies(active_path, baseline_files)
             strategy = strategies[min(no_write_turns, len(strategies) - 1)]
             text_repair = directed and strategy != "tool"
+            narrow_turn = active_recovery is not None and not directed
             limited_output = is_sonnet55_model(model) and (source_repair or bounded_repair)
             call_stage = "source_repair" if limited_output else (
                 "build_plan"
@@ -2071,12 +2241,16 @@ async def _run_native_segment(
                     )
                     if limited_output:
                         request["max_tokens"] = SONNET55_REPAIR_OUTPUT_TOKENS
+                    if (active_recovery == "output_limit" and is_sonnet55_model(model)
+                            and recovery_output_cap is not None):
+                        request["max_tokens"] = recovery_output_cap
                     if restoring:
                         assert saved_frame is not None
                         request = saved_frame.request
                         # Reconcile an older paid/tool batch under its original rules.
                         active_path = request.get("directed_path")
                         directed = active_path is not None
+                        narrow_turn = active_recovery is not None and not directed
                         strategies = _directed_strategies(active_path, baseline_files)
                         strategy = strategies[min(no_write_turns, len(strategies) - 1)]
                     elif active_path is not None and directed:
@@ -2117,8 +2291,66 @@ async def _run_native_segment(
                             tool_choice={"type": "none" if text_repair else "auto"},
                             directed_path=active_path,
                         )
+                    elif narrow_turn:
+                        assert active_recovery is not None and current_source is not None
+                        diagnostic = source_diagnostic or _completion_gap()
+                        checking_only = (
+                            not force_max_entry_write and not repair_write_required
+                            and not edit_write_required and completion_check is not None
+                            and not diagnostic and (written or prior_source_writes)
+                        )
+                        if force_max_entry_write:
+                            objective = _MAX_ENTRY_WRITE_GUIDANCE
+                            if response_recovery.budget.since_progress >= 2:
+                                objective += (
+                                    " For this attempt, connect the primary action and one working "
+                                    "screen only. Use built-in markup and saved modules. Leave "
+                                    "secondary screens, styling and integrations for later steps."
+                                )
+                        elif checking_only:
+                            objective = (
+                                "The requested source is already staged. Run a current build "
+                                "to verify the saved source, then hand off with done."
+                            )
+                        else:
+                            objective = (
+                                "Make one complete, small file change that advances the nearest "
+                                "missing requirement or fixes the current compiler diagnostic. "
+                                "Use edit_file for a unique exact snippet, or write_file for a "
+                                "small new module. Continue the original task after this change."
+                            )
+                            if edit_source_changed is not None and not edit_source_changed():
+                                objective += " " + _EDIT_SOURCE_NUDGE
+                        failure = compiler_failure(diagnostic) if diagnostic else None
+                        focus = [failure[0], *inspection_focus] if failure else inspection_focus
+                        if active_recovery == "compiler" and failure is not None:
+                            objective += f" Address the repeated compiler failure in {failure[0]}."
+                        allowed = {"build", "done"} if checking_only else {
+                            "write_file", "edit_file", "build", "done",
+                        }
+                        if repair_write_required and _remaining_repair_reads():
+                            allowed.add("read_file")
+                        if edit_source_changed is not None and not edit_source_changed():
+                            allowed -= {"build", "done"}
+                            request["tool_choice"] = {"type": "any"}
+                        if not force_max_entry_write:
+                            request["tools"] = _cache_toolset([
+                                tool for tool in request["tools"] if tool["name"] in allowed
+                            ])
+                        # A single new user message is valid for every gateway adapter.
+                        # Drop old tool pairs together, retaining the effects in the workspace.
+                        convo = [{"role": "user", "content": user_content(recovery_message(
+                            active_recovery, task=task, files=current_source,
+                            focus=focus, objective=objective, diagnostic=diagnostic,
+                        ), reference_images, native=True)}]
+                        request["convo"] = convo
+                        if emit:
+                            await emit("agent.stalled", {"step": step, "reason": active_recovery})
                     async def invoke(
                         request: dict[str, Any] = request, *, restoring: bool = restoring,
+                        cap: int | None = (
+                            recovery_output_cap if active_recovery == "output_limit" else None
+                        ),
                     ) -> dict[str, Any]:
                         expected = {"convo", "system", "model", "stage", "tools", "tool_choice"}
                         repair_budget = request.get("max_tokens")
@@ -2127,10 +2359,18 @@ async def _run_native_segment(
                             if restoring:
                                 # Saved requests retain the budget they were admitted with.
                                 allowed_repair_budgets.add(DEFAULT_REPAIR_OUTPUT_TOKENS)
+                            explicit_cap = (
+                                type(repair_budget) is int
+                                and 1 <= repair_budget <= _MAX_OBSERVED_OUTPUT_CAP
+                                and repair_budget == cap
+                            )
+                            repair_profile = (
+                                type(repair_budget) is int
+                                and repair_budget in allowed_repair_budgets
+                                and request.get("stage") == "source_repair"
+                            )
                             if (
-                                type(repair_budget) is not int
-                                or repair_budget not in allowed_repair_budgets
-                                or request.get("stage") != "source_repair"
+                                not (explicit_cap or repair_profile)
                                 or not isinstance(request.get("model"), str)
                                 or not is_sonnet55_model(request["model"])
                             ):
@@ -2179,11 +2419,20 @@ async def _run_native_segment(
                             invalidated_proofs=sorted(invalidated_proofs),
                             unverified_response_problem=unverified_response_problem,
                             response_budget=response_recovery.budget, request=request,
+                            inspection_history=inspection_history,
+                            inspection_focus=inspection_focus,
+                            inspection_source=inspection_source, recovery_mode=active_recovery,
+                            source_diagnostic=source_diagnostic,
+                            compiler_signature=compiler_signature,
+                            recovery_output_cap=recovery_output_cap,
+                            transcript_recovery_used=transcript_recovery_used,
                         )
                         assert frame is not None
+                        # Defaults are for interpretation only. Replay must use
+                        # the original persisted envelope byte-for-byte logically.
+                        value = restored if restoring else frame.model_dump(mode="json")
                         resp = await continuation.provider(
-                            {"version": 1, "kind": "native",
-                             "value": frame.model_dump(mode="json")},
+                            {"version": 1, "kind": "native", "value": value},
                             invoke,
                         )
                     if restoring:
@@ -2195,6 +2444,7 @@ async def _run_native_segment(
                             "build", "runtime_check", "probe", "verify_isolation",
                         })
                         saved_frame = None
+                    recovery_mode = None
                     _validate_response_stop_reason(resp)
                     if (restoring and edit_deadline is not None
                             and datetime.now(UTC) >= edit_deadline):
@@ -2209,6 +2459,19 @@ async def _run_native_segment(
                         steps=step, reason="finalization_reserve",
                         detail="Editing budget exhausted during the provider call.",
                     )
+                if (
+                    isinstance(exc, (_NativeTranscriptRejected, NativeTranscriptRefusal))
+                    and max_runtime and not transcript_recovery_used
+                ):
+                    transcript_recovery_used = True
+                    saved_frame = None  # The confirmed no-dispatch frame needs no tool replay.
+                    _record_turn_progress(False)
+                    response_recovery.truncated()
+                    unverified_response_problem = "native_transcript_rejected"
+                    last_build_ok = None
+                    _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
+                    recovery_mode = "transcript"
+                    continue
                 # A provider failure is not a model handoff to verification.
                 # Do not build/accept a starter or overwrite the primary cause
                 # with a source-completion gap after failed model traffic.
@@ -2288,7 +2551,17 @@ async def _run_native_segment(
                     if emit:
                         await emit("agent.tool_contract_mismatch", mismatch)
                     break
-            response_problem = _incomplete_tool_response(resp, content)
+            response_problem = _incomplete_tool_response(
+                resp, content, request_history=request["convo"] if max_runtime else None,
+            )
+            if max_runtime and response_problem == "output_limit":
+                recovery_mode = "output_limit"
+                if is_sonnet55_model(model):
+                    observed_cap = _observed_output_cap(resp, request.get("max_tokens"))
+                    if observed_cap is not None:
+                        recovery_output_cap = observed_cap
+            else:
+                recovery_output_cap = None
             selected = None
             directed_current = baseline_files.get(active_path) if active_path is not None else None
             if directed and active_path is not None:
@@ -2313,7 +2586,11 @@ async def _run_native_segment(
                              strategy=strategy, outcome=response_problem or "unexpected_action")
                     if no_write_turns >= len(strategies):
                         return await _finish_without_provider(
-                            steps=step + 1, reason="exploring",
+                            steps=step + 1,
+                            reason=(
+                                "incomplete_response" if coordinated_max and response_problem
+                                and response_problem != "output_limit" else "exploring"
+                            ),
                             detail=f"No applicable source change for {active_path}.",
                         )
                     continue
@@ -2357,8 +2634,11 @@ async def _run_native_segment(
                         done=False, summary="Модель повторно вернула неполные команды. "
                         "Изменения из этих ответов не выполнялись; сохранён предыдущий результат.",
                         files=written, steps=step + 1, transcript=convo,
-                        stop_reason="error", evidence=_evidence(),
+                        stop_reason="incomplete_response" if coordinated_max else "error",
+                        evidence=_evidence(),
                     )
+                inspection_history.clear()
+                inspection_source = None
                 if edit_source_changed is not None:
                     # A completed paid response still spent an unchanged edit
                     # turn when its incomplete tool batch could not execute.
@@ -2376,6 +2656,10 @@ async def _run_native_segment(
             tool_uses = [selected] if selected is not None else [
                 b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"
             ]
+            recovery_tools = {tool["name"] for tool in request["tools"]} if narrow_turn else set()
+            excess_recovery_writes = narrow_turn and sum(
+                call.get("name") in ("write_file", "edit_file") for call in tool_uses
+            ) > 1
             narration = _text_of(content)
             if not directed and (tool_uses or narration):
                 # Keep meaningful turns verbatim, including signed thinking.
@@ -2384,6 +2668,8 @@ async def _run_native_segment(
                 if emit and narration:
                     await emit("agent.text", {"step": step, "text": narration})
             if not tool_uses:
+                inspection_history.clear()
+                inspection_source = None
                 _done = resp.get("stop_reason") == "end_turn"
                 # Prose is not proof. Keep the turn inside the same hard budget
                 # until a real clean build exists; never ship a broken app because
@@ -2442,6 +2728,7 @@ async def _run_native_segment(
             done_summary: str | None = None
             pending_done: list[tuple[str, dict[str, Any]]] = []
             product_progress_this_turn = False
+            inspection_actions: list[Action] = []
             checked_build_this_turn = False
             ops_this_turn = 0  # executed (non-done) tool ops this turn
             infra_this_turn = 0  # of those, how many died on infra
@@ -2469,7 +2756,7 @@ async def _run_native_segment(
                 _max_prewrite_locked = (
                     _max_contract_active
                     and _max_entry_missing
-                    and no_write_turns >= _MAX_PREWRITE_DISCOVERY_TURNS
+                    and (no_write_turns >= _MAX_PREWRITE_DISCOVERY_TURNS or narrow_turn)
                 )
                 _max_entry_required = (
                     _max_contract_active
@@ -2493,6 +2780,10 @@ async def _run_native_segment(
                     )
                 ):
                     obs = {"ok": False, "error": _SOURCE_REPAIR_NUDGE}
+                elif excess_recovery_writes:
+                    obs = {"ok": False, "error": "Apply one complete file change at a time."}
+                elif narrow_turn and name not in recovery_tools:
+                    obs = {"ok": False, "error": "Select one of the offered recovery operations."}
                 elif coordinated_max and name == "runtime_check":
                     obs = {"ok": False, "error": _MAX_COORDINATOR_HANDOFF}
                 elif _max_entry_required and not (
@@ -2533,7 +2824,13 @@ async def _run_native_segment(
                             if verify_source and snapshot_files is not None:
                                 before = await snapshot_files()
                                 if before.get(current.path) != expected_source:
-                                    return {"ok": False, "error": "Selected source changed."}
+                                    if not (
+                                        continuation is not None
+                                        and await is_reconciling_source_write(
+                                            continuation, name=current.name, args=current.args,
+                                        )
+                                    ):
+                                        return {"ok": False, "error": "Selected source changed."}
                             result, _ = await checks.execute(current, execute)
                             if verify_source and snapshot_files is not None and result.get("ok"):
                                 actual = (await snapshot_files()).get(current.path)
@@ -2653,6 +2950,41 @@ async def _run_native_segment(
                     if _hint:
                         _tr["content"] = str(_tr["content"]) + _hint
                 results.append(_tr)
+                if action_executed and (name in INSPECTION_TOOLS or (
+                    name == "build" and not obs.get("ok") and not obs.get("environment_mutated")
+                )):
+                    inspection_actions.append(action)
+
+            if max_runtime:
+                if (
+                    not narrow_turn and len(inspection_actions) == len(tool_uses)
+                    and not infra_this_turn
+                ):
+                    source = source_fingerprint(await _current_source())
+                    if inspection_source != source:
+                        inspection_history.clear()
+                        inspection_focus.clear()
+                        inspection_source = source
+                    signature = inspection_signature(
+                        inspection_actions, [str(result["content"]) for result in results],
+                    )
+                    inspection_history = [*inspection_history[-3:], signature]
+                    inspection_focus = list(dict.fromkeys([
+                        path for action in reversed(inspection_actions)
+                        if (path := _source_repair_read_path(action.path)) is not None
+                    ] + inspection_focus))[:4]
+                    if repeated_inspection(inspection_history):
+                        recovery_mode = "inspection"
+                else:
+                    # Keep a narrowed existing edit on writes until it makes a
+                    # change or reaches its original no-progress boundary.
+                    if (narrow_turn and active_recovery == "inspection"
+                            and edit_source_changed is not None and not edit_source_changed()):
+                        recovery_mode = "inspection"
+                    else:
+                        inspection_history.clear()
+                        inspection_focus.clear()
+                        inspection_source = None
 
             current_managed_gap = _current_managed_gap()
             if pending_done:
@@ -2850,7 +3182,7 @@ NativeSegmentRunner = Callable[
 
 _CONTINUATION_TERMINAL_REASONS = frozenset(
     {"error", "infra_error", "provider_error", "provider_stopped_red", "finalization_reserve",
-     "managed_source_contract_unresolved", "output_limit"}
+     "managed_source_contract_unresolved", "output_limit", "incomplete_response"}
 )
 
 
