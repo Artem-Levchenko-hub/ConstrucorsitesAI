@@ -169,6 +169,7 @@ async def test_gateway_rejects_missing_unit_financial_constraint(test_engine, co
 SCRIPT = Path(__file__).resolve().parents[3] / "infra/release/deploy-prod.sh"
 OLD, NEW = "a" * 64, "b" * 64
 OLD_IMAGE, NEW_IMAGE = "sha256:" + "c" * 64, "sha256:" + "d" * 64
+RELEASE = "e" * 40
 
 
 def gate_code():
@@ -199,6 +200,8 @@ def execute_gate(
     target_running=True,
     ancestor=None,
     stderr_degraded=False,
+    staged_arguments=(),
+    staged_image=NEW_IMAGE,
 ):
     import subprocess
 
@@ -210,7 +213,11 @@ def execute_gate(
 
     def run(command, **kwargs):
         commands.append((command, kwargs))
-        if command[:3] == ["docker", "image", "inspect"]:
+        if command[:4] == ["docker", "image", "inspect", "omnia-gateway:" + RELEASE]:
+            output = json.dumps([{"Id": staged_image, "Config": {"Labels": {
+                "org.opencontainers.image.revision": RELEASE, "ru.yleum.release.role": "gateway",
+            }}}])
+        elif command[:3] == ["docker", "image", "inspect"]:
             output = NEW_IMAGE
         elif command[:2] == ["docker", "inspect"]:
             key = command[2]
@@ -238,7 +245,7 @@ def execute_gate(
         )
 
     monkeypatch.setattr(subprocess, "run", run)
-    monkeypatch.setattr("sys.argv", ["-", OLD, OLD_IMAGE])
+    monkeypatch.setattr("sys.argv", ["-", OLD, OLD_IMAGE, *staged_arguments])
     exec(compile(gate_code(), str(SCRIPT), "exec"), {})
     return commands
 
@@ -253,7 +260,7 @@ def test_gate_runs_after_replacement_before_both_admission_reopens(tmp_path, gat
     # Definitions may precede rollout; compare the actual normal call sites.
     normal = source[source.index('say "core: ff-merge') :]
     replacement_start = normal.index("if [ $GW = 1 ]; then")
-    replacement = normal[replacement_start : normal.index("\nfi", replacement_start) + 3]
+    replacement = gateway_replacement_block()
     closing = normal.index("\n  finish_owned_release\n")
     assert replacement_start < normal.index("build gateway") < closing
     call_start = normal.rfind('if [ "$API" = 1 ]; then', 0, closing)
@@ -342,6 +349,20 @@ def test_green_gate_checks_actual_container_pool_without_secret_output(monkeypat
     assert "PRIVATE_DB_SECRET" not in capsys.readouterr().out
 
 
+def test_scoped_cutover_proves_exact_staged_gateway_image(monkeypatch):
+    commands = execute_gate(monkeypatch, staged_arguments=(RELEASE,))
+    staged_read = ["docker", "image", "inspect", "omnia-gateway:" + RELEASE]
+    assert staged_read in [command for command, _ in commands]
+    with pytest.raises(RuntimeError, match="gateway differs from its staged release image"):
+        execute_gate(monkeypatch, staged_arguments=(RELEASE,), staged_image=OLD_IMAGE)
+
+
+@pytest.mark.parametrize("staged_arguments", [("",), (RELEASE, "unexpected")])
+def test_malformed_scope_cannot_use_legacy_gateway_proof(monkeypatch, staged_arguments):
+    with pytest.raises(RuntimeError, match="gateway cutover arguments are invalid"):
+        execute_gate(monkeypatch, staged_arguments=staged_arguments)
+
+
 @pytest.mark.parametrize(
     "case",
     [
@@ -375,14 +396,18 @@ def test_failed_cutover_refuses_reopen(monkeypatch, capsys, case):
     assert "PRIVATE_DB_SECRET" not in capsys.readouterr().out
 
 
+def gateway_replacement_block():
+    source = SCRIPT.read_text(encoding="utf-8")
+    prepare = source.index('say "core: ff-merge')
+    begin = source.index("if [ $GW = 1 ]; then", prepare)
+    end = source.index("\nfi", begin) + len("\nfi")
+    return source[begin:end]
+
+
 def test_gateway_build_failure_is_not_hidden_by_log_filter():
-    build = next(
-        line
-        for line in SCRIPT.read_text(encoding="utf-8").splitlines()
-        if "build gateway 2>&1" in line
-    )
-    assert "set -euo pipefail;" in build
-    assert "{ grep -E 'Built|ERROR|error' || true; }" in build
+    block = gateway_replacement_block()
+    assert "set -euo pipefail;" in block
+    assert "{ grep -E 'Built|ERROR|error' || true; }" in block
 
 
 @pytest.mark.asyncio
@@ -520,24 +545,28 @@ async def test_real_schema_accepts_renamed_constraints_and_later_head(test_engin
 
 def test_failed_real_shell_build_pipeline_never_reaches_gateway_replacement(tmp_path):
     import shlex
+    import shutil
     import subprocess
 
-    line = next(
-        line
-        for line in SCRIPT.read_text(encoding="utf-8").splitlines()
-        if "build gateway 2>&1" in line
-    )
+    shell = shutil.which("bash")
+    if shell is None:
+        pytest.skip("requires local Bash for the gateway build failure")
     capture = tmp_path / "remote-command"
-    capture_ssh = 'ssh() { printf "%s" "$2" > ' + shlex.quote(str(capture)) + "; }; "
-    captured = subprocess.run(["bash", "-c", capture_ssh + line], capture_output=True, text=True)
+    capture_ssh = (
+        'GW=1; say() { :; }; gateway_capture_identity() { :; }; '
+        'ssh() { printf "%s" "$2" > ' + shlex.quote(capture.as_posix()) + "; }; "
+    )
+    captured = subprocess.run(
+        [shell, "-c", capture_ssh + gateway_replacement_block()], capture_output=True, text=True,
+    )
     assert captured.returncode == 0
     remote = capture.read_text()
-    remote = remote.replace("/opt/omnia/apps/llm-gateway/deploy/full", str(tmp_path))
+    remote = remote.replace("/opt/omnia/apps/llm-gateway/deploy/full", tmp_path.as_posix())
     marker = tmp_path / "replacement-attempted"
     fake_docker = (
         'docker() { if [[ "$*" == *"build gateway"* ]]; then return 23; '
         f"else touch {shlex.quote(str(marker))}; return 0; fi; }}; "
     )
-    result = subprocess.run(["bash", "-c", fake_docker + remote], capture_output=True, text=True)
+    result = subprocess.run([shell, "-c", fake_docker + remote], capture_output=True, text=True)
     assert result.returncode == 23
     assert not marker.exists()

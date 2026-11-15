@@ -31,7 +31,7 @@ from yleum_api.core.config import get_settings
 
 _VERSIONS = Path(__file__).resolve().parent.parent / "migrations" / "versions"
 _API_ROOT = Path(__file__).resolve().parents[1]
-_CURRENT_HEAD = "0106_native_transcript_refusal"
+_CURRENT_HEAD = "0107_expired_provider_reservation"
 _RECOVERY_REVISION = "0088_generation_recovery_effects"
 # Migrations use either bare (`revision = "x"`) or annotated
 # (`revision: str = "x"`, `down_revision: Union[str, None] = "x"`) declarations —
@@ -208,7 +208,8 @@ def test_security_and_analytics_extend_the_only_migration_head() -> None:
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
     assert heads == [_CURRENT_HEAD]
-    assert chain[_CURRENT_HEAD] == "0105_max_nutrition_ai"
+    assert chain[_CURRENT_HEAD] == "0106_native_transcript_refusal"
+    assert chain["0106_native_transcript_refusal"] == "0105_max_nutrition_ai"
     assert chain["0105_max_nutrition_ai"] == "0104_max_catalog_delivery"
     assert chain["0104_max_catalog_delivery"] == "0103_max_staff_workspace"
     assert chain["0103_max_staff_workspace"] == "0102_support_service"

@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from tests.test_generation_recovery_deadlines import _clock
+from tests.test_generation_recovery_deadlines import response_schema as response_schema
 from tests.test_generation_recovery_execution import _bootstrap_wait
 from tests.test_generation_worker import _queued_dispatch
 from yleum_api.models.generation_provider_attempt import GenerationProviderAttempt
@@ -32,6 +33,31 @@ from yleum_api.services.generation.recovery_contract import (
 from yleum_api.services.generation.recovery_tool_receipts import digest
 from yleum_api.services.orchestrator_client import ProjectCellResourceResponse
 from yleum_api.services.project_cell_proofs import ProofDimension, ProofIdentity
+
+
+@pytest.fixture
+async def expired_release_head(db_session, test_engine):
+    async with test_engine.begin() as connection:
+        present = await connection.scalar(text("SELECT to_regclass('public.alembic_version')"))
+        if present:
+            revisions = await connection.scalars(text("SELECT version_num FROM alembic_version"))
+            original = revisions.all()
+        else:
+            await connection.execute(text("CREATE TABLE alembic_version(version_num text)"))
+            original = None
+    try:
+        yield
+    finally:
+        await db_session.rollback()
+        async with test_engine.begin() as connection:
+            if original is None:
+                await connection.execute(text("DROP TABLE alembic_version"))
+            else:
+                await connection.execute(text("DELETE FROM alembic_version"))
+                for head in original:
+                    await connection.execute(
+                        text("INSERT INTO alembic_version VALUES(:head)"), {"head": head},
+                    )
 
 
 @pytest.mark.parametrize(
@@ -60,7 +86,8 @@ from yleum_api.services.project_cell_proofs import ProofDimension, ProofIdentity
     ],
 )
 async def test_expired_provider_release_classification(
-    db_session, test_engine, monkeypatch, mode, case, eligible, drained,
+    db_session, test_engine, monkeypatch, response_schema, expired_release_head,
+    mode, case, eligible, drained,
 ):
     from yleum_api.services.generation import expired_provider_drain
     from yleum_api.services.generation.expired_provider_drain import (
@@ -241,15 +268,11 @@ async def test_expired_provider_release_classification(
                 receipt_ref=receipt,
                 receipt_sha256=receipt_sha256,
             ))
-    await db_session.execute(text("CREATE TABLE IF NOT EXISTS alembic_version(version_num text)"))
     await db_session.execute(text("DELETE FROM alembic_version"))
     await db_session.execute(text("INSERT INTO alembic_version VALUES(:head)"), {
         "head": "0107_expired_provider_reservation" if mode == "settled" and case != "wrong_head"
         else "0106_native_transcript_refusal",
     })
-    await db_session.execute(text(
-        "CREATE TABLE IF NOT EXISTS generation_responses(attempt_id uuid, state text)"
-    ))
     if case == "other_run":
         await _queued_dispatch(db_session)
     if case == "historical_later_call":

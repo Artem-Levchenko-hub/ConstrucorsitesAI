@@ -587,16 +587,22 @@ gateway_capture_identity() {
   }
 }
 gateway_cutover_gate() {
-  local staged=""
+  local staged_arg=""
   if [ -n "${EXPIRED_SCOPE_DIGEST:-}" ]; then
-    staged="$SHA"
+    staged_arg=" '$SHA'"
   fi
-  ssh max-core "python3 - '$GW_PREVIOUS_CONTAINER_ID' '$GW_PREVIOUS_IMAGE_ID' '$staged'" <<'GATEWAY_CUTOVER_PY'
+  ssh max-core "python3 - '$GW_PREVIOUS_CONTAINER_ID' '$GW_PREVIOUS_IMAGE_ID'$staged_arg" <<'GATEWAY_CUTOVER_PY'
 import json
+import re
 import subprocess
 import sys
 
-old_container, old_image, staged = sys.argv[1:]
+if len(sys.argv) not in {3, 4} or (
+    len(sys.argv) == 4 and not re.fullmatch(r"[0-9a-f]{40}", sys.argv[3])
+):
+    raise RuntimeError("gateway cutover arguments are invalid; admission remains fenced")
+old_container, old_image = sys.argv[1:3]
+staged = sys.argv[3] if len(sys.argv) == 4 else ""
 format_metadata = ('{"id":{{json .Id}},"image":{{json .Image}},'
                    '"running":{{json .State.Running}},'
                    '"service":{{json (index .Config.Labels "com.docker.compose.service")}},'

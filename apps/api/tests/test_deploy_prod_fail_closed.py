@@ -96,8 +96,9 @@ grep() {{ return 0; }}
 
 def run_build(tmp_path, *, build_exit=0, image_present=True, launch_lost=False):
     script = SCRIPT.read_text(encoding="utf-8")
-    start = script.index('say "core: сборка $TARGETS')
-    end = script.index("\nif [ $API = 1 ]; then", start)
+    legacy_build = script.index('say "core: сборка $TARGETS')
+    start = script.rindex('\nif [ -n "${EXPIRED_SCOPE_DIGEST:-}" ]; then', 0, legacy_build) + 1
+    end = script.index("\nif [ $API = 1 ]; then", legacy_build)
     block = script[start:end]
     compose = tmp_path / "compose"
     compose.mkdir(exist_ok=True)
