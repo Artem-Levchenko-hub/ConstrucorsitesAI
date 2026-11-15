@@ -2194,6 +2194,10 @@ class ManagedSourceGap(str):
         gap._located_key = self._located_key
         return gap
 
+    @property
+    def obligation(self) -> ManagedSourceObligation | None:
+        return self._obligation
+
     def rejection_key(self) -> str | None:
         if self._located_key is not None:
             return self._located_key

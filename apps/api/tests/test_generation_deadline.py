@@ -518,7 +518,7 @@ async def test_a_repair_that_runs_out_of_time_says_so(
     # Five seconds for editing, followed by the reserved 180-second final build.
     run.started_at = datetime.now(UTC) - _EDIT + timedelta(seconds=185)
     await db_session.commit()
-    monkeypatch.setattr(max_finalization, "_MIN_REPAIR_SECONDS", 0)
+    monkeypatch.setattr(max_finalization, "MIN_SOURCE_REPAIR_SECONDS", 0)
 
     async def repair(detail: str) -> None:
         await asyncio.sleep(30)

@@ -51,6 +51,7 @@ from yleum_api.services.generation.source_error_classification import (
     source_check_is_repairable,
 )
 from yleum_api.services.generation_deadline import (
+    MIN_SOURCE_REPAIR_SECONDS,
     generation_deadline,
     note_proof_sealed,
     note_proof_settled,
@@ -130,7 +131,6 @@ from yleum_api.services.versioning_capabilities import capability_gap
 
 _MAX_DETAIL_BYTES = 4096
 # A repair is one model turn plus a build; starting it with less time only burns the rest.
-_MIN_REPAIR_SECONDS = 60
 _MAX_AUTONOMOUS_REPAIRS = 5
 _MAX_REPAIR_STRATEGIES_WITHOUT_PROGRESS = 3
 # How often the watchdog looks again while a sealed hand-off runs under its own ceiling.
@@ -868,7 +868,10 @@ class MaxFinalizationCoordinator:
                             # A changed diagnostic must not give a retained broad
                             # tool response authority to write on a new failure.
                             fresh_failure = SourceFailure()
-                        await self._grant_initial_repair_window(continuation, current_check)
+                        await self._grant_initial_repair_window(
+                            continuation, current_check,
+                            managed_source_gap=durable.pending_detail if source_preflight else None,
+                        )
                     else:
                         fresh_failure = await self.revalidate_pending_repair(
                             targeted=durable.pending_targeted,
@@ -970,6 +973,7 @@ class MaxFinalizationCoordinator:
                 await save_finalization_progress(continuation, durable)
                 await self._grant_initial_repair_window(
                     continuation, outcome.proof.full_build or outcome.proof.fast_check,
+                    managed_source_gap=outcome.redacted_detail if source_preflight else None,
                 )
             repair_completed = await self._invoke_source_repair(
                 detail=outcome.redacted_detail,
@@ -1016,16 +1020,26 @@ class MaxFinalizationCoordinator:
 
     async def _grant_initial_repair_window(
         self, continuation: ExecutionDriver | None, receipt: ProjectCellProofResult | None,
+        *, managed_source_gap: str | None = None,
     ) -> None:
         from yleum_api.services.generation.recovery_clock import grant_window
         from yleum_api.services.generation.recovery_contract import RecoveryStateV3
 
         if continuation is None or not isinstance(continuation.state, RecoveryStateV3):
             return
-        if receipt is None or receipt.outcome != ProofOutcome.RED.value:
+        receipt_id = (
+            receipt.id
+            if receipt is not None and receipt.outcome == ProofOutcome.RED.value
+            else None
+        )
+        if receipt_id is None and managed_source_gap is None:
             return
         await continuation.account_work()
-        if await grant_window(continuation, repair_receipt_id=receipt.id):
+        if await grant_window(
+            continuation,
+            repair_receipt_id=receipt_id,
+            managed_source_gap=managed_source_gap if receipt_id is None else None,
+        ):
             await continuation.wait()
 
     async def _invoke_source_repair(
@@ -1054,7 +1068,7 @@ class MaxFinalizationCoordinator:
         if continuation is not None:
             repair_end = continuation.soft_edit_deadline(repair_end) or repair_end
         remaining = (repair_end - datetime.now(UTC)).total_seconds()
-        if remaining < _MIN_REPAIR_SECONDS:
+        if remaining < MIN_SOURCE_REPAIR_SECONDS:
             if continuation is not None:
                 await continuation.soft_boundary(exhausted=True)
             raise TimeoutError("generation deadline exceeded before source repair")

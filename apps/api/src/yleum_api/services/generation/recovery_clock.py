@@ -291,14 +291,91 @@ async def _current_compiler_progress(session: AsyncSession, state: RecoveryState
     )
 
 
-async def grant_window(driver: ExecutionDriver, *, repair_receipt_id: UUID | None = None) -> bool:
+async def _managed_source_repair_state(
+    driver: ExecutionDriver, detail: str,
+) -> RecoveryStateV3 | None:
+    from yleum_api.services.generation.recovery_pipeline import CompletedAgentTurn
+    from yleum_api.services.generation_deadline import MIN_SOURCE_REPAIR_SECONDS
+    from yleum_api.services.max_generation_contract import max_source_completion_gap
+    from yleum_api.services.max_management_generation import ManagedSourceGap
+    from yleum_api.services.promotion_permit import workspace_revision_digest
+
+    state = driver.state
+    if (
+        not isinstance(state, RecoveryStateV3)
+        or state.binding is None
+        or state.phase != "working"
+        or state.clock.stage != "edit"
+        or state.clock.repair_granted
+        or state.execution.stage != "finalization"
+        or state.execution.substep != "checkpoint_ready"
+        or state.execution.physical_state != "active"
+        or state.execution.pending_effect_id is not None
+        or state.execution.budget.repair_calls != 0
+    ):
+        return None
+    workspace, fence = state.execution.control_workspace_id, state.execution.control_fencing_epoch
+    if (
+        driver.runtime_control != (workspace, fence)
+        or str(workspace) != state.binding.workspace_id
+        or fence != state.binding.fencing_epoch
+    ):
+        return None
+    edit_deadline = driver.soft_edit_deadline(None)
+    if (
+        edit_deadline is None
+        or (edit_deadline - datetime.now(UTC)).total_seconds() >= MIN_SOURCE_REPAIR_SECONDS
+    ):
+        return None
+    completed = driver.context["completed"]
+    raw_turn = completed.get("agent_turn")
+    progress = completed.get("finalization_progress")
+    if (
+        raw_turn is None or not isinstance(progress, dict)
+        or progress.get("pending_detail") != detail
+    ):
+        return None
+    turn = CompletedAgentTurn.from_json(raw_turn)
+    if (
+        turn.result.done or turn.result.stop_reason != "source_deadline"
+        or not turn.result.files or turn.provider_failure
+    ):
+        return None
+
+    # The persisted text only selects the pending check. Recompute the typed
+    # obligation against the current candidate and the admitted request.
+    binding, files = await driver.snapshot()
+    if binding != state.binding or workspace_revision_digest(files) != binding.source_sha256:
+        return None
+    prompt = driver.context["pipeline"]["prompt_text"]
+    gap = max_source_completion_gap(prompt, files, portable=True)
+    if isinstance(gap, ManagedSourceGap) and gap.obligation is not None and gap == detail:
+        return state
+    return None
+
+
+async def grant_window(
+    driver: ExecutionDriver, *, repair_receipt_id: UUID | None = None,
+    managed_source_gap: str | None = None,
+) -> bool:
     """Consume each independently verified window grant at most once."""
     from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.models.project import Project
     from yleum_api.services import max_behavior_proof as behavior
     from yleum_api.services.generation.recovery_requirements import (
         load_compiler_witness,
         load_requirement_witness,
     )
+    from yleum_api.services.generation.recovery_store import _validate_binding
+    from yleum_api.services.generation_deadline import is_restoration_adaptation
+
+    source_repair_state = None
+    if managed_source_gap is not None:
+        if repair_receipt_id is not None:
+            raise RecoveryContractError("repair evidence must select one source check")
+        source_repair_state = await _managed_source_repair_state(driver, managed_source_gap)
+        if source_repair_state is None:
+            return False
 
     granted = False
 
@@ -311,7 +388,18 @@ async def grant_window(driver: ExecutionDriver, *, repair_receipt_id: UUID | Non
         stage = clock.stage
         repair = clock.repair_granted
         compiler = clock.compiler_granted
-        if repair_receipt_id is not None:
+        if source_repair_state is not None:
+            run = await session.get(GenerationRun, state.identity.run_id)
+            project = await session.get(Project, state.identity.project_id)
+            if (
+                state != source_repair_state or run is None or project is None
+                or project.template != "max_miniapp" or is_restoration_adaptation(run)
+                or run.prompt_hash != state.identity.prompt_hash
+            ):
+                raise RecoveryContractError("managed source repair ownership changed")
+            await _validate_binding(session, run=run, binding=state.binding)
+            stage, repair = "repair", True
+        elif repair_receipt_id is not None:
             if repair:
                 return state
             witness = await load_compiler_witness(

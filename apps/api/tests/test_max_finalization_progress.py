@@ -98,6 +98,54 @@ async def test_autonomous_repair_exhausts_attempts_on_unchanged_source(loop):
     assert len(builds) == 1
 
 
+@pytest.mark.parametrize("cold", [False, True])
+async def test_source_gap_is_available_to_repair_grant_before_any_new_model_call(loop, cold):
+    from yleum_api.services.generation.continuation import SourceNoveltyTracker
+    from yleum_api.services.generation.recovery_pipeline import FinalizationProgress
+
+    coordinator, files, _, _ = loop
+    detail = "Connect the visible app profile"
+    progress = FinalizationProgress(
+        source_history=SourceNoveltyTracker(files).source_history(),
+        feedback=(detail,), pending_detail=detail, pending_fast_check=True,
+    )
+    saved = {"finalization_progress": progress.model_dump(mode="json")} if cold else {}
+    continuation = SimpleNamespace(
+        context={"completed": saved}, account_work=AsyncMock(),
+        state=SimpleNamespace(execution=None),
+    )
+
+    async def save(_execution, *, context):
+        continuation.context = context
+
+    continuation.save = save
+    green = SimpleNamespace(dimension="fast_check", outcome="green")
+    coordinator.fast_check = AsyncMock(return_value=green)
+    coordinator.finalize = AsyncMock(return_value=SimpleNamespace(
+        status=MaxFinalizationStatus.NEEDS_EDIT, redacted_detail=detail,
+        proof=SimpleNamespace(full_build=None, fast_check=None),
+    ))
+    coordinator._invoke_source_repair = AsyncMock(side_effect=AssertionError("model invoked early"))
+
+    class RepairWindowGranted(Exception):
+        pass
+
+    async def grant(driver, receipt, *, managed_source_gap):
+        assert driver.context["completed"]["finalization_progress"]["pending_detail"] == detail
+        assert managed_source_gap == detail
+        assert receipt is (green if cold else None)
+        raise RepairWindowGranted
+
+    coordinator._grant_initial_repair_window = grant
+    with pytest.raises(RepairWindowGranted):
+        await coordinator.finalize_with_repair(
+            prompt="Собери приложение", repair=AsyncMock(), continuation=continuation,
+            source_preflight=AsyncMock(return_value=None), autonomous_source_repair=True,
+        )
+    assert coordinator.finalize.await_count == (0 if cold else 1)
+    coordinator._invoke_source_repair.assert_not_awaited()
+
+
 @pytest.mark.parametrize("fix_every_error", [True, False])
 async def test_single_repair_checks_again_and_returns_the_actual_verdict(loop, fix_every_error):
     coordinator, files, builds, _ = loop

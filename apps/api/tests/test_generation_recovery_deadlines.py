@@ -578,6 +578,114 @@ async def test_first_repair_window_requires_live_owned_terminal_red(proof_clock,
     assert c.driver.state.execution.budget == budget
 
 
+@pytest.mark.parametrize(
+    "damage", [
+        None, "draft_changed", "fence_changed", "wrong_control", "wrong_stop", "wrong_gap",
+        "source_time_left",
+    ],
+)
+async def test_managed_source_gap_can_open_only_one_owned_repair_window(
+    proof_clock, monkeypatch, damage,
+):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from tests.test_max_management_generation import connection_files
+    from yleum_api.models.project import Project
+    from yleum_api.services.agent_builder import AgentResult
+    from yleum_api.services.generation import recovery_store
+    from yleum_api.services.generation.continuation import SourceNoveltyTracker
+    from yleum_api.services.generation.recovery_clock import grant_window
+    from yleum_api.services.generation.recovery_contract import (
+        CheckpointRef,
+        IncompleteResponseBudget,
+        decode_recovery,
+    )
+    from yleum_api.services.generation.recovery_pipeline import (
+        CompletedAgentTurn,
+        FinalizationProgress,
+    )
+    from yleum_api.services.max_generation_contract import max_source_completion_gap
+    from yleum_api.services.promotion_permit import workspace_revision_digest
+
+    c, p = proof_clock.owner, proof_clock
+    project = await c.session.get(Project, c.run.project_id)
+    project.template = "max_miniapp"
+    prompt = "Собери приложение"
+    files = connection_files("", ("catalog",))
+    files.pop("src/app/page.tsx")
+    files["src/app/api/catalog/route.ts"] = "export const GET = () => Response.json([])"
+    gap = max_source_completion_gap(prompt, files, portable=True)
+    assert gap is not None and gap.startswith("Connect useYleumAppProfile")
+    binding = p.binding.model_copy(update={"source_sha256": workspace_revision_digest(files)})
+    ref = CheckpointRef(object_key="retained", sha256="c" * 64)
+    clock = c.driver.state.clock
+    if damage == "source_time_left":
+        clock = clock.model_copy(update={
+            "segment_deadline": datetime.now(UTC) + timedelta(minutes=8),
+        })
+    state = c.driver.state.model_copy(update={
+        "cursor": "finalization",
+        "binding": binding,
+        "checkpoint": ref,
+        "context_ref": ref,
+        "clock": clock,
+        "execution": c.driver.state.execution.model_copy(update={
+            "stage": "finalization", "substep": "checkpoint_ready",
+            "execution_context_ref": ref, "physical_state": "active",
+            "control_workspace_id": p.workspace.id,
+            "control_fencing_epoch": p.workspace.fencing_epoch,
+        }),
+    })
+    c.driver.state = decode_recovery(state.model_dump(mode="json"))
+    c.run.agent_state = {**c.run.agent_state, "recovery_v1": state.model_dump(mode="json")}
+    control_fence = p.workspace.fencing_epoch - int(damage == "wrong_control")
+    c.driver.runtime_control = (p.workspace.id, control_fence)
+    detail = "runtime dependency unavailable" if damage == "wrong_gap" else str(gap)
+    stop = "max_steps" if damage == "wrong_stop" else "source_deadline"
+    turn = CompletedAgentTurn(AgentResult(False, "", files, 17, stop_reason=stop),
+                              None, IncompleteResponseBudget())
+    progress = FinalizationProgress(
+        source_history=SourceNoveltyTracker(files).source_history(), feedback=(detail,),
+        pending_detail=detail, pending_fast_check=True,
+    )
+    c.driver.context = {"pipeline": {"prompt_text": prompt}, "completed": {
+        "agent_turn": turn.to_json(), "finalization_progress": progress.model_dump(mode="json"),
+    }}
+    snapshot_files = (
+        {**files, "src/app/globals.css": "main {}"} if damage == "draft_changed" else files
+    )
+    c.driver.snapshot = AsyncMock(return_value=(binding, snapshot_files))
+    physical = SimpleNamespace(
+        workspace_revision=binding.source_sha256,
+        schema_data_digest=binding.schema_sha256,
+        environment_digest=binding.environment_sha256,
+    )
+    monkeypatch.setattr(
+        recovery_store, "project_cell_agent_identity", AsyncMock(return_value=physical),
+    )
+    if damage == "fence_changed":
+        p.workspace.fencing_epoch += 1
+    await c.session.commit()
+
+    budget = c.driver.state.execution.budget
+    async with c.owned():
+        if damage == "fence_changed":
+            with pytest.raises(ValueError, match="fence conflict"):
+                await grant_window(c.driver, managed_source_gap=detail)
+        else:
+            assert await grant_window(c.driver, managed_source_gap=detail) is (damage is None)
+        if damage is None:
+            assert c.driver.state.clock.stage == "repair"
+            assert c.driver.state.clock.segment_seq == 1
+            assert not await grant_window(c.driver, managed_source_gap=detail)
+        else:
+            assert not c.driver.state.clock.repair_granted
+            assert c.driver.state.clock.segment_seq == 0
+    assert c.driver.state.execution.budget == budget
+    assert c.driver.state.identity.run_id == c.run.id
+
+
 @pytest.mark.parametrize("stage, fault", [
     ("edit", None), ("repair", None), ("edit", "no_red"), ("edit", "no_green"),
     ("edit", "old_red"), ("repair", "old_red"), ("edit", "foreign_green"),
