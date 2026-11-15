@@ -476,6 +476,9 @@ class PromptAcceptance:
         self.settings = get_settings()
 
     async def conduct_interview(self) -> None:
+        from yleum_api.services.behavior_driver_configuration import meal_canary_request
+        from yleum_api.services.generation.meal_acceptance import BUILD_PROMPT
+
         self.discovery_result: DiscoveryResult | None = None
         # Async onboarding: set when the slow first-turn plan is deferred out of the
         # request (delivered over WS). No build/ASK this turn — a placeholder streams
@@ -483,11 +486,18 @@ class PromptAcceptance:
         self.async_onboarding = False
         self.do_clarify = False
         self.effective_prompt = self.payload.prompt
+        reviewed_meal_build = (
+            self.payload.prompt == BUILD_PROMPT
+            and meal_canary_request(
+                self.settings, self.project_id, self.payload.prompt, self.project.template,
+            )
+        )
         interview_eligible = (
             self.is_first_build
             and not getattr(self, "free_chat_limited", False)
             and not getattr(self, "unit_free_first_build", False)
             and not self.payload.skip_clarify
+            and not reviewed_meal_build
             and not self.payload.reference_image_ids
             and not self.font_selections
             and not self.resolved_fonts
