@@ -34,7 +34,13 @@ from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt
 
 from yleum_api.core.config import get_settings
 from yleum_api.services.agent_build_feedback import render_model_observation
-from yleum_api.services.agent_builder import _KNOWN_ACTIONS, Action, AgentResult
+from yleum_api.services.agent_builder import (
+    _KNOWN_ACTIONS,
+    FILTERED_PROVIDER_OUTPUT,
+    SOURCE_FINALIZATION_HANDOFF,
+    Action,
+    AgentResult,
+)
 from yleum_api.services.agent_output_budget import (
     DEFAULT_REPAIR_OUTPUT_TOKENS,
     SONNET55_REPAIR_OUTPUT_TOKENS,
@@ -67,6 +73,7 @@ from yleum_api.services.generation.recovery_clock import contract_deadline
 from yleum_api.services.generation.recovery_contract import (
     IncompleteResponseBudget,
     RecoveryContractError,
+    RecoveryStateV3,
 )
 from yleum_api.services.generation.recovery_trace import (
     bounded_recovery_diagnostic,
@@ -79,6 +86,7 @@ from yleum_api.services.generation.source_repair_context import (
 from yleum_api.services.generation_failure import failure_for_error
 from yleum_api.services.integration_providers import PROVIDER_MAP
 from yleum_api.services.llm_client import (
+    LLMError,
     NativeTranscriptRefusal,
     _native_preconnect_details,
     _overload_refusal_details,
@@ -209,7 +217,9 @@ def _terminal_provider_error(marker: str) -> RuntimeError:
     return RuntimeError(f"{marker}: {failure_for_error(marker + ':').message}")
 
 
-def _gateway_native_error(response: httpx.Response, url: str) -> dict[str, Any] | None:
+def _gateway_native_error(
+    response: httpx.Response, url: str, *, optional_fields: frozenset[str] = frozenset(),
+) -> dict[str, Any] | None:
     """Read the bounded internal envelope; callers never forward its message."""
     if len(response.content) > 16_384 or response.history:
         return None
@@ -234,7 +244,9 @@ def _gateway_native_error(response: httpx.Response, url: str) -> dict[str, Any] 
             or body.get("type", "error") != "error"):
         return None
     error = body.get("error")
-    if not isinstance(error, dict) or set(error) - {"type", "code", "message", "details"}:
+    if not isinstance(error, dict) or set(error) - (
+        {"type", "code", "message", "details"} | optional_fields
+    ):
         return None
     return error
 
@@ -1329,10 +1341,18 @@ def native_system_prompt(stack_guide: str, skills: str | None = None) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
+_FILTERED_OUTPUT_SUMMARY = "PROVIDER_OUTPUT_FILTERED: ответ модели отклонён; повтор остановлен."
+
+
 def _validate_response_stop_reason(response: dict[str, Any]) -> None:
     reason = response.get("stop_reason")
+    if (
+        response.get("type") == "message"
+        and response.get("provider_finish_reason") == "content_filter"
+    ):
+        raise LLMError(_FILTERED_OUTPUT_SUMMARY, code=FILTERED_PROVIDER_OUTPUT, retry_safe=False)
     if reason == "content_filter" or response.get("provider_finish_reason") == "content_filter":
-        raise RuntimeError("PROVIDER_OUTPUT_FILTERED: ответ модели отклонён; повтор остановлен.")
+        raise RuntimeError(_FILTERED_OUTPUT_SUMMARY)
     if not isinstance(reason, str) or reason not in {
         "end_turn", "tool_use", "stop_sequence", "max_tokens",
     }:
@@ -1461,7 +1481,7 @@ async def _call_messages(
         )
 
         if provider_reconciliation_requested():
-            from yleum_api.services.llm_client import LLMError, require_recovered_response
+            from yleum_api.services.llm_client import require_recovered_response
             try:
                 retained = await require_recovered_response(generation_attempt)
             except NativeTranscriptRefusal:
@@ -1527,6 +1547,21 @@ async def _call_messages(
                 ) as r:
                     accepted_headers = True
                     await r.aread()
+            if r.status_code == 502:
+                filter_marker = _gateway_native_error(
+                    r, url, optional_fields=frozenset({"retry_safe"}),
+                )
+                if (
+                    filter_marker is not None
+                    and set(filter_marker) == {"type", "code", "message", "retry_safe"}
+                    and filter_marker["type"] == filter_marker["code"] == FILTERED_PROVIDER_OUTPUT
+                    and filter_marker["retry_safe"] is False
+                    and isinstance(filter_marker["message"], str)
+                ):
+                    raise LLMError(
+                        _FILTERED_OUTPUT_SUMMARY, code=FILTERED_PROVIDER_OUTPUT,
+                        http_status=502, retry_safe=False,
+                    )
             if r.status_code >= 400:
                 try:
                     output_body = r.json()
@@ -1727,6 +1762,7 @@ async def _run_native_segment(
     prior_managed_rejection: str | None = None,
     directed_path: str | None = None,
     snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None,
+    allow_filtered_source_handoff: bool = False,
 ) -> AgentResult:
     """Drive the native tool-use loop until the model calls ``done`` (with a clean
     build) or the step budget is hit. Returns the written files + transcript.
@@ -2472,6 +2508,22 @@ async def _run_native_segment(
                     _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
                     recovery_mode = "transcript"
                     continue
+                settled_filter = (
+                    isinstance(getattr(continuation, "state", None), RecoveryStateV3)
+                    and isinstance(exc, LLMError) and exc.code == FILTERED_PROVIDER_OUTPUT
+                    and exc.finish_reason == "content_filter"
+                    and exc.provider_charge_ambiguous is False and exc.retry_safe is False
+                )
+                if (
+                    settled_filter and allow_filtered_source_handoff and not source_repair
+                    and coordinated_max
+                ):
+                    return AgentResult(
+                        done=False, summary="Черновик передан на финальную проверку.",
+                        files=written, steps=step, transcript=convo, evidence=_evidence(),
+                        stop_reason=SOURCE_FINALIZATION_HANDOFF, needs_finalization=True,
+                        continuation_reason=FILTERED_PROVIDER_OUTPUT,
+                    )
                 # A provider failure is not a model handoff to verification.
                 # Do not build/accept a starter or overwrite the primary cause
                 # with a source-completion gap after failed model traffic.
@@ -2516,6 +2568,7 @@ async def _run_native_segment(
                 return AgentResult(
                     done=False, summary=safe_reason, files=written, steps=step,
                     transcript=convo, stop_reason="provider_error", evidence=_evidence(),
+                    continuation_reason=FILTERED_PROVIDER_OUTPUT if settled_filter else "",
                 )
 
             content = resp.get("content")
@@ -3352,6 +3405,7 @@ async def _run_native_segments(
             segments=segment,
             needs_finalization=result.needs_finalization,
             proof_checkpoint=result.proof_checkpoint,
+            continuation_reason=result.continuation_reason,
         )
         budget_boundary = segment_limit is None and result.stop_reason in {
             "max_steps", "max_steps_green", "max_steps_red",
@@ -3452,6 +3506,7 @@ async def run_native_build(
     recovery_binding: RecoveryBindingReader | None = None,
     continuation: ExecutionDriver | None = None,
     directed_path: str | None = None,
+    allow_filtered_source_handoff: bool = False,
 ) -> AgentResult:
     """Run one native generation, optionally continuing inside the same run."""
     response_recovery = response_recovery or ResponseRecovery()
@@ -3501,6 +3556,7 @@ async def run_native_build(
                 directed_path if first_segment and not prior_source_writes else None
             ),
             snapshot_files=snapshot_files,
+            allow_filtered_source_handoff=allow_filtered_source_handoff,
         )
         prior_source_writes = prior_source_writes or bool(result.files)
         # The next segment is prompted with this exact summary. The rejection

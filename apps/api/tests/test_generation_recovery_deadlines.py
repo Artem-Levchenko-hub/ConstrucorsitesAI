@@ -535,7 +535,10 @@ async def test_only_the_owned_retained_filter_hands_the_draft_to_verification(
     monkeypatch.setattr(llm_client, "require_recovered_response", reader)
     error = llm_client.LLMError("filtered", code="provider_output_filtered")
     invoke = AsyncMock(side_effect=[TimeoutError("synthetic"), error] if after_timeout else error)
-    frame = {"version": 1, "kind": "native", "value": {}}
+    frame = {
+        "version": 1, "kind": "legacy",
+        "value": {"attempt": 0, "call_deadline": datetime.now(UTC).isoformat()},
+    }
     if finish == "content_filter":
         with pytest.raises(llm_client.LLMError) as raised:
             await driver.provider(frame, invoke)

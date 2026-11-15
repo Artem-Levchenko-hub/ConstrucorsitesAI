@@ -241,6 +241,7 @@ async def _has_retained_completion(
 
 async def _is_retained_content_filter(
     factory: async_sessionmaker[AsyncSession], state: RecoveryStateV3,
+    *, frame_kind: Literal["native", "legacy"],
 ) -> bool:
     from yleum_api.services.generation.provider_identity import GenerationProviderIdentity
     from yleum_api.services.llm_client import require_recovered_response
@@ -253,7 +254,14 @@ async def _is_retained_content_filter(
             attempt.run_id, attempt.project_id, attempt.user_id, attempt.attempt_id,
             attempt.prompt_hash, attempt.request_sha256,
         )
-    choices = (await require_recovered_response(identity)).get("choices")
+    retained = await require_recovered_response(identity)
+    if frame_kind == "native":
+        return (
+            retained.get("type") == "message"
+            and retained.get("provider_finish_reason") == "content_filter"
+            and "choices" not in retained
+        )
+    choices = retained.get("choices")
     return (
         isinstance(choices, list) and bool(choices) and isinstance(choices[0], dict)
         and choices[0].get("finish_reason") == "content_filter"
@@ -1110,14 +1118,16 @@ class ExecutionDriver:
         self._tool_position += 1
         return observation
 
-    async def _confirm_content_filter(self, error: Exception) -> None:
+    async def _confirm_content_filter(
+        self, error: Exception, *, frame_kind: Literal["native", "legacy"],
+    ) -> None:
         from yleum_api.services.llm_client import LLMError
 
         if (
             isinstance(self.state, RecoveryStateV3)
             and isinstance(error, LLMError) and error.code == "provider_output_filtered"
             and error.retry_safe is False
-            and await _is_retained_content_filter(self.factory, self.state)
+            and await _is_retained_content_filter(self.factory, self.state, frame_kind=frame_kind)
         ):
             # A paid, authenticated refusal can hand off the existing draft
             # for checks. Its body is never used as source.
@@ -1126,6 +1136,7 @@ class ExecutionDriver:
 
     async def _invoke_provider(
         self, cursor: ProviderEffectCursor, invoke: Callable[[], Awaitable[Any]],
+        *, frame_kind: Literal["native", "legacy"],
     ) -> Any:
         from yleum_api.services.generation.recovery_diagnostic import (
             consume_diagnostic_response_timeout,
@@ -1150,7 +1161,7 @@ class ExecutionDriver:
                          run_id=str(cursor.claim.run_id), logical_step_seq=cursor.logical_step_seq)
             return response
         except Exception as error:
-            await self._confirm_content_filter(error)
+            await self._confirm_content_filter(error, frame_kind=frame_kind)
             timeout_types = (TimeoutError, httpx.ReadTimeout)
             interrupted = (
                 isinstance(error, timeout_types)
@@ -1177,7 +1188,7 @@ class ExecutionDriver:
             with provider_effect_scope(replay):
                 response = await invoke()
         except LLMError as error:
-            await self._confirm_content_filter(error)
+            await self._confirm_content_filter(error, frame_kind=frame_kind)
             raise
         log.info(
             "generation.retained_provider_response_reused",
@@ -1281,7 +1292,7 @@ class ExecutionDriver:
             if admission is not None:
                 self.before_fresh_provider = None
         try:
-            response = await self._invoke_provider(cursor, invoke)
+            response = await self._invoke_provider(cursor, invoke, frame_kind=frame["kind"])
         except LLMOutputTruncated:
             self._reconcile_response = False
             raise

@@ -452,6 +452,10 @@ async def execute_agent_turn(
         frame.get("kind") == "native" if isinstance(frame, dict) else
         get_settings().use_native_agent or directed_path is not None
     )
+    allow_filtered_source_handoff = (
+        _agent_res is None and allow_autonomous_source_repair
+        and project_info.template == "max_miniapp"
+    )
     _completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = (
         None
     )
@@ -597,6 +601,7 @@ async def execute_agent_turn(
                     )
                 ),
                 edit_source_changed=edit_source_changed,
+                allow_filtered_source_handoff=allow_filtered_source_handoff,
                 recovery=getattr(operations, "recovery", None),
                 recovery_binding=getattr(operations, "recovery_binding", None),
                 response_recovery=getattr(operations, "response_recovery", None),
@@ -632,9 +637,7 @@ async def execute_agent_turn(
                 False if plan.bare_stack else get_settings().agent_require_green_before_done
             ),
             coordinator_handoff=runtime.legacy_coordinator_handoff(),
-            allow_filtered_source_handoff=(
-                project_info.template == "max_miniapp" and allow_autonomous_source_repair
-            ),
+            allow_filtered_source_handoff=allow_filtered_source_handoff,
             completion_check=_completion_check,
             report_managed_build_gap=uses_single_max_source_repair(runtime),
             bounded_repair=bounded_repair,

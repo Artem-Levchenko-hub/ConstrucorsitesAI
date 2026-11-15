@@ -6,7 +6,7 @@ import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, replace
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from pydantic import TypeAdapter
@@ -23,6 +23,8 @@ from yleum_api.services import (
     app_errors,
 )
 from yleum_api.services.generation.agent_finalization import (
+    NativeSourceRepairFiltered,
+    completed_filtered_source_repair,
     finalize_max_candidate,
     source_change_allows_partial_save,
     validate_edit_source_change,
@@ -85,6 +87,7 @@ from yleum_api.services.generation.runtime import _apply_project_cell_preview_fi
 from yleum_api.services.generation.source_checkpoint import (
     SourceCheckpoint,
     adjacent_checkpoint,
+    checkpoint_before_rollback,
     persist_checkpoint,
 )
 from yleum_api.services.generation_runs import (
@@ -93,7 +96,69 @@ from yleum_api.services.generation_runs import (
 )
 from yleum_api.services.project_cell_errors import ProjectCellInfrastructureError
 
+if TYPE_CHECKING:
+    from yleum_api.services.generation.recovery_execution import ExecutionDriver
+
 _log = logging.getLogger("yleum_api.routers.messages")
+
+
+async def _finish_filtered_repair_message(
+    factory: async_sessionmaker[AsyncSession], ids: GenerationIds,
+    failure: NativeSourceRepairFiltered, continuation: ExecutionDriver | None,
+) -> None:
+    from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.models.message import Message
+    from yleum_api.models.project import Project
+    from yleum_api.services.generation.recovery_execution import (
+        _require_session_owner,
+        recovery_state,
+    )
+
+    public_error = str(failure)
+    async with factory() as session:
+        project = await session.get(
+            Project, ids.project_id, with_for_update=True, populate_existing=True,
+        )
+        run = await session.get(
+            GenerationRun, ids.run_id, with_for_update=True, populate_existing=True,
+        )
+        if (
+            project is None or project.owner_id != ids.user_id
+            or run is None or run.project_id != ids.project_id or run.user_id != ids.user_id
+            or run.user_message_id != ids.user_message_id
+            or run.assistant_message_id != ids.assistant_message_id
+        ):
+            raise RecoveryContractError("filtered repair message ownership changed")
+        if run.status in {"cancel_requested", "cancelled"}:
+            return
+        if run.status != "running":
+            raise RecoveryContractError("filtered repair run is no longer active")
+        if (
+            continuation is None or continuation.state.continuation_claim is None
+            or continuation.state.phase != "working"
+            or recovery_state(run) != continuation.state
+            or not completed_filtered_source_repair(continuation)
+        ):
+            raise RecoveryContractError("filtered repair continuation claim changed")
+        await _require_session_owner(run.id)
+        message = await session.get(Message, ids.assistant_message_id, with_for_update=True)
+        if (
+            message is None or message.project_id != ids.project_id or message.role != "assistant"
+            or message.snapshot_id is not None
+        ):
+            raise RecoveryContractError("filtered repair message is not an unpublished assistant")
+        await record_generation_product_failure(session, ids.run_id, public_error)
+        message.content = public_error
+        message.tokens_in = message.tokens_in or 0
+        message.tokens_out = 0
+        await session.commit()
+    try:
+        await publish_event(
+            ids.project_id, "llm.error",
+            {"message_id": str(ids.assistant_message_id), "error": public_error},
+        )
+    except Exception as exc:
+        _log.warning("Filtered repair event could not be delivered (%s)", type(exc).__name__)
 
 
 async def _load_turn_reference_images(
@@ -494,9 +559,49 @@ async def run_agent_generation(
         await rebind_continuation(continuation)
         if runtime.coordinator is not None:
             runtime.coordinator.continuation = continuation
-        if runtime.handle is not None:
-            from yleum_api.services.generation.recovery_pipeline import reconcile_pending_role
-            await reconcile_pending_role(continuation, runtime.handle)
+
+    _checkpoint_source_files: dict[str, str] = {}
+
+    async def save_source_checkpoint(result: agent_builder.AgentResult) -> None:
+        # Keep all known paths even if the next snapshot or private save fails.
+        _checkpoint_source_files.update(result.files)
+        if project_info.template != "max_miniapp" or _operations.snapshot_files is None:
+            return
+        candidate_files = await _operations.snapshot_files()
+        _checkpoint_source_files.update(candidate_files)
+        if candidate_files == runtime.migration_baseline:
+            return
+        await persist_checkpoint(
+            factory=factory, ids=ids, baseline=baseline, files=candidate_files,
+            original_prompt=prompt_text,
+        )
+        await _agent_emit("agent.checkpoint", {
+            "step": result.steps, "human": "Сохраняю черновик, чтобы работа не потерялась",
+            "ok": True,
+        })
+
+    progress_collector = getattr(runtime, "verified_progress", None)
+    _operations = AgentOperations(
+        response_recovery=getattr(runtime, "response_recovery", None),
+        take_verified_progress=(progress_collector.take if progress_collector else None),
+        snapshot_files=getattr(runtime.handle, "snapshot_files", None),
+        checkpoint=save_source_checkpoint,
+        continuation=continuation,
+        execute=bindings.execute,
+        emit=_agent_emit,
+        probe_runtime=bindings.probe_runtime,
+        probe_build=bindings.probe_build,
+        preview_url=bindings.preview_url,
+    )
+    if completed_filtered_source_repair(continuation):
+        await checkpoint_before_rollback(_operations)
+        await _finish_filtered_repair_message(
+            factory, ids, NativeSourceRepairFiltered(), continuation,
+        )
+        return
+    if continuation is not None and runtime.handle is not None:
+        from yleum_api.services.generation.recovery_pipeline import reconcile_pending_role
+        await reconcile_pending_role(continuation, runtime.handle)
 
     await require_named_behavior_readiness(
         runtime, prompt_text, template=project_info.template, factory=factory, ids=ids,
@@ -677,45 +782,10 @@ async def run_agent_generation(
                 "control_workspace_id": runtime.handle.control_workspace_id,
                 "control_fencing_epoch": runtime.handle.control_fencing_epoch,
             }), context={**continuation.context, "completed": completed})
-    progress_collector = getattr(runtime, "verified_progress", None)
     single_max_repair = uses_single_max_source_repair(runtime)
     autonomous_max_repair = uses_autonomous_max_source_repair(runtime)
     progress.defer_verification_errors = single_max_repair or autonomous_max_repair
-    _operations = AgentOperations(
-        response_recovery=getattr(runtime, "response_recovery", None),
-        take_verified_progress=(
-            progress_collector.take if progress_collector else None
-        ),
-        snapshot_files=getattr(runtime.handle, "snapshot_files", None),
-        edit_deadline=edit_deadline,
-        continuation=continuation,
-        execute=bindings.execute,
-        emit=_agent_emit,
-        probe_runtime=bindings.probe_runtime,
-        probe_build=bindings.probe_build,
-        preview_url=bindings.preview_url,
-    )
-
-    _checkpoint_source_files: dict[str, str] = {}
-
-    async def save_source_checkpoint(result: agent_builder.AgentResult) -> None:
-        # Keep all known paths even if the next snapshot or private save fails.
-        _checkpoint_source_files.update(result.files)
-        if project_info.template != "max_miniapp" or _operations.snapshot_files is None:
-            return
-        candidate_files = await _operations.snapshot_files()
-        _checkpoint_source_files.update(candidate_files)
-        if candidate_files == runtime.migration_baseline:
-            return
-        await persist_checkpoint(
-            factory=factory, ids=ids, baseline=baseline, files=candidate_files,
-            original_prompt=prompt_text,
-        )
-        await _agent_emit("agent.checkpoint", {
-            "step": result.steps, "human": "Сохраняю черновик, чтобы работа не потерялась",
-            "ok": True,
-        })
-    _operations = replace(_operations, checkpoint=save_source_checkpoint)
+    _operations = replace(_operations, edit_deadline=edit_deadline)
     if (
         project_info.template == "max_miniapp" and runtime.coordinator is not None
         and getattr(runtime.handle, "prove_restoration_adaptation", None) is None
@@ -1008,34 +1078,34 @@ async def run_agent_generation(
     _catalog_runtime = _stack.orchestrator_template == "max-miniapp-nextjs"
     _source_handoff = _agent_res.stop_reason in agent_builder.SOURCE_HANDOFF_REASONS
     _restore_core_on_rejection = _source_handoff or single_max_repair or autonomous_max_repair
-    (
-        _max_finalization_proof,
-        files,
-        accumulated,
-    ) = await finalize_max_candidate(
-        _is_edit=_is_edit,
-        _max_has_generated_snapshot=_max_has_generated_snapshot,
-        _max_shell_enabled=bindings.shell_enabled,
-        accumulated=accumulated,
-        baseline=baseline,
-        files=files,
-        ids=ids,
-        is_free=is_free,
-        prompt_text=prompt_text,
-        runtime=runtime,
-        plan=_prompt_plan,
-        operations=_operations,
-        catalog_runtime=_catalog_runtime,
-        source_handoff=_source_handoff,
-        verification_only=_agent_res.requires_verification_only,
-        interrupted_source_reason=(
-            _agent_res.continuation_reason
-            if _agent_res.stop_reason == agent_builder.SOURCE_REPAIR_HANDOFF else None
-        ),
-        render_core_on_rejection=(
-            _render_current_max_starter_files if _restore_core_on_rejection else None
-        ),
-    )
+    try:
+        _max_finalization_proof, files, accumulated = await finalize_max_candidate(
+            _is_edit=_is_edit,
+            _max_has_generated_snapshot=_max_has_generated_snapshot,
+            _max_shell_enabled=bindings.shell_enabled,
+            accumulated=accumulated,
+            baseline=baseline,
+            files=files,
+            ids=ids,
+            is_free=is_free,
+            prompt_text=prompt_text,
+            runtime=runtime,
+            plan=_prompt_plan,
+            operations=_operations,
+            catalog_runtime=_catalog_runtime,
+            source_handoff=_source_handoff,
+            verification_only=_agent_res.requires_verification_only,
+            interrupted_source_reason=(
+                _agent_res.continuation_reason
+                if _agent_res.stop_reason == agent_builder.SOURCE_REPAIR_HANDOFF else None
+            ),
+            render_core_on_rejection=(
+                _render_current_max_starter_files if _restore_core_on_rejection else None
+            ),
+        )
+    except NativeSourceRepairFiltered as failure:
+        await _finish_filtered_repair_message(factory, ids, failure, continuation)
+        return
     from yleum_api.services.restorations import adaptation_activation_consumed
 
     _activation_consumed_publication = await adaptation_activation_consumed(

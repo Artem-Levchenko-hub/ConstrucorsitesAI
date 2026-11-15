@@ -1,4 +1,4 @@
-"""A confirmed legacy content filter can only hand off source for fresh proof."""
+"""A confirmed provider filter can only hand off source for fresh proof."""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -6,7 +6,13 @@ from uuid import uuid4
 
 import pytest
 
-from yleum_api.services import agent_builder, llm_client, max_behavior_proof, restorations
+from yleum_api.services import (
+    agent_builder,
+    agent_native,
+    llm_client,
+    max_behavior_proof,
+    restorations,
+)
 from yleum_api.services.generation import (
     agent_finalization,
     agent_generation,
@@ -76,6 +82,57 @@ async def test_legacy_filter_hands_off_only_confirmed_ordinary_max(
     else:
         assert not result.needs_finalization
         assert result.stop_reason == "provider_error"
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_native_frame_uses_the_same_filtered_source_proof_gate(monkeypatch, enabled):
+    monkeypatch.setattr(max_behavior_proof, "freeze_for_turn", AsyncMock())
+    monkeypatch.setattr(agent_generation, "get_settings", lambda: SimpleNamespace(
+        use_native_agent=False, agent_progressive_continuation=True,
+    ))
+    candidate = {_PAGE: "saved product"}
+
+    async def run_native(**kwargs):
+        if not kwargs.get("allow_filtered_source_handoff"):
+            return agent_builder.AgentResult(
+                done=False, summary="PROVIDER_OUTPUT_FILTERED: filtered", files=candidate,
+                steps=1, stop_reason="provider_error",
+            )
+        return agent_builder.AgentResult(
+            done=False, summary="", files=candidate, steps=1,
+            stop_reason=agent_builder.SOURCE_FINALIZATION_HANDOFF, needs_finalization=True,
+            continuation_reason=agent_builder.FILTERED_PROVIDER_OUTPUT,
+        )
+
+    monkeypatch.setattr(agent_native, "run_native_build", run_native)
+    runtime = GenerationRuntime(
+        handle=SimpleNamespace(
+            is_portable=lambda: True, export_files=AsyncMock(return_value=candidate),
+        ),
+        coordinator=SimpleNamespace(source_edit_deadline=AsyncMock(return_value=None)),
+    )
+    operations = SimpleNamespace(
+        execute=AsyncMock(), emit=AsyncMock(),
+        continuation=SimpleNamespace(context={"active_frame": {"kind": "native"}}),
+    )
+    turn = agent_generation.execute_agent_turn(
+        _agent_res=None, _is_edit=False, _max_has_generated_snapshot=False,
+        _max_seed_files={}, _max_shell_enabled=False, baseline=SourceBaseline(None, None, {}),
+        ids=GenerationIds(*(uuid4() for _ in range(5))), is_free=False,
+        project_info=SimpleNamespace(template="max_miniapp"), prompt_text="Build a product",
+        runtime=runtime, plan=SimpleNamespace(
+            model="claude-sonnet-5.5", stack_guide="", skills=None, user="build", steps=4,
+        ),
+        operations=operations, allow_autonomous_source_repair=enabled,
+    )
+    if enabled:
+        result, failure = await turn
+        assert failure is None and result.requires_verification_only
+        assert result.needs_finalization and not result.done and result.files == candidate
+    else:
+        with pytest.raises(RuntimeError, match="PROVIDER_OUTPUT_FILTERED"):
+            await turn
+    operations.execute.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

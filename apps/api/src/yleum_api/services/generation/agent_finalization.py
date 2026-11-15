@@ -23,6 +23,7 @@ from yleum_api.services.generation.contracts import (
     uses_autonomous_max_source_repair,
     uses_single_max_source_repair,
 )
+from yleum_api.services.generation.recovery_contract import RecoveryContractError, RecoveryStateV3
 from yleum_api.services.generation.recovery_trace import bounded_recovery_diagnostic
 from yleum_api.services.generation.runtime import _restore_project_cell_source
 from yleum_api.services.generation.source_error_classification import SourceFailure
@@ -65,6 +66,53 @@ _REPAIR_APPROACHES = (
 
 class AdaptationActivationPending(RuntimeError):
     """Forward-only controller reconciliation owns the sealed candidate."""
+
+
+class NativeSourceRepairFiltered(RuntimeError):
+    """A confirmed, retained response stopped the corrective model turn."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Провайдер отфильтровал ответ при исправлении. Новая версия не опубликована."
+        )
+
+
+class _NativeSourceRepairSettlementPending(RuntimeError):
+    """A filtered response is confirmed, but its source-repair result is unconfirmed."""
+
+
+def _is_filtered_native_repair(
+    continuation: ExecutionDriver | None, result: agent_builder.AgentResult,
+) -> bool:
+    state = getattr(continuation, "state", None)
+    return (
+        isinstance(state, RecoveryStateV3) and state.execution.stage == "finalization"
+        and result.stop_reason == "provider_error"
+        and result.continuation_reason == agent_builder.FILTERED_PROVIDER_OUTPUT
+        and not result.done and not result.needs_finalization and result.proof_checkpoint is None
+    )
+
+
+def completed_filtered_source_repair(continuation: ExecutionDriver | None) -> bool:
+    if (
+        continuation is None or not isinstance(continuation.state, RecoveryStateV3)
+        or continuation.state.execution.stage != "finalization"
+    ):
+        return False
+    from yleum_api.services.generation.recovery_pipeline import (
+        _result_from_data,
+        pending_source_repair,
+    )
+
+    entry = pending_source_repair(continuation)
+    if entry is None or entry.status != "complete" or not _is_filtered_native_repair(
+        continuation, _result_from_data(entry.result),
+    ):
+        return False
+    execution = continuation.state.execution
+    if execution.substep != "checkpoint_ready" or execution.pending_effect_id is not None:
+        raise RecoveryContractError("filtered source repair cursor was not settled")
+    return True
 
 
 def _canonical_operation_id(value: object) -> str | None:
@@ -276,7 +324,10 @@ async def run_native_source_repair(
         if accounting is not None:
             accounting.budget = entry.response_budget
         if entry.status == "complete":
-            return _result_from_data(entry.result)
+            completed = _result_from_data(entry.result)
+            if completed_filtered_source_repair(continuation):
+                raise NativeSourceRepairFiltered()
+            return completed
         task, model_baseline, edit_deadline = entry.task, entry.baseline, entry.edit_deadline
         edit_deadline = continuation.soft_edit_deadline(edit_deadline)
         if entry.targeted and source_failure is None:
@@ -393,17 +444,25 @@ async def run_native_source_repair(
         raise RuntimeError(
             "Provider response rejected (output_limit); finalization repair was not verified."
         )
-    if result.stop_reason in {"provider_error", "infra_error", "error"}:
+    filtered = _is_filtered_native_repair(continuation, result)
+    if not filtered and result.stop_reason in {"provider_error", "infra_error", "error"}:
         raise RuntimeError(result.summary)
-    if single_repair:
+    if single_repair and not filtered:
         assert runtime.handle is not None
         _require_blocking_sast(await runtime.handle.snapshot_files(), repairing=True)
     if continuation is not None:
         from yleum_api.services.generation.recovery_pipeline import finish_source_repair
-        await finish_source_repair(
-            continuation, result,
-            accounting.budget if accounting is not None else entry.response_budget,
-        )
+        try:
+            await finish_source_repair(
+                continuation, result,
+                accounting.budget if accounting is not None else entry.response_budget,
+            )
+        except Exception:
+            if filtered:
+                raise _NativeSourceRepairSettlementPending() from None
+            raise
+    if filtered:
+        raise NativeSourceRepairFiltered()
     return result
 
 
@@ -441,12 +500,17 @@ async def finalize_max_candidate(
     render_core_on_rejection: Callable[[], Awaitable[dict[str, str]]] | None = None,
     verification_only: bool = False,
 ) -> FinalizedAgentSource:
+    from yleum_api.services.generation.source_checkpoint import checkpoint_before_rollback
+
+    continuation = getattr(operations, "continuation", None)
+    if completed_filtered_source_repair(continuation):
+        await checkpoint_before_rollback(operations)
+        raise NativeSourceRepairFiltered()
     _max_finalization_proof: ProofBundle | None = None
     if runtime.coordinator is not None and (files or verification_only):
         from yleum_api.services.max_finalization import MaxFinalizationStatus
 
         assert runtime.handle is not None
-        continuation = getattr(operations, "continuation", None)
         autonomous_repair = uses_autonomous_max_source_repair(runtime)
         single_repair = (
             not autonomous_repair
@@ -580,6 +644,12 @@ async def finalize_max_candidate(
                 )
         except AdaptationActivationPending:
             raise
+        except _NativeSourceRepairSettlementPending:
+            assert continuation is not None
+            # A commit acknowledgement can be lost. Resume from the actual
+            # cursor, including a committed result whose response was lost.
+            await continuation.wait()
+            raise AssertionError("committed wait must leave the invocation") from None
         except Exception as exc:
             from yleum_api.services.max_finalization import (
                 AdaptationActivationRecoveryRequired,
@@ -587,11 +657,9 @@ async def finalize_max_candidate(
 
             if isinstance(exc, AdaptationActivationRecoveryRequired):
                 raise AdaptationActivationPending(str(exc)) from exc
-            from yleum_api.services.generation.source_checkpoint import checkpoint_before_rollback
-
             await checkpoint_before_rollback(operations)
             raise_if_terminal_cell_error(exc)
-            if verification_only:
+            if verification_only or isinstance(exc, NativeSourceRepairFiltered):
                 # The rejected source remains private. This controller phase
                 # has no journal authority to restore a physical workspace.
                 raise
