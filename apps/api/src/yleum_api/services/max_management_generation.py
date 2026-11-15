@@ -2414,7 +2414,9 @@ def _source_repair_guidance(diagnostic: str) -> str:
         return (
             "\nBuild the JSON.stringify input from explicit typed state holding validated "
             "app-owned JSON, or construct a plain object or array of known scalar fields. "
-            "A cast or moving the generic helper leaves its input unproven. For localStorage, "
+            "A cast or moving the generic helper leaves its input unproven. "
+            "For an HTTP body, build that object at the request from proven scalar fields, "
+            "or use the project's typed managed SDK action. For localStorage, "
             "preserve existing keys, stored shapes and writes. Read and validate saved values "
             "before writing, wait for hydration, then serialize each local value directly. "
             "For saved arrays, validate one parse with instanceof Array and every. After "

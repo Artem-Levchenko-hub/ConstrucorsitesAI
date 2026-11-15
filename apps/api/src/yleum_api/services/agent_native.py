@@ -2233,8 +2233,10 @@ async def _run_native_segment(
                         "step": step, "action": "build", "path": "",
                         "detail": detail, "ok": last_build_ok,
                     })
-                if (repair_gap := _managed_repair_after_feedback(managed_gap)) is not None:
-                    return _handoff_managed_repair(repair_gap, step)
+                if not source_repair:
+                    repair_gap = _managed_repair_after_feedback(managed_gap)
+                    if repair_gap is not None:
+                        return _handoff_managed_repair(repair_gap, step)
                 if edit_deadline is not None:
                     remaining = (edit_deadline - datetime.now(UTC)).total_seconds()
                     if remaining <= 0:
@@ -2818,9 +2820,15 @@ async def _run_native_segment(
                         ),
                     }
                 )
-                if _done and (managed_gap := _current_managed_gap()) is not None:
-                    if (repair_gap := _managed_repair_after_feedback(managed_gap)) is not None:
-                        return _handoff_managed_repair(repair_gap, step + 1)
+                if _done:
+                    managed_gap = (
+                        gap if source_repair and isinstance(gap, ManagedSourceGap)
+                        else _current_managed_gap()
+                    )
+                    if managed_gap is not None:
+                        repair_gap = _managed_repair_after_feedback(managed_gap)
+                        if repair_gap is not None:
+                            return _handoff_managed_repair(repair_gap, step + 1)
                 if edit_source_changed is not None and not edit_source_changed():
                     if no_write_turns >= _EDIT_NO_PROGRESS_TURNS:
                         return await _finish_without_provider(
@@ -3099,6 +3107,7 @@ async def _run_native_segment(
                         inspection_source = None
 
             current_managed_gap = _current_managed_gap()
+            checked_repair_completion = False
             if pending_done:
                 if edit_source_changed is not None and not edit_source_changed():
                     done_gap = _EDIT_SOURCE_NUDGE
@@ -3109,16 +3118,22 @@ async def _run_native_segment(
                     )
                 else:
                     done_gap = await _completion_gap() or ""
+                    checked_repair_completion = source_repair
+                    if source_repair and isinstance(done_gap, ManagedSourceGap):
+                        current_managed_gap = done_gap
                 for summary, done_result in pending_done:
                     if done_gap:
                         done_result.update(is_error=True, content="Not done yet: " + done_gap)
                     else:
                         done_summary = summary
 
-            # Count once per provider turn, and keep the last reported rejection
-            # until a check of the current source can confirm or replace it.
+            # In source repair, a quick build does not run the managed source
+            # contract. Only a fresh completion check can replace its rejection.
             if not wrote_since_build and (
-                checked_build_this_turn or (pending_done and current_managed_gap is not None)
+                checked_repair_completion
+                or (not source_repair and (
+                    checked_build_this_turn or (pending_done and current_managed_gap is not None)
+                ))
             ):
                 if current_managed_gap is not None and not pending_done:
                     results.append({"type": "text", "text": str(current_managed_gap)})

@@ -114,6 +114,72 @@ async def test_managed_rejection_hands_off_only_for_current_checked_source(
     assert result.segments == (2 if scenario == "next_segment" else 1)
 
 
+@pytest.mark.parametrize("prose_done", [False, True])
+@pytest.mark.parametrize("next_tool", ["build", "checkpoint", "fixed"])
+async def test_source_repair_uses_repeated_authoritative_completion_feedback(
+    monkeypatch, coordinated, prose_done, next_tool,
+):
+    calls = 0
+    current = dict(BASELINE)
+    current_gap = ManagedSourceGap(
+        "Managed source connection analysis cannot prove call or binding effects."
+        " Source location: src/lib/submit.ts:7:11; AST call_expression;"
+        " reason unproven_json_stringify; fingerprint aaaaaaaaaaaaaaaa."
+    )
+
+    async def completion(_written, _evidence):
+        return None if current["src/app/page.tsx"] == "fixed" else current_gap
+
+    async def provider(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return turn(
+                ("write_file", {"path": "src/app/page.tsx", "content": "still invalid"}),
+                ("build", {}),
+            )
+        if calls == 2 or calls == 4:
+            if prose_done:
+                return {
+                    "stop_reason": "end_turn",
+                    "content": [{"type": "text", "text": "Complete"}],
+                }
+            return turn(("done", {"summary": "Complete"}))
+        if calls == 3:
+            if next_tool == "fixed":
+                return turn(
+                    ("write_file", {"path": "src/app/page.tsx", "content": "fixed"}),
+                    ("build", {}),
+                )
+            if next_tool == "checkpoint":
+                return turn(
+                    ("write_file", {"path": "src/lib/other.ts", "content": "export {};"}),
+                )
+            return turn(("build", {}))
+        pytest.fail("The same checked source rejection was sent for a third model guess")
+
+    async def execute(action):
+        if action.name == "write_file":
+            current[action.path] = action.args["content"]
+        else:
+            assert action.name == "build"
+        return {"ok": True}
+
+    monkeypatch.setattr(agent_native, "_call_messages", provider)
+    result = await agent_native.run_native_build(
+        system="MAX VERIFICATION OVERRIDE", task="Fix existing app",
+        execute=execute, portable_cell=True, initial_files=BASELINE,
+        completion_check=completion, max_steps=6, max_segments=1,
+        source_repair=True,
+    )
+    assert calls == 4
+    if next_tool == "fixed":
+        assert result.done
+    else:
+        assert result.stop_reason == "managed_source_contract_unresolved"
+        assert result.summary is current_gap and not result.done
+
+
 async def test_green_fast_check_does_not_complete_unchanged_repair(monkeypatch, coordinated):
     calls = 0
 
