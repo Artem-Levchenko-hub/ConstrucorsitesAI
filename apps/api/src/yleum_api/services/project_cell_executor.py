@@ -947,6 +947,42 @@ async def _wait_for_previous_cell_reconciliation(
 CellAdmissionCallback = Callable[[UUID], Awaitable[RecoveryStateV2 | None]]
 
 
+async def _is_continuation_ensure(
+    session: AsyncSession,
+    run: GenerationRun,
+    workspace: ProjectCellWorkspace,
+    operation: ProjectCellOperation,
+    state: RecoveryStateV2,
+) -> bool:
+    from yleum_api.services.generation.recovery_execution import (
+        _owned_release_receipt,
+        _require_session_owner,
+    )
+
+    execution, claim = state.execution, state.continuation_claim
+    if (
+        run.status != "running" or run.started_at is None or run.execution_backend != "worker"
+        or state.phase != "working" or claim is None or claim.attempt_seq != state.attempt_seq
+        or execution.physical_state != "released" or execution.lease_cycle_seq == 0
+        or execution.release_operation_id is None or execution.control_workspace_id != workspace.id
+        or workspace.generation_run_id != run.id or workspace.deleted_at is not None
+        or workspace.project_id != run.project_id or workspace.owner_id != run.user_id
+        or operation.status != "pending" or operation.attempt_count != 0
+        or operation.fencing_epoch is not None or operation.execution_run_id is not None
+    ):
+        return False
+
+    release = await session.get(ProjectCellOperation, execution.release_operation_id)
+    fence = workspace.fencing_epoch
+    if (
+        not _owned_release_receipt(release, run_id=run.id, workspace_id=workspace.id, fence=fence)
+        or execution.control_fencing_epoch not in (fence, fence - 1)
+    ):
+        return False
+    await _require_session_owner(run.id, compatibility=False)
+    return True
+
+
 async def maybe_create_project_cell_executor(
     *,
     project_id: UUID,
@@ -1118,6 +1154,12 @@ async def maybe_create_project_cell_executor(
                 idempotency_key=ensure_key,
                 request={"profile_version": profile_version},
             )
+            continuation_ensure = (
+                operation
+                if isinstance(recovery, RecoveryStateV2) and not restoration_adaptation
+                and await _is_continuation_ensure(session, run, workspace, operation, recovery)
+                else None
+            )
             await session.commit()
         except (
             ProjectCellBusy,
@@ -1139,6 +1181,7 @@ async def maybe_create_project_cell_executor(
         client=HttpProjectCellOrchestratorClient(),
         emit=agent_emit or _discard_progress,
         dispatch_token=capacity_dispatch_token,
+        continuation_ensure=continuation_ensure,
         initial_attempt=lambda: execute_cell_operation(
             session_factory,
             operation.id,

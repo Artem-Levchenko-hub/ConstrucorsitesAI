@@ -126,9 +126,12 @@ async def _run_host(session: AsyncSession, run: GenerationRun) -> str:
     return str(host) if host else registry().default
 
 
-async def claim_capacity_turn(session: AsyncSession, run_id: UUID) -> CapacityTurn:
+async def claim_capacity_turn(
+    session: AsyncSession, run_id: UUID, *, continuation: bool = False,
+) -> CapacityTurn:
+    waiting_status = "running" if continuation else "queued_for_capacity"
     run = await session.get(GenerationRun, run_id)
-    if run is None or run.status != "queued_for_capacity":
+    if run is None or run.status != waiting_status:
         return CapacityTurn(
             run_id=run_id,
             may_start=False,
@@ -139,7 +142,7 @@ async def claim_capacity_turn(session: AsyncSession, run_id: UUID) -> CapacityTu
     host = await _run_host(session, run)
     await _scheduler_lock(session, host)
     await session.refresh(run)
-    if run.status != "queued_for_capacity":
+    if run.status != waiting_status:
         return CapacityTurn(
             run_id=run_id,
             may_start=False,
@@ -148,6 +151,7 @@ async def claim_capacity_turn(session: AsyncSession, run_id: UUID) -> CapacityTu
             retry_after_seconds=1,
         )
     # Only runs waiting for THIS host's capacity form its queue.
+    queued_status = GenerationRun.status == "queued_for_capacity"
     queued = list(
         (
             await session.execute(
@@ -157,7 +161,8 @@ async def claim_capacity_turn(session: AsyncSession, run_id: UUID) -> CapacityTu
                     ProjectCellWorkspace.project_id == GenerationRun.project_id,
                 )
                 .where(
-                    GenerationRun.status == "queued_for_capacity",
+                    or_(queued_status, GenerationRun.id == run_id)
+                    if continuation else queued_status,
                     ProjectCellWorkspace.orchestrator == host,
                 )
                 .order_by(GenerationRun.created_at, GenerationRun.id)
@@ -1253,19 +1258,21 @@ async def wait_for_capacity(
     emit: Callable[[dict[str, object]], Awaitable[None]],
     dispatch_token: UUID | None = None,
     initial_attempt: Callable[[], Awaitable[ProjectCellOperationOutcome]] | None = None,
+    continuation_ensure: ProjectCellOperation | None = None,
 ) -> ProjectCellOperationOutcome:
-    """Bound the entire queue, including slow reclamation/provider calls."""
+    """Bound the queue from first admission or the verified continuation reservation."""
     async with session_factory() as session:
         run = await session.get(GenerationRun, run_id)
         if run is None:
             raise RuntimeError("queued generation run disappeared")
         if run.status == "cancel_requested" or run.status not in ACTIVE_GENERATION_STATUSES:
             return await _cancel_waiting_operation(session, operation_id)
-        remaining = (
-            get_settings().project_cell_capacity_wait_seconds
-            - (datetime.now(UTC) - run.created_at).total_seconds()
+        queued_at = (
+            continuation_ensure.created_at if continuation_ensure is not None else run.created_at
         )
+        deadline = queued_at + timedelta(seconds=get_settings().project_cell_capacity_wait_seconds)
     try:
+        remaining = (deadline - datetime.now(UTC)).total_seconds()
         async with asyncio.timeout(max(0, remaining)):
             if initial_attempt is not None:
                 initial = await initial_attempt()
@@ -1278,24 +1285,24 @@ async def wait_for_capacity(
                 client=client,
                 emit=emit,
                 dispatch_token=dispatch_token,
+                deadline=deadline,
+                continuation=continuation_ensure is not None,
             )
     except TimeoutError:
         async with session_factory() as session:
-            # Recovery can replace the original ensure with a new durable one.
-            # Cancel every undispatched admission for this run, not only its first ID.
-            pending = list(
-                (
-                    await session.scalars(
-                        select(ProjectCellOperation)
-                        .where(
-                            ProjectCellOperation.generation_run_id == run_id,
-                            ProjectCellOperation.kind.in_(("ensure", "reconcile")),
-                            ProjectCellOperation.status.in_(("pending", "waiting_capacity")),
-                        )
-                        .with_for_update()
-                    )
-                ).all()
+            # Recovery can replace an ensure. An expired continuation owns only
+            # the operations reserved for its current lease cycle.
+            cancellable = select(ProjectCellOperation).where(
+                ProjectCellOperation.generation_run_id == run_id,
+                ProjectCellOperation.kind.in_(("ensure", "reconcile")),
+                ProjectCellOperation.status.in_(("pending", "waiting_capacity")),
             )
+            if continuation_ensure is not None:
+                cancellable = cancellable.where(
+                    ProjectCellOperation.workspace_id == continuation_ensure.workspace_id,
+                    ProjectCellOperation.created_at >= queued_at,
+                )
+            pending = (await session.scalars(cancellable.with_for_update())).all()
             for item in pending:
                 item.status = "cancelled"
                 item.finished_at = datetime.now(UTC)
@@ -1314,6 +1321,8 @@ async def _wait_for_capacity(
     client: ProjectCellOrchestratorClient,
     emit: Callable[[dict[str, object]], Awaitable[None]],
     dispatch_token: UUID | None = None,
+    deadline: datetime,
+    continuation: bool,
 ) -> ProjectCellOperationOutcome:
     last_progress: tuple[int, str | None] | None = None
     last_emitted_at = 0.0
@@ -1328,21 +1337,14 @@ async def _wait_for_capacity(
                 raise RuntimeError("queued generation run disappeared")
             if run.status == "cancel_requested" or run.status not in ACTIVE_GENERATION_STATUSES:
                 return await _cancel_waiting_operation(session, operation_id)
-            if (datetime.now(UTC) - run.created_at).total_seconds() >= (
-                get_settings().project_cell_capacity_wait_seconds
-            ):
-                # Starts at durable admission, before runtime bootstrap/watchdog.
+            if datetime.now(UTC) >= deadline:
                 # Never mark an unknown controller effect as a cancelled effect.
-                await _cancel_waiting_operation(session, operation_id)
                 raise TimeoutError("Project Cell capacity queue deadline exceeded")
-            run.status = "queued_for_capacity"
-            if dispatch_token is not None:
-                write_capacity_dispatch_claim(
-                    run,
-                    token=dispatch_token,
-                    lease_seconds=30,
-                )
-            turn = await claim_capacity_turn(session, run_id)
+            if not continuation:
+                run.status = "queued_for_capacity"
+                if dispatch_token is not None:
+                    write_capacity_dispatch_claim(run, token=dispatch_token, lease_seconds=30)
+            turn = await claim_capacity_turn(session, run_id, continuation=continuation)
             operation_status = await session.scalar(
                 select(ProjectCellOperation.status).where(
                     ProjectCellOperation.id == operation_id,

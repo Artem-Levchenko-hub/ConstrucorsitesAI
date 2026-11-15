@@ -128,11 +128,12 @@ async def _quiesced_physical_run(
 
     try:
         state = recovery_state(run)
-        if (
-            run.status != "running"
-            or not isinstance(state, RecoveryStateV2)
-            or state.phase not in {"waiting_dependency", "reconciling", "needs_input"}
-        ):
+        if run.status != "running" or not isinstance(state, RecoveryStateV2):
+            return None
+        claimed_preparation = parked_source == "require" and state.phase == "working"
+        if not claimed_preparation and state.phase not in {
+            "waiting_dependency", "reconciling", "needs_input",
+        }:
             return None
         project = await session.get(Project, run.project_id)
         if project is None or project.owner_id != run.user_id:
@@ -171,7 +172,9 @@ async def _quiesced_physical_run(
                 or workspace.project_id != run.project_id
                 or workspace.owner_id != run.user_id
                 or workspace.deleted_at is not None
-                or workspace.generation_run_id is not None
+                or workspace.generation_run_id not in (
+                    {None, run.id} if claimed_preparation else {None}
+                )
                 or workspace.fencing_epoch != execution.control_fencing_epoch
                 or not _owned_release_receipt(
                     operation,
@@ -197,7 +200,7 @@ async def _quiesced_physical_run(
                 if not advisory_transition:
                     if (
                         parked_source == "deny" or not isinstance(state, RecoveryStateV3)
-                        or state.phase != "needs_input"
+                        or (state.phase != "needs_input" and not claimed_preparation)
                         or state.binding.fencing_epoch + 1 != workspace.fencing_epoch
                     ):
                         return None
@@ -205,7 +208,9 @@ async def _quiesced_physical_run(
                         parked_source_repair,
                     )
 
-                    parked_source_verified = await parked_source_repair(session, run, state)
+                    parked_source_verified = await parked_source_repair(
+                        session, run, state, claimed_preparation=claimed_preparation,
+                    )
                     if not parked_source_verified:
                         return None
             if not await _provider_stopped(session, run):
