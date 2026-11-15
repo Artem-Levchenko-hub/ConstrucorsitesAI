@@ -138,7 +138,7 @@ def acceptance_required(run: GenerationRun) -> bool:
         return True
     if state is not None:
         return False  # V1 shadow is observational; never implicitly upgraded.
-    if run.response_mode == "clarify":
+    if getattr(run, "response_mode", None) == "clarify":
         return False
     settings = get_settings()
     return settings.generation_recovery_mode == "on" or (
