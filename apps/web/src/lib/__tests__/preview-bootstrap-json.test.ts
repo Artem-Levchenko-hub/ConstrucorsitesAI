@@ -24,7 +24,10 @@ function request(accept = "application/json", project = "own", expiry = Math.flo
   const signature = createHmac("sha256", "secret").update(`omnia:max-preview-session:v1\n${project}\n${expiry}`, "utf8").digest("base64url");
   return new Request(`https://cell.dev2.yleum.ru/api/omnia/preview-session?expires=${expiry}&signature=${signature}`, { headers: { Accept: accept } });
 }
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 describe("signed preview bootstrap JSON without navigation", () => {
   function env() { vi.stubEnv("NODE_ENV", "development"); vi.stubEnv("AUTH_SECRET", "secret"); vi.stubEnv("OMNIA_PROJECT_ID", "own"); }
   it("uses the same 900s secure cookie and leaves ordinary navigation as 307", async () => {
@@ -38,6 +41,7 @@ describe("signed preview bootstrap JSON without navigation", () => {
     expect(navigation.status).toBe(307); expect(navigation.headers.get("location")).toBe("/");
   });
   it("does not bypass project, expiry, signature or public-environment guards", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_795_000_000_000);
     env(); const { GET, insert } = route();
     for (const input of [request("application/json", "other"), request("application/json", "own", 1), request("application/json", "own", Math.floor(Date.now()/1000)+121)]) expect((await GET(input)).status).toBe(404);
     vi.stubEnv("NODE_ENV", "production"); expect((await GET(request())).status).toBe(404);

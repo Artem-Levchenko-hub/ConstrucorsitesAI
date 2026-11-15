@@ -154,7 +154,9 @@ async def test_interrupted_release_reuses_only_the_owned_envelope(monkeypatch, o
     operation_execute = AsyncMock(side_effect=execute)
     monkeypatch.setattr(recovery_release, "replay_indeterminate_cell_operation", operation_replay)
     monkeypatch.setattr(recovery_release, "execute_cell_operation", operation_execute)
-    monkeypatch.setattr(recovery_release, "_require_session_owner", AsyncMock())
+    monkeypatch.setattr(
+        recovery_release.recovery_execution, "_require_session_owner", AsyncMock(),
+    )
     monkeypatch.setattr(recovery_release, "lock_workspace_operations", AsyncMock())
     monkeypatch.setattr(recovery_release, "HttpProjectCellOrchestratorClient", lambda: object())
     project = SimpleNamespace(owner_id=run.user_id, template="max_miniapp")

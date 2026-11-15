@@ -145,7 +145,8 @@ async def test_both_verification_sites_scope_only_sast_and_preserve_backend_view
         _is_edit=False, _max_seed_files={}, baseline=SourceBaseline(None, None, source),
         files={}, ids=GenerationIds(*(uuid4() for _ in range(5))),
         project_info=SimpleNamespace(template=template, slug="owned-test"),
-        runtime=GenerationRuntime(), plan=SimpleNamespace(), operations=SimpleNamespace(),
+        runtime=GenerationRuntime(), plan=SimpleNamespace(model="sonnet"),
+        operations=SimpleNamespace(),
     )
     assert len(backend_views) == len(sast_views) == 2
     assert all(view == source for view in backend_views)

@@ -449,14 +449,15 @@ async def execute_agent_turn(
         continuation_context.get("active_frame") if isinstance(continuation_context, dict) else None
     )
     # An already-issued request keeps its original wire protocol when the worker resumes.
-    _native_agent = (
-        frame.get("kind") == "native" if isinstance(frame, dict) else
-        (
-            plan.model == KIMI_PILOT_MODEL
-            or get_settings().use_native_agent
-            or directed_path is not None
+    _native_agent = False
+    if _agent_res is None or source_checkpoint is not None:
+        _native_agent = (
+            frame.get("kind") == "native" if isinstance(frame, dict) else (
+                plan.model == KIMI_PILOT_MODEL
+                or get_settings().use_native_agent
+                or directed_path is not None
+            )
         )
-    )
     allow_filtered_source_handoff = (
         _agent_res is None and allow_autonomous_source_repair
         and project_info.template == "max_miniapp"

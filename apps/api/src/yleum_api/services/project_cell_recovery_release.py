@@ -14,12 +14,12 @@ from yleum_api.models.project_cell import (
     ProjectCellOperation,
     ProjectCellWorkspace,
 )
+from yleum_api.services.generation import recovery_execution
 from yleum_api.services.generation.recovery_clock import next_dependency_check
 from yleum_api.services.generation.recovery_contract import RecoveryState, RecoveryStateV2
 from yleum_api.services.generation.recovery_execution import (
     RECOVERY_KEY,
     _owned_release_receipt,
-    _require_session_owner,
     recovery_state,
 )
 from yleum_api.services.generation.recovery_store import _locked_owner
@@ -157,7 +157,7 @@ def _record_release(
 async def resume_recovery_release(
     factory: async_sessionmaker[AsyncSession], run_id: UUID, state: RecoveryStateV2,
 ) -> None:
-    await _require_session_owner(run_id)
+    await recovery_execution._require_session_owner(run_id)
     async with factory() as session:
         owned = await _locked_release(session, run_id, state)
         if owned is None:
@@ -182,7 +182,7 @@ async def resume_recovery_release(
     await dispatch(
         factory, operation_id, HttpProjectCellOrchestratorClient(), expected_workspace_fence=fence,
     )
-    await _require_session_owner(run_id)
+    await recovery_execution._require_session_owner(run_id)
     async with factory() as session:
         owned = await _locked_release(session, run_id, state)
         if owned is None:
