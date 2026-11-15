@@ -565,9 +565,10 @@ async def run_agent_generation(
     async def save_source_checkpoint(result: agent_builder.AgentResult) -> None:
         # Keep all known paths even if the next snapshot or private save fails.
         _checkpoint_source_files.update(result.files)
-        if project_info.template != "max_miniapp" or _operations.snapshot_files is None:
+        snapshot_files = getattr(runtime.handle, "snapshot_files", None)
+        if project_info.template != "max_miniapp" or snapshot_files is None:
             return
-        candidate_files = await _operations.snapshot_files()
+        candidate_files = await snapshot_files()
         _checkpoint_source_files.update(candidate_files)
         if candidate_files == runtime.migration_baseline:
             return
@@ -580,21 +581,23 @@ async def run_agent_generation(
             "ok": True,
         })
 
-    progress_collector = getattr(runtime, "verified_progress", None)
-    _operations = AgentOperations(
-        response_recovery=getattr(runtime, "response_recovery", None),
-        take_verified_progress=(progress_collector.take if progress_collector else None),
-        snapshot_files=getattr(runtime.handle, "snapshot_files", None),
-        checkpoint=save_source_checkpoint,
-        continuation=continuation,
-        execute=bindings.execute,
-        emit=_agent_emit,
-        probe_runtime=bindings.probe_runtime,
-        probe_build=bindings.probe_build,
-        preview_url=bindings.preview_url,
-    )
+    def make_agent_operations() -> AgentOperations:
+        progress_collector = getattr(runtime, "verified_progress", None)
+        return AgentOperations(
+            response_recovery=getattr(runtime, "response_recovery", None),
+            take_verified_progress=(progress_collector.take if progress_collector else None),
+            snapshot_files=getattr(runtime.handle, "snapshot_files", None),
+            checkpoint=save_source_checkpoint,
+            continuation=continuation,
+            execute=bindings.execute,
+            emit=_agent_emit,
+            probe_runtime=bindings.probe_runtime,
+            probe_build=bindings.probe_build,
+            preview_url=bindings.preview_url,
+        )
+
     if completed_filtered_source_repair(continuation):
-        await checkpoint_before_rollback(_operations)
+        await checkpoint_before_rollback(make_agent_operations())
         await _finish_filtered_repair_message(
             factory, ids, NativeSourceRepairFiltered(), continuation,
         )
@@ -785,7 +788,7 @@ async def run_agent_generation(
     single_max_repair = uses_single_max_source_repair(runtime)
     autonomous_max_repair = uses_autonomous_max_source_repair(runtime)
     progress.defer_verification_errors = single_max_repair or autonomous_max_repair
-    _operations = replace(_operations, edit_deadline=edit_deadline)
+    _operations = replace(make_agent_operations(), edit_deadline=edit_deadline)
     if (
         project_info.template == "max_miniapp" and runtime.coordinator is not None
         and getattr(runtime.handle, "prove_restoration_adaptation", None) is None
