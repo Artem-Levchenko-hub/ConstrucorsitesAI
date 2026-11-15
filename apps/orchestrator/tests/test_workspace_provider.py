@@ -4,10 +4,11 @@ import ast
 import inspect
 from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from tests.test_cell_checkpoint import _make_fixture as _make_checkpoint_fixture
 from yleum_orchestrator.core import workspace_provider as workspace_provider_contract
@@ -18,6 +19,7 @@ from yleum_orchestrator.core.cell_resources import (
 from yleum_orchestrator.core.config import Settings, get_settings
 from yleum_orchestrator.core.workspace_provider import (
     ControlAction,
+    ReleaseEnvironmentExpectation,
     WorkspaceHandle,
     WorkspaceProviderUnavailable,
     WorkspaceResourceStatus,
@@ -562,7 +564,10 @@ def test_provider_dtos_are_immutable_and_control_dtos_are_minimal() -> None:
         action.kind = "wake"  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):
         result.state = "resources_ready"  # type: ignore[misc]
-    assert [field.name for field in fields(ControlAction)] == ["kind", "checkpoint_ref"]
+    assert [field.name for field in fields(ControlAction)] == [
+        "kind", "checkpoint_ref", "require_environment_proof",
+    ]
+    assert action.require_environment_proof is None
     assert [field.name for field in fields(WorkspaceResourceStatus)] == [
         "workspace_id",
         "state",
@@ -575,6 +580,37 @@ def test_provider_dtos_are_immutable_and_control_dtos_are_minimal() -> None:
         "has_redis",
         "lease_observation",
     ]
+
+
+@pytest.mark.parametrize(
+    "kind", ["release", "wake", "pause", "stop", "destroy", "restore", "reconcile"],
+)
+def test_environment_proof_is_scoped_to_generation_release(
+    kind: Literal["release", "wake", "pause", "stop", "destroy", "restore", "reconcile"],
+) -> None:
+    proof = ReleaseEnvironmentExpectation(source_sha256="a" * 64, environment_sha256="b" * 64)
+    checkpoint_ref = "accepted-1" if kind in {"pause", "stop", "restore"} else None
+    payload = {
+        "workspace_id": uuid4(),
+        "kind": kind,
+        "checkpoint_ref": checkpoint_ref,
+        "operation_id": uuid4(),
+        "fencing_epoch": 2,
+        "request_digest": "c" * 64,
+        "require_environment_proof": proof.model_dump(mode="json"),
+    }
+    if kind == "release":
+        request = workspace_schema.WorkspaceControlRequest.model_validate(payload)
+        action = ControlAction(kind=kind, require_environment_proof=proof)
+        assert request.require_environment_proof == action.require_environment_proof == proof
+        return
+
+    with pytest.raises(ValidationError, match="only be required for generation release"):
+        workspace_schema.WorkspaceControlRequest.model_validate(payload)
+    with pytest.raises(ValueError, match="only be required for generation release"):
+        ControlAction(
+            kind=kind, checkpoint_ref=checkpoint_ref, require_environment_proof=proof,
+        )
 
 
 async def test_resource_provider_delegates_without_legacy_provisioner(tmp_path: Path) -> None:
