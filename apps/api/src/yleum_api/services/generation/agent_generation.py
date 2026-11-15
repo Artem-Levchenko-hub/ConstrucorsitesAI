@@ -458,6 +458,10 @@ async def execute_agent_turn(
                 or directed_path is not None
             )
         )
+    authoritative_first_build = (
+        _native_agent and not _is_edit and runtime.coordinator is not None
+        and runtime.handle is not None and callable(snapshot_reader)
+    )
     allow_filtered_source_handoff = (
         _agent_res is None and allow_autonomous_source_repair
         and project_info.template == "max_miniapp"
@@ -484,13 +488,12 @@ async def execute_agent_turn(
         def _max_completion_check(
             written: Mapping[str, str], evidence: Mapping[str, int]
         ) -> str | None:
-            # Native supplies accumulated writes; legacy supplies an authoritative
-            # full snapshot. Do not resurrect its deleted baseline/seed paths.
-            effective_files = {
-                **_max_baseline_files,
-                **_max_seed_files,
-                **written,
-            } if _native_agent else dict(written)
+            # Coordinated native and legacy can check the actual current tree.
+            # Only a native caller without a snapshot needs the writes overlay.
+            effective_files = (
+                {**_max_baseline_files, **_max_seed_files, **written}
+                if _native_agent and not authoritative_first_build else written
+            )
             if runtime.coordinator is not None:
                 return max_source_completion_gap(
                     prompt_text,
@@ -548,13 +551,24 @@ async def execute_agent_turn(
         # as final verification while it still has a chance to repair this run.
         from yleum_api.services.generation.agent_runtime import guard_native_source_contract
 
-        _native_execute, _completion_check = await guard_native_source_contract(
+        _native_execute, guarded_completion = await guard_native_source_contract(
             runtime, ids, _native_execute, _completion_check,
             report_managed_build_gap=(
                 uses_single_max_source_repair(runtime)
                 and getattr(operations, "continuation", None) is None
             ),
         )
+        native_completion: agent_native._CompletionCheck = guarded_completion
+        if authoritative_first_build:
+            assert callable(snapshot_reader)
+            snapshot = snapshot_reader
+
+            async def check_current_source(
+                _written: Mapping[str, str], evidence: Mapping[str, int],
+            ) -> str | None:
+                return guarded_completion(await snapshot(), evidence)
+
+            native_completion = check_current_source
         _native_max_segments = (
             None
             if runtime.coordinator is not None
@@ -583,7 +597,7 @@ async def execute_agent_turn(
                 message_id=str(ids.assistant_message_id),
                 free=is_free,
                 emit=operations.emit,
-                completion_check=_completion_check,
+                completion_check=native_completion,
                 max_steps=plan.steps,
                 max_segments=_native_max_segments,
                 snapshot_files=snapshot_reader if callable(snapshot_reader) else None,

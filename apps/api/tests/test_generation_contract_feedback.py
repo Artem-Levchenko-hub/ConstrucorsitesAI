@@ -109,6 +109,70 @@ async def test_native_completion_uses_trusted_template_for_catalog_noop_guard(
         assert result.files == await handle.export_files()
 
 
+@pytest.mark.parametrize("deleted", [False, True])
+async def test_first_native_max_completion_uses_the_existing_workspace_tree(monkeypatch, deleted):
+    from inspect import isawaitable
+
+    from yleum_api.services import max_behavior_proof
+    from yleum_api.services.agent_builder import AgentResult
+    from yleum_api.services.generation import agent_generation
+    from yleum_api.services.generation.contracts import SourceBaseline
+    from yleum_api.services.max_generation_contract import max_source_completion_gap
+
+    from .test_max_generation_contract import _portable_crm_files
+    from .test_max_management_generation import connection_example
+    from .test_native_repair_context import managed_files
+
+    page = 'import {prepare} from "@/app/shared";\n' + connection_example(("catalog",)).replace(
+        "const {profile}", "prepare();\nconst {profile}", 1,
+    )
+    deleted_path = "src/app/shared.tsx"
+    current = {
+        **managed_files(page),
+        ".omnia/cell.json": _portable_crm_files()[".omnia/cell.json"],
+        "src/app/shared.ts": "export function prepare() { return true; }",
+    }
+    stale = {**current, deleted_path: 'export function prepare() { throw new Error("invalid"); }'}
+    brief = "Preserve the product"
+    assert max_source_completion_gap(brief, current, portable=True) is None
+    assert deleted_path in max_source_completion_gap(brief, stale, portable=True)
+    current = current if deleted else stale
+    monkeypatch.setattr(max_behavior_proof, "freeze_for_turn", AsyncMock())
+    monkeypatch.setattr(
+        agent_generation, "get_settings",
+        lambda: SimpleNamespace(use_native_agent=True, agent_progressive_continuation=True),
+    )
+    handle = SimpleNamespace(
+        snapshot_files=AsyncMock(side_effect=lambda: dict(current)),
+        is_portable=lambda: True,
+        export_files=AsyncMock(return_value={"src/app/page.tsx": page}),
+    )
+
+    async def run_native(**kwargs):
+        verdict = kwargs["completion_check"]({"src/app/page.tsx": page}, {})
+        gap = await verdict if isawaitable(verdict) else verdict
+        if deleted:
+            assert gap is None
+        else:
+            assert deleted_path in gap and "throw_statement" in gap
+        return AgentResult(done=gap is None, summary=gap or "done", files={}, steps=1)
+
+    monkeypatch.setattr(agent_native, "run_native_build", run_native)
+    result, _ = await agent_generation.execute_agent_turn(
+        _agent_res=None, _is_edit=False, _max_has_generated_snapshot=False,
+        _max_seed_files=stale, _max_shell_enabled=True,
+        baseline=SourceBaseline(None, None, {}),
+        ids=GenerationIds(*(uuid4() for _ in range(5))), is_free=False,
+        project_info=SimpleNamespace(template="max_miniapp"), prompt_text=brief,
+        runtime=GenerationRuntime(
+            handle=handle, coordinator=SimpleNamespace(source_edit_deadline=AsyncMock()),
+        ),
+        plan=SimpleNamespace(model="sonnet", stack_guide="", skills=None, user=brief, steps=2),
+        operations=SimpleNamespace(execute=AsyncMock(), emit=AsyncMock()),
+    )
+    assert result.done is deleted
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("portable", [False, True])
 async def test_live_integration_contract_reaches_final_native_prompt(portable):
