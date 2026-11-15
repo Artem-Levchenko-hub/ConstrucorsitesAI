@@ -3,6 +3,7 @@
 import asyncio
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -178,6 +179,154 @@ async def test_source_repair_uses_repeated_authoritative_completion_feedback(
     else:
         assert result.stop_reason == "managed_source_contract_unresolved"
         assert result.summary is current_gap and not result.done
+
+
+@pytest.mark.parametrize(
+    "replay", [
+        "same", "old_context", "unknown_version", "old_repair", "old_step", "old_segment",
+        "foreign_contract", "invalid_key", "changed_gap", "fixed",
+    ],
+)
+async def test_cold_source_repair_repeats_only_a_fresh_matching_rejection(
+    monkeypatch, coordinated, replay,
+):
+    from yleum_api.services.generation.recovery_contract import (
+        CheckpointRef,
+        ExecutionBudget,
+        ExecutionCursor,
+        IncompleteResponseBudget,
+    )
+    from yleum_api.services.generation.recovery_pipeline import (
+        SourceRepairEntry,
+        finish_source_repair,
+    )
+
+    calls = []
+    checks = []
+    context = {}
+    current = dict(BASELINE)
+    marker = "native_repair_last_rejection"
+    repair = SourceRepairEntry(
+        baseline=current, task="Fix existing app", edit_deadline=None, targeted=False,
+        response_budget=IncompleteResponseBudget(),
+    )
+    initial_context = {"completed": {"source_repair": repair.model_dump(mode="json")}}
+    gap = ManagedSourceGap(
+        "Managed source connection analysis cannot prove call or binding effects."
+        " Source location: src/lib/submit.ts:7:11; AST call_expression;"
+        " reason unproven_json_stringify; fingerprint aaaaaaaaaaaaaaaa."
+    )
+    changed_gap = ManagedSourceGap(str(gap).replace("aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"))
+    paid_response = turn(("build", {}), ("done", {"summary": "Complete"}))
+
+    class Restart(BaseException):
+        pass
+
+    class Continuation:
+        def __init__(self, saved=None):
+            self.context = deepcopy(initial_context if saved is None else saved)
+            self.state = SimpleNamespace(execution=ExecutionCursor(
+                stage="finalization", substep="checkpoint_ready", physical_state="active",
+                execution_context_ref=CheckpointRef(object_key="test-context", sha256="a" * 64),
+                budget=ExecutionBudget(repair_calls=1),
+            ))
+            self.replay = saved is not None
+
+        def restore_frame(self, kind):
+            assert kind == "native"
+            return self.context["active_frame"]["value"] if self.replay else None
+
+        async def provider(self, frame, invoke):
+            if self.replay:
+                assert frame == self.context["active_frame"]
+                self.replay = False
+                return deepcopy(paid_response)
+            response = await invoke()
+            if frame["value"]["step"] == 2:
+                context.update(deepcopy({**self.context, "active_frame": frame}))
+                raise Restart
+            return response
+
+        async def save(self, execution, *, context):
+            self.state.execution = execution
+            self.context = context
+
+    async def completion(_written, _evidence):
+        if current["src/app/page.tsx"] == "fixed":
+            checked = None
+        elif len(checks) and replay == "changed_gap":
+            checked = changed_gap
+        else:
+            checked = gap
+        checks.append(checked)
+        return checked
+
+    async def provider(*args, **kwargs):
+        calls.append(args[2])
+        if len(calls) == 1:
+            return turn(
+                ("write_file", {"path": "src/app/page.tsx", "content": "still invalid"}),
+                ("build", {}),
+            )
+        if len(calls) == 2:
+            return turn(("done", {"summary": "Complete"}))
+        if len(calls) == 3:
+            return paid_response
+        return turn(
+            ("write_file", {"path": "src/app/page.tsx", "content": "fixed"}),
+            ("build", {}),
+            ("done", {"summary": "Complete"}),
+        )
+
+    async def execute(action):
+        if action.name == "write_file":
+            current[action.path] = action.args["content"]
+        else:
+            assert action.name == "build"
+        return {"ok": True}
+
+    monkeypatch.setattr(agent_native, "_call_messages", provider)
+    options = dict(
+        system="MAX VERIFICATION OVERRIDE", task=repair.task,
+        execute=execute, portable_cell=True, initial_files=BASELINE,
+        completion_check=completion, max_steps=6, max_segments=1, source_repair=True,
+    )
+    with pytest.raises(Restart):
+        await agent_native.run_native_build(**options, continuation=Continuation())
+    assert checks == [gap]
+    assert marker not in context["active_frame"]["value"]
+
+    if replay == "old_context":
+        context["completed"].pop(marker, None)
+    elif replay in {"unknown_version", "old_repair", "old_step", "old_segment"}:
+        field = {
+            "unknown_version": "version", "old_repair": "repair_call", "old_step": "step",
+            "old_segment": "segment",
+        }[replay]
+        if marker in context["completed"]:
+            context["completed"][marker][field] = 20
+    elif replay in {"foreign_contract", "invalid_key"} and marker in context["completed"]:
+        field = "contract" if replay == "foreign_contract" else "key"
+        context["completed"][marker][field] = "f" * 64 if field == "contract" else "untrusted"
+    elif replay == "fixed":
+        current["src/app/page.tsx"] = "fixed"
+
+    cold = Continuation(context)
+    result = await agent_native.run_native_build(**options, continuation=cold)
+    if replay == "same":
+        assert result.stop_reason == "managed_source_contract_unresolved"
+        assert result.summary is gap and not result.done and not result.needs_finalization
+        assert len(calls) == 3 and checks == [gap, gap]
+    elif replay == "fixed":
+        assert result.done and len(calls) == 3 and checks == [gap, None]
+    else:
+        assert result.done and len(calls) == 4
+        assert checks == [gap, changed_gap if replay == "changed_gap" else gap, None]
+
+    # A finished repair cannot seed any later invocation.
+    await finish_source_repair(cold, result, repair.response_budget)
+    assert marker not in cold.context["completed"]
+    assert cold.context["active_frame"] is None
 
 
 async def test_green_fast_check_does_not_complete_unchanged_repair(monkeypatch, coordinated):

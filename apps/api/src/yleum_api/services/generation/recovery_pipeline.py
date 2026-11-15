@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
@@ -624,6 +625,68 @@ class SourceRepairEntry(BaseModel):
         return value
 
 
+_NATIVE_REPAIR_LAST_REJECTION = "native_repair_last_rejection"
+_NATIVE_REPAIR_KEY = re.compile(r"[0-9a-f]{64}")
+
+
+def _native_repair_position(
+    driver: ExecutionDriver, *, contract: str, step: int,
+) -> dict[str, int | str] | None:
+    context = getattr(driver, "context", None)
+    if not isinstance(context, dict):
+        return None
+    completed = context.get("completed")
+    repair = completed.get("source_repair") if isinstance(completed, dict) else None
+    outer = context.get("native_outer")
+    if type(repair) is not dict or repair.get("status") != "active" or type(outer) is not dict:
+        return None
+    segment = outer.get("segment")
+    repair_call = driver.state.execution.budget.repair_calls
+    if type(segment) is not int or segment < 1 or repair_call < 1:
+        return None
+    return {
+        "version": 1, "contract": contract, "segment": segment, "step": step,
+        "repair_call": repair_call,
+    }
+
+
+def restore_native_repair_rejection(
+    driver: ExecutionDriver, *, contract: str, step: int,
+) -> str | None:
+    """Read advisory history for the current authenticated frame."""
+    position = _native_repair_position(driver, contract=contract, step=step)
+    if position is None:
+        return None
+    raw = driver.context["completed"].get(_NATIVE_REPAIR_LAST_REJECTION)
+    if type(raw) is not dict or set(raw) != {*position, "key"}:
+        return None
+    if any(
+        type(raw[name]) is not type(value) or raw[name] != value
+        for name, value in position.items()
+    ):
+        return None
+    key = raw["key"]
+    return key if type(key) is str and _NATIVE_REPAIR_KEY.fullmatch(key) else None
+
+
+def stage_native_repair_rejection(
+    driver: ExecutionDriver, *, contract: str, step: int, key: str | None,
+) -> None:
+    position = _native_repair_position(driver, contract=contract, step=step)
+    if position is None:
+        return
+    existing = driver.context["completed"]
+    if key is None and _NATIVE_REPAIR_LAST_REJECTION not in existing:
+        return
+    completed = dict(existing)
+    if key is None:
+        completed.pop(_NATIVE_REPAIR_LAST_REJECTION)
+    else:
+        completed[_NATIVE_REPAIR_LAST_REJECTION] = {"key": key, **position}
+    # The next normal provider checkpoint saves this sibling with the exact frame.
+    driver.context = {**driver.context, "completed": completed}
+
+
 class FinalizationProgress(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
     version: Literal[1] = 1
@@ -701,19 +764,18 @@ async def prepare_source_repair(
         response_budget=response_budget,
     )
     budget = driver.state.execution.budget
+    completed = {
+        **driver.context["completed"],
+        "source_repair": entry.model_dump(mode="json"),
+    }
+    completed.pop(_NATIVE_REPAIR_LAST_REJECTION, None)
     await driver.save(
         driver.state.execution.model_copy(
             update={
                 "budget": budget.model_copy(update={"repair_calls": budget.repair_calls + 1}),
             }
         ),
-        context={
-            **driver.context,
-            "completed": {
-                **driver.context["completed"],
-                "source_repair": entry.model_dump(mode="json"),
-            },
-        },
+        context={**driver.context, "completed": completed},
     )
     return entry
 
@@ -746,6 +808,7 @@ async def finish_source_repair(
         },
     }
     context.pop("native_outer", None)
+    context["completed"].pop(_NATIVE_REPAIR_LAST_REJECTION, None)
     await driver.save(
         driver.state.execution.model_copy(
             update={

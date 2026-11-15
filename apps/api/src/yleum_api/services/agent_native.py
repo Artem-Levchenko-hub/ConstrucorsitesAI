@@ -1878,6 +1878,14 @@ async def _run_native_segment(
         if saved_frame.contract != contract or saved_frame.step >= effective_max_steps:
             raise RecoveryContractError("native continuation inputs or step budget changed")
         start_step = saved_frame.step
+        if source_repair and continuation is not None:
+            from yleum_api.services.generation.recovery_pipeline import (
+                restore_native_repair_rejection,
+            )
+
+            reported_managed_rejection = restore_native_repair_rejection(
+                continuation, contract=contract, step=start_step,
+            )
         convo = saved_frame.convo
         baseline_files, written = saved_frame.baseline_files, saved_frame.written
         repair_read_paths = set(saved_frame.repair_read_paths)
@@ -2515,6 +2523,15 @@ async def _run_native_segment(
                         # Defaults are for interpretation only. Replay must use
                         # the original persisted envelope byte-for-byte logically.
                         value = restored if restoring else frame.model_dump(mode="json")
+                        if not restoring and source_repair:
+                            from yleum_api.services.generation.recovery_pipeline import (
+                                stage_native_repair_rejection,
+                            )
+
+                            stage_native_repair_rejection(
+                                continuation, contract=contract, step=step,
+                                key=reported_managed_rejection,
+                            )
                         resp = await continuation.provider(
                             {"version": 1, "kind": "native", "value": value},
                             invoke,
