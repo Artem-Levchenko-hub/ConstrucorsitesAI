@@ -25,6 +25,11 @@ CONTEXT_KEYS = {
     "commerce_capture_sha256",
 }
 PARKED_CONTEXT_KEYS = {"version", "release_sha", "run_id"}
+ARCHIVE_ROOTS = (
+    ("apps", "api", "src"),
+    ("apps", "api", "data"),
+    ("apps", "api", "skills", "ui-ux-pro-max", "data"),
+)
 
 
 def require(condition: object) -> None:
@@ -91,12 +96,13 @@ def extract_source(payload: bytes, revision: str, root: Path) -> Path:
             require(member.name.rstrip("/") == str(path) and str(path) not in seen)
             seen.add(str(path))
             require(member.isdir() or member.isfile())
-            prefix = ("apps", "api", "src")
-            require(
-                path.parts[:3] == prefix
-                or member.isdir()
-                and path.parts in {("apps",), ("apps", "api")}
-            )
+            require(any(
+                path.parts[:len(prefix)] == prefix
+                or (member.isdir() and prefix[:len(path.parts)] == path.parts)
+                for prefix in ARCHIVE_ROOTS
+            ))
+            if member.isfile() and path.parts[:3] != ARCHIVE_ROOTS[0]:
+                require(path.suffix in {".csv", ".json"})
             require(0 <= member.size <= 8 * 1024 * 1024)
             total += member.size
             require(total <= MAX_ARCHIVE)

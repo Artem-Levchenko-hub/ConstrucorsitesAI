@@ -18,7 +18,8 @@
 #                         ingress + read-only gate → target migration/fence → обычный rollout
 #     --parked-source-run UUID
 #                         read-only проверка точного остановленного MAX run перед захватом ролей;
-#                         только для переезда на проверенный релиз восстановления
+#                         только для проверенного релиза восстановления; с --no-web допускает
+#                         --control-revision для исправления проверок того же выпуска
 #     --repair-window N   окно починки адаптации (RESTORATION_ADAPTATION_REPAIR_SECONDS), по умолчанию 3600:
 #                         пишется в .env платформы и сверяется в отрендеренном compose (защита от отката к умолчанию)
 #                         (compose и api берут её из docker-compose.yml / config.py)
@@ -50,6 +51,7 @@ CONTROL_SHA=""
 REPAIR_OVERRIDE=0
 GENERATION_WINDOW=""
 PARKED_SOURCE_RUN=""
+PARKED_CONTROL_RETRY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-web) WEB=0 ;;
@@ -70,7 +72,7 @@ done
 if [ -n "$PARKED_SOURCE_RUN" ]; then
   [[ "$PARKED_SOURCE_RUN" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
     && [ "$API" = 1 ] && [ "$BOOTSTRAP" = 0 ] \
-    && [ -z "$FINALIZE_NONCE$RESUME_NONCE$CONTROL_SHA" ] || {
+    && [ -z "$FINALIZE_NONCE$RESUME_NONCE" ] || {
       echo "--parked-source-run requires a canonical UUID and normal API rollout" >&2
       exit 2
     }
@@ -94,11 +96,16 @@ if [ -n "$FINALIZE_NONCE" ] || [ -n "$RESUME_NONCE" ] || [ -n "$CONTROL_SHA" ]; 
   if { [ -n "$FINALIZE_NONCE" ] && [ -z "$RESUME_NONCE" ] && [ "$WEB" = 0 ]; } \
     || { [ -n "$RESUME_NONCE" ] && [ -z "$FINALIZE_NONCE" ] && [ "$WEB" = 1 ]; }; then
     :
+  elif [ -n "$PARKED_SOURCE_RUN" ] && [ "$WEB" = 0 ] \
+    && [ -z "$FINALIZE_NONCE$RESUME_NONCE" ]; then
+    # An infra-only correction may retry the exact parked runtime without
+    # changing the already-owned SQL or ingress fence's revision.
+    PARKED_CONTROL_RETRY=1
   else
-    echo "choose finalize with --no-web, or resume with full API/web rollout" >&2; exit 2
+    echo "choose finalize, scoped parked retry with --no-web, or full owned resume" >&2; exit 2
   fi
-  [[ "$CONTROL_SHA" =~ ^[0-9a-f]{40}$ ]] \
-    && [[ "${FINALIZE_NONCE:-$RESUME_NONCE}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || {
+  [[ "$CONTROL_SHA" =~ ^[0-9a-f]{40}$ ]] && { [ -n "$PARKED_SOURCE_RUN" ] \
+    || [[ "${FINALIZE_NONCE:-$RESUME_NONCE}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; } || {
     echo "owned continuation requires a full control SHA and canonical existing owner UUID" >&2; exit 2;
   }
 fi
@@ -140,6 +147,20 @@ publication_drain() {
       | ssh max-core "ssh -o BatchMode=yes commerce 'sudo /opt/omnia/apps/orchestrator/.venv/bin/python -'"
   fi
 }
+release_api_archive() {
+  local paths=(apps/api/src)
+  if [ -n "${PARKED_SOURCE_RUN:-}" ]; then
+    paths+=(apps/api/data ':(glob)apps/api/skills/ui-ux-pro-max/data/**/*.csv')
+  fi
+  git -C "$REPO" archive --format=tar "$1" "${paths[@]}"
+}
+release_api_loader() {
+  local revision="$SHA"
+  if [ "${PARKED_CONTROL_RETRY:-0}" = 1 ]; then
+    revision="$CONTROL_SHA"
+  fi
+  git -C "$REPO" show "$revision:infra/release/generation-reader-resume.py" | base64 -w0
+}
 quiescence_gate() {
   database_quiescence \
     && publication_drain core && publication_drain commerce
@@ -165,8 +186,8 @@ parked_source_check() {
   ingress_drain check || return
   reader_control core verify-current --release "$API_RUNTIME_SHA" || return
   context=$(python3 -c 'import base64,json,sys; print(base64.b64encode(json.dumps({"version":1,"release_sha":sys.argv[1],"run_id":sys.argv[2]}).encode()).decode())' "$SHA" "$PARKED_SOURCE_RUN") || return
-  loader=$(git -C "$REPO" show "$SHA:infra/release/generation-reader-resume.py" | base64 -w0) || return
-  git -C "$REPO" archive --format=tar "$SHA" apps/api/src \
+  loader=$(release_api_loader) || return
+  release_api_archive "$SHA" \
     | api_maintenance -c "import base64; exec(compile(base64.b64decode(\"$loader\"), \"target-parked-source-check\", \"exec\"))" "$SHA" "$context" parked-source
 }
 
@@ -192,6 +213,14 @@ clear_finished_parked_scope() {
   done
   reader_control core verify-current --release "$SHA" || return
   ingress_drain clear-parked-source
+}
+
+require_parked_control_owner() {
+  [ "$1" = "$PARKED_SOURCE_RUN" ] && [ "$2" = 1 ] || {
+    echo "parked control retry requires the existing ingress owner and exact scope" >&2; return 75;
+  }
+  api_maintenance -m yleum_api.services.generation_deployment_drain status "$SHA" \
+    | python3 -c 'import json,sys; state=json.load(sys.stdin); sys.exit(0 if state.get("release_sha")==sys.argv[1] and state.get("bootstrap_readonly") is False else 75)' "$SHA"
 }
 
 reader_prepare_retry() {
@@ -251,10 +280,10 @@ for host, raw in zip(("core", "commerce"), sys.argv[3:], strict=True):
 print(base64.b64encode(json.dumps(result).encode()).decode())
 READER_CONTEXT
   ) || return
-  loader=$(git -C "$REPO" show "$SHA:infra/release/generation-reader-resume.py" | base64 -w0) || return
+  loader=$(release_api_loader) || return
   # New process + exact committed package before any app imports. Installed
   # image contributes dependencies only; import/schema incompatibility denies.
-  git -C "$REPO" archive --format=tar "$SHA" apps/api/src \
+  release_api_archive "$SHA" \
     | api_maintenance -c "import base64; exec(compile(base64.b64decode(\"$loader\"), \"target-reader-resume\", \"exec\"))" "$SHA" "$context" "${scope[@]}"
 }
 
@@ -606,6 +635,8 @@ control_preflight() {
   git -C "$REPO" diff --name-only --no-renames -z "$SHA" "$CONTROL_SHA" \
     | python3 -c 'import sys
 allowed = {b"infra/release/deploy-prod.sh", b"infra/release/generation-publication-drain.py",
+           b"infra/release/generation-reader-resume.py", b"infra/release/test_generation_reader_resume.py",
+           b"infra/release/test_api_maintenance_contract.py",
            b"infra/release/test_generation_reader_deploy.py", b"infra/release/test_machine_quiescence_contract.py",
            b"infra/release/test_owned_release_finalize_contract.py",
            b"infra/release/test_generation_physical_drain_contract.py",
@@ -894,9 +925,10 @@ if [ -n "$CONTROL_SHA" ]; then
   control_preflight
 fi
 if [ -n "$PARKED_SOURCE_RUN" ]; then
-  [ "$(git -C "$REPO" rev-parse HEAD)" = "$SHA" ] \
+  PARKED_DRIVER_SHA="${CONTROL_SHA:-$SHA}"
+  [ "$(git -C "$REPO" rev-parse HEAD)" = "$PARKED_DRIVER_SHA" ] \
     && [ -z "$(git -C "$REPO" status --porcelain --untracked-files=all)" ] \
-    && cmp -s "$REPO/infra/release/deploy-prod.sh" <(git -C "$REPO" show "$SHA:infra/release/deploy-prod.sh") \
+    && cmp -s "$REPO/infra/release/deploy-prod.sh" <(git -C "$REPO" show "$PARKED_DRIVER_SHA:infra/release/deploy-prod.sh") \
     && [ "$(cd "$REPO" && gh run list --workflow ci.yml --branch main --commit "$SHA" --limit 1 \
       --json headSha,status,conclusion --jq '.[0] | [.headSha,.status,.conclusion] | join(" ")')" = "$SHA completed success" ] || {
       echo "parked source requires exact clean pushed source and green main CI" >&2
@@ -933,6 +965,9 @@ print(scope or "-", int(state["ingress_active"]))
       say "завершённый релиз $SHORT: запись восстановления убрана"
       exit 0
     fi
+  fi
+  if [ "$PARKED_CONTROL_RETRY" = 1 ]; then
+    require_parked_control_owner "$scope" "$ingress_active" || exit 75
   fi
 fi
 if [ -n "$FINALIZE_NONCE" ]; then

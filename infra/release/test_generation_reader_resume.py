@@ -51,6 +51,8 @@ class ResumeSourceTests(unittest.TestCase):
             self.archive(revision="b" * 40),
             self.archive("../outside"),
             self.archive("apps/api/.env"),
+            self.archive("apps/api/data/sitecustomize.py"),
+            self.archive("apps/api/skills/ui-ux-pro-max/scripts/run.py"),
             self.archive("/absolute"),
             self.archive("apps/api/src/../outside"),
         ):
@@ -90,7 +92,7 @@ class ResumeSourceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.module.decode_context(base64.b64encode(raw.encode()).decode(), "a" * 40)
 
-    def launch(self, program, context, *mode):
+    def launch(self, program, context, *mode, assets=None):
         output = io.BytesIO()
         with tarfile.open(
             fileobj=output, mode="w", format=tarfile.PAX_FORMAT, pax_headers={"comment": "a" * 40}
@@ -101,11 +103,31 @@ class ResumeSourceTests(unittest.TestCase):
                 item = tarfile.TarInfo("apps/api/src/yleum_api/" + name)
                 item.size = len(data)
                 archive.addfile(item, io.BytesIO(data))
+            for name, data in (assets or {}).items():
+                item = tarfile.TarInfo(name)
+                item.size = len(data)
+                archive.addfile(item, io.BytesIO(data))
         return subprocess.run(
             [sys.executable, "-B", str(Path(__file__).with_name("generation-reader-resume.py")),
              "a" * 40, base64.b64encode(json.dumps(context).encode()).decode(), *mode],
             input=output.getvalue(), capture_output=True, timeout=10,
         )
+
+    def test_target_can_read_its_bundled_api_design_tables(self):
+        prefix = '''import json, sys
+from pathlib import Path
+api_root = Path(__file__).resolve().parents[3]
+assert (api_root / "skills/ui-ux-pro-max/data/typography.csv").read_text() == "fixture"
+assert (api_root / "data/design_patterns.json").read_text() == "fixture"
+context = json.load(sys.stdin)
+print(json.dumps(dict(context, basis="owned_release_capture", active=dict.fromkeys(
+    ["generations","operations","leases","restorations"], 0), drained=True)))
+'''
+        result = self.launch(prefix, self.context(), assets={
+            "apps/api/skills/ui-ux-pro-max/data/typography.csv": b"fixture",
+            "apps/api/data/design_patterns.json": b"fixture",
+        })
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_fresh_process_imports_only_archived_target_and_sanitizes_failure(self):
         prefix = '''import json, sys

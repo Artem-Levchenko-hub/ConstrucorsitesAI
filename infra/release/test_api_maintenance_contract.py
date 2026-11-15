@@ -562,6 +562,7 @@ class MaintenanceShellTests(unittest.TestCase):
         script += "git() { python3 -c " + shlex.quote(git_stub) + ' "$@"; }\n'
         capture = "import json,sys; print(json.dumps({'argv':sys.argv[1:],'stdin':sys.stdin.read()}))"
         script += "api_maintenance() { python3 -c " + shlex.quote(capture) + ' "$@"; }\n'
+        script += shell_function("release_api_archive") + shell_function("release_api_loader") + "\n"
         script += shell_function("reader_resume_check") + "\nreader_resume_check\n"
         result = self.execute(script)
         self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
@@ -573,6 +574,53 @@ class MaintenanceShellTests(unittest.TestCase):
         self.assertEqual(arguments[2], TARGET)
         context = json.loads(base64.b64decode(arguments[3], validate=True))
         self.assertEqual(context, {**owner, "core_capture_sha256": "c" * 64, "commerce_capture_sha256": "d" * 64})
+
+    def test_scoped_control_only_changes_the_loader_revision(self):
+        scope = "11111111-1111-4111-8111-111111111111"
+        control = "e" * 40
+        script = f"SHA={TARGET}\nCONTROL_SHA={control}\nREPO=/repo\nPARKED_CONTROL_RETRY=1\n"
+        script += f"API_RUNTIME_SHA={CURRENT}\nPARKED_SOURCE_RUN={scope}\n"
+        script += 'ingress_drain() { [ "$*" = check ]; }\n'
+        script += f'reader_control() {{ [ "$*" = "core verify-current --release {CURRENT}" ]; }}\n'
+        git_stub = (
+            "import sys\n"
+            f"if sys.argv[1:]==['-C','/repo','show','{control}:infra/release/generation-reader-resume.py']:\n"
+            " print('loader',end='')\n"
+            f"elif sys.argv[1:]==['-C','/repo','archive','--format=tar','{TARGET}','apps/api/src','apps/api/data',"
+            "':(glob)apps/api/skills/ui-ux-pro-max/data/**/*.csv']:\n"
+            f" print('{TARGET}',end='')\n"
+            "else: raise AssertionError('unexpected source request')\n"
+        )
+        script += "git() { python3 -c " + shlex.quote(git_stub) + ' "$@"; }\n'
+        capture = "import json,sys; print(json.dumps({'argv':sys.argv[1:],'stdin':sys.stdin.read()}))"
+        script += "api_maintenance() { python3 -c " + shlex.quote(capture) + ' "$@"; }\n'
+        script += shell_function("release_api_archive") + shell_function("release_api_loader") + "\n"
+        script += shell_function("parked_source_check") + "\nparked_source_check\n"
+        result = self.execute(script)
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+        decoded = json.loads(result.stdout)
+        self.assertEqual(decoded["stdin"], TARGET)
+        args = decoded["argv"]
+        self.assertIn(base64.b64encode(b"loader").decode(), args[1])
+        self.assertEqual(args[2], TARGET)
+        self.assertEqual(json.loads(base64.b64decode(args[3])), {
+            "version": 1, "release_sha": TARGET, "run_id": scope,
+        })
+        self.assertEqual(args[4:], ["parked-source"])
+
+    def test_scoped_control_retry_requires_both_existing_owners(self):
+        scope = "11111111-1111-4111-8111-111111111111"
+        for ingress, active, sql, accepted in (
+            (scope, 1, TARGET, True), (scope, 0, TARGET, False),
+            ("-", 1, TARGET, False), (scope, 1, CURRENT, False),
+        ):
+            with self.subTest(ingress=ingress, active=active, sql=sql):
+                script = f"SHA={TARGET}\nPARKED_SOURCE_RUN={scope}\n"
+                response = json.dumps({"release_sha": sql, "bootstrap_readonly": False})
+                script += f"api_maintenance() {{ printf %s {shlex.quote(response)}; }}\n"
+                script += shell_function("require_parked_control_owner")
+                script += f"\nrequire_parked_control_owner {ingress} {active}\n"
+                self.assertEqual(self.execute(script).returncode == 0, accepted)
 
     def test_current_reader_gate_and_target_captures_keep_distinct_revisions(self):
         script = f"SHA={TARGET}\nAPI_RUNTIME_SHA={CURRENT}\nREADER_RETRY=0\n"

@@ -198,7 +198,9 @@ class OwnedReleaseFinalizationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2, result.stderr)
 
     def test_resume_preflight_preserves_authority_before_any_mutation(self):
-        functions = self.function("resume_owned_preflight") + self.function("reader_resume_check")
+        functions = (self.function("resume_owned_preflight") + self.function("release_api_archive")
+                     + self.function("release_api_loader")
+                     + self.function("reader_resume_check"))
         for failure in ("", "ancestor", "ingress", "owner-core", "owner-commerce",
                         "capture-core", "capture-commerce", "capture-owner", "capture-hash", "sql"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temp:
@@ -548,6 +550,7 @@ SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 FINALIZE_NONCE=11111111-1111-4111-8111-111111111111
 CONTROL_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 PARKED_SOURCE_RUN=
+PARKED_CONTROL_RETRY=0
 SHORT=aaaaaaaa
 REPO=.
 API=1 WEB=0 GW=0 LEGAL= REPAIR=3600
@@ -587,6 +590,7 @@ FINALIZE_NONCE=
 RESUME_NONCE=11111111-1111-4111-8111-111111111111
 CONTROL_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 PARKED_SOURCE_RUN=
+PARKED_CONTROL_RETRY=0
 SHORT=aaaaaaaa
 REPO=.
 API=1 WEB=1 GW=0 LEGAL= REPAIR=3600 BOOTSTRAP=0
@@ -635,11 +639,15 @@ reader_before() { [ "$READER_RETRY" = 1 ]; record before; }
         publication = self.function("publication_drain")
         self.assertIn('gate_revision="${CONTROL_SHA:-$SHA}"', publication)
         self.assertIn('$gate_revision:infra/release/generation-publication-drain.py', publication)
-        for name in ("api_maintenance", "ingress_drain", "reader_control", "reader_resume_check", "reader_target"):
+        for name in ("api_maintenance", "ingress_drain", "reader_control", "reader_target"):
             with self.subTest(name=name):
                 helper = self.function(name)
                 self.assertNotIn("CONTROL_SHA", helper)
                 self.assertIn('$SHA:', helper)
+        resume = self.function("reader_resume_check")
+        self.assertIn('release_api_archive "$SHA"', resume)
+        self.assertIn('loader=$(release_api_loader)', resume)
+        self.assertNotIn("CONTROL_SHA", resume)
 
 
 class BillingRuntimeIdentityTests(unittest.TestCase):

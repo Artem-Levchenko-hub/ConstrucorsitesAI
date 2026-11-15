@@ -542,3 +542,16 @@ Retries recover that selection from root-owned state. The record survives the
 end of ingress and clears after SQL admission and both reader inhibits complete.
 Once these checks are installed on the serving revision, normal releases also
 recognize proven retired source checks as durable waits.
+
+If the checker itself fails before capturing readers, an infra-only correction
+can retry the same fully verified runtime and scope under the original fences.
+Use a clean checkout of the pushed control revision after its main CI passes.
+
+```sh
+infra/release/deploy-prod.sh "$FIX_SHA" --no-web --parked-source-run "$RUN_ID" \
+  --control-revision "$CONTROL_SHA"
+```
+
+The control revision supplies the checker and release driver. The runtime source,
+API data tables and fence ownership remain bound to `FIX_SHA`. A control checkout
+with runtime changes or a different parked scope is rejected.
