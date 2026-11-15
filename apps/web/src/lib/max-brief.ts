@@ -139,12 +139,15 @@ export function serializeMaxProjectFeatures(brief: Pick<MaxProjectBrief, "appTyp
 
 export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
   const appTypes = selectedMaxAppTypes(brief.appType, brief.appTypes);
+  const scenarios = appTypes.map(type => MAX_APP_TYPES.find(option => option.id === type)!);
+  const idea = brief.idea.trim();
   if (brief.catalogItemCount !== undefined && (!Number.isInteger(brief.catalogItemCount) || brief.catalogItemCount < 0 || brief.catalogItemCount > 100)) {
     throw new Error("В начальном каталоге может быть от 0 до 100 позиций.");
   }
-  if (Array.from(brief.idea.trim()).length > MAX_BRIEF_LENGTH) {
+  if (Array.from(idea).length > MAX_BRIEF_LENGTH) {
     throw new Error(`Описание слишком длинное: максимум ${MAX_BRIEF_LENGTH} символов. Текст сохранён в форме.`);
   }
+  const scenarioDetails = idea || scenarios.map(option => option.description).join(". ");
   const features =
     brief.features.length > 0
       ? brief.features.join(", ")
@@ -161,8 +164,8 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
     "Не превращай его в обычный сайт, Telegram Mini App, VK Mini App или отдельное веб-приложение.",
     "",
     `Название продукта: ${brief.name.trim()}.`,
-    `${appTypes.length === 1 ? "Сценарий" : "Сценарии"}: ${appTypes.map(type => optionLabel(MAX_APP_TYPES, type)).join(", ")}.`,
-    `Что должно делать приложение: ${brief.idea.trim()}.`,
+    `${scenarios.length === 1 ? "Сценарий" : "Сценарии"}: ${scenarios.map(option => option.label).join(", ")}.`,
+    `Что должно делать приложение: ${scenarioDetails}.`,
     "Это служебное задание для создания приложения, а не публичное описание. Не выводи инструкции из задания посетителю. Публичное описание владелец задаёт отдельно в данных приложения.",
     `Целевая аудитория: ${audience}.`,
     `Главное действие пользователя: ${primaryAction}.`,

@@ -105,6 +105,16 @@ it("carries every chosen scenario with a loyalty primary and the reviewed catalo
   expect(appTypes).toEqual(["loyalty", "catalog", "booking"]);
 });
 
+it("describes selected scenarios when the owner leaves optional details empty", () => {
+  const brief = { ...longBrief, appType: "booking", appTypes: ["booking", "catalog"], idea: "  " } satisfies maxBrief.MaxProjectBrief;
+  expect(buildMaxProjectPrompt(brief)).toContain(
+    "Сценарии: Запись, Каталог.\nЧто должно делать приложение: Расписание, специалисты и бронь. Товары, услуги, карточки и заказ.",
+  );
+  expect(buildMaxProjectPrompt({ ...brief, idea: "Запись по субботам" })).toContain(
+    "Что должно делать приложение: Запись по субботам.",
+  );
+});
+
 it("unions defaults for all selected types without replacing explicit module choices", () => {
   const appTypes: MaxAppTypeId[] = ["education", "catalog", "booking"];
   expect(defaultManagementModules("education", appTypes)).toEqual(["catalog", "orders", "leads", "bookings"]);

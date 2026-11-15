@@ -31,6 +31,7 @@ export function MaxProjectReview({
   style,
   brandColors,
 }: MaxProjectReviewProps) {
+  const description = idea.trim();
   const appTypeOptions = selectedMaxAppTypes(appType, appTypes)
     .map(type => MAX_APP_TYPES.find(item => item.id === type));
   const styleOption = MAX_STYLES.find(item => item.id === style);
@@ -40,10 +41,12 @@ export function MaxProjectReview({
       <header className="max-project-review__identity">
         <p className="max-project-review__eyebrow">Соберём мини-приложение для MAX</p>
         <h3>{name}</h3>
-        <p className="max-project-review__idea">
-          <span className="max-project-review__idea-label">Что оно делает</span>
-          {idea}
-        </p>
+        {description && (
+          <p className="max-project-review__idea">
+            <span className="max-project-review__idea-label">Что оно делает</span>
+            {description}
+          </p>
+        )}
       </header>
 
       <section className="max-project-review__action" aria-labelledby="max-review-primary-action">

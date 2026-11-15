@@ -105,10 +105,20 @@ it.each(["create", "empty-state", "ready-idea"])("opens the wizard directly from
   else await click(entrance === "create" ? "Создать приложение" : "Создать первое приложение");
   expect(document.querySelector("#max-project-name")).not.toBeNull();
   const name = document.querySelector<HTMLInputElement>("#max-project-name")!;
-  const idea = document.querySelector<HTMLTextAreaElement>("#max-project-idea")!;
+  const idea = document.querySelector<HTMLTextAreaElement>("#max-project-idea");
   expect(name.value).toBe(entrance === "ready-idea" ? "Кофейня" : "");
-  if (entrance === "ready-idea") expect(idea.value).toContain("предзаказ");
-  else expect(idea.value).toBe("");
+  if (entrance === "ready-idea") {
+    expect(idea?.value).toContain("предзаказ");
+    idea!.focus();
+    await change("#max-project-idea", "");
+    expect(document.querySelector("#max-project-idea")).toBe(idea);
+    expect(document.activeElement).toBe(idea);
+    expect(idea?.value).toBe("");
+    await change("#max-project-idea", "Показать любимые напитки");
+    expect(idea?.value).toBe("Показать любимые напитки");
+  } else {
+    expect(idea).toBeNull();
+  }
   expectNoTraining(); expectNoCreation();
 });
 
@@ -128,7 +138,7 @@ it("consumes the saved landing prompt once under StrictMode and does not create 
   await frames.flush();
   expect(document.querySelector("#max-project-idea")).toBeNull();
   await click("Создать приложение");
-  expect(document.querySelector<HTMLTextAreaElement>("#max-project-idea")?.value).toBe("");
+  expect(document.querySelector("#max-project-idea")).toBeNull();
   expectNoCreation();
 });
 
@@ -247,7 +257,7 @@ it("distinguishes loading, query failure, retry and a real empty workspace", asy
   expect(button("Создать первое приложение")).toBeDefined();
 });
 
-it("validates name and idea, retains answers through Back, and creates only after review", async () => {
+it("validates the name, retains optional details through Back, and creates only after review", async () => {
   await openWizard();
   const dialog = document.querySelector('[role="dialog"]')!;
   const describedText = () => document.getElementById(dialog.getAttribute("aria-describedby") ?? "")?.textContent;
@@ -255,12 +265,21 @@ it("validates name and idea, retains answers through Back, and creates only afte
   expect(dialog.textContent).not.toContain("Название и идея станут основой первой сборки");
   expect(dialog.querySelector("#max-project-name-hint")?.textContent).toBe("Не менее 2 символов");
   expect(dialog.querySelector("#max-project-name")?.getAttribute("aria-describedby")).toBe("max-project-name-hint");
+  expect(dialog.querySelector("fieldset > legend")?.textContent).toBe("Что пользователь сможет делать?");
+  const addDetails = button("Добавить детали");
+  expect(addDetails.getAttribute("aria-expanded")).toBe("false");
+  expect(document.getElementById(addDetails.getAttribute("aria-controls")!)?.hidden).toBe(true);
+  addDetails.focus();
+  await click("Добавить детали");
+  const idea = dialog.querySelector<HTMLTextAreaElement>("#max-project-idea")!;
+  expect(document.activeElement).toBe(idea);
+  expect(idea.required).toBe(false);
   expect(dialog.querySelector("#max-project-idea")?.getAttribute("placeholder")).toBe("Например, получать баллы, выбирать награды и оформлять заказ к выдаче");
   expect(dialog.querySelector("#max-project-idea")?.getAttribute("aria-describedby")).toBe("max-project-idea-limit");
   expect(button("Далее")?.disabled).toBe(true);
   await change("#max-project-name", "Кофе рядом");
   await change("#max-project-idea", "мало");
-  expect(button("Далее").disabled).toBe(true);
+  expect(button("Далее").disabled).toBe(false);
   await change("#max-project-idea", "Получать баллы и выбирать награды");
   await click("Далее");
   expect(document.activeElement?.textContent).toBe("Для кого приложение?");
@@ -270,6 +289,7 @@ it("validates name and idea, retains answers through Back, and creates only afte
   await click("Назад");
   expect(dialog.hasAttribute("aria-describedby")).toBe(false);
   expect(document.querySelector<HTMLInputElement>("#max-project-name")?.value).toBe("Кофе рядом");
+  expect(document.querySelector<HTMLTextAreaElement>("#max-project-idea")?.value).toBe("Получать баллы и выбирать награды");
   await click("Далее");
   expect(document.querySelector<HTMLInputElement>("#max-audience")?.value).toBe("Гости кофейни");
   await click("Далее");
@@ -301,8 +321,12 @@ it("keeps optional answers optional and locks duplicate submit and dismissal whi
   mocks.create.mockReturnValue(new Promise(() => {}));
   await openWizard();
   await change("#max-project-name", "Кофе рядом");
-  await change("#max-project-idea", "Получать баллы и выбирать награды");
+  expect(document.querySelector("#max-project-idea")).toBeNull();
+  expect(button("Далее").disabled).toBe(false);
   await click("Далее"); await click("Далее"); await click("Далее");
+  const review = document.querySelector('[aria-label="Сводка проекта"]');
+  expect(review?.querySelector(".max-project-review__facts")?.textContent).toContain("Лояльность");
+  expect(review?.textContent).not.toContain("Что оно делает");
   await act(async () => { button("Создать проект").click(); button("Создать проект").click(); });
   await settle(() => expect(mocks.create).toHaveBeenCalledTimes(1));
   expect(button("Создать проект").disabled).toBe(true);
@@ -315,6 +339,7 @@ it("keeps optional answers optional and locks duplicate submit and dismissal whi
 it("reviews prompt products, preserves manual edits through Back and creates the canonical catalog in one request", async () => {
   await openWizard();
   await change("#max-project-name", "Кофейня");
+  await click("Добавить детали");
   await change("#max-project-idea", "Создай кофейню в стиле брутализм, латте 300 ₽, капучино 200 ₽");
   await click("Далее"); await click("Далее"); await click("Далее");
   const titles = () => [...document.querySelectorAll<HTMLInputElement>('input[id$="-title"]')];
@@ -342,6 +367,7 @@ it("reviews prompt products, preserves manual edits through Back and creates the
 it("honors the owner's explicit empty catalog even when the brief contains priced products", async () => {
   await openWizard();
   await change("#max-project-name", "Кофейня");
+  await click("Добавить детали");
   await change("#max-project-idea", "Создай кофейню, латте 300 ₽, капучино 200 ₽");
   await click("Далее"); await click("Далее"); await click("Далее");
   await click("Начать с пустого каталога");
@@ -365,6 +391,7 @@ it("retains the reviewed empty-catalog decision after securely connecting a prov
   const token = "sk-" + "e".repeat(24);
   await openWizard();
   await change("#max-project-name", "Кофейня");
+  await click("Добавить детали");
   await change("#max-project-idea", `Кофейня, латте 300 ₽, капучино 200 ₽\nAITUNNEL token: "${token}"`);
   await click("Далее"); await click("Далее"); await click("Далее");
   await click("Начать с пустого каталога");
@@ -382,6 +409,7 @@ it("retains the reviewed empty-catalog decision after securely connecting a prov
 it("blocks an unnamed position and an overflowing proposal until the owner explicitly resolves it", async () => {
   await openWizard();
   await change("#max-project-name", "Каталог");
+  await click("Добавить детали");
   await change("#max-project-idea", Array.from({ length: 101 }, (_, index) => `Товар ${index + 1}: 300 ₽`).join("; "));
   await click("Далее"); await click("Далее"); await click("Далее");
   expect(button("Создать проект").disabled).toBe(true);
@@ -399,6 +427,7 @@ it("retains the review after a failed create so the same answers can be retried"
   mocks.create.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce(project);
   await openWizard();
   await change("#max-project-name", "Кофе рядом");
+  await click("Добавить детали");
   await change("#max-project-idea", "Получать баллы и выбирать награды");
   await click("Далее"); await click("Далее"); await click("Далее");
   await click("Создать проект");

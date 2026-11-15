@@ -31,30 +31,37 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
   const [step, setStep] = useState(0);
   const [pinnedFeature, setPinnedFeature] = useState<MaxFeature | null>(null);
   const [hoveredFeature, setHoveredFeature] = useState<MaxFeature | null>(null);
+  const [detailsRevealed, setDetailsRevealed] = useState(false);
   const previewedFeature = hoveredFeature ?? pinnedFeature;
   const [submitting, setSubmitting] = useState(false);
   const submitLock = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
+  const detailsField = useRef<HTMLTextAreaElement>(null);
   const busy = pending || submitting;
   const appTypes = selectedMaxAppTypes(values.appType, values.appTypes);
   const multipleTypes = values.appTypes !== undefined;
+  const customSelected = appTypes.includes("custom");
+  const showDetails = customSelected || detailsRevealed || values.idea.length > 0;
   const managementModules = newProjectManagementModules(values.appType, values.managementModules, values.appTypes);
   const length = Array.from(values.idea.trim()).length;
-  const ideaTooShort = length < 10;
+  const ideaTooShort = customSelected && length < 10;
   const ideaTooLong = length > MAX_BRIEF_LENGTH;
   const ready = values.name.trim().length > 1 && !ideaTooShort && !ideaTooLong;
 
   useEffect(() => { if (open) heading.current?.focus(); }, [step, open]);
+  useEffect(() => { if (detailsRevealed) detailsField.current?.focus(); }, [detailsRevealed]);
 
   function selectAppType(type: MaxAppTypeId) {
     if (!multipleTypes) {
       onChange({ appType: type });
       return;
     }
-    const removing = appTypes.includes(type);
-    if (removing && appTypes.length === 1) return;
-    const next = removing ? appTypes.filter(selected => selected !== type) : [...appTypes, type];
-    const defaults = removing ? [] : defaultManagementModules(type);
+    const selected = appTypes.includes(type);
+    if (selected && appTypes.length === 1) return;
+    const next = type === "custom" || customSelected
+      ? [type]
+      : selected ? appTypes.filter(current => current !== type) : [...appTypes, type];
+    const defaults = selected ? [] : defaultManagementModules(type);
     onChange({
       appType: next[0],
       appTypes: next,
@@ -113,23 +120,46 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
                 <Input id="max-project-name" value={values.name} onChange={(event) => onChange({ name: event.target.value })} placeholder="Например, Кофе рядом" maxLength={100} required aria-describedby="max-project-name-hint" />
                 <p id="max-project-name-hint" className="text-xs text-fg-secondary">Не менее 2 символов</p>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="max-project-idea">Что пользователь сможет делать?</Label>
-                <Textarea id="max-project-idea" value={values.idea} onChange={(event) => onChange({ idea: event.target.value })} placeholder="Например, получать баллы, выбирать награды и оформлять заказ к выдаче" className="min-h-28 resize-y" required aria-describedby="max-project-idea-limit" aria-invalid={ideaTooLong} />
-                <p id="max-project-idea-limit" className="text-xs text-fg-secondary">
-                  {length} / {MAX_BRIEF_LENGTH} символов
-                  {ideaTooShort && <span className="block">Не менее 10 символов</span>}
-                  {ideaTooLong && <span className="block">Сократите описание перед отправкой</span>}
-                </p>
-              </div>
               <fieldset>
-                <legend className="text-sm font-medium">Тип приложения</legend>
+                <legend className="text-sm font-medium">Что пользователь сможет делать?</legend>
                 {multipleTypes && <p className="max-wizard-note">Выберите хотя бы один</p>}
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {MAX_APP_TYPES.map(item => <button key={item.id} type="button" aria-pressed={appTypes.includes(item.id)} onClick={() => selectAppType(item.id)} className="max-wizard-option">
                     <span className="flex items-center justify-between gap-2 text-sm font-medium">{item.label}{appTypes.includes(item.id) && <Check className="size-4 text-accent" />}</span>
                     <span className="mt-1 block text-xs leading-5 text-fg-secondary">{item.description}</span>
                   </button>)}
+                </div>
+                {!showDetails && (
+                  <Button type="button" variant="outline" className="mt-3" aria-expanded={false}
+                    aria-controls="max-project-details" onClick={() => setDetailsRevealed(true)}>
+                    Добавить детали
+                  </Button>
+                )}
+                <div id="max-project-details" className="mt-3 space-y-2" hidden={!showDetails}>
+                  {showDetails && <>
+                    <Label htmlFor="max-project-idea">
+                      {customSelected ? "Опишите свою идею" : "Детали сценария (необязательно)"}
+                    </Label>
+                    <Textarea
+                      ref={detailsField}
+                      id="max-project-idea"
+                      value={values.idea}
+                      onChange={(event) => {
+                        setDetailsRevealed(true);
+                        onChange({ idea: event.target.value });
+                      }}
+                      placeholder="Например, получать баллы, выбирать награды и оформлять заказ к выдаче"
+                      className="min-h-28 resize-y"
+                      required={customSelected}
+                      aria-describedby="max-project-idea-limit"
+                      aria-invalid={ideaTooLong || (ideaTooShort && length > 0)}
+                    />
+                    <p id="max-project-idea-limit" className="text-xs text-fg-secondary">
+                      {length} / {MAX_BRIEF_LENGTH} символов
+                      {ideaTooShort && <span className="block">Не менее 10 символов</span>}
+                      {ideaTooLong && <span className="block">Сократите описание перед отправкой</span>}
+                    </p>
+                  </>}
                 </div>
               </fieldset>
             </>}

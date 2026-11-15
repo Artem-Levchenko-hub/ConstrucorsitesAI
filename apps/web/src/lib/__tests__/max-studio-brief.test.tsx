@@ -25,7 +25,7 @@ const button = (name: string) => [...document.querySelectorAll("button")].find(c
 async function click(name: string) { expect(button(name), name).toBeDefined(); await act(async () => button(name).click()); }
 
 function typeButton(name: string) {
-  const group = [...document.querySelectorAll("fieldset")].find(fieldset => fieldset.querySelector("legend")?.textContent === "Тип приложения")!;
+  const group = [...document.querySelectorAll("fieldset")].find(fieldset => fieldset.querySelector("legend")?.textContent === "Что пользователь сможет делать?")!;
   return [...group.querySelectorAll("button")].find(candidate => candidate.querySelector("span")?.textContent?.startsWith(name))!;
 }
 
@@ -55,6 +55,7 @@ it("transfers the entire pasted brief from creation to the chat starter", async 
     await act(async () => { root.render(<QueryClientProvider client={client}><MaxStudio email="qa@example.ru" /></QueryClientProvider>); });
     await act(async () => { await vi.waitFor(() => expect([...container.querySelectorAll("button")].some(b => b.textContent?.includes("Создать приложение"))).toBe(true)); });
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.includes("Создать приложение"))!.click(); });
+    await click("Добавить детали");
     const input = document.querySelector<HTMLTextAreaElement>("#max-project-idea")!;
     expect(input.maxLength).toBe(-1);
     await act(async () => { change(document.querySelector<HTMLInputElement>("#max-project-name")!, "Склад"); change(input, brief); });
@@ -134,6 +135,7 @@ it("opens the home wizard without a tutorial and creates one mixed app after con
     await click("Создать приложение");
     expect(document.querySelector("#max-project-name")).not.toBeNull();
     expectWizardStep(1);
+    await click("Добавить детали");
     await act(async () => {
       change(document.querySelector<HTMLInputElement>("#max-project-name")!, "Кофейня с записью");
       change(document.querySelector<HTMLTextAreaElement>("#max-project-idea")!, "Кофейня с баллами, каталогом и записью.\nЛатте — 300 ₽\nЧай — 150 ₽");
@@ -177,6 +179,7 @@ it("preserves explicit orders and bookings opt-outs for a mixed app through back
   const dispose = await renderStudio();
   try {
     await click("Создать приложение");
+    await click("Добавить детали");
     await act(async () => {
       change(document.querySelector<HTMLInputElement>("#max-project-name")!, "Клуб");
       change(document.querySelector<HTMLTextAreaElement>("#max-project-idea")!, "Бонусы, каталог и запись для клуба");
@@ -208,6 +211,7 @@ it("replaces the mixed draft with the selected ready idea without creating a pro
   const dispose = await renderStudio();
   try {
     await click("Создать приложение");
+    await click("Добавить детали");
     await act(async () => {
       change(document.querySelector<HTMLInputElement>("#max-project-name")!, "Клуб");
       change(document.querySelector<HTMLTextAreaElement>("#max-project-idea")!, "Бонусы, каталог и запись для клуба");
