@@ -2134,10 +2134,19 @@ class MaxFinalizationCoordinator:
             prepare = getattr(self.executor, "prepare_environment", None)
             if prepare is None or error.reason not in {"stopped", "missing", "prepare_pending"}:
                 raise
-            await prepare(error.workspace_revision, error.manifest_digest)
-            # One attempt only. The durable startup journal, not this stack,
-            # owns the physical effect budget across a cold continuation.
-            return await self._identity()
+            # The controller already verified this exact startup result under
+            # its workspace lock. Use it once, without caching future reads.
+            identity = await prepare(error.workspace_revision, error.manifest_digest)
+            if (
+                not isinstance(identity, ProofIdentity)
+                or identity.workspace_id != self.executor.workspace_id
+                or identity.generation_run_id != self.generation_run_id
+                or identity.fencing_epoch != self.executor.control_fencing_epoch
+                or identity.workspace_revision != error.workspace_revision
+                or identity.cell_manifest_digest != error.manifest_digest
+            ):
+                raise MaxFinalizationConflict("foreign prepared startup identity") from error
+            return identity
 
     async def _identity(self) -> ProofIdentity:
         assert self.executor.current_identity is not None

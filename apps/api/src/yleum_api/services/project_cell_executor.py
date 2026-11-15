@@ -662,7 +662,7 @@ class ProjectCellExecutorHandle:
     release: Callable[[], Awaitable[None]]
     refresh_snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None
     current_identity: Callable[[], Awaitable[ProofIdentity]] | None = None
-    prepare_environment: Callable[[str, str], Awaitable[None]] | None = None
+    prepare_environment: Callable[[str, str], Awaitable[ProofIdentity]] | None = None
     run_role: (
         Callable[[ProjectCellCommandRole, UUID], Awaitable[ProjectCellCommandObservation]] | None
     ) = None
@@ -1563,18 +1563,22 @@ async def maybe_create_project_cell_executor(
         last_identity = _proof_identity(identity)
         return last_identity
 
-    async def _prepare_environment(expected_revision: str, manifest_digest: str) -> None:
+    async def _prepare_environment(expected_revision: str, manifest_digest: str) -> ProofIdentity:
         if (restoration_adaptation or not _is_portable()
                 or expected_revision != workspace_revision):
             raise OrchestratorUnavailable("Owned startup source context is unavailable")
+        prepare_fence = fencing_epoch
         try:
-            await project_cell_prepare_environment(
+            identity = await project_cell_prepare_environment(
                 agent_workspace_id, project_id=project_id, owner_id=user_id,
-                generation_run_id=leased_run_id, fencing_epoch=fencing_epoch,
+                generation_run_id=leased_run_id, fencing_epoch=prepare_fence,
                 expected_revision=expected_revision, manifest_digest=manifest_digest,
             )
         except (OrchestratorBadRequest, OrchestratorUnavailable) as error:
             raise OrchestratorUnavailable("Owned environment startup requires recovery") from error
+        if prepare_fence != fencing_epoch or expected_revision != workspace_revision:
+            raise OrchestratorUnavailable("Owned startup source context changed during preparation")
+        return _proof_identity(identity, dispatch_fence=prepare_fence)
 
     async def _prove_environment_recovery(
         release_operation_id: UUID,

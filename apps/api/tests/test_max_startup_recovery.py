@@ -1,3 +1,4 @@
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4, uuid5
@@ -5,7 +6,8 @@ from uuid import uuid4, uuid5
 import pytest
 
 from yleum_api.services import orchestrator_client
-from yleum_api.services.max_finalization import MaxFinalizationCoordinator
+from yleum_api.services.max_finalization import MaxFinalizationConflict, MaxFinalizationCoordinator
+from yleum_api.services.project_cell_proofs import ProofIdentity
 
 
 def unavailable(reason="stopped"):
@@ -18,12 +20,18 @@ def unavailable(reason="stopped"):
 
 def coordinator(events):
     wid, run = uuid4(), uuid4()
-    identity = SimpleNamespace(workspace_id=wid, generation_run_id=run)
+    identity = ProofIdentity(
+        workspace_id=wid, generation_run_id=run, fencing_epoch=7,
+        workspace_revision="a" * 64, cell_manifest_digest="b" * 64, dependency_digest="c" * 64,
+        schema_data_digest="d" * 64, base_image_digest="e" * 64, toolchain_digest="e" * 64,
+        resource_profile_version="test", build_config_digest="f" * 64,
+    )
     result = SimpleNamespace(outcome="green")
     instance = object.__new__(MaxFinalizationCoordinator)
     instance.generation_run_id = run
     instance.executor = SimpleNamespace(
         workspace_id=wid,
+        control_fencing_epoch=7,
         prove_restoration_adaptation=None,
         current_identity=AsyncMock(side_effect=[unavailable(), identity]),
         prepare_environment=AsyncMock(),
@@ -39,6 +47,7 @@ def coordinator(events):
         assert events == ["reconciled", "failures_checked"]
         assert (revision, manifest) == ("a" * 64, "b" * 64)
         events.append("prepared")
+        return identity
 
     instance.executor.prepare_environment.side_effect = prepare
     instance._reconcile_tool_commands = reconciled
@@ -50,24 +59,63 @@ def coordinator(events):
     return instance, identity
 
 
-async def test_normal_fast_check_prepares_after_reconciliation_and_refreshes_identity():
+async def test_normal_fast_check_uses_owned_prepare_result_after_reconciliation():
     events = []
-    instance, _identity = coordinator(events)
+    instance, identity = coordinator(events)
     assert (await instance.fast_check()).outcome == "green"
     assert events == ["reconciled", "failures_checked", "prepared"]
-    assert instance.executor.current_identity.await_count == 2
+    instance.executor.current_identity.assert_awaited_once()
+    instance.executor.prepare_environment.assert_awaited_once_with(
+        identity.workspace_revision, identity.cell_manifest_digest,
+    )
+    instance._proof.assert_awaited_once_with(identity)
     instance._run_bootstrap.assert_awaited_once()
     instance._run_role_result.assert_awaited_once()
 
 
-async def test_second_unavailable_identity_is_fatal_not_a_prepare_loop():
+async def test_indeterminate_prepare_does_not_retry_or_authorize_proof():
     instance, _identity = coordinator([])
-    instance.executor.current_identity.side_effect = [unavailable(), unavailable()]
-    with pytest.raises(orchestrator_client.OrchestratorMachineInventoryUnavailable):
+    instance.executor.prepare_environment.side_effect = orchestrator_client.OrchestratorUnavailable(
+        "startup pending",
+    )
+    with pytest.raises(orchestrator_client.OrchestratorUnavailable, match="startup pending"):
         await instance.fast_check()
-    assert instance.executor.prepare_environment.await_count == 1
+    instance.executor.current_identity.assert_awaited_once()
+    instance.executor.prepare_environment.assert_awaited_once()
     instance._proof.assert_not_awaited()
     instance._run_bootstrap.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "changed", ["workspace", "run", "fence", "revision", "manifest", "missing"],
+)
+async def test_foreign_prepare_identity_does_not_authorize_proof(changed):
+    instance, identity = coordinator([])
+    candidate = {
+        "workspace": replace(identity, workspace_id=uuid4()),
+        "run": replace(identity, generation_run_id=uuid4()),
+        "fence": replace(identity, fencing_epoch=8),
+        "revision": replace(identity, workspace_revision="1" * 64),
+        "manifest": replace(identity, cell_manifest_digest="1" * 64),
+        "missing": None,
+    }[changed]
+    instance.executor.prepare_environment = AsyncMock(return_value=candidate)
+    with pytest.raises(MaxFinalizationConflict):
+        await instance.fast_check()
+    instance.executor.current_identity.assert_awaited_once()
+    instance._proof.assert_not_awaited()
+    instance._run_bootstrap.assert_not_awaited()
+    instance._run_role_result.assert_not_awaited()
+
+
+async def test_next_identity_read_is_fresh_after_prepare():
+    instance, prepared = coordinator(["reconciled", "failures_checked"])
+    live = replace(prepared, workspace_revision="1" * 64)
+    instance.executor.current_identity.side_effect = [unavailable(), live]
+    assert await instance._normal_fast_check_identity() == prepared
+    assert await instance._normal_fast_check_identity() == live
+    assert instance.executor.current_identity.await_count == 2
+    instance.executor.prepare_environment.assert_awaited_once()
 
 
 async def test_pending_reconciliation_failure_prevents_startup():

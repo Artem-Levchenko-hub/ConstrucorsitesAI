@@ -1662,14 +1662,27 @@ async def test_owned_prepare_callback_uses_current_source_and_never_dispatches_r
         assert workspace_id == harness.workspace_id
         assert kwargs["project_id"] == harness.project_id
         assert kwargs["generation_run_id"] == harness.run_id
+        assert kwargs["fencing_epoch"] == harness.handle.control_fencing_epoch
         calls.append(kwargs)
+        return project_cell_executor.ProjectCellWorkspaceIdentity(
+            workspace_revision=kwargs["expected_revision"],
+            cell_manifest_digest=kwargs["manifest_digest"],
+            dependency_digest="a" * 64, schema_data_digest="b" * 64,
+            environment_digest="1" * 64, build_config_digest="e" * 64,
+        )
 
     monkeypatch.setattr(project_cell_executor, "project_cell_prepare_environment", prepare)
     identity = await harness.handle.current_identity()
     assert harness.handle.prepare_environment is not None
-    await harness.handle.prepare_environment(
+    prepared = await harness.handle.prepare_environment(
         identity.workspace_revision, identity.cell_manifest_digest,
     )
+    assert prepared.workspace_id == harness.workspace_id
+    assert prepared.generation_run_id == harness.run_id
+    assert prepared.fencing_epoch == harness.handle.control_fencing_epoch
+    assert prepared.workspace_revision == identity.workspace_revision
+    assert prepared.cell_manifest_digest == identity.cell_manifest_digest
+    assert prepared.base_image_digest == prepared.toolchain_digest == "1" * 64
     assert len(calls) == 1
     assert harness.exec_calls == []
     with pytest.raises(OrchestratorUnavailable):
