@@ -20,6 +20,9 @@
 #                         read-only проверка точного остановленного MAX run перед захватом ролей;
 #                         только для проверенного релиза восстановления; с --no-web допускает
 #                         --control-revision для исправления проверок того же выпуска
+#     --expired-provider-scope FILE
+#                         закрыть один подтверждённый резерв до отправки в модели и выкатить
+#                         связанные исправления API и gateway; требуется --gateway --no-web
 #     --repair-window N   окно починки адаптации (RESTORATION_ADAPTATION_REPAIR_SECONDS), по умолчанию 3600:
 #                         пишется в .env платформы и сверяется в отрендеренном compose (защита от отката к умолчанию)
 #                         (compose и api берут её из docker-compose.yml / config.py)
@@ -52,6 +55,8 @@ REPAIR_OVERRIDE=0
 GENERATION_WINDOW=""
 PARKED_SOURCE_RUN=""
 PARKED_CONTROL_RETRY=0
+EXPIRED_SCOPE_PATH=""
+EXPIRED_SCOPE_DIGEST=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-web) WEB=0 ;;
@@ -62,6 +67,7 @@ while [ $# -gt 0 ]; do
     --gateway) GW=1 ;;
     --bootstrap-admission) BOOTSTRAP=1 ;;
     --parked-source-run) PARKED_SOURCE_RUN="${2:?}"; shift ;;
+    --expired-provider-scope) EXPIRED_SCOPE_PATH="${2:?}"; shift ;;
     --finalize-owned-release) FINALIZE_NONCE="${2:?}"; shift ;;
     --resume-owned-release) RESUME_NONCE="${2:?}"; shift ;;
     --control-revision) CONTROL_SHA="${2:?}"; shift ;;
@@ -116,6 +122,30 @@ fi
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "нужен полный 40-символьный sha, получено: $SHA" >&2; exit 2; }
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+if [ -n "$EXPIRED_SCOPE_PATH" ]; then
+  [ "$API" = 1 ] && [ "$WEB" = 0 ] && [ "$GW" = 1 ] && [ "$BOOTSTRAP" = 0 ] \
+    && [ -z "$PARKED_SOURCE_RUN$FINALIZE_NONCE$RESUME_NONCE$CONTROL_SHA$LEGAL$GENERATION_WINDOW" ] \
+    && [ "$REPAIR_OVERRIDE" = 0 ] || {
+    echo "expired provider scope requires --gateway --no-web without other release overrides" >&2; exit 2;
+  }
+  [ -f "$EXPIRED_SCOPE_PATH" ] && [ ! -L "$EXPIRED_SCOPE_PATH" ] \
+    && [ "$(wc -c < "$EXPIRED_SCOPE_PATH")" -le 8192 ] || {
+    echo "expired provider scope requires a bounded local file" >&2; exit 2;
+  }
+  EXPIRED_SCOPE_DATA=$(cat "$EXPIRED_SCOPE_PATH")
+  expiration=$(printf '%s' "$EXPIRED_SCOPE_DATA" \
+    | python3 "$REPO/infra/release/generation-expired-provider-images.py" scope "$SHA" \
+    | python3 -c '
+import json, re, sys
+from uuid import UUID
+d = json.load(sys.stdin)
+run, incumbent, digest = d["run_id"], d["reader_release_sha"], d["scope_sha256"]
+assert str(UUID(run)) == run and re.fullmatch("[0-9a-f]{40}", incumbent)
+assert re.fullmatch("[0-9a-f]{64}", digest)
+print(run, incumbent, digest)
+') || exit 75
+  read -r PARKED_SOURCE_RUN EXPIRED_INCUMBENT EXPIRED_SCOPE_DIGEST <<< "$expiration"
+fi
 RELEASE_DRIVER="${BASH_SOURCE[0]}"
 LOG="/tmp/omnia-build-${SHA:0:12}.log"
 SHORT="${SHA:0:8}"
@@ -130,9 +160,16 @@ api_maintenance() {
 }
 ingress_drain() {
   local scope=""
-  if { [ "$1" = begin ] || [ "$1" = clear-parked-source ]; } \
+  if { [ "$1" = begin ] || [ "$1" = clear-parked-source ] || [ "$1" = mark-expired-ending ]; } \
     && [ -n "${PARKED_SOURCE_RUN:-}" ]; then
     scope=" $PARKED_SOURCE_RUN"
+    if [ -n "${EXPIRED_SCOPE_DIGEST:-}" ]; then
+      scope="$scope $EXPIRED_SCOPE_DIGEST"
+    fi
+    if [ "$1" = mark-expired-ending ]; then
+      [[ "$READER_NONCE" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 75
+      scope="$scope $READER_NONCE"
+    fi
   fi
   git -C "$REPO" show "$SHA:infra/release/generation-ingress-drain.py" \
     | ssh max-core "sudo python3 - $1 $SHA$scope"
@@ -174,6 +211,8 @@ database_quiescence() {
     ingress_drain check || return
     git -C "$REPO" show "$SHA:apps/api/src/yleum_api/services/generation_deployment_drain.py" \
       | api_maintenance - bootstrap-check "$SHA"
+  elif [ -n "${EXPIRED_SCOPE_DIGEST:-}" ]; then
+    expired_provider_check settled
   elif [ -n "${PARKED_SOURCE_RUN:-}" ]; then
     parked_source_check
   else
@@ -189,6 +228,104 @@ parked_source_check() {
   loader=$(release_api_loader) || return
   release_api_archive "$SHA" \
     | api_maintenance -c "import base64; exec(compile(base64.b64decode(\"$loader\"), \"target-parked-source-check\", \"exec\"))" "$SHA" "$context" parked-source
+}
+
+expired_api_context() {
+  printf '%s' "$EXPIRED_SCOPE_DATA" | python3 -c '
+import base64, json, sys
+value = json.load(sys.stdin)["api"]
+mode, capture = sys.argv[1:]
+if mode in ("eligibility", "settled"):
+    value["mode"] = mode
+else:
+    del value["reader_release_sha"]
+    if mode == "resume":
+        owned = json.loads(base64.b64decode(capture, validate=True))
+        for key in ("owner_nonce", "core_capture_sha256", "commerce_capture_sha256"):
+            value[key] = owned[key]
+    else:
+        assert mode == "end" and not capture
+print(base64.b64encode(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).decode())
+' "$1" "${2:-}"
+}
+
+expired_provider_check() {
+  local context loader
+  ingress_drain check || return
+  reader_control core verify-current --release "$API_RUNTIME_SHA" || return
+  [ "$API_RUNTIME_SHA" = "$EXPIRED_INCUMBENT" ] || return
+  context=$(expired_api_context "$1") || return
+  loader=$(release_api_loader) || return
+  release_api_archive "$SHA" \
+    | api_maintenance -c "import base64; exec(compile(base64.b64decode(\"$loader\"), \"target-expired-provider-check\", \"exec\"))" "$SHA" "$context" expired-provider
+}
+
+expired_provider_images() {
+  local helper
+  helper=$(git -C "$REPO" show "$SHA:infra/release/generation-expired-provider-images.py" | base64 -w0) || return
+  printf '%s' "$EXPIRED_SCOPE_DATA" \
+    | ssh max-core "sudo -n python3 -c 'import base64; exec(compile(base64.b64decode(\"$helper\"), \"expired-provider-images\", \"exec\"))' '$1' '$SHA'"
+}
+
+expired_provider_preapply() {
+  publication_drain core && publication_drain commerce || return
+  if expired_provider_check settled >/dev/null; then
+    say "core: подтверждён ранее закрытый резерв"
+    return 0
+  fi
+  expired_provider_check eligibility || return
+  expired_provider_images migrate || return
+  expired_provider_check eligibility || return
+  publication_drain core && publication_drain commerce || return
+  say "закрываю подтверждённый резерв, для которого не было запроса к модели"
+  expired_provider_images seal || return
+  expired_provider_check settled
+}
+
+expired_provider_end() {
+  local context
+  context=$(expired_api_context end) || return
+  printf '%s' "$context" | base64 -d \
+    | api_maintenance -m yleum_api.services.generation_deployment_drain end-expired-provider "$SHA"
+}
+
+expired_provider_finish_open_ingress() {
+  local status host
+  [ "$API_RUNTIME_SHA" = "$SHA" ] || return 75
+  status=$(api_maintenance -m yleum_api.services.generation_deployment_drain status "$SHA" \
+    | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+owner = d["release_sha"]
+assert owner is None or (owner == sys.argv[1] and d["bootstrap_readonly"] is False)
+print("released" if owner is None else "owned")
+' "$SHA") || return
+  if [ "$status" = owned ]; then
+    reader_control core verify-current --release "$SHA" || return
+    for host in core commerce; do
+      reader_control "$host" verify-owner --release "$SHA" --owner-nonce "$READER_NONCE" || return
+    done
+    publication_drain core && publication_drain commerce || return
+    expired_provider_gateway_cutover || return
+    verify_billing_runtime || return
+    expired_provider_end || return
+  fi
+  for host in core commerce; do
+    reader_control "$host" clear --release "$SHA" --owner-nonce "$READER_NONCE" || return
+  done
+  reader_control core verify-current --release "$SHA" || return
+  ingress_drain clear-parked-source
+}
+
+expired_provider_gateway_cutover() {
+  local identity GW_PREVIOUS_CONTAINER_ID GW_PREVIOUS_IMAGE_ID
+  identity=$(printf '%s' "$EXPIRED_SCOPE_DATA" | python3 -c '
+import json, sys
+value = json.load(sys.stdin)["gateway_runtime"]
+print(value["container_id"], value["image_id"])
+') || return
+  read -r GW_PREVIOUS_CONTAINER_ID GW_PREVIOUS_IMAGE_ID <<< "$identity"
+  gateway_cutover_gate
 }
 
 reader_control() {
@@ -280,6 +417,10 @@ for host, raw in zip(("core", "commerce"), sys.argv[3:], strict=True):
 print(base64.b64encode(json.dumps(result).encode()).decode())
 READER_CONTEXT
   ) || return
+  if [ -n "${EXPIRED_SCOPE_DIGEST:-}" ]; then
+    context=$(expired_api_context resume "$context") || return
+    scope=(resume-expired-provider)
+  fi
   loader=$(release_api_loader) || return
   # New process + exact committed package before any app imports. Installed
   # image contributes dependencies only; import/schema incompatibility denies.
@@ -446,12 +587,16 @@ gateway_capture_identity() {
   }
 }
 gateway_cutover_gate() {
-  ssh max-core "python3 - '$GW_PREVIOUS_CONTAINER_ID' '$GW_PREVIOUS_IMAGE_ID'" <<'GATEWAY_CUTOVER_PY'
+  local staged=""
+  if [ -n "${EXPIRED_SCOPE_DIGEST:-}" ]; then
+    staged="$SHA"
+  fi
+  ssh max-core "python3 - '$GW_PREVIOUS_CONTAINER_ID' '$GW_PREVIOUS_IMAGE_ID' '$staged'" <<'GATEWAY_CUTOVER_PY'
 import json
 import subprocess
 import sys
 
-old_container, old_image = sys.argv[1:]
+old_container, old_image, staged = sys.argv[1:]
 format_metadata = ('{"id":{{json .Id}},"image":{{json .Image}},'
                    '"running":{{json .State.Running}},'
                    '"service":{{json (index .Config.Labels "com.docker.compose.service")}},'
@@ -465,6 +610,13 @@ def command(args, include_stderr=False, **kwargs):
 
 current = json.loads(command(['docker', 'inspect', 'yleum-prod-gw', '--format', format_metadata]))
 expected_image = command(['docker', 'image', 'inspect', 'omnia-gateway:prod', '--format', '{{.Id}}'])
+if staged:
+    artifact = json.loads(command(['docker', 'image', 'inspect', 'omnia-gateway:' + staged]))[0]
+    labels = artifact['Config']['Labels']
+    if (artifact['Id'] != expected_image
+            or labels.get('org.opencontainers.image.revision') != staged
+            or labels.get('ru.yleum.release.role') != 'gateway'):
+        raise RuntimeError("gateway differs from its staged release image; admission remains fenced")
 if not (current['running'] is True and current['id'] != old_container
         and current['image'] == expected_image
         and current['configured_image'] == 'omnia-gateway:prod'
@@ -905,6 +1057,12 @@ PY
   reader_control core verify-owner --release "$SHA" --owner-nonce "$READER_NONCE"
   reader_control commerce verify-owner --release "$SHA" --owner-nonce "$READER_NONCE"
   reader_target
+  if [ -n "${EXPIRED_SCOPE_DIGEST:-}" ]; then
+    ingress_drain mark-expired-ending
+    ingress_drain end
+    expired_provider_finish_open_ingress
+    return
+  fi
   ingress_drain end
   if [ -n "${PARKED_SOURCE_RUN:-}" ]; then
     api_maintenance -m yleum_api.services.generation_deployment_drain end-parked-source "$SHA" "$PARKED_SOURCE_RUN"
@@ -945,25 +1103,43 @@ API_RUNTIME_SHA=$(api_maintenance --describe-runtime)
 [[ "$API_RUNTIME_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "API runtime revision is unconfirmed" >&2; exit 75; }
 if [ "$API" = 1 ]; then
   scope_status=$(ingress_drain parked-source-scope | python3 -c '
-import json, sys
+import json, re, sys
 from uuid import UUID
 state = json.load(sys.stdin)
-assert type(state) is dict and set(state) == {"parked_source_run", "ingress_active"}
+assert type(state) is dict
+digest = state.pop("expired_provider_sha256", "-")
+nonce = state.pop("expired_provider_ending_nonce", "-")
+assert digest == "-" or re.fullmatch("[0-9a-f]{64}", digest)
+assert nonce == "-" or (digest != "-" and str(UUID(nonce)) == nonce and UUID(nonce).int)
+assert set(state) == {"parked_source_run", "ingress_active"}
 scope = state["parked_source_run"]
 assert scope is None or (type(scope) is str and str(UUID(scope)) == scope)
 assert type(state["ingress_active"]) is bool
-print(scope or "-", int(state["ingress_active"]))
+print(scope or "-", int(state["ingress_active"]), digest, nonce)
 ')
-  read -r scope ingress_active <<< "$scope_status"
+  read -r scope ingress_active saved_scope_digest ending_nonce <<< "$scope_status"
+  if [ "$saved_scope_digest" != "-" ] || { [ "$scope" != "-" ] && [ -n "${EXPIRED_SCOPE_DIGEST:-}" ]; }; then
+    [ "${EXPIRED_SCOPE_DIGEST:-}" = "$saved_scope_digest" ] || {
+      echo "existing ingress drain requires its original expired provider scope" >&2; exit 75;
+    }
+  fi
   if [ "$scope" != "-" ]; then
     [ -z "$PARKED_SOURCE_RUN" ] || [ "$PARKED_SOURCE_RUN" = "$scope" ] || {
       echo "existing ingress drain has another parked source scope" >&2; exit 75;
     }
     PARKED_SOURCE_RUN="$scope"
-    if [ "$ingress_active" = 0 ] && [ "$API_RUNTIME_SHA" = "$SHA" ] \
-      && clear_finished_parked_scope; then
-      say "завершённый релиз $SHORT: запись восстановления убрана"
-      exit 0
+    if [ "$ingress_active" = 0 ] && [ "$API_RUNTIME_SHA" = "$SHA" ]; then
+      if [ "$ending_nonce" != "-" ]; then
+        READER_NONCE="$ending_nonce"
+        expired_provider_finish_open_ingress
+        say "закрытие точного релиза $SHORT подтверждено"
+        exit 0
+      elif clear_finished_parked_scope; then
+        say "завершённый релиз $SHORT: запись восстановления убрана"
+        exit 0
+      elif [ "$saved_scope_digest" != "-" ]; then
+        echo "expired provider scope lacks its exact ending capture; refusing to reopen barriers" >&2; exit 75
+      fi
     fi
   fi
   if [ "$PARKED_CONTROL_RETRY" = 1 ]; then
@@ -981,6 +1157,15 @@ if [ -n "${RESUME_NONCE:-}" ]; then
 fi
 
 if [ "$API" = 1 ]; then
+  if [ -n "${EXPIRED_SCOPE_DIGEST:-}" ]; then
+    if [ "$API_RUNTIME_SHA" = "$EXPIRED_INCUMBENT" ]; then
+      say "core: готовлю точные образы API и gateway до закрытия ingress"
+      ssh max-core "git -C /opt/omnia fetch -q origin && git -C /opt/omnia merge-base --is-ancestor $SHA origin/main"
+      expired_provider_images stage
+    elif [ "$API_RUNTIME_SHA" != "$SHA" ] || [ "$saved_scope_digest" != "$EXPIRED_SCOPE_DIGEST" ]; then
+      echo "expired provider scope has an unexpected runtime revision" >&2; exit 75
+    fi
+  fi
   say "scoped ingress barrier: новые изменения проектов временно закрыты"
   ingress_drain begin
   # Recover only this persisted release owner, before asking old/mixed readers
@@ -997,6 +1182,11 @@ if [ "$API" = 1 ]; then
     exit 75
   }
   fi
+  if [ -n "${EXPIRED_SCOPE_DIGEST:-}" ] && [ "$READER_RETRY" = 0 ]; then
+    expired_provider_preapply || {
+      echo "expired provider settlement was not confirmed; admission remains fenced" >&2; exit 75;
+    }
+  fi
   drained=0
   for i in $(seq 1 180); do
     if quiescence_gate; then
@@ -1009,6 +1199,9 @@ if [ "$API" = 1 ]; then
     exit 75
   }
   reader_before
+  if [ -n "${EXPIRED_SCOPE_DIGEST:-}" ]; then
+    READER_RETRY=1
+  fi
 fi
 
 say "core: ff-merge + идентичность релиза в compose .env"
@@ -1054,6 +1247,10 @@ if legal:
 print(\"compose ok: yandex creds at api:\", bool(api.get(\"YANDEX_ID_CLIENT_SECRET\")), \"| repair window\", api.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\"), \"| generation window\", api.get(\"MAX_GENERATION_DEADLINE_SECONDS\"), \"| legal\", api.get(\"LEGAL_DOCUMENT_VERSION\"))
 '"
 
+if [ -n "${EXPIRED_SCOPE_DIGEST:-}" ]; then
+  say "core: проверяю подготовленные образы точной ревизии"
+  expired_provider_images verify-images
+else
 TARGETS=""; [ $API = 1 ] && TARGETS="api"; [ $WEB = 1 ] && TARGETS="$TARGETS web"; TARGETS="${TARGETS# }"
 say "core: сборка $TARGETS под nohup, опрос до готовности"
 # A fresh directory binds completion to this launch, including retries of the same SHA.
@@ -1074,6 +1271,7 @@ for i in $(seq 1 60); do
 done
 [ "$state" = built ] || { echo "сборка не уложилась в 30 минут"; exit 1; }
 ssh max-core "grep -E 'ERROR|error:' $LOG | tail -3 || true"
+fi
 
 if [ $API = 1 ]; then
 ingress_drain check
@@ -1112,8 +1310,12 @@ fi
 
 if [ $GW = 1 ]; then
   gateway_capture_identity
-  say "core: шлюз моделей (gateway) — сборка и перезапуск одного контейнера"
-  ssh max-core "set -euo pipefail; cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose -f docker-compose.yml -f docker-compose.hostdb.yml build gateway 2>&1 | { grep -E 'Built|ERROR|error' || true; } | tail -2; docker compose -f docker-compose.yml -f docker-compose.hostdb.yml up -d --no-build --no-deps --force-recreate gateway 2>&1 | { grep -E 'Started|Recreated|Error|error' || true; } | tail -2; for i in \$(seq 1 30); do s=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8101/health 2>/dev/null || true); [ \"\$s\" = 200 ] && { echo \"gateway health 200 с попытки \$i\"; break; }; sleep 2; done; docker inspect \$(docker inspect yleum-prod-gw >/dev/null 2>&1 && echo yleum-prod-gw || echo omnia-prod-gw) --format 'gateway image {{.Image}} started {{.State.StartedAt}}' | cut -c1-90"
+  local_gateway_build="docker compose -f docker-compose.yml -f docker-compose.hostdb.yml build gateway 2>&1 | { grep -E 'Built|ERROR|error' || true; } | tail -2"
+  if [ -n "${EXPIRED_SCOPE_DIGEST:-}" ]; then
+    local_gateway_build="docker tag omnia-gateway:$SHA omnia-gateway:prod"
+  fi
+  say "core: шлюз моделей (gateway) — подготовка образа и перезапуск одного контейнера"
+  ssh max-core "set -euo pipefail; cd /opt/omnia/apps/llm-gateway/deploy/full; $local_gateway_build; docker compose -f docker-compose.yml -f docker-compose.hostdb.yml up -d --no-build --no-deps --force-recreate gateway 2>&1 | { grep -E 'Started|Recreated|Error|error' || true; } | tail -2; for i in \$(seq 1 30); do s=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8101/health 2>/dev/null || true); [ \"\$s\" = 200 ] && { echo \"gateway health 200 с попытки \$i\"; break; }; sleep 2; done; docker inspect \$(docker inspect yleum-prod-gw >/dev/null 2>&1 && echo yleum-prod-gw || echo omnia-prod-gw) --format 'gateway image {{.Image}} started {{.State.StartedAt}}' | cut -c1-90"
 fi
 
 say "публичный health"

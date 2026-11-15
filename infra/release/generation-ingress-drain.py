@@ -133,33 +133,44 @@ def owned(release: str) -> dict[str, object]:
     return data
 
 
-def parked_source_scope(release: str) -> str | None:
+def parked_source_record(release: str) -> tuple[str | None, str | None]:
     path = STATE / (release + ".parked-source.json")
-    selected = None
+    selected = scope_digest = None
     if path.is_symlink():
         raise RuntimeError("parked source scope path is a symbolic link")
     if path.exists():
         value = json.loads(path.read_bytes())
         if (
             type(value) is not dict
-            or set(value) != {"release_sha", "run_id"} or value["release_sha"] != release
+            or set(value) not in ({"release_sha", "run_id"}, {"release_sha", "run_id", "expired_provider_sha256"})
+            or value["release_sha"] != release
             or type(value["run_id"]) is not str or str(UUID(value["run_id"])) != value["run_id"]
         ):
             raise RuntimeError("parked source scope is corrupt")
         selected = value["run_id"]
-    if (STATE / "active.json").exists() and owned(release).get("parked_source_run") != selected:
-        raise RuntimeError("parked source scope conflicts with the ingress barrier")
-    return selected
+        scope_digest = value.get("expired_provider_sha256")
+        if "expired_provider_sha256" in value and (
+            type(scope_digest) is not str or not re.fullmatch(r"[0-9a-f]{64}", scope_digest)
+        ):
+            raise RuntimeError("expired provider scope is corrupt")
+    if (STATE / "active.json").exists():
+        active = owned(release)
+        if (active.get("parked_source_run"), active.get("expired_provider_sha256")) != (selected, scope_digest):
+            raise RuntimeError("parked source scope conflicts with the ingress barrier")
+    return selected, scope_digest
 
 
-def begin(release: str, parked_source_run: str | None = None) -> None:
+def parked_source_scope(release: str) -> str | None:
+    return parked_source_record(release)[0]
+
+
+def begin(release: str, parked_source_run: str | None = None, scope_digest: str | None = None) -> None:
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
-    selected = parked_source_scope(release)
-    if selected is not None and selected != parked_source_run:
+    saved = parked_source_record(release)
+    requested = (parked_source_run, scope_digest)
+    if (saved[0] is not None or (STATE / "active.json").exists()) and saved != requested:
         raise RuntimeError("ingress drain has another parked source scope")
     if (STATE / "active.json").exists():
-        if selected != parked_source_run:
-            raise RuntimeError("ingress drain has another parked source scope")
         probe()
         return
     if MAP.exists():
@@ -170,11 +181,11 @@ def begin(release: str, parked_source_run: str | None = None) -> None:
     backup = STATE / (release + ".original.conf")
     if backup.exists() and backup.read_bytes() != source:
         raise RuntimeError("existing backup differs; do not overwrite it")
-    if parked_source_run is not None and selected is None:
-        write_atomic(
-            STATE / (release + ".parked-source.json"),
-            json.dumps({"release_sha": release, "run_id": parked_source_run}).encode(),
-        )
+    if parked_source_run is not None and saved[0] is None:
+        scope = {"release_sha": release, "run_id": parked_source_run}
+        if scope_digest is not None:
+            scope["expired_provider_sha256"] = scope_digest
+        write_atomic(STATE / (release + ".parked-source.json"), json.dumps(scope).encode())
     write_atomic(backup, source)
     write_atomic(MAP, MAP_BODY, 0o644)
     write_atomic(VHOST, blocked, mode)
@@ -192,10 +203,47 @@ def begin(release: str, parked_source_run: str | None = None) -> None:
     }
     if parked_source_run is not None:
         data["parked_source_run"] = parked_source_run
+    if scope_digest is not None:
+        data["expired_provider_sha256"] = scope_digest
     write_atomic(STATE / "active.json", json.dumps(data, sort_keys=True).encode())
     # From here onward errors retain the owned state and barrier. No EXIT cleanup.
     command("systemctl", "reload", "nginx")
     probe()
+
+
+def expired_ending_path(release: str) -> Path:
+    return STATE / (release + ".expired-provider-ending.json")
+
+
+def expired_ending_nonce(release: str, scope_digest: str | None) -> str | None:
+    path = expired_ending_path(release)
+    if path.is_symlink():
+        raise RuntimeError("expired-provider end marker is a symbolic link")
+    if not path.exists():
+        return None
+    data = json.loads(path.read_bytes())
+    if (
+        scope_digest is None or type(data) is not dict
+        or set(data) != {"release_sha", "scope_sha256", "owner_nonce"}
+        or data["release_sha"] != release or data["scope_sha256"] != scope_digest
+        or type(data["owner_nonce"]) is not str
+        or str(UUID(data["owner_nonce"])) != data["owner_nonce"]
+    ):
+        raise RuntimeError("expired-provider end marker is corrupt")
+    return data["owner_nonce"]
+
+
+def mark_expired_ending(release: str, run_id: str, scope_digest: str, nonce: str) -> None:
+    owned(release)
+    if parked_source_record(release) != (run_id, scope_digest):
+        raise RuntimeError("expired-provider end requires its original scope")
+    saved = expired_ending_nonce(release, scope_digest)
+    if saved is not None and saved != nonce:
+        raise RuntimeError("expired-provider end belongs to another reader capture")
+    if saved is None:
+        write_atomic(expired_ending_path(release), json.dumps({
+            "release_sha": release, "scope_sha256": scope_digest, "owner_nonce": nonce,
+        }).encode())
 
 
 def end(release: str) -> None:
@@ -221,33 +269,52 @@ def end(release: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "action", choices=("begin", "check", "end", "parked-source-scope", "clear-parked-source"),
+        "action", choices=("begin", "check", "end", "parked-source-scope", "clear-parked-source",
+                           "mark-expired-ending"),
     )
     parser.add_argument("release_sha")
     parser.add_argument("parked_source_run", nargs="?")
+    parser.add_argument("expired_provider_sha256", nargs="?")
+    parser.add_argument("owner_nonce", nargs="?")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.release_sha):
         parser.error("full release SHA required")
     selected = args.parked_source_run
     if selected is not None and (
-        args.action not in {"begin", "clear-parked-source"} or str(UUID(selected)) != selected
+        args.action not in {"begin", "clear-parked-source", "mark-expired-ending"} or str(UUID(selected)) != selected
     ):
         parser.error("expected a canonical parked source UUID")
-    if args.action == "begin":
-        begin(args.release_sha, selected)
+    scope_digest = args.expired_provider_sha256
+    if scope_digest is not None and (selected is None or not re.fullmatch(r"[0-9a-f]{64}", scope_digest)):
+        parser.error("expected the expired provider scope digest for the selected run")
+    if args.action == "mark-expired-ending":
+        if (selected is None or scope_digest is None or args.owner_nonce is None
+                or str(UUID(args.owner_nonce)) != args.owner_nonce or UUID(args.owner_nonce).int == 0):
+            parser.error("expected exact expired provider scope and reader capture")
+        mark_expired_ending(args.release_sha, selected, scope_digest, args.owner_nonce)
+    elif args.owner_nonce is not None:
+        parser.error("unexpected reader capture")
+    elif args.action == "begin":
+        begin(args.release_sha, selected, scope_digest)
     elif args.action == "end":
         end(args.release_sha)
     elif args.action == "parked-source-scope":
-        print(json.dumps({
-            "parked_source_run": parked_source_scope(args.release_sha),
-            "ingress_active": (STATE / "active.json").exists(),
-        }))
+        saved_run, saved_digest = parked_source_record(args.release_sha)
+        scope_status = {"parked_source_run": saved_run, "ingress_active": (STATE / "active.json").exists()}
+        if saved_digest is not None:
+            scope_status["expired_provider_sha256"] = saved_digest
+            nonce = expired_ending_nonce(args.release_sha, saved_digest)
+            if nonce is not None:
+                scope_status["expired_provider_ending_nonce"] = nonce
+        print(json.dumps(scope_status))
         raise SystemExit(0)
     elif args.action == "clear-parked-source":
         if (STATE / "active.json").exists() or selected is None:
             raise RuntimeError("parked source scope can only clear after ingress ends")
-        if parked_source_scope(args.release_sha) != selected:
+        if parked_source_record(args.release_sha) != (selected, scope_digest):
             raise RuntimeError("parked source scope cannot clear for a different run")
+        if expired_ending_nonce(args.release_sha, scope_digest) is not None:
+            expired_ending_path(args.release_sha).unlink()
         (STATE / (args.release_sha + ".parked-source.json")).unlink()
     else:
         owned(args.release_sha)

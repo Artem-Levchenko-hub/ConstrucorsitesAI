@@ -689,6 +689,36 @@ class CanonicalDeployContractTests(unittest.TestCase):
                 gate.begin(TARGET, selected)
                 self.assertEqual(gate.parked_source_scope(TARGET), selected)
 
+    def test_ingress_pins_the_expired_provider_envelope_across_its_end(self):
+        gate = load_source("test_ingress_expired_scope", "generation-ingress-drain.py")
+        run_id = "11111111-1111-4111-8111-111111111111"
+        digest = "a" * 64
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vhost = root / "vhost"
+            vhost.write_bytes(b"server { location /api/ { proxy_pass http://fixture; } }")
+            with patch.multiple(
+                gate, VHOST=vhost, MAP=root / "map", STATE=root / "state",
+                command=MagicMock(), probe=MagicMock(),
+            ):
+                gate.begin(TARGET, run_id, digest)
+                self.assertEqual(gate.parked_source_record(TARGET), (run_id, digest))
+                nonce = "33333333-3333-4333-8333-333333333333"
+                gate.mark_expired_ending(TARGET, run_id, digest, nonce)
+                gate.mark_expired_ending(TARGET, run_id, digest, nonce)
+                with self.assertRaisesRegex(RuntimeError, "another reader capture"):
+                    gate.mark_expired_ending(TARGET, run_id, digest, run_id)
+                for altered in (None, "b" * 64):
+                    with self.assertRaisesRegex(RuntimeError, "another parked source scope"):
+                        gate.begin(TARGET, run_id, altered)
+                gate.end(TARGET)
+                self.assertEqual(gate.expired_ending_nonce(TARGET, digest), nonce)
+                self.assertEqual(gate.parked_source_record(TARGET), (run_id, digest))
+                with self.assertRaisesRegex(RuntimeError, "another parked source scope"):
+                    gate.begin(TARGET, run_id)
+                gate.begin(TARGET, run_id, digest)
+                self.assertEqual(gate.parked_source_record(TARGET), (run_id, digest))
+
     def test_all_serving_api_python_calls_are_external_to_reader_cgroups(self):
         source = (HERE / "deploy-prod.sh").read_text(encoding="utf-8")
         # Gateway's independent retirement check deliberately retains Docker exec.

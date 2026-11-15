@@ -15,7 +15,10 @@ from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.project import Project
 from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from yleum_api.models.provider_call import ProviderCall
-from yleum_api.services.generation.provider_attempts import native_transcript_attempt_closed
+from yleum_api.services.generation.provider_attempts import (
+    expired_reservation_closed,
+    native_transcript_attempt_closed,
+)
 from yleum_api.services.generation.recovery_contract import (
     CheckpointRef,
     RecoveryStateV2,
@@ -55,7 +58,10 @@ async def _provider_stopped(session: AsyncSession, run: GenerationRun) -> bool:
         ):
             return False
         if attempt.provider_call_id is None:
-            if not await native_transcript_attempt_closed(session, attempt):
+            if not (
+                await native_transcript_attempt_closed(session, attempt)
+                or await expired_reservation_closed(session, attempt)
+            ):
                 return False
             continue
         call = await session.get(ProviderCall, attempt.provider_call_id)

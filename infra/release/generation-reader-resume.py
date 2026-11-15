@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -23,6 +24,14 @@ CONTEXT_KEYS = {
     "owner_nonce",
     "core_capture_sha256",
     "commerce_capture_sha256",
+}
+EXPIRED_SCOPE_KEYS = {
+    "version", "release_sha", "run_id", "attempt_id", "state_revision",
+    "context_sha256", "source_sha256", "clock_sha256",
+}
+EXPIRED_COMMANDS = {
+    "expired-provider": ("expired-provider-check", "expired_provider_reservation"),
+    "resume-expired-provider": ("resume-expired-provider-check", "owned_expired_provider_capture"),
 }
 PARKED_CONTEXT_KEYS = {"version", "release_sha", "run_id"}
 ARCHIVE_ROOTS = (
@@ -45,21 +54,54 @@ def unique_object(pairs: list[tuple[str, object]]) -> dict:
     return value
 
 
-def decode_context(encoded: str, revision: str) -> dict:
+def decode_release_context(encoded: str, revision: str) -> dict:
     require(re.fullmatch(r"[0-9a-f]{40}", revision) and len(encoded) <= 5500)
     raw = base64.b64decode(encoded, validate=True)
     require(len(raw) <= 4096)
     value = json.loads(raw, object_pairs_hook=unique_object)
-    require(type(value) is dict and set(value) == CONTEXT_KEYS)
+    require(type(value) is dict)
     require(
         type(value["version"]) is int
         and value["version"] == 1
         and value["release_sha"] == revision
     )
+    return value
+
+
+def validate_capture(value: dict) -> None:
     require(str(UUID(value["owner_nonce"])) == value["owner_nonce"])
     for key in ("core_capture_sha256", "commerce_capture_sha256"):
         require(
             isinstance(value[key], str) and re.fullmatch(r"[0-9a-f]{64}", value[key])
+        )
+
+
+
+def decode_context(encoded: str, revision: str) -> dict:
+    value = decode_release_context(encoded, revision)
+    require(set(value) == CONTEXT_KEYS)
+    validate_capture(value)
+    return value
+
+
+def decode_expired_context(encoded: str, revision: str, *, owned: bool) -> dict:
+    value = decode_release_context(encoded, revision)
+    required = (EXPIRED_SCOPE_KEYS | CONTEXT_KEYS if owned
+                else EXPIRED_SCOPE_KEYS | {"reader_release_sha", "mode"})
+    require(set(value) == required)
+    for key in ("run_id", "attempt_id"):
+        parsed = UUID(value[key])
+        require(parsed.int and str(parsed) == value[key])
+    require(type(value["state_revision"]) is int and value["state_revision"] >= 0)
+    for key in ("context_sha256", "source_sha256", "clock_sha256"):
+        require(isinstance(value[key], str) and re.fullmatch(r"[0-9a-f]{64}", value[key]))
+    if owned:
+        validate_capture(value)
+    else:
+        reader = value["reader_release_sha"]
+        require(
+            isinstance(reader, str) and reader != revision and re.fullmatch(r"[0-9a-f]{40}", reader)
+            and value["mode"] in ("eligibility", "settled")
         )
     return value
 
@@ -126,14 +168,19 @@ def extract_source(payload: bytes, revision: str, root: Path) -> Path:
 def main() -> int:
     require(len(sys.argv) in (3, 4, 5) and "yleum_api" not in sys.modules)
     revision, encoded = sys.argv[1:3]
-    parked = len(sys.argv) == 4
+    check = sys.argv[3] if len(sys.argv) == 4 else None
+    parked = check == "parked-source"
     scoped_resume = len(sys.argv) == 5
     extra: list[str] = []
-    if parked:
-        require(sys.argv[3] == "parked-source")
+    expired_basis = None
+    if check in EXPIRED_COMMANDS:
+        command, expired_basis = EXPIRED_COMMANDS[check]
+        context = decode_expired_context(encoded, revision, owned=check == "resume-expired-provider")
+    elif parked:
         context = decode_parked_context(encoded, revision)
         command = "parked-source-check"
     else:
+        require(check is None)
         context = decode_context(encoded, revision)
         command = "resume-check"
         if scoped_resume:
@@ -165,7 +212,22 @@ def main() -> int:
         require(len(output.getvalue()) <= 8192)
         result = json.loads(output.getvalue(), object_pairs_hook=unique_object)
         require(type(result) is dict and type(result.get("drained")) is bool)
-        if parked:
+        if expired_basis is not None:
+            mode = context.get("mode", "settled")
+            canonical = json.dumps(context, sort_keys=True, separators=(",", ":")).encode()
+            require(
+                set(result) == {"version", "release_sha", "mode", "basis", "scope_sha256",
+                                "active", "eligible", "drained"}
+                and type(result["version"]) is int
+                and result["version"] == 1
+                and result["release_sha"] == revision
+                and result["mode"] == mode
+                and result["basis"] == expired_basis
+                and result["scope_sha256"] == hashlib.sha256(canonical).hexdigest()
+                and type(result["eligible"]) is bool
+            )
+            selected = result["eligible"]
+        elif parked:
             require(
                 set(result) == {"version", "release_sha", "basis", "active",
                                 "selected_verified", "drained"}
@@ -191,9 +253,13 @@ def main() -> int:
             and set(counts) == {"generations", "operations", "leases", "restorations"}
         )
         require(all(type(count) is int and count >= 0 for count in counts.values()))
+        eligibility = expired_basis is not None and context.get("mode") == "eligibility"
+        if expired_basis is not None and selected:
+            expected = {"generations": int(eligibility), "operations": 0, "leases": 0, "restorations": 0}
+            require(counts == expected)
         require(
-            result["drained"] == (selected and not any(counts.values()))
-            and (code == 0) == result["drained"]
+            result["drained"] == (not eligibility and selected and not any(counts.values()))
+            and (code == 0) == (selected if eligibility else result["drained"])
         )
         print(json.dumps(result, sort_keys=True))
         return code

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Literal
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.db import get_pool
@@ -18,6 +21,9 @@ from yleum_gateway.services.generation_identity import (
 )
 
 NATIVE_TRANSCRIPT_REJECTED = "native_transcript_rejected"
+EXPIRED_BEFORE_DISPATCH = "expired_before_dispatch"
+_EXPIRY_RECEIPT_KIND = "gateway_expired_before_dispatch"
+_ADMISSION_LOCK = "yleum:generation:deployment-drain:v1"
 
 
 class AttemptConflict(GatewayError):
@@ -33,6 +39,404 @@ class AttemptAdmission:
     dispatch_token: UUID | None = None
     provider_call_id: UUID | None = None
     response_manifest_key: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ExpiredReservationScope:
+    identity: GenerationProviderIdentity
+    release_sha: str
+    state_revision: int
+    source_sha256: str
+
+
+def _record(value: Any) -> dict[str, Any]:
+    if isinstance(value, str):
+        value = json.loads(value)
+    if type(value) is not dict:
+        raise ValueError("invalid generation record")
+    return value
+
+
+def _release_matches(reply: dict[str, Any], workspace: UUID, fence: int) -> bool:
+    return (
+        (reply.get("workspace_id"), reply.get("fencing_epoch"), reply.get("state"))
+        == (str(workspace), fence, "resources_ready")
+        and type(reply["fencing_epoch"]) is int
+        and all(type(reply.get(key)) is bool for key in (
+            "has_workspace", "has_agent_home", "has_postgres", "has_redis",
+        ))
+    )
+
+
+async def _locked_parked_cursor(
+    conn: Any, scope: ExpiredReservationScope,
+) -> tuple[dict[str, Any], dict[str, Any], int, int, datetime]:
+    """Snapshot the selected parked owner under the existing admission fence."""
+    identity = scope.identity
+    if (
+        not re.fullmatch(r"[0-9a-f]{40}", scope.release_sha)
+        or not re.fullmatch(r"[0-9a-f]{64}", scope.source_sha256)
+        or type(scope.state_revision) is not int or scope.state_revision < 0
+        or not await conn.fetchval("SELECT pg_try_advisory_xact_lock(hashtext($1))", _ADMISSION_LOCK)
+        or await conn.fetchval(
+            "SELECT release_sha FROM deployment_drains WHERE scope='generation'",
+        ) != scope.release_sha
+        or not await conn.fetchval(
+            "SELECT pg_try_advisory_xact_lock(1195724366,$1)",
+            int.from_bytes(identity.run_id.bytes[-4:], "big", signed=True),
+        )
+    ):
+        raise ValueError("generation drain ownership is not confirmed")
+    owner = await conn.fetchrow(
+        "SELECT r.agent_state,p.current_snapshot_id FROM generation_runs r "
+        "JOIN projects p ON p.id=r.project_id WHERE r.id=$1 AND p.id=$2 "
+        "AND r.user_id=$3 AND p.owner_id=$3 AND r.prompt_hash=$4 AND r.status='running' "
+        "AND r.execution_backend='worker' AND r.response_mode IN ('build','edit') "
+        "AND p.template='max_miniapp' FOR UPDATE OF p,r NOWAIT",
+        identity.run_id, identity.project_id, identity.user_id, identity.prompt_hash,
+    )
+    if owner is None:
+        raise ValueError("generation run is not an owned parked MAX run")
+    agent = _record(owner["agent_state"])
+    state = _record(agent["recovery_v1"])
+    own = _record(state["identity"])
+    cursor = _record(state["execution"])
+    binding = _record(state["binding"])
+    snapshot = owner["current_snapshot_id"]
+    revision = state["state_revision"]
+    attempt_seq = state["attempt_seq"]
+    step = cursor["logical_step_seq"]
+    fence = binding["fencing_epoch"]
+    if (
+        "restoration_adaptation" in agent
+        or type(state["version"]) is not int or state["version"] != 3
+        or type(revision) is not int or revision != scope.state_revision
+        or type(attempt_seq) is not int or attempt_seq < 1
+        or state["phase"] != "needs_input" or state["next_check_at"] is not None
+        or state["unresolved_operation_ids"] != []
+        or (own["run_id"], own["project_id"], own["user_id"], own["prompt_hash"]) != (
+            str(identity.run_id), str(identity.project_id), str(identity.user_id), identity.prompt_hash,
+        )
+        or own["accepted_snapshot_id"] != (str(snapshot) if snapshot else None)
+        or cursor["stage"] != "finalization" or cursor["substep"] != "response_wait"
+        or cursor["physical_state"] != "released" or type(step) is not int or step < 1
+        or type(fence) is not int or fence < 1 or type(cursor["control_fencing_epoch"]) is not int
+        or cursor["control_fencing_epoch"] != fence + 1
+        or cursor["control_workspace_id"] != binding["workspace_id"]
+        or binding["source_sha256"] != scope.source_sha256
+        or set(binding) != {
+            "workspace_id", "fencing_epoch", "source_sha256", "schema_sha256", "environment_sha256",
+        }
+        or any(
+            not re.fullmatch(r"[0-9a-f]{64}", binding[key])
+            for key in ("schema_sha256", "environment_sha256")
+        )
+        or state["context_ref"] != cursor["execution_context_ref"]
+    ):
+        raise ValueError("generation parked scope changed")
+    for ref in (state["checkpoint"], state["context_ref"]):
+        if (
+            type(ref) is not dict or set(ref) != {"object_key", "sha256"}
+            or type(ref["object_key"]) is not str or not ref["object_key"]
+            or not re.fullmatch(r"[0-9a-f]{64}", ref["sha256"])
+        ):
+            raise ValueError("generation retained references are unconfirmed")
+    workspace = UUID(binding["workspace_id"])
+    release = await conn.fetchrow(
+        "SELECT o.result_payload,o.finished_at FROM project_cell_workspaces w "
+        "JOIN project_cell_operations o ON o.workspace_id=w.id "
+        "WHERE w.id=$1 AND w.project_id=$2 AND w.owner_id=$3 AND w.deleted_at IS NULL "
+        "AND w.generation_run_id IS NULL AND w.fencing_epoch=$4 AND o.id=$5 "
+        "AND o.generation_run_id=$6 AND o.kind='release' AND o.status='completed' "
+        "AND o.fencing_epoch=$4 AND o.finished_at IS NOT NULL FOR UPDATE OF w,o NOWAIT",
+        workspace, identity.project_id, identity.user_id, fence + 1,
+        UUID(cursor["release_operation_id"]), identity.run_id,
+    )
+    if release is None:
+        raise ValueError("current physical release is unconfirmed")
+    reply = _record(release["result_payload"])
+    if (
+        not _release_matches(reply, workspace, fence + 1)
+        or await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM project_cell_activity_leases "
+            "WHERE (workspace_id=$1 OR generation_run_id=$2) AND finished_at IS NULL)",
+            workspace, identity.run_id,
+        )
+    ):
+        raise ValueError("current physical release is unconfirmed")
+    return cursor, binding, step, attempt_seq, release["finished_at"]
+
+
+async def _prior_release(
+    conn: Any, identity: GenerationProviderIdentity, historical: dict[str, Any], *,
+    released_at: datetime,
+) -> datetime:
+    workspace = UUID(historical["workspace_id"])
+    fence = historical["fencing_epoch"] + 1
+    rows = await conn.fetch(
+        "SELECT result_payload,finished_at FROM project_cell_operations "
+        "WHERE workspace_id=$1 AND generation_run_id=$2 AND kind='release' "
+        "AND status='completed' AND fencing_epoch=$3 AND finished_at < $4 FOR UPDATE NOWAIT",
+        workspace, identity.run_id, fence, released_at,
+    )
+    if len(rows) != 1 or not _release_matches(_record(rows[0]["result_payload"]), workspace, fence):
+        raise ValueError("historic physical release is unconfirmed")
+    finished: datetime = rows[0]["finished_at"]
+    return finished
+
+
+def _record_sha(value: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False,
+    ).encode()).hexdigest()
+
+
+def _hex_digest(value: object) -> bool:
+    return type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+async def _confirmed_later_commands(
+    conn: Any, rows: list[Any], identity: GenerationProviderIdentity, binding: dict[str, Any],
+    *, step: int, root_attempt: int, attempt_seq: int, released_at: datetime,
+    previous_release_at: datetime | None,
+) -> None:
+    if [row["effect_ordinal"] for row in rows] != [2, 3]:
+        raise ValueError("provider step includes unrecognized effects")
+    roles = (("bootstrap", "prepare", "max-platform-bootstrap-v2"), ("fast_check", "fast_check", "v1"))
+    run, workspace = identity.run_id, UUID(binding["workspace_id"])
+    source, fence = binding["source_sha256"], binding["fencing_epoch"]
+    for row, (role, phase, contract) in zip(rows, roles, strict=True):
+        operation = row["operation_id"]
+        tool_call = f"role:{operation}"
+        effect = uuid5(uuid5(run, f"recovery-tool-v1:{step}:{tool_call}"), "physical:0")
+        if (
+            (row["run_id"], row["project_id"], row["user_id"])
+            != (run, identity.project_id, identity.user_id)
+            or row["logical_step_seq"] != step or row["payload_version"] != 1
+            or not root_attempt < row["attempt_seq"] <= attempt_seq
+            or row["kind"] != "tool" or row["state"] != "confirmed"
+            or row["provider_attempt_id"] is not None or row["parent_effect_id"] is not None
+            or row["checkpoint_ref"] is not None or operation is None
+            or row["tool_call_id"] != tool_call or row["effect_id"] != effect
+            or not _hex_digest(row["input_digest"])
+        ):
+            raise ValueError("later command ownership conflicts")
+        pre, post, receipt = (
+            _record(row[key]) for key in ("pre_binding", "post_binding", "receipt_ref")
+        )
+        activity = _record(pre["activity"])
+        reference = _record(pre["context_ref"])
+        proof = activity["proof_key"]
+        request = pre["request_sha256"]
+        volume = receipt["physical_volume"]
+        volume_identity = receipt["physical_volume_identity"]
+        if (
+            type(pre["version"]) is not int or type(pre["fencing_epoch"]) is not int
+            or pre != {
+                "version": 1, "kind": "command_v1", "workspace_id": str(workspace),
+                "fencing_epoch": fence, "workspace_revision": source,
+                "request_sha256": request, "context_ref": reference, "context_binding": binding,
+                "activity": {"operation_id": str(operation), "proof_key": proof, "phase": phase},
+            }
+            or set(reference) != {"object_key", "sha256"}
+            or type(reference["object_key"]) is not str or not reference["object_key"]
+            or not all(_hex_digest(field) for field in (
+                reference["sha256"], proof, request, volume_identity, receipt["response_sha256"],
+            ))
+            or operation != uuid5(run, f"command:{workspace}:{fence}:{proof}:{role}:{contract}")
+            or type(volume) is not str or not volume.strip()
+            or type(receipt["version"]) is not int
+            or type(receipt["dispatch_fencing_epoch"]) is not int
+            or receipt != {
+                "version": 1, "operation_id": str(operation), "workspace_id": str(workspace),
+                "project_id": str(identity.project_id), "owner_id": str(identity.user_id),
+                "generation_run_id": str(run), "dispatch_fencing_epoch": fence,
+                "physical_volume": volume, "physical_volume_identity": volume_identity,
+                "request_sha256": request, "before_revision": source, "after_revision": source,
+                "response_sha256": receipt["response_sha256"],
+            }
+            or row["receipt_sha256"] != _record_sha(receipt)
+            or post != {"workspace_revision": source, "physical_volume_identity": volume_identity}
+        ):
+            raise ValueError("later terminal command evidence conflicts")
+        proofs = await conn.fetch(
+            "SELECT r.id FROM project_cell_activity_leases l "
+            "JOIN project_cell_proofs q ON q.workspace_id=l.workspace_id "
+            "AND q.generation_run_id=l.generation_run_id AND q.fencing_epoch=l.fencing_epoch "
+            "AND q.proof_key=l.proof_key "
+            "JOIN project_cell_proof_results r ON r.operation_id=l.operation_id "
+            "AND r.workspace_id=l.workspace_id "
+            "JOIN project_cell_proofs p ON p.id=r.proof_id AND p.workspace_id=l.workspace_id "
+            "AND p.generation_run_id=l.generation_run_id AND p.fencing_epoch=l.fencing_epoch "
+            "WHERE l.operation_id=$1 AND l.workspace_id=$2 AND l.generation_run_id=$3 "
+            "AND l.fencing_epoch=$4 AND l.proof_key=$5 AND l.phase=$6 "
+            "AND l.kind='command' AND l.state='completed' "
+            "AND l.finished_at BETWEEN l.started_at AND $7 "
+            "AND r.dimension=$8 AND r.outcome='green' AND r.artifact_ref IS NULL "
+            "AND r.created_at <= $7 AND ($12::timestamptz IS NULL OR l.started_at >= $12) "
+            "AND q.workspace_revision=$9 AND p.workspace_revision=$9 "
+            "AND q.schema_data_digest=$10 AND p.schema_data_digest=$10 "
+            "AND q.base_image_digest=$11 AND q.toolchain_digest=$11 "
+            "AND p.base_image_digest=$11 AND p.toolchain_digest=$11 "
+            "FOR UPDATE OF l,q,r,p NOWAIT",
+            operation, workspace, run, fence, proof, phase, released_at, role,
+            source, binding["schema_sha256"], binding["environment_sha256"], previous_release_at,
+        )
+        if len(proofs) != 1:
+            raise ValueError("later command has no owned terminal proof")
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM generation_recovery_effects "
+        "WHERE parent_effect_id=ANY($1::uuid[]))", [row["effect_id"] for row in rows],
+    ):
+        raise ValueError("later command is not a terminal independent effect")
+
+
+async def close_expired_before_dispatch(scope: ExpiredReservationScope) -> dict[str, Any]:
+    """Maintenance only. Atomically prevent any future provider dispatch for this attempt.
+
+    The Gateway dispatch, reservation and response admission paths serialize on
+    the attempt row. Neither local wire intent nor its age proves no charge.
+    """
+    identity = scope.identity
+    try:
+        async with get_pool().acquire() as conn, conn.transaction():
+            cursor, binding, step, attempt_seq, released_at = await _locked_parked_cursor(conn, scope)
+            root_id = uuid5(identity.run_id, f"recovery-provider-v1:{step}")
+            wire_id = uuid5(root_id, "wire-v1:0:0")
+            if (
+                cursor["provider_effect_id"] != str(root_id)
+                or cursor["pending_effect_id"] != str(root_id)
+                or identity.attempt_id != uuid5(root_id, "provider-attempt-v1")
+            ):
+                raise ValueError("provider cursor changed")
+            attempt = await _owned(conn, identity.attempt_id, nowait=True)
+            if (
+                not matches(attempt, identity) or attempt["provider_call_id"] is not None
+                or attempt["response_manifest_key"] is not None
+                or attempt["response_sha256"] is not None or attempt["parent_attempt_id"] is not None
+                or await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM generation_responses WHERE attempt_id=$1) OR "
+                    "EXISTS(SELECT 1 FROM generation_provider_attempts WHERE parent_attempt_id=$1) "
+                    "OR EXISTS(SELECT 1 FROM provider_calls WHERE run_id=$2 AND created_at >= $3)",
+                    identity.attempt_id, identity.run_id, attempt["created_at"],
+                )
+            ):
+                raise ValueError("provider attempt already has a call or response admission")
+            effects = await conn.fetch(
+                "SELECT * FROM generation_recovery_effects WHERE "
+                "(run_id=$1 AND logical_step_seq=$2) OR parent_effect_id=$3 "
+                "OR parent_effect_id=$4 ORDER BY effect_ordinal FOR UPDATE NOWAIT",
+                identity.run_id, step, root_id, wire_id,
+            )
+            if [row["effect_id"] for row in effects[:2]] != [root_id, wire_id]:
+                raise ValueError("provider effect has additional or missing work")
+            root, wire = provider_effects = effects[:2]
+            later = effects[2:]
+            if (
+                any(
+                    (row["run_id"], row["project_id"], row["user_id"], row["input_digest"])
+                    != (identity.run_id, identity.project_id, identity.user_id, identity.request_sha256)
+                    or row["logical_step_seq"] != step or row["payload_version"] != 1
+                    or row["post_binding"] is not None or row["operation_id"] is not None
+                    or row["tool_call_id"] is not None
+                    for row in provider_effects
+                )
+                or root["kind"] != "provider" or root["effect_ordinal"] != 0
+                or root["parent_effect_id"] is not None
+                or root["provider_attempt_id"] != identity.attempt_id
+                or root["attempt_seq"] > attempt_seq
+                or wire["kind"] != "progress" or wire["effect_ordinal"] != 1
+                or wire["parent_effect_id"] != root_id or wire["provider_attempt_id"] is not None
+                or (wire["attempt_seq"], wire["claim_token"]) != (root["attempt_seq"], root["claim_token"])
+            ):
+                raise ValueError("provider or wire ownership changed")
+            root_binding = _record(root["pre_binding"])
+            wire_binding = _record(wire["pre_binding"])
+            wire_plan = _record(wire_binding["dispatch_v1"])
+            historical = _record(root_binding["source"])
+            plan = _record(root_binding["dispatch_v1"])
+            deadline = datetime.fromisoformat(plan["deadline"])
+            historic_fence = historical["fencing_epoch"]
+            changed_environment = historical["environment_sha256"] != binding["environment_sha256"]
+            if (
+                set(root_binding) != {"source", "dispatch_v1"}
+                or set(plan) != {"version", "clock_basis", "kind", "deadline",
+                              "outer_attempt", "outer_allowance", "wire_allowance"}
+                or type(plan["version"]) is not int or plan["version"] != 1
+                or plan["clock_basis"] != "utc" or plan["kind"] != "native"
+                or type(plan["outer_attempt"]) is not int or plan["outer_attempt"] != 0
+                or any(type(plan[key]) is not int or plan[key] < 1
+                       for key in ("outer_allowance", "wire_allowance"))
+                or deadline.utcoffset() is None
+                or deadline > await conn.fetchval("SELECT clock_timestamp()")
+                or type(historic_fence) is not int or not 0 < historic_fence <= binding["fencing_epoch"]
+                or set(historical) != set(binding)
+                or not _hex_digest(historical["environment_sha256"])
+                or any(historical[key] != binding[key] for key in (
+                    "workspace_id", "schema_sha256", "source_sha256",
+                ))
+                or (changed_environment and (
+                    historic_fence + 1 >= binding["fencing_epoch"] or not later
+                ))
+                or set(wire_binding) != {"dispatch_v1"}
+                or any(type(wire_plan[key]) is not int for key in (
+                    "version", "outer_attempt", "outer_allowance", "wire_allowance", "wire_attempt",
+                ))
+                or wire_plan != {
+                    **plan, "root_effect_id": str(root_id), "provider_effect_id": str(root_id),
+                    "attempt_id": str(identity.attempt_id), "parent_attempt_id": None,
+                    "request_sha256": identity.request_sha256, "wire_attempt": 0,
+                }
+            ):
+                raise ValueError("provider wire is not the exact expired reservation")
+            previous_release_at = (
+                await _prior_release(conn, identity, historical, released_at=released_at)
+                if changed_environment else None
+            )
+            if later:
+                await _confirmed_later_commands(
+                    conn, later, identity, binding, step=step, root_attempt=root["attempt_seq"],
+                    attempt_seq=attempt_seq, released_at=released_at,
+                    previous_release_at=previous_release_at,
+                )
+            receipt = {
+                "version": 1, "kind": _EXPIRY_RECEIPT_KIND, "attempt_id": str(identity.attempt_id),
+                "wire_effect_id": str(wire_id), "root_effect_id": str(root_id),
+                "request_sha256": identity.request_sha256, "source_sha256": scope.source_sha256,
+                "deadline": plan["deadline"],
+            }
+            if (
+                attempt["phase"] == "closed" and attempt["terminal_reason"] == EXPIRED_BEFORE_DISPATCH
+                and all(
+                    e["state"] == "confirmed" and _record(e["receipt_ref"]) == receipt
+                    for e in provider_effects
+                )
+            ):
+                return receipt
+            if (
+                attempt["phase"] != "reserved" or attempt["terminal_reason"] is not None
+                or (root["state"], wire["state"]) != ("prepared", "inflight")
+                or any(
+                    e["receipt_ref"] is not None or e["receipt_sha256"] is not None
+                    for e in provider_effects
+                )
+            ):
+                raise ValueError("provider attempt state changed")
+            changed = await conn.execute(
+                "UPDATE generation_provider_attempts SET phase='closed',terminal_reason=$2,"
+                "updated_at=now() WHERE attempt_id=$1 AND phase='reserved'",
+                identity.attempt_id, EXPIRED_BEFORE_DISPATCH,
+            )
+            effects_changed = await conn.execute(
+                "UPDATE generation_recovery_effects SET state='confirmed',receipt_ref=$2::jsonb,"
+                "revision=revision+1,updated_at=now() WHERE effect_id=ANY($1::uuid[])",
+                [root_id, wire_id], json.dumps(receipt, allow_nan=False),
+            )
+            if changed != "UPDATE 1" or effects_changed != "UPDATE 2":
+                raise ValueError("expired provider reservation was not sealed")
+    except Exception:
+        raise AttemptConflict("expired provider reservation was not confirmed") from None
+    return receipt
 
 
 class _ObjectPairs(list[tuple[str, Any]]):

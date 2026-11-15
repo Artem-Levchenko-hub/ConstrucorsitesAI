@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import re
 import sys
@@ -20,6 +21,10 @@ from yleum_api.services.generation.recovery_readers import require_recovery_read
 if TYPE_CHECKING:
     from yleum_api.models.deployment_drain import DeploymentDrain
     from yleum_api.models.project_cell import ProjectCellOperation
+    from yleum_api.services.generation.expired_provider_drain import (
+        ExpiredProviderScope,
+        Mode,
+    )
 
 _SCOPE = "generation"
 _LOCK = "yleum:generation:deployment-drain:v1"
@@ -250,7 +255,10 @@ async def drain_status(session: AsyncSession, *, bootstrap: bool = False) -> dic
     }
 
 
-def _release_context(raw: str, *, release_sha: str, fields: set[str]) -> dict[str, Any]:
+def _release_context(
+    raw: str, *, release_sha: str, fields: set[str],
+    integer_fields: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
     def unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
         result: dict[str, object] = {}
         for key, value in pairs:
@@ -266,7 +274,10 @@ def _release_context(raw: str, *, release_sha: str, fields: set[str]) -> dict[st
         raise ValueError("release context shape is invalid")
     if type(value["version"]) is not int or value["version"] != 1:
         raise ValueError("release context version is unsupported")
-    if any(type(value[key]) is not str for key in {"release_sha", *fields}):
+    if any(
+        type(value[key]) is not (int if key in integer_fields else str)
+        for key in {"release_sha", *fields}
+    ):
         raise ValueError("release context field type is invalid")
     if value["release_sha"] != release_sha or re.fullmatch(r"[0-9a-f]{40}", release_sha) is None:
         raise ValueError("release context target differs")
@@ -421,6 +432,97 @@ async def _parked_source_classification(
     return ParkedSourceClassification(context.release_sha, counts, selected_verified)
 
 
+_EXPIRED_SCOPE_FIELDS = {
+    "run_id", "attempt_id", "state_revision", "context_sha256", "source_sha256", "clock_sha256",
+}
+_CAPTURE_FIELDS = {"owner_nonce", "core_capture_sha256", "commerce_capture_sha256"}
+_EXPIRED_BASES = {
+    "expired-provider-check": "expired_provider_reservation",
+    "resume-expired-provider-check": "owned_expired_provider_capture",
+    "end-expired-provider": "expired_provider_end",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ExpiredProviderReleaseRequest:
+    scope: ExpiredProviderScope
+    scope_sha256: str
+    mode: Mode
+    reader_release_sha: str | None
+    capture: ReleaseCaptureContext | None
+    basis: str
+
+    @classmethod
+    def parse(cls, raw: str, *, release_sha: str, action: str) -> ExpiredProviderReleaseRequest:
+        from yleum_api.services.generation.expired_provider_drain import ExpiredProviderScope
+
+        basis = _EXPIRED_BASES[action]
+        fields = _EXPIRED_SCOPE_FIELDS.copy()
+        if action == "expired-provider-check":
+            fields |= {"mode", "reader_release_sha"}
+        elif action == "resume-expired-provider-check":
+            fields |= _CAPTURE_FIELDS
+        value = _release_context(
+            raw, release_sha=release_sha, fields=fields,
+            integer_fields=frozenset({"state_revision"}),
+        )
+        run_id, attempt_id = UUID(value["run_id"]), UUID(value["attempt_id"])
+        if str(run_id) != value["run_id"] or str(attempt_id) != value["attempt_id"]:
+            raise ValueError("expired provider identity is not canonical")
+        scope = ExpiredProviderScope(
+            release_sha, run_id, attempt_id, value["state_revision"],
+            value["context_sha256"], value["source_sha256"], value["clock_sha256"],
+        )
+        mode: Mode = value.get("mode", "settled")
+        if mode not in {"eligibility", "settled"}:
+            raise ValueError("expired provider check mode is unsupported")
+        reader_release = None
+        capture = None
+        if action == "expired-provider-check":
+            reader_release = value["reader_release_sha"]
+            if reader_release == release_sha or not re.fullmatch(r"[0-9a-f]{40}", reader_release):
+                raise ValueError("expired provider check needs the distinct incumbent reader")
+        elif action == "resume-expired-provider-check":
+            capture_wire = {key: value[key] for key in {"version", "release_sha", *_CAPTURE_FIELDS}}
+            capture = ReleaseCaptureContext.parse(json.dumps(capture_wire), release_sha=release_sha)
+        else:
+            reader_release = release_sha
+        canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+        return cls(
+            scope, hashlib.sha256(canonical).hexdigest(), mode, reader_release, capture, basis,
+        )
+
+
+async def _expired_provider_command(
+    session: AsyncSession, request: ExpiredProviderReleaseRequest,
+) -> tuple[dict[str, object], bool]:
+    from yleum_api.services.generation.expired_provider_drain import (
+        _classify_locked_expired_provider,
+    )
+
+    release_sha = request.scope.release_sha
+    ending = request.basis == _EXPIRED_BASES["end-expired-provider"]
+    if not ending:
+        await session.execute(text("SET TRANSACTION READ ONLY"))
+    row = await _locked_drain(session, release_sha)
+    if row is None:
+        raise ValueError("expired provider check requires its existing deployment drain")
+    report = await _classify_locked_expired_provider(
+        session, request.scope, mode=request.mode, reader_release_sha=request.reader_release_sha,
+        captured=request.capture is not None,
+    )
+    if ending and report.sql_drained:
+        await session.delete(row)
+        await session.commit()
+    result = {
+        "version": 1, "release_sha": release_sha, "mode": request.mode, "basis": request.basis,
+        "scope_sha256": request.scope_sha256, "active": report.active,
+        "eligible": report.eligible, "drained": report.sql_drained,
+    }
+    allowed = report.eligible if request.mode == "eligibility" else report.sql_drained
+    return result, allowed
+
+
 async def _command(action: str, release_sha: str, selected_run: str | None = None) -> None:
     from yleum_api.core.db import dispose_engine, get_engine
 
@@ -437,8 +539,20 @@ async def _command(action: str, release_sha: str, selected_run: str | None = Non
         ParkedSourceCheck.parse(sys.stdin.read(4097), release_sha=release_sha)
         if action == "parked-source-check" else None
     )
+    expired = (
+        ExpiredProviderReleaseRequest.parse(
+            sys.stdin.read(4097), release_sha=release_sha, action=action,
+        )
+        if action in _EXPIRED_BASES else None
+    )
     try:
         async with async_sessionmaker(get_engine(), expire_on_commit=False)() as session:
+            if expired is not None:
+                result, allowed = await _expired_provider_command(session, expired)
+                print(json.dumps(result, sort_keys=True))
+                if not allowed:
+                    raise SystemExit(75)
+                return
             if parked is not None:
                 parked_result = await _parked_source_classification(session, parked)
                 print(json.dumps(parked_result.to_wire(), sort_keys=True))
@@ -476,6 +590,7 @@ if __name__ == "__main__":
         "action", choices=(
             "begin", "check", "status", "end", "bootstrap-check", "resume-check",
             "parked-source-check", "resume-parked-source-check", "end-parked-source",
+            *_EXPIRED_BASES,
         ),
     )
     parser.add_argument("release_sha")

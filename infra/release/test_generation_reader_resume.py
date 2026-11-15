@@ -171,5 +171,77 @@ result = dict(context, basis="parked_source_recovery", active=dict.fromkeys(
         self.assertEqual(invalid.returncode, 75)
 
 
+
+    def expired_context(self):
+        return {
+            "version": 1, "release_sha": "a" * 40, "state_revision": 7,
+            "run_id": "11111111-1111-4111-8111-111111111111",
+            "attempt_id": "22222222-2222-4222-8222-222222222222",
+            "source_sha256": "3" * 64, "context_sha256": "4" * 64, "clock_sha256": "5" * 64,
+        }
+
+    def test_expired_provider_eligibility_does_not_mean_drained(self):
+        context = dict(self.expired_context(), reader_release_sha="b" * 40, mode="eligibility")
+        program = '''import hashlib, json, sys
+assert sys.argv[1:] == ["expired-provider-check", "a" * 40]
+context = json.load(sys.stdin)
+assert context["reader_release_sha"] == "b" * 40
+digest = hashlib.sha256(json.dumps(context, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+result = dict(version=1, release_sha=context["release_sha"], mode=context["mode"],
+              basis="expired_provider_reservation", scope_sha256=digest,
+              active=dict(generations=1, operations=0, leases=0, restorations=0),
+              eligible=True, drained=False)
+'''
+        valid = self.launch(program + "print(json.dumps(result))", context, "expired-provider")
+        self.assertEqual(valid.returncode, 0, valid.stdout + valid.stderr)
+        self.assertFalse(json.loads(valid.stdout)["drained"])
+        self.assertNotIn(context["run_id"].encode(), valid.stdout)
+        for untrusted in (
+            'result["drained"] = True', 'result["scope_sha256"] = "a" * 64',
+            'result["active"]["generations"] = 0', 'result["active"]["operations"] = 1',
+        ):
+            outcome = self.launch(
+                program + untrusted + "\nprint(json.dumps(result))", context, "expired-provider",
+            )
+            self.assertEqual(outcome.returncode, 75)
+        for bad in (
+            dict(context, reader_release_sha="a" * 40), dict(context, state_revision=True),
+            dict(context, attempt_id="00000000-0000-0000-0000-000000000000"),
+        ):
+            self.assertEqual(self.launch(program, bad, "expired-provider").returncode, 75)
+
+    def test_expired_provider_resume_requires_both_bound_captures_and_a_settled_result(self):
+        context = self.expired_context() | self.context()
+        program = '''import hashlib, json, sys
+assert sys.argv[1:] == ["resume-expired-provider-check", "a" * 40]
+context = json.load(sys.stdin)
+assert context["core_capture_sha256"] == "b" * 64
+assert context["commerce_capture_sha256"] == "c" * 64
+digest = hashlib.sha256(json.dumps(context, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+result = dict(version=1, release_sha=context["release_sha"], mode="settled",
+              basis="owned_expired_provider_capture", scope_sha256=digest,
+              active=dict(generations=0, operations=0, leases=0, restorations=0),
+              eligible=True, drained=True)
+'''
+        payload = program + "print(json.dumps(result))"
+        valid = self.launch(payload, context, "resume-expired-provider")
+        self.assertEqual(valid.returncode, 0, valid.stdout + valid.stderr)
+        self.assertTrue(json.loads(valid.stdout)["drained"])
+        self.assertNotIn(context["owner_nonce"].encode(), valid.stdout)
+        incomplete = dict(context)
+        del incomplete["commerce_capture_sha256"]
+        for bad in (incomplete, dict(context, mode="eligibility"), dict(context, reader_release_sha="b" * 40)):
+            self.assertEqual(self.launch(payload, bad, "resume-expired-provider").returncode, 75)
+        for untrusted in (
+            'result["mode"] = "eligibility"', 'result["basis"] = "owned_release_capture"',
+            'result["active"]["generations"] = 1',
+        ):
+            tampered = self.launch(
+                program + untrusted + "\nprint(json.dumps(result))", context, "resume-expired-provider",
+            )
+            self.assertEqual(tampered.returncode, 75)
+        self.assertEqual(self.launch(payload, context, "end-expired-provider").returncode, 75)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -555,3 +555,123 @@ infra/release/deploy-prod.sh "$FIX_SHA" --no-web --parked-source-run "$RUN_ID" \
 The control revision supplies the checker and release driver. The runtime source,
 API data tables and fence ownership remain bound to `FIX_SHA`. A control checkout
 with runtime changes or a different parked scope is rejected.
+
+### Adoption requirements for an expired provider reservation
+
+For a reviewed release with these changes, use the canonical
+command with the exact clean target checkout, green main CI and the original
+running gateway and API identities:
+
+```bash
+infra/release/deploy-prod.sh "$FIX_SHA" --no-web --gateway --expired-provider-scope "$SCOPE_FILE"
+```
+
+The local scope file is private and must not enter Git or logs. It contains
+the exact `api` and `gateway` one-off payloads and `gateway_runtime` with the
+current canonical `container_id` and `image_id`. The API payload is specified
+below. The gateway payload contains the same target and incumbent release
+SHAs, state revision and source digest, `version=1`,
+`action="close_expired_before_dispatch"` and the tracked request's existing
+`identity`. Confirm both scopes against the stored attempt and retain the
+same file for retry. The ingress owner pins the canonical digest of all
+three fields. The parked-source mode for a different recovery cursor remains
+independent.
+
+The command stages the exact API and Gateway images before closing ingress.
+It then runs these two steps under the release mutex:
+
+1. Under the existing release mutex, verify owned ingress, the same target's
+   SQL drain, the five incumbent readers and the incumbent Gateway image and
+   database identity. Run both controllers' publication and physical checks.
+   Run the target's eligibility classifier against schema 0106 or the exact
+   installed 0107. Bind one run and attempt to the release, state revision,
+   retained context, source and full clock. Eligibility leaves all active
+   counts intact. A second blocker, a different workspace owner or release
+   fence, a changed clock or context, or an open response denies adoption.
+2. A verified one-off target API image on the canonical Core compose database
+   may install only the additive 0106-to-0107 expansion. Check the exact single
+   Alembic head before and after and hold the admission lock on the migration
+   connection. Reverify the same ingress, reader and Gateway role before the
+   exact target Gateway one-off can seal the selected attempt. It must lock the
+   same attempt row used by dispatch and response admission, then recheck
+   the release owner and current writer identity. A call, receiver, descendant
+   or outward receipt winning the race denies closure. After a verified
+   closure, use the read-only settled classifier and both original controller
+   checks before capture. Require the same settled evidence during resume and
+   end before reopening the owned barriers.
+
+The existing target loader accepts API source and data only. The old API
+runtime does not carry the target migration or Gateway package. The old Gateway
+runtime lacks the sealing command. The one-off launcher pins both staged
+packages by revision and role and checks the configured database string against
+both canonical live roles. The API migrator uses a dedicated maintenance alias
+of the exact staged image. The target reader loader remains read-only.
+
+The target API one-off entry point is
+`python -m yleum_api.ops.expired_provider_migration`. The reviewed launcher
+supplies one bounded JSON object on stdin with the integer `version` equal to
+1 and the fields `release_sha`, `reader_release_sha`, `run_id`, `attempt_id`, `state_revision`,
+`context_sha256`, `source_sha256` and `clock_sha256`. It must first verify
+the target image, the incumbent role and held ingress, and independently
+observe the platform database identity. The launcher reads the incumbent API
+SHA through the authenticated `api-maintenance --describe-runtime` path
+and confirms it against the complete current reader inventory. The runner
+checks its distinct target release identity and uses the confirmed incumbent
+SHA for the reader checks throughout the same SQL owner's migration. At 0106 it requires a
+positive eligibility report while the selected generation remains counted.
+At 0107 it verifies the two validated constraints and either the same
+eligible reservation or the positive settled report. Its `settled` output
+comes from that report. The runner changes the schema only and cannot seal
+the Gateway attempt or advance deployment.
+
+If the schema expansion succeeds but closure fails, retain the additive schema
+and the owned barriers. Reobserve the selected attempt before retrying the same
+target. An acknowledged or unacknowledged seal requires the exact immutable
+receipt readback. Any different evidence blocks the retry. Downgrade after a
+seal would erase its schema authority and is forbidden by migration 0107.
+After reader capture or replacement, rerun the same command with the original
+scope. If ingress already reopened, the pinned ending nonce authorizes only
+verification, the exact SQL end if still owned, and reader cleanup. It never
+reopens either barrier. If nginx restored the original config but interruption
+left its active marker, verify the saved original/blocked checksums and actual
+route and reconcile that ingress transition before rerunning. Preserve the SQL
+and reader owners until their exact completion checks succeed.
+
+This proof retires a provider reservation and leaves the generation phase,
+cell, source and credits untouched. A released candidate can still have a RED
+source verdict and an open, expired work interval. The settled classifier
+preserves that arithmetic and grants only deployment quiescence under the
+owned barriers. Resuming or repairing the same generation requires a separate
+verified source transition and fresh acceptance under the existing policy.
+
+
+### Scoped expired provider release reader
+
+The fresh target-source loader accepts `expired-provider` and
+`resume-expired-provider`. Each uses a bounded base64 JSON object and the
+canonical private scope `version=1`, `release_sha`, `run_id`, `attempt_id`,
+`state_revision`, `context_sha256`, `source_sha256` and `clock_sha256`.
+The canonical launcher supplies the exact pushed target archive.
+
+- `expired-provider-check <target>` takes that scope plus `reader_release_sha`
+  and `mode` on stdin. Obtain the distinct incumbent SHA from the authenticated
+  runtime description and verify the actual incumbent reader inventory.
+  Eligibility succeeds with `eligible=true` and `drained=false`. Settlement
+  succeeds only after the exact receipt exists and every other count is zero.
+- `resume-expired-provider-check <target>` takes the same base scope plus
+  `owner_nonce`, `core_capture_sha256` and `commerce_capture_sha256` on stdin.
+  The canonical launcher verifies both root captures and inhibits before the
+  check. The reader checks SQL settlement and the current owned drain while
+  the service inventory may still span releases.
+- `end-expired-provider <target>` takes the base scope on stdin. The target
+  API must see its complete running reader set before and after settlement
+  verification, under the same exclusive SQL transaction that deletes the
+  target drain. This command runs through the privileged release wrapper and
+  is not available in the read-only archive loader.
+
+Reports give the exact release, mode, verification basis, active counts,
+`eligible`, `drained` and the SHA-256 of the complete validated input
+serialized as compact JSON with sorted keys. A successful end reports the
+settled state immediately before deletion. Exit 75 preserves the drain.
+Only the selected settled run can be removed from the blocker count.
+This procedure grants no source edit, provider dispatch or publication authority.

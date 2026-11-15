@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+import hashlib
+import json
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4, uuid5
 
-from sqlalchemy import text
+from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
@@ -15,6 +18,10 @@ from yleum_api.services.generation.provider_identity import (
     GenerationProviderIdentity,
     request_digest,
 )
+
+if TYPE_CHECKING:
+    from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
+    from yleum_api.services.generation.recovery_contract import RecoveryBinding
 
 
 async def prepare_generation_attempt(
@@ -243,6 +250,268 @@ async def native_transcript_attempt_closed(
         "SELECT EXISTS(SELECT 1 FROM generation_responses WHERE attempt_id=:attempt)"
     ), {"attempt": attempt.attempt_id})
     return receiver_exists is False
+
+
+@dataclass(frozen=True, slots=True)
+class _ExpiredProviderFrame:
+    root: GenerationRecoveryEffect
+    wire: GenerationRecoveryEffect
+    source: RecoveryBinding
+    deadline_wire: str
+
+    def receipt(self, attempt: GenerationProviderAttempt) -> dict[str, object]:
+        return {
+            "version": 1, "kind": "gateway_expired_before_dispatch",
+            "attempt_id": str(attempt.attempt_id), "wire_effect_id": str(self.wire.effect_id),
+            "root_effect_id": str(self.root.effect_id), "request_sha256": attempt.request_sha256,
+            "source_sha256": self.source.source_sha256, "deadline": self.deadline_wire,
+        }
+
+
+async def _closed_role_binding(
+    session: AsyncSession, row: GenerationRecoveryEffect, root: GenerationRecoveryEffect,
+    previous: RecoveryBinding, phase: str, dimension_name: str,
+) -> RecoveryBinding | None:
+    from yleum_api.models.project_cell import (
+        ProjectCellActivityLease,
+        ProjectCellProof,
+        ProjectCellProofResult,
+    )
+    from yleum_api.services.generation.recovery_actions import recovery_binding
+    from yleum_api.services.generation.recovery_tool_receipts import CommandBinding, digest
+    from yleum_api.services.orchestrator_client import (
+        OrchestratorUnavailable,
+        ProjectCellCommandReceipt,
+    )
+    from yleum_api.services.project_cell_proofs import ProofDimension, proof_identity_from_model
+
+    operation_id = row.operation_id
+    call = f"role:{operation_id}"
+    role_root = uuid5(root.run_id, f"recovery-tool-v1:{root.logical_step_seq}:{call}")
+    if (
+        operation_id is None or row.tool_call_id != call
+        or row.effect_id != uuid5(role_root, "physical:0")
+        or (row.run_id, row.project_id, row.user_id, row.logical_step_seq)
+        != (root.run_id, root.project_id, root.user_id, root.logical_step_seq)
+        or row.kind != "tool" or row.state != "confirmed" or row.payload_version != 1
+        or row.parent_effect_id is not None or row.provider_attempt_id is not None
+        or row.attempt_seq < root.attempt_seq or row.checkpoint_ref is not None
+    ):
+        return None
+    try:
+        intent = CommandBinding.model_validate_json(json.dumps(row.pre_binding, allow_nan=False))
+        receipt = ProjectCellCommandReceipt.from_json(row.receipt_ref)
+        receipt_digest = digest(row.receipt_ref)
+    except (OrchestratorUnavailable, TypeError, ValueError):
+        return None
+    role_binding, activity = intent.context_binding, intent.activity
+    if (
+        role_binding is None or activity is None or activity.operation_id != operation_id
+        or activity.phase != phase or row.receipt_sha256 != receipt_digest
+        or role_binding.workspace_id != previous.workspace_id
+        or str(intent.workspace_id) != role_binding.workspace_id
+        or intent.fencing_epoch != role_binding.fencing_epoch
+        or role_binding.fencing_epoch != previous.fencing_epoch + 2
+        or (role_binding.source_sha256, role_binding.schema_sha256)
+        != (previous.source_sha256, previous.schema_sha256)
+        or receipt.operation_id != operation_id
+        or (receipt.workspace_id, receipt.project_id, receipt.owner_id, receipt.generation_run_id)
+        != (intent.workspace_id, root.project_id, root.user_id, root.run_id)
+        or receipt.dispatch_fencing_epoch != intent.fencing_epoch
+        or receipt.request_sha256 != intent.request_sha256
+        or any(revision != role_binding.source_sha256 for revision in (
+            intent.workspace_revision, receipt.before_revision, receipt.after_revision,
+        ))
+        or row.post_binding != {
+            "workspace_revision": receipt.after_revision,
+            "physical_volume_identity": receipt.physical_volume_identity,
+        }
+    ):
+        return None
+    lease = await session.get(ProjectCellActivityLease, operation_id)
+    if (
+        lease is None or lease.kind != "command" or lease.state != "completed"
+        or lease.finished_at is None or lease.phase != phase
+        or (lease.workspace_id, lease.generation_run_id, lease.fencing_epoch)
+        != (intent.workspace_id, root.run_id, intent.fencing_epoch)
+        or lease.proof_key != activity.proof_key
+    ):
+        return None
+    results = (await session.execute(
+        select(ProjectCellProofResult, ProjectCellProof)
+        .join(ProjectCellProof, ProjectCellProofResult.proof_id == ProjectCellProof.id)
+        .where(ProjectCellProofResult.operation_id == operation_id).limit(2)
+    )).all()
+    if len(results) != 1:
+        return None
+    result, proof = results[0]
+    if (
+        result.workspace_id != intent.workspace_id or result.dimension != dimension_name
+        or result.outcome != "green"
+        or (proof.workspace_id, proof.generation_run_id, proof.fencing_epoch)
+        != (intent.workspace_id, root.run_id, intent.fencing_epoch)
+        or proof.workspace_revision != role_binding.source_sha256
+        or result.detail_digest != hashlib.sha256(result.redacted_detail.encode()).hexdigest()
+    ):
+        return None
+    prior_proof = await session.scalar(select(ProjectCellProof).where(
+        ProjectCellProof.workspace_id == intent.workspace_id,
+        ProjectCellProof.fencing_epoch == intent.fencing_epoch,
+        ProjectCellProof.proof_key == lease.proof_key,
+    ))
+    if prior_proof is None or prior_proof.generation_run_id != root.run_id:
+        return None
+    try:
+        identity = proof_identity_from_model(proof)
+        prior_identity = proof_identity_from_model(prior_proof)
+        if (
+            identity.proof_key != proof.proof_key or prior_identity.proof_key != lease.proof_key
+            or identity.dimension_key(ProofDimension(dimension_name)) != result.dimension_key
+            or recovery_binding(identity) != role_binding
+            or recovery_binding(prior_identity) != role_binding
+        ):
+            return None
+    except ValueError:
+        return None
+    return role_binding
+
+
+async def _expired_provider_frame(
+    session: AsyncSession, attempt: GenerationProviderAttempt, *,
+    current_binding: RecoveryBinding | None = None, max_attempt_seq: int | None = None,
+) -> _ExpiredProviderFrame | None:
+    """Check the original provider frame separately from a later retired execution lease."""
+    from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
+    from yleum_api.models.project_cell import ProjectCellOperation
+    from yleum_api.services.generation.recovery_contract import RecoveryBinding
+    from yleum_api.services.generation.recovery_execution import _owned_release_receipt
+    from yleum_api.services.generation.recovery_reconciliation import (
+        _dispatch_plan,
+        provider_root_effect_id,
+    )
+
+    if attempt.version != 1 or any(value is not None for value in (
+        attempt.provider_call_id, attempt.response_manifest_key, attempt.response_sha256,
+        attempt.parent_attempt_id,
+    )):
+        return None
+    effect = GenerationRecoveryEffect
+    root = await session.scalar(
+        select(effect).where(effect.provider_attempt_id == attempt.attempt_id),
+    )
+    if root is None or type(root.pre_binding) is not dict or root.logical_step_seq < 1:
+        return None
+    root_id = provider_root_effect_id(attempt.run_id, root.logical_step_seq)
+    wire_id = uuid5(root_id, "wire-v1:0:0")
+    if root.effect_id != root_id or attempt.attempt_id != uuid5(root_id, "provider-attempt-v1"):
+        return None
+    try:
+        historical = RecoveryBinding.model_validate_json(
+            json.dumps(root.pre_binding["source"], allow_nan=False),
+        )
+        plan = _dispatch_plan(root.pre_binding)
+        if plan.kind != "native" or plan.outer_attempt != 0:
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+    rows = (await session.scalars(select(effect).where(or_(
+        (effect.run_id == attempt.run_id) & (effect.logical_step_seq == root.logical_step_seq),
+        effect.parent_effect_id.in_((root_id, wire_id)),
+    )).order_by(effect.effect_ordinal).limit(5))).all()
+    if len(rows) not in {2, 4} or [row.effect_id for row in rows[:2]] != [root_id, wire_id]:
+        return None
+    wire = rows[1]
+    expected_wire = {"dispatch_v1": {
+        **root.pre_binding["dispatch_v1"], "root_effect_id": str(root_id),
+        "provider_effect_id": str(root_id), "attempt_id": str(attempt.attempt_id),
+        "parent_attempt_id": None, "request_sha256": attempt.request_sha256, "wire_attempt": 0,
+    }}
+    if (
+        root.kind != "provider" or root.effect_ordinal != 0 or root.parent_effect_id is not None
+        or wire.kind != "progress" or wire.effect_ordinal != 1 or wire.parent_effect_id != root_id
+        or wire.pre_binding != expected_wire or wire.provider_attempt_id is not None
+        or (wire.attempt_seq, wire.claim_token) != (root.attempt_seq, root.claim_token)
+        or any(
+            row.payload_version != 1 or row.logical_step_seq != root.logical_step_seq
+            or (row.run_id, row.project_id, row.user_id, row.input_digest)
+            != (attempt.run_id, attempt.project_id, attempt.user_id, attempt.request_sha256)
+            or row.post_binding is not None or row.operation_id is not None
+            or row.tool_call_id is not None or row.receipt_sha256 is not None
+            or row.checkpoint_ref is not None
+            for row in rows[:2]
+        )
+        or (max_attempt_seq is not None and any(row.attempt_seq > max_attempt_seq for row in rows))
+    ):
+        return None
+    if len(rows) == 4:
+        preparation, fast_check = rows[2:]
+        if (
+            (preparation.effect_ordinal, fast_check.effect_ordinal) != (2, 3)
+            or await session.scalar(select(
+                select(effect.effect_id).where(
+                    effect.parent_effect_id.in_((preparation.effect_id, fast_check.effect_id)),
+                ).exists(),
+            )) is not False
+        ):
+            return None
+        role_binding = await _closed_role_binding(session, preparation, root, historical,
+                                                  "prepare", "bootstrap")
+        if role_binding is None or role_binding != await _closed_role_binding(
+            session, fast_check, root, historical, "fast_check", "fast_check",
+        ) or (current_binding is not None and current_binding != role_binding):
+            return None
+        workspace_id = UUID(role_binding.workspace_id)
+        releases = (await session.scalars(select(ProjectCellOperation).where(
+            ProjectCellOperation.workspace_id == workspace_id,
+            ProjectCellOperation.generation_run_id == attempt.run_id,
+            ProjectCellOperation.kind == "release",
+            ProjectCellOperation.fencing_epoch == historical.fencing_epoch + 1,
+        ).limit(2))).all()
+        if len(releases) != 1 or not _owned_release_receipt(
+            releases[0], run_id=attempt.run_id, workspace_id=workspace_id,
+            fence=historical.fencing_epoch + 1,
+        ):
+            return None
+    elif current_binding is not None and (
+        historical.fencing_epoch > current_binding.fencing_epoch
+        or historical.model_copy(update={"fencing_epoch": current_binding.fencing_epoch})
+        != current_binding
+    ):
+        return None
+    if await session.scalar(text(
+        "SELECT EXISTS(SELECT 1 FROM generation_responses WHERE attempt_id=:attempt) OR "
+        "EXISTS(SELECT 1 FROM generation_provider_attempts WHERE parent_attempt_id=:attempt) OR "
+        "(:current AND EXISTS(SELECT 1 FROM provider_calls "
+        "WHERE run_id=:run AND created_at>=:created)) OR clock_timestamp() < :deadline"
+    ), {
+        "attempt": attempt.attempt_id, "run": attempt.run_id, "created": attempt.created_at,
+        "deadline": plan.deadline, "current": current_binding is not None,
+    }) is not False:
+        return None
+    return _ExpiredProviderFrame(
+        root, wire, historical, root.pre_binding["dispatch_v1"]["deadline"],
+    )
+
+
+def _matches_expiry_receipt(
+    attempt: GenerationProviderAttempt, frame: _ExpiredProviderFrame,
+) -> bool:
+    receipt = frame.receipt(attempt)
+    return (
+        attempt.phase == "closed" and attempt.terminal_reason == "expired_before_dispatch"
+        and all(row.state == "confirmed" and row.receipt_ref == receipt
+                for row in (frame.root, frame.wire))
+    )
+
+
+async def expired_reservation_closed(
+    session: AsyncSession, attempt: GenerationProviderAttempt,
+) -> bool:
+    """Recognize only the matching Gateway-owned no-dispatch evidence."""
+    if attempt.phase != "closed" or attempt.terminal_reason != "expired_before_dispatch":
+        return False
+    frame = await _expired_provider_frame(session, attempt)
+    return frame is not None and _matches_expiry_receipt(attempt, frame)
 
 
 async def require_native_transcript_refusal(identity: GenerationProviderIdentity) -> None:
