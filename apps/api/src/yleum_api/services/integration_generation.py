@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from yleum_api.core.config import get_settings
 from yleum_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
 from yleum_api.models.max_staff import MaxStaffSettings
 from yleum_api.models.project import Project
@@ -209,7 +210,7 @@ async def generation_context(session: AsyncSession, project_id: UUID) -> str:
         lines.append(_STAFF_CHECKOUT_GUIDE)
     elif staff_order_mode == "pickup":
         lines.append(_STAFF_PICKUP_GUIDE)
-    elif "yookassa" in providers:
+    elif "yookassa" in providers and get_settings().max_staff_enabled:
         lines.append(
             "When the owner explicitly asks to prepare online orders for the staff queue, "
             "read the linked checkout and status helpers in integration-client.ts and use the "

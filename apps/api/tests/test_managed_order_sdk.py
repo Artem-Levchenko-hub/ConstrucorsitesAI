@@ -149,14 +149,22 @@ def test_checkout_proxy_rejects_actor_switch_or_injected_amount_and_status(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", [None, "pickup", "yookassa"])
-async def test_generation_uses_linked_checkout_only_for_explicit_online_staff_mode(mode):
-    from yleum_api.services.integration_generation import generation_context
+@pytest.mark.parametrize("staff_enabled", [False, True])
+async def test_generation_preserves_configured_order_modes_and_omits_disabled_staff_opt_in(
+    monkeypatch, mode, staff_enabled,
+):
+    from yleum_api.services import integration_generation
 
+    monkeypatch.setattr(
+        integration_generation, "get_settings",
+        lambda: SimpleNamespace(max_staff_enabled=staff_enabled),
+    )
     session = SimpleNamespace(
         scalars=AsyncMock(return_value=SimpleNamespace(all=lambda: ["yookassa"])),
         scalar=AsyncMock(side_effect=[False, mode]),
     )
-    context = await generation_context(session, UUID(ORDER_ID))
+    context = await integration_generation.generation_context(session, UUID(ORDER_ID))
+    assert ("staff queue" in context) is (staff_enabled and mode is None)
     assert ("createYleumOrderCheckout(order.id)" in context) is (mode == "yookassa")
     assert ("getReturnedYleumCheckoutOrderId()" in context) is (mode == "yookassa")
     assert ("createYleumPayment({amount" in context) is (mode is None)
