@@ -208,7 +208,7 @@ def require_database(args: list[str], env: dict, images: dict, database: str) ->
 def invoke(
     args: list[str], env: dict, *, role: str, module: str, scope: dict, name: str | None = None,
 ) -> dict:
-    run = [*args, "run", "--no-build", "--no-deps", "--pull", "never", "-T", "--rm"]
+    run = [*args, "run", "--build=false", "--no-deps", "--pull", "never", "-T", "--rm"]
     if name is not None:
         run += ["--name", name]
     response = command(

@@ -91,6 +91,16 @@ class ScopeTests(TestCase):
             run.return_value.stdout = json.dumps(rows)
             self.assertFalse(self.launcher.images_ready(names, TARGET))
 
+    def test_one_off_disables_build_and_pull_on_current_production_compose(self):
+        with patch.object(self.launcher, "command", return_value=b'{"ok":true}') as command:
+            result = self.launcher.invoke(
+                ["docker", "compose"], {}, role="gateway", module="approved", scope={},
+            )
+        argv = command.call_args.args[0]
+        self.assertEqual(argv[:9], ["docker", "compose", "run", "--build=false", "--no-deps",
+                                    "--pull", "never", "-T", "--rm"])
+        self.assertEqual(result, {"ok": True})
+
     def test_migration_one_off_uses_only_the_staged_image_and_cannot_dispatch(self):
         request = scope()
         response = {
