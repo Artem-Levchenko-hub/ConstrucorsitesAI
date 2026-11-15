@@ -679,7 +679,7 @@ async def _dispatch_native_provider(
 ) -> tuple[UUID, httpx.Response, str] | Response:
     """Commit each upstream attempt independently before its network dispatch."""
     run_id, project_id = dispatch_options["run_id"], dispatch_options["project_id"]
-    route = dispatch_options["route"]
+    route = dispatch_options.get("route")
     provider_scope = await text_failover.select_scope(
         identity, model, run_id=run_id, project_id=project_id, user_id=dispatch_options.get("user_id"),
         cell_route=route if route == "/v1/project-cell/messages" else None,
@@ -692,8 +692,12 @@ async def _dispatch_native_provider(
     attempts: dict[str, int] = {}
 
     async def exhausted_after_refusal(call_id: UUID) -> bool:
-        return backup_enabled and identity is not None and await text_failover.confirmed_chain_exhausted(
-            identity, call_id, route=route, user_id=dispatch_options.get("user_id"),
+        return (
+            backup_enabled and identity is not None
+            and route in ("/v1/messages", "/v1/project-cell/messages")
+            and await text_failover.confirmed_chain_exhausted(
+                identity, call_id, route=route, user_id=dispatch_options.get("user_id"),
+            )
         )
 
     while True:
