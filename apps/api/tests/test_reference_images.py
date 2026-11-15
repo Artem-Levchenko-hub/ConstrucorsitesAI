@@ -84,7 +84,7 @@ async def test_reference_binding_keeps_semantics_on_raw_text(monkeypatch, prompt
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("native", [False, True])
-async def test_both_agent_paths_send_reference_bytes(monkeypatch, native):
+async def test_both_agent_paths_send_reference_bytes(monkeypatch, request, native):
     import base64
 
     from yleum_api.services import agent_builder, agent_native
@@ -94,6 +94,7 @@ async def test_both_agent_paths_send_reference_bytes(monkeypatch, native):
     from yleum_api.core.config import get_settings
 
     get_settings.cache_clear()
+    request.addfinalizer(get_settings.cache_clear)
     raw = png_bytes()
     data = base64.b64encode(raw).decode()
     images = [
