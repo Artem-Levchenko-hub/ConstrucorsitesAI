@@ -79,6 +79,10 @@ class _DispatchState:
     preconnect_allowance: int | None = None
 
 
+def provider_root_effect_id(run_id: UUID, logical_step_seq: int) -> UUID:
+    return uuid5(run_id, f"recovery-provider-v1:{logical_step_seq}")
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderEffectCursor:
     claim: ContinuationClaim
@@ -89,10 +93,11 @@ class ProviderEffectCursor:
     outer_allowance: int = 1
     call_deadline: datetime | None = None
     dispatch: _DispatchState = field(default_factory=_DispatchState, compare=False)
+    retained_only: bool = False
 
     @property
     def root_effect_id(self) -> UUID:
-        return uuid5(self.claim.run_id, f"recovery-provider-v1:{self.logical_step_seq}")
+        return provider_root_effect_id(self.claim.run_id, self.logical_step_seq)
 
 
 _PROVIDER_EFFECT: ContextVar[ProviderEffectCursor | None] = ContextVar(
@@ -826,6 +831,7 @@ async def authorize_cold_wire_continuation(
     if (
         cursor is None
         or identity is None
+        or cursor.retained_only
         or not provider_reconciliation_requested()
         or cursor.dispatch.plan is None
         or cursor.dispatch.wire_used == 0

@@ -257,6 +257,310 @@ async def clock_owner(db_session, test_engine, monkeypatch):
     )
 
 
+@pytest.mark.parametrize("provider_phase", ["dispatching", "indeterminate", "closed"])
+async def test_response_wait_defers_open_attempt_before_claiming_a_cell(
+    clock_owner, monkeypatch, provider_phase,
+):
+    from unittest.mock import AsyncMock
+    from uuid import uuid5
+
+    from yleum_api.models.generation_provider_attempt import GenerationProviderAttempt
+    from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
+    from yleum_api.models.provider_call import ProviderCall
+    from yleum_api.services.generation import recovery_execution, recovery_store
+    from yleum_api.services.generation.recovery_contract import (
+        CheckpointRef,
+        RecoveryBinding,
+        decode_recovery,
+    )
+
+    c = clock_owner
+    old = c.driver.state
+    workspace = uuid4()
+    binding = RecoveryBinding(
+        workspace_id=str(workspace), fencing_epoch=3,
+        source_sha256="a" * 64, schema_sha256="b" * 64, environment_sha256="c" * 64,
+    )
+    ref = CheckpointRef(object_key="qa-retained", sha256="d" * 64)
+    root = uuid5(c.run.id, "recovery-provider-v1:12")
+    attempt = uuid5(root, "provider-attempt-v1")
+    state = decode_recovery(old.model_copy(update={
+        "cursor": "finalization", "binding": binding, "checkpoint": ref, "context_ref": ref,
+        # A crashed acquisition also leaves a due working cursor.
+        "phase": "working", "next_check_at": None,
+        "execution": old.execution.model_copy(update={
+            "stage": "finalization", "substep": "response_wait",
+            "logical_step_seq": 12, "provider_effect_id": root, "pending_effect_id": root,
+            "physical_state": "released", "release_operation_id": uuid4(),
+            "control_workspace_id": workspace, "control_fencing_epoch": 4,
+            "execution_context_ref": ref,
+        }),
+    }).model_dump(mode="json"))
+    c.run.agent_state = {**c.run.agent_state, "recovery_v1": state.model_dump(mode="json")}
+    attempt_scope = dict(
+        run_id=c.run.id, project_id=c.run.project_id, user_id=c.run.user_id,
+    )
+    status = {"dispatching": "started", "indeterminate": "ambiguous", "closed": "completed"}
+    provider_call = ProviderCall(
+        **attempt_scope, id=uuid4(), provider_scope="llmgw", route="native_messages",
+        requested_model="synthetic", expense_owner="user", stage="source_repair", free=True,
+        status=status[provider_phase], finished_at=(
+            None if provider_phase == "dispatching" else datetime.now(UTC)
+        ),
+    )
+    c.session.add(provider_call)
+    await c.session.flush()
+    c.session.add(GenerationProviderAttempt(
+        **attempt_scope, attempt_id=attempt, dispatch_token=uuid4(),
+        prompt_hash=c.run.prompt_hash, request_sha256="e" * 64, phase=provider_phase,
+        provider_call_id=provider_call.id,
+        terminal_reason="completed" if provider_phase == "closed" else None,
+    ))
+    await c.session.flush()
+    c.session.add(GenerationRecoveryEffect(
+        **attempt_scope, effect_id=root, logical_step_seq=12, effect_ordinal=0, kind="provider",
+        input_digest="e" * 64, provider_attempt_id=attempt, attempt_seq=state.attempt_seq,
+        claim_token=state.continuation_claim.token,
+    ))
+    await c.session.commit()
+    monkeypatch.setattr(recovery_store, "_baseline_sha", AsyncMock())
+    released = AsyncMock(return_value=False)
+    monkeypatch.setattr(recovery_execution, "_released_quiescent", released)
+
+    now = datetime.now(UTC)
+    async with c.owned(), c.factory() as session:
+        claim = await recovery_execution.claim_continuation(
+            session, run_id=c.run.id, expected_attempt=state.attempt_seq,
+            worker_id="qa-worker", now=now,
+        )
+        await session.commit()
+    assert claim is None
+    await c.session.refresh(c.run)
+    after = recovery_execution.recovery_state(c.run)
+    if provider_phase == "closed":
+        released.assert_awaited_once()
+        assert after == state
+    else:
+        released.assert_not_awaited()
+        assert after.phase == "waiting_dependency" and after.next_check_at > now
+        assert after.attempt_seq == state.attempt_seq and after.execution == state.execution
+        assert after.checkpoint == ref and after.binding == binding
+        assert after.clock.segment_deadline == state.clock.segment_deadline
+        assert after.clock.segment_used_ms == state.clock.segment_used_ms
+        assert after.clock.dependency_failures == state.clock.dependency_failures + 1
+
+
+@pytest.mark.parametrize("outcome", ["stored", "unknown", "pending"])
+async def test_timeout_reads_retained_completion_under_the_same_lease(monkeypatch, outcome):
+    from unittest.mock import AsyncMock
+
+    import httpx
+    from pydantic import SecretStr
+
+    from yleum_api.core import config
+    from yleum_api.services import agent_native, llm_client
+    from yleum_api.services.generation import (
+        provider_attempts,
+        recovery_execution,
+        recovery_reconciliation,
+        response_auth,
+    )
+    from yleum_api.services.generation.provider_identity import GenerationProviderIdentity
+    from yleum_api.services.generation.recovery_contract import ContinuationClaim
+
+    state = _state()
+    claim = ContinuationClaim(
+        run_id=state.identity.run_id, token=uuid4(), attempt_seq=state.attempt_seq,
+        worker_id="qa-worker", expires_at=datetime.now(UTC) + timedelta(minutes=1),
+    )
+    state = state.model_copy(update={"continuation_claim": claim})
+    driver = recovery_execution.ExecutionDriver(None, state, {}, AsyncMock())
+    driver.soft_boundary = AsyncMock()
+    driver.wait = AsyncMock(side_effect=RuntimeError("committed wait"))
+    monkeypatch.setattr(
+        recovery_execution, "_has_retained_completion",
+        AsyncMock(return_value=outcome != "unknown"),
+    )
+
+    async def save(execution, *, context):
+        driver.state = driver.state.model_copy(update={
+            "state_revision": driver.state.state_revision + 1, "execution": execution,
+        })
+        driver.context = context
+
+    driver.save = save
+    effects = []
+    methods = []
+    response = {"content": [{"type": "text", "text": "retained result"}], "stop_reason": "end_turn"}
+    ids = state.identity
+    identity = GenerationProviderIdentity(
+        ids.run_id, ids.project_id, ids.user_id, uuid4(), ids.prompt_hash, "b" * 64,
+    )
+    settings = config.get_settings().model_copy(update={
+        "llm_gateway_url": "http://gateway.test",
+        "generation_response_retention_enabled": True,
+        "generation_response_signing_secret": SecretStr("synthetic-test-secret-" * 3),
+    })
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    monkeypatch.setattr(llm_client, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        provider_attempts, "prepare_generation_attempt", AsyncMock(return_value=identity),
+    )
+    reserve_wire = AsyncMock(return_value=None)
+    monkeypatch.setattr(provider_attempts, "reserve_generation_wire", reserve_wire)
+
+    def gateway(request):
+        methods.append(request.method)
+        purpose = "generation_response.record" if request.method == "POST" else (
+            "generation_response.read"
+        )
+        assert response_auth.verify_generation_response_token(
+            request.headers[response_auth.HEADER], purpose=purpose,
+        ) == identity
+        if request.method == "POST":
+            raise httpx.ReadTimeout("synthetic response timeout")
+        if outcome == "pending":
+            return httpx.Response(200, json={
+                "version": 1, "identity": identity.to_wire(), "state": "pending",
+            })
+        return httpx.Response(200, json={
+            "version": 1, "identity": identity.to_wire(), "state": "stored",
+            "response": {"format": "json", "status": 200, "body": response},
+        })
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient",
+        lambda **kw: client_type(transport=httpx.MockTransport(gateway), **kw),
+    )
+
+    async def invoke():
+        read_only = recovery_reconciliation.provider_reconciliation_requested()
+        attempt = recovery_reconciliation.prospective_provider_attempt()
+        effects.append((read_only, attempt))
+        async with httpx.AsyncClient() as client:
+            return await agent_native._call_messages(
+                client, "http://gateway.test/v1/messages", [], "test system",
+            )
+
+    frame = {"version": 1, "kind": "native", "value": {}}
+    if outcome == "stored":
+        assert await driver.provider(frame, invoke) == response
+        driver.wait.assert_not_awaited()
+    else:
+        with pytest.raises(RuntimeError, match="committed wait"):
+            await driver.provider(frame, invoke)
+        driver.wait.assert_awaited_once()
+    expected_effects = [(False, effects[0][1])]
+    if outcome != "unknown":
+        expected_effects.append((True, effects[0][1]))
+    assert effects == expected_effects
+    assert methods == (["POST"] if outcome == "unknown" else ["POST", "GET"])
+    reserve_wire.assert_awaited_once()
+    assert driver.state.identity == state.identity
+    assert driver.state.execution.budget.steps == state.execution.budget.steps + 1
+    assert driver.state.execution.logical_step_seq == state.execution.logical_step_seq + 1
+
+
+async def test_operator_timeout_consumes_one_confirmed_qa_response(clock_owner, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from pydantic import SecretStr
+
+    from yleum_api.core import config
+    from yleum_api.core.errors import ApiError
+    from yleum_api.services import generation_deployment_drain
+    from yleum_api.services.generation import recovery_diagnostic as diagnostic
+    from yleum_api.services.generation import recovery_execution as execution
+
+    c = clock_owner
+    scope = {
+        "run_id": c.run.id,
+        "project_id": c.run.project_id,
+        "user_id": c.run.user_id,
+    }
+    settings = config.get_settings().model_copy(update={
+        "generation_recovery_mode": "canary",
+        "generation_recovery_execution_enabled": True,
+        "generation_provider_attempts_enabled": True,
+        "generation_response_retention_enabled": True,
+        "generation_recovery_canary_project_ids": str(c.run.project_id),
+        "generation_response_signing_secret": SecretStr("synthetic-test-secret-" * 3),
+    })
+    monkeypatch.setattr(diagnostic, "get_settings", lambda: settings)
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        diagnostic, "_diagnostic_qa_owner", AsyncMock(return_value=True), raising=False,
+    )
+    await diagnostic.arm_diagnostic_response_timeout(c.session, **scope)
+    await c.session.commit()
+
+    retained = AsyncMock(return_value=None)
+    monkeypatch.setattr(execution, "_retained_completion_attempt", retained, raising=False)
+    consume = diagnostic.consume_diagnostic_response_timeout
+    async with c.owned():
+        with monkeypatch.context() as drain:
+            drain.setattr(generation_deployment_drain, "require_generation_admission", AsyncMock(
+                side_effect=ApiError("generation_draining", "Synthetic drain", 503),
+            ))
+            assert not await consume(c.factory, c.driver.state)
+            retained.assert_not_awaited()
+        assert not await consume(c.factory, c.driver.state)
+        attempt = uuid4()
+        retained.return_value = SimpleNamespace(attempt_id=attempt)
+        assert await consume(c.factory, c.driver.state)
+        assert not await consume(c.factory, c.driver.state)
+    await c.session.refresh(c.run)
+    assert c.run.agent_state[diagnostic.TIMEOUT_KEY]["attempt_id"] == str(attempt)
+    assert execution.recovery_state(c.run) == c.driver.state
+
+
+@pytest.mark.parametrize("repair_started", [False, True])
+async def test_recovery_preserves_the_original_minimum_for_a_started_repair(
+    monkeypatch, repair_started,
+):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from yleum_api.services import max_finalization
+
+    @asynccontextmanager
+    async def sessions():
+        yield object()
+
+    now = datetime.now(UTC)
+    coordinator = object.__new__(max_finalization.MaxFinalizationCoordinator)
+    coordinator.session_factory = sessions
+    coordinator._locked_run = AsyncMock(return_value=SimpleNamespace(
+        status="running", agent_state={}, started_at=now - timedelta(minutes=15),
+    ))
+    boundary = AsyncMock()
+    coordinator.continuation = SimpleNamespace(
+        state=_state(), soft_boundary=boundary, soft_edit_deadline=lambda value: value,
+    )
+    monkeypatch.setattr(
+        max_finalization, "generation_deadline", lambda _: SimpleNamespace(at=now),
+    )
+    monkeypatch.setattr(
+        max_finalization, "source_edit_deadline",
+        lambda *args, **kwargs: now + timedelta(seconds=85),
+    )
+    repair = AsyncMock(return_value=True)
+    args = dict(detail="test", repair=repair, repair_source=None, failure=None,
+                repair_started=repair_started)
+    if repair_started:
+        assert await coordinator._invoke_source_repair(**args)
+        repair.assert_awaited_once_with("test")
+        boundary.assert_not_awaited()
+    else:
+        with pytest.raises(TimeoutError, match="before source repair"):
+            await coordinator._invoke_source_repair(**args)
+        repair.assert_not_awaited()
+        boundary.assert_awaited_once_with(exhausted=True)
+
+
 async def test_known_clock_charge_CAS_rejects_stale_writer_and_unknown_ACK(clock_owner):
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -581,7 +885,7 @@ async def test_first_repair_window_requires_live_owned_terminal_red(proof_clock,
 @pytest.mark.parametrize(
     "damage", [
         None, "draft_changed", "fence_changed", "wrong_control", "wrong_stop", "wrong_gap",
-        "source_time_left",
+        "source_time_left", "only_85_seconds",
     ],
 )
 async def test_managed_source_gap_can_open_only_one_owned_repair_window(
@@ -620,9 +924,10 @@ async def test_managed_source_gap_can_open_only_one_owned_repair_window(
     binding = p.binding.model_copy(update={"source_sha256": workspace_revision_digest(files)})
     ref = CheckpointRef(object_key="retained", sha256="c" * 64)
     clock = c.driver.state.clock
-    if damage == "source_time_left":
+    if damage in {"source_time_left", "only_85_seconds"}:
+        seconds = 385 if damage == "only_85_seconds" else 480
         clock = clock.model_copy(update={
-            "segment_deadline": datetime.now(UTC) + timedelta(minutes=8),
+            "segment_deadline": datetime.now(UTC) + timedelta(seconds=seconds),
         })
     state = c.driver.state.model_copy(update={
         "cursor": "finalization",
@@ -669,13 +974,14 @@ async def test_managed_source_gap_can_open_only_one_owned_repair_window(
     await c.session.commit()
 
     budget = c.driver.state.execution.budget
+    eligible = damage in {None, "only_85_seconds"}
     async with c.owned():
         if damage == "fence_changed":
             with pytest.raises(ValueError, match="fence conflict"):
                 await grant_window(c.driver, managed_source_gap=detail)
         else:
-            assert await grant_window(c.driver, managed_source_gap=detail) is (damage is None)
-        if damage is None:
+            assert await grant_window(c.driver, managed_source_gap=detail) is eligible
+        if eligible:
             assert c.driver.state.clock.stage == "repair"
             assert c.driver.state.clock.segment_seq == 1
             assert not await grant_window(c.driver, managed_source_gap=detail)

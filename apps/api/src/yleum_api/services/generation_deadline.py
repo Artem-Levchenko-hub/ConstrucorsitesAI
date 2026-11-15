@@ -28,6 +28,7 @@ _BOOK_KEY = "deadline"
 # proofs. Editing must leave room for those checks inside the existing ceiling.
 FINALIZATION_RESERVE_SECONDS = 300
 MIN_SOURCE_REPAIR_SECONDS = 60
+MIN_PROVIDER_WINDOW_SECONDS = 105
 
 
 def source_edit_deadline(

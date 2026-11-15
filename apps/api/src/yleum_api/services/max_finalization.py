@@ -43,7 +43,7 @@ from yleum_api.services.generation.meal_acceptance_receipts import (
 from yleum_api.services.generation.notes_acceptance_receipts import require_notes_observation
 from yleum_api.services.generation.recovery_acceptance import require_coordinator_acceptance
 from yleum_api.services.generation.recovery_actions import recovery_binding
-from yleum_api.services.generation.recovery_contract import RecoveryContractError
+from yleum_api.services.generation.recovery_contract import RecoveryContractError, RecoveryStateV3
 from yleum_api.services.generation.recovery_requirements import load_compiler_witness
 from yleum_api.services.generation.source_error_classification import (
     SourceFailure,
@@ -51,8 +51,10 @@ from yleum_api.services.generation.source_error_classification import (
     source_check_is_repairable,
 )
 from yleum_api.services.generation_deadline import (
+    MIN_PROVIDER_WINDOW_SECONDS,
     MIN_SOURCE_REPAIR_SECONDS,
     generation_deadline,
+    is_restoration_adaptation,
     note_proof_sealed,
     note_proof_settled,
     note_repair_stage_started,
@@ -437,7 +439,6 @@ class MaxFinalizationCoordinator:
 
     async def source_edit_deadline(self, *, repair: bool = False) -> datetime | None:
         continuation: ExecutionDriver | None = getattr(self, "continuation", None)
-        from yleum_api.services.generation.recovery_contract import RecoveryStateV3
         if continuation is not None and isinstance(continuation.state, RecoveryStateV3):
             return continuation.soft_edit_deadline(None)
         async with self.session_factory() as session:
@@ -881,6 +882,7 @@ class MaxFinalizationCoordinator:
                         repair=repair,
                         repair_source=repair_source,
                         failure=fresh_failure,
+                        repair_started=pending is not None,
                     )
                 elif autonomous_source_repair:
                     repair_completed = _result_from_data(pending.result).done
@@ -1023,7 +1025,6 @@ class MaxFinalizationCoordinator:
         *, managed_source_gap: str | None = None,
     ) -> None:
         from yleum_api.services.generation.recovery_clock import grant_window
-        from yleum_api.services.generation.recovery_contract import RecoveryStateV3
 
         if continuation is None or not isinstance(continuation.state, RecoveryStateV3):
             return
@@ -1049,6 +1050,7 @@ class MaxFinalizationCoordinator:
         repair: Callable[[str], Awaitable[bool | None]],
         repair_source: Callable[[str, SourceFailure], Awaitable[bool | None]] | None,
         failure: SourceFailure | None,
+        repair_started: bool = False,
     ) -> bool:
         continuation: ExecutionDriver | None = getattr(self, "continuation", None)
         async with self.session_factory() as session:
@@ -1056,6 +1058,13 @@ class MaxFinalizationCoordinator:
             if run.status == "cancel_requested":
                 raise asyncio.CancelledError
             deadline = generation_deadline(run).at
+            minimum = (
+                MIN_PROVIDER_WINDOW_SECONDS
+                if continuation is not None and isinstance(continuation.state, RecoveryStateV3)
+                and not repair_started
+                and not is_restoration_adaptation(run)
+                else MIN_SOURCE_REPAIR_SECONDS
+            )
         if deadline is None:
             raise MaxFinalizationConflict(
                 "sealed restoration adaptation cannot enter a source repair"
@@ -1068,7 +1077,7 @@ class MaxFinalizationCoordinator:
         if continuation is not None:
             repair_end = continuation.soft_edit_deadline(repair_end) or repair_end
         remaining = (repair_end - datetime.now(UTC)).total_seconds()
-        if remaining < MIN_SOURCE_REPAIR_SECONDS:
+        if remaining < minimum:
             if continuation is not None:
                 await continuation.soft_boundary(exhausted=True)
             raise TimeoutError("generation deadline exceeded before source repair")

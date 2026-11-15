@@ -84,6 +84,7 @@ from yleum_api.services.generation.recovery_contract import (
 )
 from yleum_api.services.generation.recovery_trace import provider_error_context
 from yleum_api.services.generation.source_repair_context import MAX_REPAIR_CONTEXT_BYTES
+from yleum_api.services.generation_deadline import MIN_PROVIDER_WINDOW_SECONDS
 from yleum_api.services.max_generation_contract import _is_product_source
 from yleum_api.services.max_management_generation import ManagedSourceGap
 from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
@@ -201,7 +202,6 @@ _PROVIDER_RECEIPT_WINDOW_SECONDS = 15.0
 _MIN_MAX_PROVIDER_WINDOW_SECONDS = (
     _AGENT_RESPONSE_TIMEOUT_SECONDS + _PROVIDER_RECEIPT_WINDOW_SECONDS
 )
-_MIN_PROVIDER_WINDOW_SECONDS = 105.0
 _SOURCE_HANDOFF_SNAPSHOT_SECONDS = 5.0
 _DURABLE_DEADLINE_CHECK_SECONDS = 60.0
 SOURCE_FINALIZATION_HANDOFF = "source_finalization_handoff"
@@ -1233,7 +1233,7 @@ async def _run_agent_segment(
             minimum_window = (
                 _MIN_MAX_PROVIDER_WINDOW_SECONDS
                 if reserve_full_provider_window and _uses_ordinary_max_source_contract()
-                else _MIN_PROVIDER_WINDOW_SECONDS
+                else MIN_PROVIDER_WINDOW_SECONDS
             )
             if (uses_gateway and coordinator_handoff and not restoring and remaining is not None
                     and 0 < remaining <= minimum_window):

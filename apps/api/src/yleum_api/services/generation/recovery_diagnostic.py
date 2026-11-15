@@ -7,21 +7,30 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
+from yleum_api.core.errors import ApiError
 from yleum_api.models.generation_provider_attempt import GenerationProviderAttempt
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.project import Project
 from yleum_api.services.generation.response_auth import _secret, _signed, _verified
 
+if TYPE_CHECKING:
+    from yleum_api.services.generation.recovery_contract import RecoveryStateV3
+
 KEY = "diagnostic_output_budget_v1"
 DOMAIN = b"yleum:operator-generation-output-diagnostic:v1"
+TIMEOUT_KEY = "diagnostic_response_timeout_v1"
+_TIMEOUT_DOMAIN = b"yleum:operator-generation-response-timeout:v1"
+_TIMEOUT_PURPOSE = "operator.response-timeout.once"
+_TIMEOUT_LIFETIME = 20 * 60
 _INTENT: ContextVar[dict[str, Any] | None] = ContextVar("diagnostic_output_intent", default=None)
 
 
@@ -132,10 +141,9 @@ async def lock_diagnostic_namespace(session: AsyncSession, run_id: UUID) -> None
         raise ValueError("diagnostic/first-attempt reservation is busy")
 
 
-async def arm_diagnostic_output_budget(
-    session: AsyncSession, *, run_id: UUID, project_id: UUID, user_id: UUID, attempt_id: UUID
-) -> None:
-    """Operator-only transaction; caller commits. No admission, dispatch, or public route."""
+async def _unused_diagnostic_run(
+    session: AsyncSession, *, run_id: UUID, project_id: UUID, user_id: UUID,
+) -> GenerationRun:
     _canary(project_id)
     await lock_diagnostic_namespace(session, run_id)
     project = await session.scalar(
@@ -159,6 +167,7 @@ async def arm_diagnostic_output_budget(
         or run.user_message_id is None
         or run.assistant_message_id is None
         or KEY in run.agent_state
+        or TIMEOUT_KEY in run.agent_state
         or await session.scalar(
             select(GenerationProviderAttempt.attempt_id)
             .where(
@@ -183,6 +192,16 @@ async def arm_diagnostic_output_budget(
     from yleum_api.services.generation.request_binding import bound_message_request
 
     bound_message_request(run, user_message, project_id=project_id, run_id=run_id)
+    return run
+
+
+async def arm_diagnostic_output_budget(
+    session: AsyncSession, *, run_id: UUID, project_id: UUID, user_id: UUID, attempt_id: UUID,
+) -> None:
+    """Operator-only transaction; caller commits. No admission, dispatch, or public route."""
+    run = await _unused_diagnostic_run(
+        session, run_id=run_id, project_id=project_id, user_id=user_id,
+    )
     now = datetime.now(UTC)
     run.agent_state = {
         **run.agent_state,
@@ -200,6 +219,97 @@ async def arm_diagnostic_output_budget(
     }
     session.add(run)
     await session.flush()
+
+
+async def _diagnostic_qa_owner(session: AsyncSession, user_id: UUID) -> bool:
+    from yleum_api.models.user import User
+    from yleum_api.services.entitlements import has_qa_unlimited_generations, load_plan_context
+
+    user = await session.get(User, user_id)
+    return user is not None and has_qa_unlimited_generations(
+        user, await load_plan_context(session, user_id),
+    )
+
+
+def _timeout_scope(run: GenerationRun) -> dict[str, str]:
+    return {
+        "purpose": _TIMEOUT_PURPOSE,
+        "run_id": str(run.id),
+        "project_id": str(run.project_id),
+        "user_id": str(run.user_id),
+        "prompt_hash": run.prompt_hash,
+    }
+
+
+async def arm_diagnostic_response_timeout(
+    session: AsyncSession, *, run_id: UUID, project_id: UUID, user_id: UUID,
+) -> None:
+    """Arm a read timeout on the first confirmed response of one admitted QA run."""
+    run = await _unused_diagnostic_run(
+        session, run_id=run_id, project_id=project_id, user_id=user_id,
+    )
+    if not await _diagnostic_qa_owner(session, user_id):
+        raise ValueError("response timeout requires an internal QA account")
+    issued = int(datetime.now(UTC).timestamp())
+    token = _signed(
+        {**_timeout_scope(run), "iat": issued, "exp": issued + _TIMEOUT_LIFETIME},
+        _secret(None), _TIMEOUT_DOMAIN,
+    )
+    run.agent_state = {**run.agent_state, TIMEOUT_KEY: {"token": token}}
+    await session.flush()
+
+
+async def consume_diagnostic_response_timeout(
+    factory: async_sessionmaker[AsyncSession], state: RecoveryStateV3,
+) -> bool:
+    """Take a one-shot test intent only after the original response is retained."""
+    from yleum_api.services.generation.recovery_execution import (
+        _require_session_owner,
+        _retained_completion_attempt,
+        recovery_state,
+    )
+    from yleum_api.services.generation.recovery_store import _locked_owner
+    from yleum_api.services.generation_deployment_drain import require_generation_admission
+
+    owner = state.identity
+    try:
+        _canary(owner.project_id)
+        async with factory() as session:
+            hint = await session.get(GenerationRun, owner.run_id)
+            pending = hint.agent_state.get(TIMEOUT_KEY) if hint is not None else None
+            if type(pending) is not dict or set(pending) != {"token"}:
+                return False
+            await require_generation_admission(session)
+            run, _ = await _locked_owner(
+                session, run_id=owner.run_id, project_id=owner.project_id, user_id=owner.user_id,
+            )
+            raw = run.agent_state.get(TIMEOUT_KEY)
+            if type(raw) is not dict or set(raw) != {"token"} or recovery_state(run) != state:
+                return False
+            claims = _verified(
+                raw["token"], secret=_secret(None), domain=_TIMEOUT_DOMAIN, now=datetime.now(UTC),
+                max_lifetime_seconds=_TIMEOUT_LIFETIME,
+            )
+            scope = _timeout_scope(run)
+            if (
+                set(claims) != {*scope, "iat", "exp"}
+                or any(claims[key] != value for key, value in scope.items())
+                or run.prompt_hash != owner.prompt_hash
+                or not await _diagnostic_qa_owner(session, owner.user_id)
+            ):
+                return False
+            attempt = await _retained_completion_attempt(session, state)
+            if attempt is None:
+                return False
+            await _require_session_owner(run.id)
+            run.agent_state = {
+                **run.agent_state, TIMEOUT_KEY: {**raw, "attempt_id": str(attempt.attempt_id)},
+            }
+            await session.commit()
+            return True
+    except (ApiError, ValueError, SQLAlchemyError):
+        # The test hook cannot replace a real reply on unknown authorization or commit.
+        return False
 
 
 def _saved_intent(

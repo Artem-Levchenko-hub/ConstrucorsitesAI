@@ -10,9 +10,11 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4
 
+import httpx
+import structlog
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
 
@@ -40,9 +42,13 @@ from yleum_api.services.generation.recovery_contract import (
 )
 from yleum_api.services.generation_deployment_drain import require_generation_admission
 
+if TYPE_CHECKING:
+    from yleum_api.services.generation.recovery_reconciliation import ProviderEffectCursor
+
 # Keep the original container key so old strict readers see an unsupported
 # version, rather than ignoring a new sibling namespace and replaying dispatch.
 RECOVERY_KEY = "recovery_v1"
+log = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +187,80 @@ async def _released_quiescent(
     return True
 
 
+async def _response_wait_attempt(
+    session: AsyncSession, state: RecoveryStateV2,
+) -> GenerationProviderAttempt | None:
+    from yleum_api.services.generation.recovery_reconciliation import provider_root_effect_id
+
+    execution, owner = state.execution, state.identity
+    if execution.substep != "response_wait":
+        return None
+    root = provider_root_effect_id(owner.run_id, execution.logical_step_seq)
+    if execution.provider_effect_id != root or execution.pending_effect_id != root:
+        return None
+    effect, attempt = GenerationRecoveryEffect, GenerationProviderAttempt
+    matches = await session.scalars(
+        select(attempt).join(effect, effect.provider_attempt_id == attempt.attempt_id).where(
+            effect.kind == "provider", effect.logical_step_seq == execution.logical_step_seq,
+            effect.run_id == owner.run_id, effect.project_id == owner.project_id,
+            effect.user_id == owner.user_id, effect.input_digest == attempt.request_sha256,
+            attempt.run_id == owner.run_id, attempt.project_id == owner.project_id,
+            attempt.user_id == owner.user_id, attempt.prompt_hash == owner.prompt_hash,
+        ).order_by(effect.effect_ordinal.desc()).limit(1)
+    )
+    return matches.one_or_none()
+
+
+async def _retained_completion_attempt(
+    session: AsyncSession, state: RecoveryStateV2,
+) -> GenerationProviderAttempt | None:
+    attempt = await _response_wait_attempt(session, state)
+    if (
+        attempt is None or attempt.phase != "closed" or attempt.terminal_reason != "completed"
+        or attempt.provider_call_id is None or not attempt.response_manifest_key
+        or not attempt.response_sha256
+    ):
+        return None
+    stored = await session.scalar(text(
+        "SELECT state FROM generation_responses WHERE attempt_id=:attempt "
+        "AND manifest_key=:manifest AND response_sha256=:sha"
+    ), {
+        "attempt": attempt.attempt_id, "manifest": attempt.response_manifest_key,
+        "sha": attempt.response_sha256,
+    })
+    return attempt if stored == "complete" else None
+
+
+async def _has_retained_completion(
+    factory: async_sessionmaker[AsyncSession], state: RecoveryStateV2,
+) -> bool:
+    async with factory() as session:
+        return await _retained_completion_attempt(session, state) is not None
+
+
+async def _defer_open_response(
+    session: AsyncSession, run: GenerationRun, state: RecoveryStateV3, now: datetime,
+) -> bool:
+    from yleum_api.services.generation.recovery_clock import next_dependency_check
+
+    attempt = await _response_wait_attempt(session, state)
+    if attempt is None or attempt.phase not in {"dispatching", "indeterminate"}:
+        return False
+    # An open receipt cannot become usable through cell acquisition. A later
+    # poll rereads the same logical step without reopening the active clock.
+    failures = state.clock.dependency_failures + 1
+    deferred = state.model_copy(update={
+        "phase": "waiting_dependency",
+        "next_check_at": next_dependency_check(run.id, failures=failures, now=now),
+        "state_revision": state.state_revision + 1,
+        "clock": state.clock.model_copy(update={"dependency_failures": failures}),
+    })
+    await _require_session_owner(run.id)
+    run.agent_state = {**run.agent_state, RECOVERY_KEY: deferred.model_dump(mode="json")}
+    await session.flush()
+    return True
+
+
 async def claim_continuation(
     session: AsyncSession,
     *,
@@ -215,6 +295,8 @@ async def claim_continuation(
             and (state.next_check_at is None or state.next_check_at > now)
         )
     ):
+        return None
+    if isinstance(state, RecoveryStateV3) and await _defer_open_response(session, run, state, now):
         return None
     from yleum_api.services.generation.agent_publication import publication_committed
     if not await publication_committed(session, run=run, project=project, state=state):
@@ -998,6 +1080,50 @@ class ExecutionDriver:
         self._tool_position += 1
         return observation
 
+    async def _invoke_provider(
+        self, cursor: ProviderEffectCursor, invoke: Callable[[], Awaitable[Any]],
+    ) -> Any:
+        from yleum_api.services.generation.recovery_diagnostic import (
+            consume_diagnostic_response_timeout,
+        )
+        from yleum_api.services.generation.recovery_reconciliation import (
+            ProviderEffectCursor,
+            provider_effect_scope,
+        )
+
+        try:
+            with provider_effect_scope(cursor):
+                response = await invoke()
+            if (
+                not cursor.reconcile_only and isinstance(self.state, RecoveryStateV3)
+                and await consume_diagnostic_response_timeout(self.factory, self.state)
+            ):
+                raise TimeoutError("QA timeout after response retention")
+            return response
+        except Exception as error:
+            timeout_types = (TimeoutError, httpx.ReadTimeout)
+            timeout = isinstance(error, timeout_types) or isinstance(error.__cause__, timeout_types)
+            if (
+                cursor.reconcile_only or not isinstance(self.state, RecoveryStateV3)
+                or not timeout
+                or not await _has_retained_completion(self.factory, self.state)
+            ):
+                raise
+        # The first request has a closed, retained result. The usual signed
+        # reader validates it again before returning bytes to the agent.
+        replay = ProviderEffectCursor(
+            cursor.claim, self.state.state_revision, cursor.logical_step_seq,
+            reconcile_only=True, retained_only=True, outer_attempt=cursor.outer_attempt,
+            outer_allowance=cursor.outer_allowance, call_deadline=cursor.call_deadline,
+        )
+        with provider_effect_scope(replay):
+            response = await invoke()
+        log.info(
+            "generation.retained_provider_response_reused",
+            run_id=str(replay.claim.run_id), logical_step_seq=replay.logical_step_seq,
+        )
+        return response
+
     async def provider(
         self,
         frame: dict[str, Any],
@@ -1005,7 +1131,6 @@ class ExecutionDriver:
     ) -> Any:
         from yleum_api.services.generation.recovery_reconciliation import (
             ProviderEffectCursor,
-            provider_effect_scope,
         )
         from yleum_api.services.llm_client import LLMError, LLMOutputTruncated
 
@@ -1095,8 +1220,7 @@ class ExecutionDriver:
             if admission is not None:
                 self.before_fresh_provider = None
         try:
-            with provider_effect_scope(cursor):
-                response = await invoke()
+            response = await self._invoke_provider(cursor, invoke)
         except LLMOutputTruncated:
             self._reconcile_response = False
             raise

@@ -54,7 +54,9 @@ def _signed(claims: dict[str, object], secret: str, domain: bytes) -> str:
     return signed.decode() + "." + hmac.new(key, signed, hashlib.sha256).hexdigest()
 
 
-def _verified(token: str, *, secret: str, domain: bytes, now: datetime) -> dict[str, Any]:
+def _verified(
+    token: str, *, secret: str, domain: bytes, now: datetime, max_lifetime_seconds: int = 60,
+) -> dict[str, Any]:
     if not isinstance(token, str) or len(token) > 4096:
         raise ValueError("invalid generation response assertion")
     match = re.fullmatch(r"v1\.([A-Za-z0-9_-]+)\.([a-f0-9]{64})", token)
@@ -76,7 +78,7 @@ def _verified(token: str, *, secret: str, domain: bytes, now: datetime) -> dict[
         if (
             type(issued) is not int
             or type(expires) is not int
-            or not 0 < expires - issued <= 60
+            or not 0 < expires - issued <= max_lifetime_seconds
             or issued > seconds
             or expires <= seconds
             or _signed(claims, secret, domain) != token

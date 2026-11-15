@@ -295,7 +295,7 @@ async def _managed_source_repair_state(
     driver: ExecutionDriver, detail: str,
 ) -> RecoveryStateV3 | None:
     from yleum_api.services.generation.recovery_pipeline import CompletedAgentTurn
-    from yleum_api.services.generation_deadline import MIN_SOURCE_REPAIR_SECONDS
+    from yleum_api.services.generation_deadline import MIN_PROVIDER_WINDOW_SECONDS
     from yleum_api.services.max_generation_contract import max_source_completion_gap
     from yleum_api.services.max_management_generation import ManagedSourceGap
     from yleum_api.services.promotion_permit import workspace_revision_digest
@@ -324,7 +324,7 @@ async def _managed_source_repair_state(
     edit_deadline = driver.soft_edit_deadline(None)
     if (
         edit_deadline is None
-        or (edit_deadline - datetime.now(UTC)).total_seconds() >= MIN_SOURCE_REPAIR_SECONDS
+        or (edit_deadline - datetime.now(UTC)).total_seconds() >= MIN_PROVIDER_WINDOW_SECONDS
     ):
         return None
     completed = driver.context["completed"]
