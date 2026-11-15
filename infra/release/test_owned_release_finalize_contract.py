@@ -547,6 +547,7 @@ reader_control() { record "$2-$1"; }
 SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 FINALIZE_NONCE=11111111-1111-4111-8111-111111111111
 CONTROL_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+PARKED_SOURCE_RUN=
 SHORT=aaaaaaaa
 REPO=.
 API=1 WEB=0 GW=0 LEGAL= REPAIR=3600
@@ -561,13 +562,18 @@ ssh() {
  esac
 }
 api_maintenance() { [ "$1" = --describe-runtime ]; printf 'describe\\n' >> calls; printf '%s' "$SHA"; }
+ingress_drain() {
+ [ "$1" = parked-source-scope ]
+ printf 'scope\\n' >> calls
+ printf '{"parked_source_run":null,"ingress_active":true}'
+}
 finalize_preflight() { printf 'preflight\\n' >> calls; }
 finish_owned_release() { printf 'finish\\n' >> calls; }
 ''' + main
             result = self.shell(script, cwd=temp)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(Path(temp, "calls").read_text().splitlines(),
-                             ["control", "lock", "describe", "preflight", "finish", "unlock"])
+                             ["control", "lock", "describe", "scope", "preflight", "finish", "unlock"])
 
     def test_resume_main_preflight_precedes_normal_full_rollout_under_mutex(self):
         main = self.source().split('say "выкатка ', 1)[1]
@@ -580,6 +586,7 @@ SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 FINALIZE_NONCE=
 RESUME_NONCE=11111111-1111-4111-8111-111111111111
 CONTROL_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+PARKED_SOURCE_RUN=
 SHORT=aaaaaaaa
 REPO=.
 API=1 WEB=1 GW=0 LEGAL= REPAIR=3600 BOOTSTRAP=0
@@ -598,7 +605,12 @@ api_maintenance() {
  if [ "$1" = --describe-runtime ]; then record describe; printf '%s' "$SHA";
  else [ "$3" = begin ] && [ "$4" = "$SHA" ]; record sql-begin; fi
 }
-ingress_drain() { record "ingress-$1"; }
+ingress_drain() {
+ record "ingress-$1"
+ if [ "$1" = parked-source-scope ]; then
+   printf '{"parked_source_run":null,"ingress_active":true}'
+ fi
+}
 reader_control() { [ "$2" = verify-owner ]; record "owner-$1"; }
 reader_resume_check() { record resume-check; }
 reader_prepare_retry() { [ "$READER_NONCE" = "$RESUME_NONCE" ]; record prepare; }
@@ -613,7 +625,8 @@ reader_before() { [ "$READER_RETRY" = 1 ]; record before; }
                     self.assertFalse(any(item.startswith("build:") for item in calls))
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(calls, ["control", "lock", "describe", "ancestor", "ingress-check",
+                    self.assertEqual(calls, ["control", "lock", "describe", "ingress-parked-source-scope",
+                                             "ancestor", "ingress-check",
                                              "owner-core", "owner-commerce", "resume-check", "ingress-begin",
                                              "prepare", "sql-begin", "physical", "before",
                                              "build:" + self.target + ":1:1", "unlock"])
