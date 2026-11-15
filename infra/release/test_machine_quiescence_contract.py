@@ -174,6 +174,7 @@ class PendingFastCheckTests(unittest.TestCase):
             self.sources,
             self.checker._PORTABLE_QUIESCENCE_READER_WAIT_SOURCES,
             self.checker._PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES,
+            self.checker._PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES,
         ):
             self.assertEqual(
                 self.checker._pending_portable_commands(self.machine, sources=sources),
@@ -619,15 +620,15 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             (Path(__file__).parent / "fixtures/source-guard-lease-quiescence-sources.json")
             .read_text()
         )
-        current = self.checker._PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES
+        current = self.checker._PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES
         self.checker._require_reviewed_portable_sources(previous)
         self.checker._require_reviewed_portable_sources(previous_lease)
         baseline = json.loads(
             (Path(__file__).parent / "fixtures/bootstrap-recheck-quiescence-sources.json")
             .read_text()
         )
-        mixed = {name: previous_lease[name] for name in current
-                 if previous_lease[name] != current[name]}
+        mixed = {name: digest for name, digest in previous_lease.items()
+                 if digest != current[name]}
         mixed["services.docker_cell_resources"] = baseline["services.docker_cell_resources"]
         for name, digest in mixed.items():
             with self.subTest(mixed=name), self.assertRaisesRegex(

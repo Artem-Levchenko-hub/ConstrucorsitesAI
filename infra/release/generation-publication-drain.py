@@ -232,6 +232,16 @@ _PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES = {
         "230b53167ab847a4fdb9ce23460a1d3da6d5cde7c0c754a81a70221da9bb0161"
     ),
 }
+# Generation release seals its environment and the fenced reader verifies it after
+# startup. Keep the old bundle available for the drain before controller rollout.
+_PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES = {
+    **_PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES,
+    "services.docker_machine_backend": "533772df280e9fd186cf97e7ce8eb631fb66e69d91557283f5dfb69ed86fd829",
+    "services.machine_adapter": "686f7bf79ad750e0e5c42ec63d4c0e0123a75a27d1a7417a011a456f51b279ac",
+    "routers.workspace": "a762e1426d8bc52e88ab8f0cf3e62c48cb83b154c9c22bc2a221e0c955e5b30c",
+    "services.docker_cell_resources": "eaec1570e7b09616d6ee1461737a2dada016799e7bedb967e24f8b19cf60971a",
+    "services.machine_recovery_environment": "28808c4a701a1e62cea1f3e8561573f429a3b588e20540e9164c61cca3bfba1a",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -253,6 +263,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES,
     _PORTABLE_QUIESCENCE_READER_WAIT_SOURCES,
     _PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES,
+    _PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.
@@ -496,7 +507,8 @@ def _pending_portable_commands(machine: dict, *, sources: dict[str, str]) -> dic
         _kernel_need(
             sources in (_PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES,
                         _PORTABLE_QUIESCENCE_READER_WAIT_SOURCES,
-                        _PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES)
+                        _PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES,
+                        _PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES)
             and len(requests) == 1 and len(pending) <= 1,
             "quiescence_command_scope",
         )
