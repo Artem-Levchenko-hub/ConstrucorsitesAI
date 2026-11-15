@@ -24,6 +24,7 @@ from yleum_api.models.project_cell import (
     ProjectCellWorkspace,
 )
 from yleum_api.models.restoration import ACTIVE_RESTORATION_STATES, Restoration
+from yleum_api.services.generation_execution_context import execution_run_id
 from yleum_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
     write_capacity_dispatch_claim,
@@ -1267,6 +1268,8 @@ async def wait_for_capacity(
             raise RuntimeError("queued generation run disappeared")
         if run.status == "cancel_requested" or run.status not in ACTIVE_GENERATION_STATUSES:
             return await _cancel_waiting_operation(session, operation_id)
+        operation = await session.get(ProjectCellOperation, operation_id)
+        parked_for_capacity = operation is not None and operation.status == "waiting_capacity"
         queued_at = (
             continuation_ensure.created_at if continuation_ensure is not None else run.created_at
         )
@@ -1274,7 +1277,8 @@ async def wait_for_capacity(
     try:
         remaining = (deadline - datetime.now(UTC)).total_seconds()
         async with asyncio.timeout(max(0, remaining)):
-            if initial_attempt is not None:
+            # Only the new-operation fast path may bypass the queued retry schedule.
+            if initial_attempt is not None and not parked_for_capacity:
                 initial = await initial_attempt()
                 if initial.status not in {"waiting_capacity", "indeterminate", "running"}:
                     return initial
@@ -1313,6 +1317,42 @@ async def wait_for_capacity(
         raise TimeoutError("Project Cell capacity queue deadline exceeded") from None
 
 
+async def _owns_capacity_refusal(
+    session: AsyncSession,
+    run: GenerationRun,
+    operation: ProjectCellOperation,
+    locally_refused_operation_id: UUID | None,
+) -> bool:
+    if (
+        operation.kind != "ensure"
+        or operation.generation_run_id != run.id
+        or operation.fencing_epoch is None
+        or operation.capacity_reason is None
+    ):
+        return False
+
+    dispatch_owner = execution_run_id.get()
+    if not (
+        dispatch_owner == run.id == operation.execution_run_id
+        or (
+            dispatch_owner is None
+            and operation.execution_run_id is None
+            and operation.id == locally_refused_operation_id
+        )
+    ):
+        return False
+
+    workspace = await session.get(ProjectCellWorkspace, operation.workspace_id)
+    return (
+        workspace is not None
+        and workspace.deleted_at is None
+        and workspace.project_id == run.project_id
+        and workspace.owner_id == run.user_id
+        and workspace.generation_run_id == run.id
+        and workspace.fencing_epoch == operation.fencing_epoch
+    )
+
+
 async def _wait_for_capacity(
     session_factory: async_sessionmaker[AsyncSession],
     *,
@@ -1327,7 +1367,7 @@ async def _wait_for_capacity(
     last_progress: tuple[int, str | None] | None = None
     last_emitted_at = 0.0
     ensure_anchor_id = operation_id
-    refused_for_capacity = False
+    locally_refused_operation_id: UUID | None = None
     while True:
         async with session_factory() as session:
             run = await session.scalar(
@@ -1345,9 +1385,21 @@ async def _wait_for_capacity(
                 if dispatch_token is not None:
                     write_capacity_dispatch_claim(run, token=dispatch_token, lease_seconds=30)
             turn = await claim_capacity_turn(session, run_id, continuation=continuation)
-            operation_status = await session.scalar(
-                select(ProjectCellOperation.status).where(
-                    ProjectCellOperation.id == operation_id,
+            operation = await session.get(ProjectCellOperation, operation_id)
+            operation_status = operation.status if operation is not None else None
+            next_attempt_at = (
+                operation.next_attempt_at
+                if operation is not None and operation.status == "waiting_capacity"
+                else None
+            )
+            retry_deferred = next_attempt_at is not None and next_attempt_at > datetime.now(UTC)
+            may_reclaim = (
+                turn.may_start
+                and not retry_deferred
+                and next_attempt_at is not None
+                and operation is not None
+                and await _owns_capacity_refusal(
+                    session, run, operation, locally_refused_operation_id,
                 )
             )
             await session.commit()
@@ -1365,12 +1417,25 @@ async def _wait_for_capacity(
                 }
             )
             last_progress = progress
-            last_emitted_at = now
-        if not turn.may_start:
-            await asyncio.sleep(max(1, min(turn.retry_after_seconds, 10)))
+            last_emitted_at = time.monotonic()
+            if may_reclaim:
+                # Stop or a different workspace fence can arrive while publishing.
+                # Read current authority before reclaiming a cell or retrying ensure.
+                continue
+        if retry_deferred or not turn.may_start:
+            retry_delay = (
+                (next_attempt_at - datetime.now(UTC)).total_seconds()
+                if next_attempt_at is not None else 0.0
+            )
+            if not turn.may_start:
+                retry_delay = max(retry_delay, 1, turn.retry_after_seconds)
+            if retry_delay > 0:
+                await asyncio.sleep(min(retry_delay, 10))
+            # Even if progress emission crossed the deadline, read the due operation
+            # and check reclamation authority together in the next locked pass.
             continue
 
-        if refused_for_capacity:
+        if may_reclaim:
             # Усыпляем чужую ячейку ТОЛЬКО после того, как хост действительно
             # отказал. Раньше это делал каждый, кто дошёл до головы очереди, —
             # при одном ходоке за раз это было почти незаметно, а при нескольких
@@ -1392,19 +1457,7 @@ async def _wait_for_capacity(
             outcome = await execute_cell_operation(session_factory, operation_id, client)
         operation_id = outcome.operation_id
         if outcome.status == "waiting_capacity":
-            refused_for_capacity = True
-            async with session_factory() as session:
-                operation = await session.get(ProjectCellOperation, operation_id)
-                delay = 1
-                if operation is not None and operation.next_attempt_at is not None:
-                    delay = max(
-                        1,
-                        min(
-                            10,
-                            int((operation.next_attempt_at - datetime.now(UTC)).total_seconds()),
-                        ),
-                    )
-            await asyncio.sleep(delay)
+            locally_refused_operation_id = operation_id
             continue
         if outcome.status in {"indeterminate", "running"}:
             await asyncio.sleep(1)

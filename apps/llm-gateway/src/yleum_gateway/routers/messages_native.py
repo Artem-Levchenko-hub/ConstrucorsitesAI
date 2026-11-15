@@ -8,8 +8,8 @@ with LLMGW as primary and the separately admitted AI Tunnel backup.
 
 Thinking blocks from historical transcripts are intentionally omitted when
 building the OpenAI request: llmgw does not document Anthropic thinking
-signatures. Tool ids and results are preserved, which is the state required for
-the build loop to continue correctly.
+signatures. Kimi assistant turns use a private provider-bound carrier instead.
+Tool IDs and results stay in the shared Anthropic-shaped transcript.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ import httpx
 import structlog
 from fastapi import APIRouter, HTTPException, Request, Response
 
+from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.errors import (
     BillingReconciliationRequiredError,
     DispatchDeadlineError,
@@ -56,7 +57,15 @@ from yleum_gateway.providers.rate_limit import bounded_error_body, refusal_retry
 from yleum_gateway.services import billing, file_logger, generation_attempts, text_failover
 from yleum_gateway.services import provider_calls as provider_calls
 from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
+from yleum_gateway.services.generation_credit_guard import KIMI_PILOT_STAGES
 from yleum_gateway.services.generation_identity import GenerationProviderIdentity
+from yleum_gateway.services.kimi_native import (
+    KIMI_LLMGW_MODEL,
+    KIMI_MODEL,
+    KimiNativeSession,
+    assistant_text,
+    restore_history,
+)
 from yleum_gateway.services.model_router import is_supported, native_messages_route, slug_to_omnia
 from yleum_gateway.services.native_request_validation import (
     NativeRequestValidationError,
@@ -199,7 +208,9 @@ def _text(content: Any) -> str:
     )
 
 
-def _openai_text_content(content: Any, *, field: str) -> str | list[dict[str, Any]]:
+def _openai_text_content(
+    content: Any, *, field: str, preserve_cache_control: bool = True,
+) -> str | list[dict[str, Any]]:
     """Keep Anthropic cache breakpoints while adapting text blocks.
 
     llmgw accepts OpenAI content arrays. LiteLLM-compatible Anthropic routes read
@@ -242,7 +253,7 @@ def _openai_text_content(content: Any, *, field: str) -> str | list[dict[str, An
             adapted_image: dict[str, Any] = {"type": "image_url", "image_url": {
                 "url": f"data:{source['media_type']};base64,{source['data']}",
             }}
-            if isinstance(block.get("cache_control"), dict):
+            if preserve_cache_control and isinstance(block.get("cache_control"), dict):
                 adapted_image["cache_control"] = dict(block["cache_control"])
             blocks.append(adapted_image)
             continue
@@ -252,7 +263,7 @@ def _openai_text_content(content: Any, *, field: str) -> str | list[dict[str, An
         if not text:
             continue
         adapted: dict[str, Any] = {"type": "text", "text": text}
-        if isinstance(block.get("cache_control"), dict):
+        if preserve_cache_control and isinstance(block.get("cache_control"), dict):
             adapted["cache_control"] = dict(block["cache_control"])
         blocks.append(adapted)
     if not blocks:
@@ -262,9 +273,17 @@ def _openai_text_content(content: Any, *, field: str) -> str | list[dict[str, An
     return "\n".join(str(block["text"]) for block in blocks)
 
 
-def _openai_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
+def _openai_messages(
+    body: dict[str, Any], *, kimi: KimiNativeSession | None = None,
+) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    system = _openai_text_content(body.get("system"), field="system")
+    restore_history(kimi, "system", body.get("system"), [], "system")
+    # Kimi has provider-managed prefix caching. Claude breakpoints are only for
+    # the compatible Anthropic routes and are not part of Kimi's request shape.
+    preserve_cache_control = kimi is None
+    system = _openai_text_content(
+        body.get("system"), field="system", preserve_cache_control=preserve_cache_control,
+    )
     if system:
         out.append({"role": "system", "content": system})
 
@@ -284,7 +303,10 @@ def _openai_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
         content = message.get("content", "")
 
         if role == "assistant":
-            text = _openai_text_content(content, field=f"{field}.content")
+            if kimi is None:
+                text = _openai_text_content(content, field=f"{field}.content") or None
+            else:
+                text = assistant_text(content, f"{field}.content")
             tool_calls: list[dict[str, Any]] = []
             if isinstance(content, list):
                 for block in content:
@@ -304,13 +326,18 @@ def _openai_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
                     )
             item: dict[str, Any] = {
                 "role": "assistant",
-                "content": text or None,
+                "content": text,
             }
             if tool_calls:
                 item["tool_calls"] = tool_calls
+            item.update(restore_history(
+                kimi, role, content, tool_calls, f"{field}.content",
+                text=text if isinstance(text, str) else None,
+            ))
             out.append(item)
             continue
 
+        restore_history(kimi, role, content, [], f"{field}.content")
         if role != "user":
             raise NativeRequestValidationError(
                 "unsupported_message_role", f"{field}.role", message=f"unsupported role: {role}",
@@ -325,7 +352,9 @@ def _openai_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
                 message="message content must be text or an array",
             )
 
-        text = _openai_text_content(content, field=f"{field}.content")
+        text = _openai_text_content(
+            content, field=f"{field}.content", preserve_cache_control=preserve_cache_control,
+        )
         for block in content:
             if not isinstance(block, dict) or block.get("type") != "tool_result":
                 continue
@@ -342,7 +371,7 @@ def _openai_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
             # The native loop puts its moving prefix breakpoint on the last
             # tool_result. LiteLLM understands cache_control at message level,
             # so carry it across instead of silently dropping the main cache.
-            if isinstance(block.get("cache_control"), dict):
+            if preserve_cache_control and isinstance(block.get("cache_control"), dict):
                 tool_result["cache_control"] = dict(block["cache_control"])
             out.append(tool_result)
         # Resolve every preceding assistant tool call before adding feedback.
@@ -353,7 +382,7 @@ def _openai_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def _openai_tools(raw: Any) -> list[dict[str, Any]]:
+def _openai_tools(raw: Any, *, preserve_cache_control: bool = True) -> list[dict[str, Any]]:
     if not isinstance(raw, list):
         return []
     tools: list[dict[str, Any]] = []
@@ -370,7 +399,7 @@ def _openai_tools(raw: Any) -> list[dict[str, Any]]:
         item: dict[str, Any] = {"type": "function", "function": function}
         # LiteLLM reads tool cache_control beside `type`/`function`, matching
         # the OpenAI extension it converts to Anthropic's cached tool block.
-        if isinstance(tool.get("cache_control"), dict):
+        if preserve_cache_control and isinstance(tool.get("cache_control"), dict):
             item["cache_control"] = dict(tool["cache_control"])
         tools.append(item)
     return tools
@@ -394,31 +423,64 @@ class _InvalidUsageReceipt(ValueError):
     """A paid response has no trustworthy token totals for settlement."""
 
 
-def _native_usage(raw: Any) -> dict[str, Any]:
+def _receipt_token_count(value: object) -> int:
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        try:
+            value = int(value)
+        except ValueError as exc:
+            raise _InvalidUsageReceipt("Invalid provider token receipt") from exc
+    if type(value) is not int or value < 0:
+        raise _InvalidUsageReceipt("Invalid provider token receipt")
+    return value
+
+
+def _matching_cache_token_count(*aliases: object) -> int:
+    counts = {_receipt_token_count(value) for value in aliases if value is not None}
+    if len(counts) > 1:
+        raise _InvalidUsageReceipt("Conflicting Kimi cache token counters")
+    return next(iter(counts), 0)
+
+
+def _native_usage(raw: Any, *, strict_cache: bool = False) -> dict[str, int]:
     if not isinstance(raw, dict):
         raise _InvalidUsageReceipt("Missing provider token receipt")
     usage = dict(raw)
-    for field in ("prompt_tokens", "completion_tokens"):
-        value = usage.get(field)
-        if isinstance(value, str) and value.isascii() and value.isdecimal():
-            try:
-                value = int(value)
-            except ValueError as exc:
-                raise _InvalidUsageReceipt("Invalid provider token receipt") from exc
-        if type(value) is not int or value < 0:
-            raise _InvalidUsageReceipt("Invalid provider token receipt")
-        usage[field] = value
+    tokens_in = _receipt_token_count(usage.get("prompt_tokens"))
+    tokens_out = _receipt_token_count(usage.get("completion_tokens"))
+    if strict_cache:
+        details = usage.get("prompt_tokens_details")
+        if details is None:
+            details = {}
+        if not isinstance(details, dict):
+            raise _InvalidUsageReceipt("Invalid Kimi cache token receipt")
+        cached = _matching_cache_token_count(
+            details.get("cached_tokens"), usage.get("prompt_cache_hit_tokens"),
+            usage.get("cache_read_input_tokens"),
+        )
+        written = _matching_cache_token_count(
+            details.get("cache_write_tokens"), details.get("cache_creation_tokens"),
+            usage.get("cache_creation_input_tokens"),
+        )
+        # Kimi's unknown cache-write tariff must never be masked by clamping.
+        if cached + written > tokens_in:
+            raise _InvalidUsageReceipt("Kimi cache tokens exceed input tokens")
+        return {
+            "input_tokens": tokens_in,
+            "output_tokens": tokens_out,
+            "cache_read_input_tokens": cached,
+            "cache_creation_input_tokens": written,
+        }
+    usage.update(prompt_tokens=tokens_in, completion_tokens=tokens_out)
     normalized, _ = llmgw.normalize_usage(usage, 0, 0)
-    return normalized
+    return {
+        "input_tokens": normalized["prompt_tokens"],
+        "output_tokens": normalized["completion_tokens"],
+        "cache_read_input_tokens": normalized["prompt_cache_hit_tokens"],
+        "cache_creation_input_tokens": normalized["cache_creation_input_tokens"],
+    }
 
 
-def _anthropic_response(data: dict[str, Any], omnia_model: str) -> dict[str, Any]:
-    try:
-        choice = (data.get("choices") or [])[0]
-        message = choice.get("message") or {}
-    except (IndexError, AttributeError) as exc:
-        raise ValueError("llmgw returned no completion choice") from exc
-
+def _standard_response_content(message: dict[str, Any]) -> list[dict[str, Any]]:
     content: list[dict[str, Any]] = []
     text = message.get("content")
     if isinstance(text, str) and text:
@@ -447,6 +509,25 @@ def _anthropic_response(data: dict[str, Any], omnia_model: str) -> dict[str, Any
                        if not isinstance(tool_input, dict) else {}),
                 }
             )
+    return content
+
+
+def _anthropic_response(
+    data: dict[str, Any], omnia_model: str, *, kimi: KimiNativeSession | None = None,
+    usage: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    if kimi is not None:
+        content = kimi.response_content(data, expected_model=omnia_model)
+        choice = data["choices"][0]
+        tool_calls = choice["finish_reason"] == "tool_calls"
+    else:
+        try:
+            choice = (data.get("choices") or [])[0]
+            message = choice.get("message") or {}
+        except (IndexError, AttributeError) as exc:
+            raise ValueError("llmgw returned no completion choice") from exc
+        content = _standard_response_content(message)
+        tool_calls = message.get("tool_calls")
 
     finish_reason = choice.get("finish_reason")
     if output_stop_error(finish_reason) is not None:
@@ -458,7 +539,8 @@ def _anthropic_response(data: dict[str, Any], omnia_model: str) -> dict[str, Any
     else:
         stop_reason = "end_turn"
 
-    usage = _native_usage(data.get("usage"))
+    if usage is None:
+        usage = _native_usage(data.get("usage"), strict_cache=kimi is not None)
     return {
         "id": data.get("id") or f"msg_{uuid4().hex}",
         "type": "message",
@@ -468,12 +550,7 @@ def _anthropic_response(data: dict[str, Any], omnia_model: str) -> dict[str, Any
         "stop_reason": stop_reason,
         "provider_finish_reason": finish_reason if isinstance(finish_reason, str) else None,
         "stop_sequence": None,
-        "usage": {
-            "input_tokens": usage["prompt_tokens"],
-            "output_tokens": usage["completion_tokens"],
-            "cache_read_input_tokens": usage["prompt_cache_hit_tokens"],
-            "cache_creation_input_tokens": usage["cache_creation_input_tokens"],
-        },
+        "usage": usage,
     }
 
 
@@ -650,6 +727,8 @@ async def _settle_native_cost(
     receipt: dict[str, Any], reported: ReportedCost,
     identity: GenerationProviderIdentity | None = None,
     provider_scope: str = "llmgw",
+    *,
+    require_positive: bool = False,
 ) -> tuple[Decimal, dict[str, Any]] | None:
     try:
         cost_rub, provenance = await resolve_request_cost(
@@ -659,6 +738,8 @@ async def _settle_native_cost(
             cache_write_factor=anthropic_cache_write_factor(actual_model, payload),
             **text_failover.scope_options(provider_scope),
         )
+        if require_positive and cost_rub <= 0:
+            raise ValueError("Positive Kimi provider cost could not be confirmed")
         calculated_cost_rub = (Decimal(provenance["calculated_cost_rub"])
                                if provenance["calculated_cost_rub"] is not None else None)
     except Exception as exc:
@@ -676,17 +757,18 @@ async def _dispatch_native_provider(
     *, identity: GenerationProviderIdentity | None, model: str, payload: dict[str, Any],
     primary_route: tuple[str, str], dispatch_options: dict[str, Any], retry_count: int,
     provider_deadline: float, timed_primary: bool = False,
+    kimi: KimiNativeSession | None = None,
 ) -> tuple[UUID, httpx.Response, str] | Response:
     """Commit each upstream attempt independently before its network dispatch."""
     run_id, project_id = dispatch_options["run_id"], dispatch_options["project_id"]
     route = dispatch_options.get("route")
-    provider_scope = await text_failover.select_scope(
+    provider_scope = kimi.provider_scope if kimi else await text_failover.select_scope(
         identity, model, run_id=run_id, project_id=project_id, user_id=dispatch_options.get("user_id"),
         cell_route=route if route == "/v1/project-cell/messages" else None,
     )
     backup_enabled = text_failover.enabled(model)
     generation_retries = backup_enabled and run_id is not None and project_id is not None
-    timed_generation = generation_retries or (timed_primary and backup_enabled)
+    timed_generation = kimi is not None or generation_retries or (timed_primary and backup_enabled)
     stage = dispatch_options["stage"]
     loop = asyncio.get_running_loop()
     attempts: dict[str, int] = {}
@@ -710,8 +792,9 @@ async def _dispatch_native_provider(
             error = DispatchDeadlineError()
             return _err(error.http_status, error.code, error.message, details=error.details)
         api_key, api_base = primary_route if provider_scope == "llmgw" else text_failover.credentials(provider_scope)
-        payload = {**payload, "model": llmgw.native_slug(model) if provider_scope == "llmgw" else model}
-        collect_repair = provider_scope == "aitunnel" and stage == "source_repair"
+        wire_model = kimi.wire_model if kimi else llmgw.native_slug(model) if provider_scope == "llmgw" else model
+        payload = {**payload, "model": wire_model}
+        collect_repair = kimi is None and provider_scope == "aitunnel" and stage == "source_repair"
         rejection = provider_payload_rejection(collected_stream_payload(payload) if collect_repair else payload)
         if rejection is not None:
             return _native_request_rejected(
@@ -941,6 +1024,7 @@ async def _native_messages_execute(
     request: Request,
     *,
     runner_claims: RunnerClaims | None = None,
+    retained_identity: GenerationProviderIdentity | None = None,
 ) -> Response:
     route_path = "/v1/project-cell/messages" if runner_claims is not None else "/v1/messages"
     dispatch_options: dict[str, Any] = {
@@ -992,6 +1076,8 @@ async def _native_messages_execute(
     model = str(body.get("model") or "")
     if model == "anthropic/claude-sonnet-5.5":
         model = "claude-sonnet-5.5"
+    elif model == KIMI_LLMGW_MODEL:
+        model = KIMI_MODEL
 
     user_id = (
         None if runner_claims is not None else _uuid(body.get("user") or metadata.get("user_id"))
@@ -999,7 +1085,8 @@ async def _native_messages_execute(
     project_id = (
         runner_claims.project_id if runner_claims is not None else _uuid(metadata.get("project_id"))
     )
-    message_id = _uuid(metadata.get("message_id"))
+    raw_message_id = metadata.get("message_id")
+    message_id = _uuid(raw_message_id)
     run_id = runner_claims.run_id if runner_claims is not None else _uuid(metadata.get("run_id"))
     stage = str(metadata.get("stage") or "native_agent")[:80]
     retry_count = _non_negative_int(metadata.get("retry_count"))
@@ -1014,6 +1101,26 @@ async def _native_messages_execute(
             "model is required", phase="request_validation", reason="missing_model",
             field="model", scope=dispatch_options, retry_count=retry_count,
         )
+    kimi: KimiNativeSession | None = None
+    if model == KIMI_MODEL:
+        settings = get_settings()
+        secret = settings.generation_response_signing_secret
+        if (
+            retained_identity is None or identity != retained_identity
+            or retained_identity.project_id not in settings.max_kimi_pilot_project_ids
+            or user_id != retained_identity.user_id or runner_claims is not None or secret is None
+            or type(metadata.get("free", False)) is not bool or stage not in KIMI_PILOT_STAGES
+            or (raw_message_id is not None and message_id is None)
+        ):
+            return _err(409, "model_unavailable", "Kimi requires an approved retained native generation")
+        try:
+            kimi = KimiNativeSession(
+                identity=retained_identity, route=route_path, provider_scope="llmgw",
+                secret=secret.get_secret_value(),
+            )
+        except ValueError:
+            return _err(503, "model_unavailable", "Kimi history authentication is unavailable")
+
     primary_route = native_messages_route()
     if primary_route is None:
         return _native_request_rejected(
@@ -1023,7 +1130,7 @@ async def _native_messages_execute(
         )
 
     try:
-        messages = _openai_messages(body)
+        messages = _openai_messages(body, kimi=kimi)
     except ValueError as exc:
         reason, field = (
             (exc.reason, exc.field) if isinstance(exc, NativeRequestValidationError)
@@ -1040,12 +1147,12 @@ async def _native_messages_execute(
         fallback=8192,
     )
     payload: dict[str, Any] = {
-        "model": llmgw.native_slug(model),
+        "model": kimi.wire_model if kimi else llmgw.native_slug(model),
         "messages": messages,
         **({"max_tokens": budget} if budget is not None else {}),
         "stream": False,
     }
-    tools = _openai_tools(body.get("tools"))
+    tools = _openai_tools(body.get("tools"), preserve_cache_control=kimi is None)
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = _openai_tool_choice(body.get("tool_choice"))
@@ -1075,11 +1182,19 @@ async def _native_messages_execute(
     # spending after the user's wallet floor or when accounting is unavailable.
     if user_id is not None:
         try:
-            unit_covered = await billing.precheck_generation_units(user_id,project_id,run_id,stage,identity) if run_id is not None else False
-            if unit_covered and free:
-                raise BillingReconciliationRequiredError("Unit policy cannot claim free billing")
-            if not free and not unit_covered:
-                await billing.precheck_balance(user_id, _estimate_native_cost(model, payload))
+            if kimi is not None:
+                if not await billing.precheck_kimi_pilot(
+                    kimi.identity, stage, KIMI_MODEL, requested_free=free, message_id=message_id,
+                ):
+                    return _err(409, "model_unavailable", "Kimi requires an approved initial build billing policy")
+            else:
+                unit_covered = run_id is not None and await billing.precheck_generation_units(
+                    user_id, project_id, run_id, stage, identity,
+                )
+                if unit_covered and free:
+                    raise BillingReconciliationRequiredError("Unit policy cannot claim free billing")
+                if not free and not unit_covered:
+                    await billing.precheck_balance(user_id, _estimate_native_cost(model, payload))
         except WalletEmptyError as exc:
             return _err(402, "wallet_empty", exc.message)
         except Exception:
@@ -1090,6 +1205,7 @@ async def _native_messages_execute(
         identity=identity, model=model, payload=payload, primary_route=primary_route,
         timed_primary=identity is not None or request.headers.get("x-yleum-provider-timeout-seconds") is not None,
         retry_count=retry_count, provider_deadline=provider_deadline, dispatch_options=dispatch_options,
+        **({"kimi": kimi} if kimi is not None else {}),
     )
     if isinstance(provider_result, Response):
         return provider_result
@@ -1101,8 +1217,14 @@ async def _native_messages_execute(
         if not isinstance(upstream_data, dict):
             raise ValueError("upstream response must be an object")
         reported_model = upstream_data.get("model")
-        actual_model = slug_to_omnia(reported_model) if isinstance(reported_model, str) else None
-        if reported_model and (actual_model is None or not is_supported(actual_model) or (provider_scope == "aitunnel" and actual_model != model)):
+        actual_model = model if kimi else slug_to_omnia(reported_model) if isinstance(reported_model, str) else None
+        model_mismatch = (
+            reported_model != kimi.wire_model if kimi else bool(reported_model) and (
+                actual_model is None or not is_supported(actual_model)
+                or (provider_scope == "aitunnel" and actual_model != model)
+            )
+        )
+        if model_mismatch:
             if not await _finish_provider_call(
                 provider_call_id, identity=identity, status="ambiguous", error_type="ValidationFailedError",
                 **known_evidence,
@@ -1115,7 +1237,20 @@ async def _native_messages_execute(
             )
         actual_model = actual_model or model
         fallback_used = actual_model != model or provider_scope == "aitunnel"
-        adapted = _anthropic_response(upstream_data, actual_model)
+        if kimi is None:
+            adapted = _anthropic_response(upstream_data, actual_model)
+            usage = adapted["usage"]
+        else:
+            usage = _native_usage(upstream_data.get("usage"), strict_cache=True)
+            if usage["input_tokens"] + usage["output_tokens"] <= 0:
+                raise _InvalidUsageReceipt("Missing positive Kimi token usage")
+            try:
+                adapted = _anthropic_response(upstream_data, actual_model, kimi=kimi, usage=usage)
+            except ValueError as exc:
+                # Exact Kimi identity and usage are known. Do not expose a
+                # partial tool or reasoning carrier, but settle the cost.
+                log.warning("native_messages.kimi_unusable_response", error_type=type(exc).__name__)
+                adapted = None
     except _InvalidUsageReceipt:
         await _finish_provider_call(
             provider_call_id, identity=identity, status="ambiguous", error_type="ValidationFailedError", **known_evidence,
@@ -1135,8 +1270,8 @@ async def _native_messages_execute(
         remember_json_response,
     )
 
-    remember_json_response(adapted)
-    usage = adapted["usage"]
+    if adapted is not None:
+        remember_json_response(adapted)
     tokens_in = int(usage.get("input_tokens") or 0)
     tokens_out = int(usage.get("output_tokens") or 0)
     cache_read = int(usage.get("cache_read_input_tokens") or 0)
@@ -1150,6 +1285,7 @@ async def _native_messages_execute(
             "tokens_in": tokens_in, "tokens_out": tokens_out,
             "cache_read_tokens": cache_read, "cache_write_tokens": cache_write,
         }, reported, identity, provider_scope,
+        **({"require_positive": True} if adapted is None else {}),
     ))
     if settled is None:
         return _err(503, "billing_unavailable", "Provider accounting is temporarily unavailable")
@@ -1211,6 +1347,14 @@ async def _native_messages_execute(
             return _err(503, "billing_unavailable", "usage accounting is temporarily unavailable")
 
     confirm_response_accounting()
+    if adapted is None:
+        # Keep the same bounded error for live and authenticated cold reads.
+        return Response(status_code=502, media_type="application/json", content=json.dumps({
+            "type": "error", "error": {
+                "type": "provider_output_invalid", "code": "provider_output_invalid",
+                "message": "Provider response did not contain a usable assistant turn", "retry_safe": False,
+            },
+        }))
     # Deny output only after the actual receipt and wallet have been settled.
     output_error = output_stop_error(adapted["provider_finish_reason"])
     if output_error is not None:
@@ -1303,7 +1447,9 @@ async def _native_messages_impl(
         if identity is not None:
             return cast(Response, await run_retained(
                 identity, route,
-                lambda: _native_messages_execute(request, runner_claims=runner_claims),
+                lambda: _native_messages_execute(
+                    request, runner_claims=runner_claims, retained_identity=identity,
+                ),
             ))
         return await _native_messages_execute(request, runner_claims=runner_claims)
     except generation_attempts.AttemptConflict:

@@ -11,6 +11,7 @@ from typing import Any
 from yleum_api.core.config import get_settings
 from yleum_api.schemas.project import orchestrator_template
 from yleum_api.services import agent_builder
+from yleum_api.services.agent_output_budget import KIMI_PILOT_MODEL
 from yleum_api.services.generation.contracts import (
     AgentOperations,
     AgentPromptPlan,
@@ -450,7 +451,11 @@ async def execute_agent_turn(
     # An already-issued request keeps its original wire protocol when the worker resumes.
     _native_agent = (
         frame.get("kind") == "native" if isinstance(frame, dict) else
-        get_settings().use_native_agent or directed_path is not None
+        (
+            plan.model == KIMI_PILOT_MODEL
+            or get_settings().use_native_agent
+            or directed_path is not None
+        )
     )
     allow_filtered_source_handoff = (
         _agent_res is None and allow_autonomous_source_repair
@@ -820,6 +825,7 @@ async def complete_empty_legacy_build(
         and not _agent_res.requires_verification_only
         and get_settings().use_agentic_builder
         and not get_settings().use_native_agent
+        and plan.model != KIMI_PILOT_MODEL
         and not uses_single_max_source_repair(runtime)
         and _agent_res.stop_reason
         not in {

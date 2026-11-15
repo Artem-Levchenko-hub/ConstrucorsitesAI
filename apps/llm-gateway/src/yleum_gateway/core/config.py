@@ -15,9 +15,11 @@ speech-to-text (whisper) and the optional `gpt-image-1` model.
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Annotated
+from uuid import UUID
 
-from pydantic import SecretStr, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -58,6 +60,26 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql://omnia:omnia@localhost:5432/omnia"
     generation_provider_attempts_enabled: bool = False
+    # At most two explicit projects can use signed, retained Kimi turns.
+    max_kimi_pilot_project_ids: Annotated[tuple[UUID, ...], NoDecode] = Field(default=(), validate_default=False)
+
+    @field_validator("max_kimi_pilot_project_ids", mode="before")
+    @classmethod
+    def parse_kimi_pilot_project_ids(cls, value: object) -> tuple[UUID, ...]:
+        if not isinstance(value, str):
+            raise ValueError("Kimi pilot projects must be a comma-separated UUID list")
+        if not value.strip():
+            return ()
+        entries = [entry.strip() for entry in value.split(",")]
+        if len(entries) > 2 or len(set(entries)) != len(entries):
+            raise ValueError("Kimi pilot requires at most two distinct project UUIDs")
+        try:
+            projects = tuple(UUID(entry) for entry in entries)
+        except ValueError:
+            raise ValueError("Kimi pilot project IDs must be canonical UUIDs") from None
+        if any(str(project) != entry for project, entry in zip(projects, entries, strict=True)):
+            raise ValueError("Kimi pilot project IDs must be canonical UUIDs")
+        return projects
     # Durable response bodies remain private and OFF until rollout readiness.
     generation_response_retention_enabled: bool = False
     generation_response_cleanup_enabled: bool = False

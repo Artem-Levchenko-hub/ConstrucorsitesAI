@@ -8,7 +8,7 @@ import hmac
 import json
 import re
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, TypeGuard
 
 from yleum_api.services.generation.provider_identity import GenerationProviderIdentity
 
@@ -25,13 +25,17 @@ TRANSCRIPT_HEADER = "x-generation-transcript-authorization"
 _DOMAIN = b"yleum:generation-response:v1"
 
 
+def valid_response_signing_key(value: str | None) -> TypeGuard[str]:
+    return value is not None and len(value) >= 32
+
+
 def _secret(value: str | None) -> str:
     if value is None:
         from yleum_api.core.config import get_settings
 
         configured = get_settings().generation_response_signing_secret
         value = configured.get_secret_value() if configured else None
-    if not value or len(value) < 32:
+    if not valid_response_signing_key(value):
         raise ValueError("generation response authentication unavailable")
     return value
 
@@ -299,7 +303,8 @@ def native_attempt_headers(
     if identity is None or (recorded is not None and HEADER in recorded):
         return recorded
     secret = getattr(get_settings(), "generation_response_signing_secret", None)
-    if secret is None or len(key := secret.get_secret_value()) < 32:
+    key = secret.get_secret_value() if secret is not None else None
+    if not valid_response_signing_key(key):
         return recorded
     return {
         **(recorded or {}),

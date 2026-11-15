@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Omnia LLM Gateway — OpenAI-compatible proxy to Anthropic / OpenAI / YandexGPT / OpenRouter"
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "cryptography>=50.0.0,<51.0",
     "fastapi>=0.136,<0.137",
     "uvicorn[standard]>=0.32",
     # Security fixes are in the 1.88 branch; keep upgrades within that minor.

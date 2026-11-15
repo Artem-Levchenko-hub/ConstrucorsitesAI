@@ -26,12 +26,17 @@ async def test_completed_terminal_and_llm_done_admission_share_project_first_loc
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from yleum_api.models.project import Project
+    from yleum_api.models.project_cell import ProjectCellWorkspace
     from yleum_api.services import generation_runs as runs
     from yleum_api.services.generation.recovery_contract import RecoveryContractError
 
-    _harness, run, message, _state, _calls = await _canonical(db_session, test_engine, monkeypatch)
+    harness, run, message, _state, _calls = await _canonical(db_session, test_engine, monkeypatch)
     run.response_mode = "clarify"
     message.tokens_out = 1  # the real llm.done admission fast path
+    workspace = await db_session.get(
+        ProjectCellWorkspace, harness.coordinator.executor.workspace_id
+    )
+    workspace.generation_run_id = None  # Exercise admission after owning cleanup.
     await db_session.commit()
     project_locked, release_admission, finalizer_started = (
         asyncio.Event(),
@@ -511,6 +516,7 @@ async def test_confirmed_gated_publication_completes_after_release_without_repla
 
     from sqlalchemy import text
 
+    from yleum_api.core.errors import ApiError
     from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
     from yleum_api.models.project_cell import ProjectCellWorkspace
     from yleum_api.services.generation import agent_publication as publication
@@ -523,7 +529,10 @@ async def test_confirmed_gated_publication_completes_after_release_without_repla
     from yleum_api.services.generation.recovery_contract import (
         RecoveryContractError,
     )
-    from yleum_api.services.generation_runs import terminalize_generation_run_locked
+    from yleum_api.services.generation_runs import (
+        reserve_generation_run,
+        terminalize_generation_run_locked,
+    )
 
     harness, run, message, state, _calls = await _canonical(
         db_session, test_engine, monkeypatch, version=version
@@ -591,6 +600,23 @@ async def test_confirmed_gated_publication_completes_after_release_without_repla
     workspace = await db_session.get(
         ProjectCellWorkspace, harness.coordinator.executor.workspace_id
     )
+    if damage is None:
+        assert workspace.generation_run_id == run.id
+        monkeypatch.setattr(
+            "yleum_api.services.publication_migrations.get_status", AsyncMock(return_value=None)
+        )
+        async with harness.coordinator.session_factory() as next_prompt:
+            with pytest.raises(ApiError) as active:
+                await reserve_generation_run(
+                    next_prompt,
+                    project_id=run.project_id,
+                    user_id=run.user_id,
+                    idempotency_key="next-prompt-before-release",
+                    prompt="Следующая правка",
+                )
+            assert active.value.status_code == 409 and active.value.code == "generation_active"
+        await db_session.refresh(run)
+        assert run.status == "running" and run.finished_at is None
     workspace.generation_run_id = None
     await db_session.commit()
 

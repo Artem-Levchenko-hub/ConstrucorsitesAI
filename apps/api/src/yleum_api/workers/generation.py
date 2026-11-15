@@ -160,6 +160,11 @@ async def execute_dispatch(run_id: UUID) -> bool:
     from yleum_api.services.generation.recovery_contract import (
         RecoveryContractError,
         RecoveryStateV2,
+        RecoveryStateV3,
+    )
+    from yleum_api.services.generation.recovery_prepare_backoff import (
+        PREPARE_BACKOFF_KEY,
+        resume_with_prepare_backoff,
     )
     from yleum_api.services.generation.supervisor import (
         _OWNERSHIP_LOST_CANCEL_REASON,
@@ -186,6 +191,8 @@ async def execute_dispatch(run_id: UUID) -> bool:
             recovery_execution.SessionOwnership(run_id, ownership)
         )
         claim = None
+        claimed_state: RecoveryStateV3 | None = None
+        claimed_at: datetime | None = None
         try:
             async with factory() as session:
                 run = await session.get(GenerationRun, run_id, with_for_update=True)
@@ -246,10 +253,27 @@ async def execute_dispatch(run_id: UUID) -> bool:
                         await _await_owned_dispatch(work, ownership, run_id)
                         return True
                     async with factory() as session:
+                        claimed_at = datetime.now(UTC)
                         claim = await recovery_execution.claim_continuation(
-                            session, run_id=run_id, expected_attempt=state.attempt_seq,
-                            worker_id="generation-worker", now=datetime.now(UTC),
+                            session,
+                            run_id=run_id,
+                            expected_attempt=state.attempt_seq,
+                            worker_id="generation-worker",
+                            now=claimed_at,
                         )
+                        if claim is not None and isinstance(state, RecoveryStateV3):
+                            claimed = await session.get(
+                                GenerationRun, run_id, populate_existing=True
+                            )
+                            current = (
+                                recovery_execution.recovery_state(claimed) if claimed else None
+                            )
+                            if claimed is not None and isinstance(current, RecoveryStateV3):
+                                claimed_state = current
+                                if PREPARE_BACKOFF_KEY in claimed.agent_state:
+                                    persisted = dict(claimed.agent_state)
+                                    persisted.pop(PREPARE_BACKOFF_KEY)
+                                    claimed.agent_state = persisted
                         await session.commit()
                     if claim is None:
                         return False
@@ -285,8 +309,14 @@ async def execute_dispatch(run_id: UUID) -> bool:
             capacity_token = uuid4()
             work = asyncio.create_task(
                 _run_tracked_prompt(
-                    recovery_execution.resume_generation(claim) if claim is not None else
-                    _process_prompt(**kwargs, capacity_dispatch_token=capacity_token),  # type: ignore[arg-type]
+                    resume_with_prepare_backoff(
+                        factory,
+                        claim,
+                        claimed_state,
+                        started_at=claimed_at,
+                    )
+                    if claim is not None
+                    else _process_prompt(**kwargs, capacity_dispatch_token=capacity_token),  # type: ignore[arg-type]
                     run_id=run_id,
                     project_id=dispatch.project_id,
                     assistant_message_id=dispatch.assistant_message_id,

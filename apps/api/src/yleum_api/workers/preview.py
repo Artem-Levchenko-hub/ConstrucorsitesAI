@@ -327,11 +327,11 @@ async def capture_live_url_report(
                     except Exception as exc:
                         issues.append(_live_capture_issue("bootstrap", exc))
                         return LiveCaptureReport({}, tuple(issues))
-                try:
+                async def navigate_and_settle(timeout_ms: int) -> None:
                     response = await page.goto(
                         url,
                         wait_until="domcontentloaded",
-                        timeout=startup_timeout_ms,
+                        timeout=timeout_ms,
                     )
                     if require_success_status and (response is None or response.status >= 400):
                         raise ValueError("Unsuccessful preview HTTP status")
@@ -339,23 +339,18 @@ async def capture_live_url_report(
                         await _await_container_ready(page)
                     await _await_paint(page)
                     await _await_content(page)
+
+                try:
+                    await navigate_and_settle(startup_timeout_ms)
                 except Exception as exc:
                     issues.append(_live_capture_issue("warmup", exc))
                     return LiveCaptureReport({}, tuple(issues))
-                for width in widths:
+                for index, width in enumerate(widths):
                     try:
-                        await page.set_viewport_size({"width": int(width), "height": height})
-                        response = await page.goto(
-                            url,
-                            wait_until="domcontentloaded",
-                            timeout=GOTO_TIMEOUT_MS,
-                        )
-                        if require_success_status and (response is None or response.status >= 400):
-                            raise ValueError("Unsuccessful preview HTTP status")
-                        if settle_container:
-                            await _await_container_ready(page)
-                        await _await_paint(page)
-                        await _await_content(page)
+                        # The startup navigation already settled at the first width.
+                        if index > 0:
+                            await page.set_viewport_size({"width": int(width), "height": height})
+                            await navigate_and_settle(GOTO_TIMEOUT_MS)
                         out[int(width)] = await page.screenshot(full_page=full_page)
                     except Exception as exc:
                         issues.append(

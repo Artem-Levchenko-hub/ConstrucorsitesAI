@@ -2,6 +2,7 @@ import hashlib
 from functools import lru_cache
 from typing import Literal
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -819,6 +820,21 @@ class Settings(BaseSettings):
         return None if value == "" else value
 
     generation_recovery_canary_project_ids: str = ""
+    # Internal, comma-separated canonical UUIDs; blank disables new admissions.
+    max_kimi_pilot_project_ids: str = ""
+
+    @field_validator("max_kimi_pilot_project_ids")
+    @classmethod
+    def normalize_kimi_pilot_scope(cls, value: str) -> str:
+        ids = [part.strip() for part in value.split(",")] if value.strip() else []
+        try:
+            valid_ids = all(str(UUID(part)) == part for part in ids)
+        except ValueError:
+            valid_ids = False
+        if not valid_ids or len(ids) > 2 or len(set(ids)) != len(ids):
+            raise ValueError("Kimi pilot requires at most two distinct canonical project UUIDs")
+        return ",".join(ids)
+
     # Сколько сборок воркер ведёт одновременно. Это ГЛАВНЫЙ предел числа
     # пользователей, которые могут запустить генерацию в одну минуту: мощности
     # ячеек с 26.09 хватает на 14 на площадку, а воркер пускал ровно 8 — и это

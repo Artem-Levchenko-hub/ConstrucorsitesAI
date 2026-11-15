@@ -1,5 +1,7 @@
 """Owned PostgreSQL generation billing fixtures; no provider or real wallet calls."""
 
+import json
+from dataclasses import replace
 from decimal import Decimal
 from uuid import uuid4
 
@@ -82,6 +84,76 @@ async def _run(pool, database_url, *, free=False):
         await session.commit()
     await engine.dispose()
     return user, project, messages, run
+
+
+async def test_kimi_initial_qa_requires_the_owned_attempt_and_current_private_plan(pool, database_url):
+    from yleum_gateway.services.generation_identity import GenerationProviderIdentity
+
+    user, project, messages, run = await _run(pool, database_url, free=True)
+    plan, subscription = uuid4(), uuid4()
+    identity = GenerationProviderIdentity(run, project, user, uuid4(), "a" * 64, "b" * 64)
+    model = "kimi-k3.1-pro"
+    dispatch = {"schema_version": 1, "is_free": True, "force_model": model,
+                "user_id": str(user), "project_id": str(project)}
+
+    async def allowed(attempt=identity, *, free=True, message_id=None):
+        return await billing.precheck_kimi_pilot(
+            attempt, "native_agent", model, requested_free=free, message_id=message_id,
+        )
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE generation_runs SET agent_state=$2::jsonb,prompt_hash=$3 WHERE id=$1",
+            run, json.dumps({"dispatch": dispatch}), identity.prompt_hash,
+        )
+        await conn.execute(
+            "INSERT INTO generation_provider_attempts "
+            "(attempt_id,run_id,project_id,user_id,prompt_hash,request_sha256,dispatch_token) "
+            "VALUES($1,$2,$3,$4,$5,$6,$7)",
+            identity.attempt_id, run, project, user, identity.prompt_hash, identity.request_sha256, uuid4(),
+        )
+    assert not await allowed()
+
+    async with pool.acquire() as conn, conn.transaction():
+        await conn.execute("UPDATE users SET role='admin' WHERE id=$1", user)
+        await conn.execute(
+            "INSERT INTO billing_plans "
+            "(id,code,version,name,price_rub,billing_interval,included_credit_rub,is_active,entitlements) "
+            "VALUES($1,'qa_internal',1,'Synthetic internal QA',0,'month',0,false,$2::jsonb)",
+            plan, json.dumps({"qa_unlimited_generations": True}),
+        )
+        await conn.execute(
+            "INSERT INTO subscriptions(id,billing_account_id,user_id,plan_id,status) "
+            "SELECT $1,id,$2,$3,'active' FROM billing_accounts WHERE personal_user_id=$2",
+            subscription, user, plan,
+        )
+    assert await allowed()
+    assert await allowed(message_id=messages[0])
+    assert not await allowed(message_id=messages[1])
+    assert not await allowed(free=False)
+    assert not await allowed(replace(identity, request_sha256="c" * 64))
+
+    receipt = "qa-kimi-" + str(run)
+    cost = Decimal("0.03")
+    usage_input = dict(
+        user_id=user, project_id=project, message_id=messages[0], run_id=run, model_id=model,
+        tokens_in=50, tokens_out=10, cost_rub=cost, description="Synthetic Kimi usage",
+        stage="native_agent", free=True, provider_request_id=receipt,
+    )
+    settlement = await billing.charge(**usage_input)
+    assert await billing.charge(**usage_input) == settlement
+    async with pool.acquire() as conn:
+        assert await conn.fetchval(
+            "SELECT u.cost_rub FROM usage u JOIN usage_settlements s ON s.usage_id=u.id "
+            "WHERE s.id=$1 AND s.provider_request_id=$2 AND s.wallet_charge_id IS NULL",
+            settlement, receipt,
+        ) == cost
+        assert await conn.fetchval("SELECT count(*) FROM wallet_charges WHERE user_id=$1", user) == 0
+        assert await conn.fetchval(
+            "SELECT count(*) FROM usage WHERE run_id=$1 AND provider_request_id=$2", run, receipt,
+        ) == 1
+        await conn.execute("UPDATE subscriptions SET status='paused' WHERE id=$1", subscription)
+    assert not await allowed()
 
 
 async def _provider(user, project, messages, run, key, amount="2", free=False):

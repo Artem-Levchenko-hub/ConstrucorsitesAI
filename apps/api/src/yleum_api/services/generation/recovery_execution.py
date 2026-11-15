@@ -40,15 +40,20 @@ from yleum_api.services.generation.recovery_contract import (
     RecoveryStateV3,
     decode_recovery,
 )
-from yleum_api.services.generation_deployment_drain import require_generation_admission
+from yleum_api.services.generation_deployment_drain import (
+    require_generation_admission,
+    try_continuation_admission,
+)
 
 if TYPE_CHECKING:
+    from yleum_api.services.generation.provider_identity import GenerationProviderIdentity
     from yleum_api.services.generation.recovery_reconciliation import ProviderEffectCursor
     from yleum_api.services.orchestrator_client import ProjectCellEnvironmentRecoveryProof
 
 # Keep the original container key so old strict readers see an unsupported
 # version, rather than ignoring a new sibling namespace and replaying dispatch.
 RECOVERY_KEY = "recovery_v1"
+PROVIDER_REFUSAL_REDRIVE_KEY = "provider_refusal_redrive_v1"
 log = structlog.get_logger(__name__)
 
 
@@ -212,6 +217,109 @@ async def _response_wait_attempt(
     return matches.one_or_none()
 
 
+class NativeProviderRedrive(Exception):
+    """Resume with a new logical step after the one scheduled connection redrive."""
+
+
+def _preconnect_redrive_attempt(run: GenerationRun) -> UUID | None:
+    data = run.agent_state
+    if not isinstance(data, dict) or PROVIDER_REFUSAL_REDRIVE_KEY not in data:
+        return None
+    receipt = data[PROVIDER_REFUSAL_REDRIVE_KEY]
+    if (
+        type(receipt) is not dict or set(receipt) != {"version", "attempt_id"}
+        or type(receipt["version"]) is not int or receipt["version"] != 1
+        or type(receipt["attempt_id"]) is not str
+    ):
+        raise RecoveryContractError("invalid provider refusal redrive receipt")
+    try:
+        attempt = UUID(receipt["attempt_id"])
+    except ValueError as exc:
+        raise RecoveryContractError("invalid provider refusal redrive attempt") from exc
+    if str(attempt) != receipt["attempt_id"] or attempt.int == 0:
+        raise RecoveryContractError("invalid provider refusal redrive attempt")
+    return attempt
+
+
+async def _closed_native_preconnect_chain(
+    session: AsyncSession, state: RecoveryStateV3,
+) -> GenerationProviderIdentity | None:
+    from yleum_api.services.generation.provider_identity import GenerationProviderIdentity
+
+    attempt = await _response_wait_attempt(session, state)
+    if attempt is None:
+        return None
+    # These rows are the sole no-dispatch evidence. A generic 5xx, a balance
+    # refusal or even a confirmed 429 must not masquerade as a connect failure.
+    exact = await session.scalar(text("""
+        WITH RECURSIVE chain AS (
+            SELECT a.*,0 AS depth FROM generation_provider_attempts a
+            WHERE a.attempt_id=:leaf
+            UNION ALL
+            SELECT p.*,c.depth+1 FROM chain c
+            JOIN generation_provider_attempts p ON p.attempt_id=c.parent_attempt_id
+            WHERE c.depth<8 AND p.run_id=:run AND p.project_id=:project
+                  AND p.user_id=:owner AND p.prompt_hash=:prompt AND p.request_sha256=:digest
+        )
+        SELECT bool_or(c.parent_attempt_id IS NULL)
+            AND count(DISTINCT call.provider_scope)=2
+            AND bool_and(COALESCE(
+                c.phase='closed' AND c.terminal_reason='preconnect'
+                AND call.provider_scope IN ('llmgw','aitunnel')
+                AND call.route='/v1/messages' AND call.requested_model='claude-sonnet-5.5'
+                AND call.status='failed' AND call.finished_at IS NOT NULL
+                AND call.run_id=:run AND call.project_id=:project AND call.user_id=:owner
+                AND call.receipt_hash IS NOT NULL AND call.usage_id IS NULL
+                AND call.tokens_in IS NULL AND call.tokens_out IS NULL
+                AND call.cache_read_tokens IS NULL AND call.cache_write_tokens IS NULL
+                AND call.calculated_cost_rub IS NULL AND call.provider_cost_rub IS NULL
+                AND call.provider_cost_usd IS NULL AND call.cost_provenance IS NULL
+                AND response.state='complete' AND NOT response.reconciliation_hold
+                AND response.reconciled_at IS NOT NULL
+                AND response.manifest_key=c.response_manifest_key
+                AND response.response_sha256=c.response_sha256
+                AND effect.kind='provider' AND effect.logical_step_seq=:step
+                AND effect.run_id=:run AND effect.project_id=:project AND effect.user_id=:owner
+                AND effect.input_digest=:digest
+                AND ((c.parent_attempt_id IS NOT NULL AND effect.effect_ordinal>0)
+                    OR (effect.effect_id=:root AND effect.effect_ordinal=0)), FALSE))
+        FROM chain c
+        LEFT JOIN provider_calls call ON call.id=c.provider_call_id
+        LEFT JOIN generation_responses response ON response.attempt_id=c.attempt_id
+        LEFT JOIN generation_recovery_effects effect ON effect.provider_attempt_id=c.attempt_id
+    """), {
+        "leaf": attempt.attempt_id, "run": attempt.run_id, "project": attempt.project_id,
+        "owner": attempt.user_id, "prompt": attempt.prompt_hash, "digest": attempt.request_sha256,
+        "step": state.execution.logical_step_seq, "root": state.execution.provider_effect_id,
+    })
+    if exact is not True:
+        return None
+    return GenerationProviderIdentity(
+        attempt.run_id, attempt.project_id, attempt.user_id, attempt.attempt_id,
+        attempt.prompt_hash, attempt.request_sha256,
+    )
+
+
+async def _armed_preconnect_wait(
+    session: AsyncSession, run: GenerationRun, state: RecoveryStateV2,
+) -> bool:
+    # A release-only worker can stop the physical writer after the clock owner
+    # dies. The drain observes that stop; resume_clock still charges an open interval.
+    if (
+        not isinstance(state, RecoveryStateV3)
+        or state.phase != "waiting_dependency" or state.next_check_at is None
+        or state.clock.wait_dependency is not None
+        or (state.identity.run_id, state.identity.project_id, state.identity.user_id)
+        != (run.id, run.project_id, run.user_id)
+    ):
+        return False
+    armed = _preconnect_redrive_attempt(run)
+    if armed is None:
+        return False
+    closed = await _closed_native_preconnect_chain(session, state)
+    return closed is not None and closed.attempt_id == armed
+
+
 async def _retained_completion_attempt(
     session: AsyncSession, state: RecoveryStateV2,
 ) -> GenerationProviderAttempt | None:
@@ -302,7 +410,8 @@ async def claim_continuation(
     from yleum_api.services.generation.recovery_store import _baseline_sha, _locked_owner
 
     await _require_session_owner(run_id)
-    await require_generation_admission(session)
+    if not await try_continuation_admission(session):
+        return None
     hint = await session.get(GenerationRun, run_id, populate_existing=True)
     if hint is None or hint.status != "running":
         return None
@@ -702,6 +811,7 @@ async def commit_current_wait(
     factory: async_sessionmaker[AsyncSession], previous: RecoveryStateV2,
     *, runtime_control: tuple[UUID | None, int | None] | None = None,
     phase: Literal["waiting_dependency", "needs_input"] = "waiting_dependency",
+    refusal_redrive: GenerationProviderIdentity | None = None,
 ) -> RecoveryStateV2:
     """Retain the current committed cursor after an uncertain local write.
 
@@ -729,6 +839,15 @@ async def commit_current_wait(
             or current.execution.control_fencing_epoch != previous.execution.control_fencing_epoch
         ):
             raise RecoveryContractError("wait cannot adopt another execution owner")
+        if refusal_redrive is not None:
+            if (
+                phase != "waiting_dependency" or not isinstance(current, RecoveryStateV3)
+                or current != previous or current.phase != "working"
+                or current.clock.wait_dependency is not None
+                or _preconnect_redrive_attempt(run) is not None
+                or await _closed_native_preconnect_chain(session, current) != refusal_redrive
+            ):
+                raise RecoveryContractError("connection refusal redrive lost its exact owner")
         control_id = current.execution.control_workspace_id
         control_fence = current.execution.control_fencing_epoch
         if control_id is None and current.binding is not None:
@@ -780,6 +899,8 @@ async def commit_current_wait(
             from yleum_api.services.generation.recovery_clock import next_dependency_check
             failures = current.clock.dependency_failures + 1
             wait_at = next_dependency_check(run.id, failures=failures, now=wait_at)
+            if refusal_redrive is not None:
+                wait_at = max(wait_at, datetime.now(UTC) + timedelta(seconds=60))
             clock_fields["clock"] = current.clock.model_copy(
                 update={"dependency_failures": failures},
             )
@@ -788,7 +909,12 @@ async def commit_current_wait(
             "state_revision": current.state_revision + 1, "execution": execution,
             **clock_fields,
         })
-        run.agent_state = {**run.agent_state, RECOVERY_KEY: updated.model_dump(mode="json")}
+        saved = {**run.agent_state, RECOVERY_KEY: updated.model_dump(mode="json")}
+        if refusal_redrive is not None:
+            saved[PROVIDER_REFUSAL_REDRIVE_KEY] = {
+                "version": 1, "attempt_id": str(refusal_redrive.attempt_id),
+            }
+        run.agent_state = saved
         await session.commit()
         return updated
 
@@ -994,13 +1120,17 @@ class ExecutionDriver:
         )
         self.context = context
 
-    async def wait(self, *, needs_input: bool = False) -> None:
+    async def wait(
+        self, *, needs_input: bool = False,
+        refusal_redrive: GenerationProviderIdentity | None = None,
+    ) -> None:
         # The dependency itself may be unavailable. Retain the last confirmed
         # source/context and active/unknown physical status; no stopped inference.
         await self.account_work()
         self.state = await commit_current_wait(
             self.factory, self.state, runtime_control=self.runtime_control,
             phase="needs_input" if needs_input else "waiting_dependency",
+            refusal_redrive=refusal_redrive,
         )
         raise GenerationYielded(
             run_id=self.state.identity.run_id,
@@ -1209,6 +1339,55 @@ class ExecutionDriver:
         )
         return response
 
+    async def _redrive_confirmed_preconnect(
+        self, frame: dict[str, Any], *, reconcile: bool,
+    ) -> None:
+        from yleum_api.services.agent_output_budget import is_sonnet55_model
+        from yleum_api.services.generation.recovery_store import _locked_owner
+        from yleum_api.services.llm_client import (
+            LLMError,
+            ProviderChainExhausted,
+            require_recovered_response,
+        )
+
+        state = self.state
+        request = frame["value"].get("request")
+        if (
+            not isinstance(state, RecoveryStateV3) or frame["kind"] != "native"
+            or not isinstance(request, dict) or not isinstance(request.get("model"), str)
+            or not is_sonnet55_model(request["model"])
+        ):
+            return
+        owner = state.identity
+        await _require_session_owner(owner.run_id)
+        async with self.factory() as session:
+            run, _ = await _locked_owner(
+                session, run_id=owner.run_id, project_id=owner.project_id, user_id=owner.user_id,
+            )
+            if recovery_state(run) != state:
+                raise RecoveryContractError("provider refusal redrive execution changed")
+            armed = _preconnect_redrive_attempt(run)
+            identity = await _closed_native_preconnect_chain(session, state)
+        if identity is None or (armed is not None and armed != identity.attempt_id):
+            return
+        # Bind the exhausted envelope to the SQL leaf on both warm and cold
+        # paths. Cold reconciliation may have switched to a proven child.
+        try:
+            await require_recovered_response(identity)
+        except ProviderChainExhausted:
+            pass
+        except LLMError:
+            return
+        else:
+            return
+        if armed is None:
+            await self.wait(refusal_redrive=identity)
+        elif reconcile:
+            # Keep the marker for the run. Only the original cursor can use it;
+            # saving a different logical step makes the marker spent.
+            self._reconcile_response = False
+            raise NativeProviderRedrive()
+
     async def provider(
         self,
         frame: dict[str, Any],
@@ -1217,7 +1396,11 @@ class ExecutionDriver:
         from yleum_api.services.generation.recovery_reconciliation import (
             ProviderEffectCursor,
         )
-        from yleum_api.services.llm_client import LLMError, LLMOutputTruncated
+        from yleum_api.services.llm_client import (
+            LLMError,
+            LLMOutputTruncated,
+            ProviderChainExhausted,
+        )
 
         if (
             set(frame) != {"version", "kind", "value"}
@@ -1310,6 +1493,8 @@ class ExecutionDriver:
             self._reconcile_response = False
             raise
         except LLMError as exc:
+            if isinstance(exc, ProviderChainExhausted):
+                await self._redrive_confirmed_preconnect(frame, reconcile=reconcile)
             if (
                 isinstance(self.state, RecoveryStateV3)
                 and exc.provider_refusal_category in {"access", "funds"}

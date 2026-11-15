@@ -17,6 +17,7 @@ from typing import Any, cast
 import httpx
 
 from yleum_gateway.core.errors import ModelNotFoundError
+from yleum_gateway.services.kimi_native import KIMI_MODEL
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +69,14 @@ _USD_SOURCES = ("usage:cost_usd", "usage:cost", "metadata:cost_usd", "header:x-c
 _AITUNNEL_TARIFF_SOURCE = "aitunnel-public-catalog-2026-10-23"
 _AITUNNEL_PRICE = ModelPrice(Decimal("0.4"), Decimal("2.0"), Decimal("0.1"))
 
+# Frozen model-specific estimate. Reported RUB still takes precedence.
+_KIMI_LLMGW_QUOTE_URL = "https://llmgw.ru/models/kimi-k3.1-pro"
+_KIMI_LLMGW_QUOTE_DATE = "2026-11-14"
+_KIMI_LLMGW_TARIFF_SOURCE = f"llmgw-public-kimi-k3.1-pro-{_KIMI_LLMGW_QUOTE_DATE}"
+_KIMI_LLMGW_PRICE = ModelPrice(
+    Decimal("0.33846"), Decimal("1.69232"), Decimal("0.03385") / Decimal("0.33846"),
+)
+
 
 def _validate_provider_scope(provider_scope: str) -> None:
     if provider_scope not in ("llmgw", "aitunnel"):
@@ -110,7 +119,7 @@ def read_reported_cost(
 
 def cost_provenance(
     model_id: str,
-    calculated_rub: Decimal,
+    calculated_rub: Decimal | None,
     reported: ReportedCost | None = None,
     *,
     tokens_in: int,
@@ -118,16 +127,17 @@ def cost_provenance(
     cache_read_tokens: int = 0,
     cache_write_tokens: int = 0,
     estimated_tokens: bool = False,
-    cache_write_factor: Decimal = _CACHE_WRITE_RATE,
+    cache_write_factor: Decimal | None = _CACHE_WRITE_RATE,
 ) -> dict[str, Any]:
     """Record the selected calculation; a USD observation never implies FX."""
     reported = reported or ReportedCost()
-    price = PRICE_TABLE[model_id]
+    kimi_quote = model_id == KIMI_MODEL
+    price = _KIMI_LLMGW_PRICE if kimi_quote else PRICE_TABLE[model_id]
     tariff = {
         "rub_per_1k_in": str(price.rub_per_1k_in),
         "rub_per_1k_out": str(price.rub_per_1k_out),
         "cache_read_factor": str(price.cache_read_factor),
-        "cache_write_factor": str(cache_write_factor),
+        "cache_write_factor": str(cache_write_factor) if cache_write_factor is not None else None,
         "quantum_rub": str(_QUANT),
     }
     revision = {
@@ -137,12 +147,18 @@ def cost_provenance(
         "cache_write_factor": str(cache_write_factor),
         "quantum_rub": str(_QUANT),
     }
+    if kimi_quote:
+        revision = {
+            "source": _KIMI_LLMGW_QUOTE_URL, "date": _KIMI_LLMGW_QUOTE_DATE,
+            "model": model_id, "tariff": tariff,
+        }
     evidence = {
         "schema_version": 1,
         "basis": "provider_reported_rub" if reported.cost_rub is not None else
-        "local_token_estimate" if estimated_tokens else "token_tariff",
+        "local_token_estimate" if estimated_tokens else
+        "provider_catalog_estimate" if kimi_quote else "token_tariff",
         "effective_cost_rub": str(reported.cost_rub if reported.cost_rub is not None else calculated_rub),
-        "calculated_cost_rub": str(calculated_rub),
+        "calculated_cost_rub": str(calculated_rub) if calculated_rub is not None else None,
         "reported_cost_rub": str(reported.cost_rub) if reported.cost_rub is not None else None,
         "provider_cost_usd": str(reported.cost_usd) if reported.cost_usd is not None else None,
         "rub_source": reported.rub_source,
@@ -154,6 +170,8 @@ def cost_provenance(
         "cache_read_tokens": cache_read_tokens,
         "cache_write_tokens": cache_write_tokens,
     }
+    if kimi_quote and cache_write_factor is None:
+        evidence.update(schema_version=2, provider_scope="llmgw", tariff_source=_KIMI_LLMGW_TARIFF_SOURCE)
     return validate_cost_provenance(evidence)
 
 
@@ -170,11 +188,18 @@ def validate_cost_provenance(
         keys |= {"provider_scope", "tariff_source"}
     if set(evidence) != keys or type(version) is not int or version not in {1, 2}:
         raise ValueError("Invalid cost provenance shape")
-    if version == 2 and (evidence["provider_scope"] != "aitunnel"
-                        or evidence["tariff_source"] != _AITUNNEL_TARIFF_SOURCE
-                        or evidence["rub_source"] not in (None, "usage:cost_rub")
-                        or evidence["usd_source"] not in (None, "usage:cost_usd")):
-        raise ValueError("Invalid provider cost provenance")
+    if version == 2:
+        identity = (evidence["provider_scope"], evidence["tariff_source"])
+        aitunnel = (identity == ("aitunnel", _AITUNNEL_TARIFF_SOURCE)
+                    and evidence["rub_source"] in (None, "usage:cost_rub")
+                    and evidence["usd_source"] in (None, "usage:cost_usd"))
+        kimi = (identity == ("llmgw", _KIMI_LLMGW_TARIFF_SOURCE)
+                and evidence["basis"] == "provider_reported_rub"
+                and evidence["calculated_cost_rub"] is None
+                and type(evidence["cache_write_tokens"]) is int and evidence["cache_write_tokens"] > 0
+                and (_finite_cost(evidence["reported_cost_rub"]) or Decimal(0)) > 0)
+        if not (aitunnel or kimi):
+            raise ValueError("Invalid provider cost provenance")
     if evidence["basis"] not in {"provider_reported_rub", "token_tariff", "local_token_estimate", "provider_catalog_estimate"}:
         raise ValueError("Invalid cost provenance basis")
     if evidence["rub_source"] not in (*_RUB_SOURCES, None) or evidence["usd_source"] not in (*_USD_SOURCES, None):
@@ -319,6 +344,26 @@ async def resolve_request_cost(
         return _aitunnel_request_cost(model_id, tokens_in=tokens_in, tokens_out=tokens_out,
             cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens,
             reported=reported, estimated_tokens=estimated_tokens)
+    if model_id == KIMI_MODEL:
+        if cache_write_tokens:
+            received = _finite_cost(reported.cost_rub) if reported is not None else None
+            if received is None or received <= 0 or estimated_tokens:
+                raise ValueError("Kimi cache write tariff is unverified")
+            return received, cost_provenance(
+                model_id, None, reported, tokens_in=tokens_in, tokens_out=tokens_out,
+                cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens,
+                cache_write_factor=None,
+            )
+        local = _calculate_with_price(
+            _KIMI_LLMGW_PRICE, tokens_in, tokens_out, cache_read_tokens, 0,
+            cache_write_factor=Decimal(0),
+        )
+        evidence = cost_provenance(
+            model_id, local, reported, tokens_in=tokens_in, tokens_out=tokens_out,
+            cache_read_tokens=cache_read_tokens, estimated_tokens=estimated_tokens,
+            cache_write_factor=Decimal(0),
+        )
+        return reported.cost_rub if reported and reported.cost_rub is not None else local, evidence
     # Anthropic documents 5m writes at 1.25x and 1h writes at 2x. The caller
     # selects a factor only from the cache controls actually sent upstream;
     # mixed/unknown policies do not acquire a fabricated current quote.

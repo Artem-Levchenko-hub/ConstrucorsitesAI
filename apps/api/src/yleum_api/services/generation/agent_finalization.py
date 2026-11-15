@@ -380,22 +380,33 @@ async def run_native_source_repair(
 
         execute = targeted_execute
 
-    def completion(written: Mapping[str, str], _evidence: Mapping[str, int]) -> str | None:
-        effective = {**baseline, **written}
+    def completion(files: Mapping[str, str], _evidence: Mapping[str, int]) -> str | None:
         if require_edit_from is not None and unchanged_candidate_before_finalization(
-            baseline_files=require_edit_from, workspace_files=effective,
+            baseline_files=require_edit_from, workspace_files=files,
             requires_source_change=True, message="", catalog_runtime=catalog_runtime,
         ) is not None:
             return "Apply the requested edit to the existing product before done."
-        return max_source_completion_gap(prompt_text, effective, portable=True)
+        return max_source_completion_gap(prompt_text, files, portable=True)
 
-    repair_execute, repair_completion = await guard_native_source_contract(
+    repair_execute, guarded_completion = await guard_native_source_contract(
         runtime, ids, execute, completion,
     )
     checkpoint = getattr(operations, "checkpoint", None)
     snapshot = getattr(operations, "snapshot_files", None) or getattr(
         runtime.handle, "snapshot_files", None,
     )
+
+    async def repair_completion(
+        written: Mapping[str, str], evidence: Mapping[str, int],
+    ) -> str | None:
+        # Shell and recovered tools can delete paths absent from the write log.
+        # Scan the acquired runtime's complete current tree at the decision.
+        files = (
+            await snapshot() if runtime.handle is not None and callable(snapshot)
+            else {**baseline, **written}
+        )
+        return guarded_completion(files, evidence)
+
     if checkpoint is not None and callable(snapshot):
         repair_execute = checkpoint_source_actions(
             execute=repair_execute, snapshot=snapshot, checkpoint=checkpoint,

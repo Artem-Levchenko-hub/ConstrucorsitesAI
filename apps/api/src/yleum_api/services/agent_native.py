@@ -43,6 +43,7 @@ from yleum_api.services.agent_builder import (
 )
 from yleum_api.services.agent_output_budget import (
     DEFAULT_REPAIR_OUTPUT_TOKENS,
+    KIMI_PILOT_MODEL,
     SONNET55_REPAIR_OUTPUT_TOKENS,
     agent_output_tokens,
     is_sonnet55_model,
@@ -89,9 +90,11 @@ from yleum_api.services.llm_client import (
     LLMError,
     NativeTranscriptRefusal,
     ProviderChainExhausted,
+    SettledKimiOutputInvalid,
     _native_preconnect_details,
     _overload_refusal_details,
     is_durable_native_transcript_refusal,
+    is_kimi_unusable_output,
     is_provider_chain_exhausted,
     rate_limit_retry_delay,
 )
@@ -1410,9 +1413,9 @@ async def _call_messages(
     if tools == []:
         payload.pop("tools")
         payload.pop("tool_choice")
-    if is_sonnet55_model(model):
-        # The pinned Gateway model rejects forced tool use. It does not expose
-        # verified adaptive/effort controls; do not send a legacy manual budget.
+    if is_sonnet55_model(model) or model == KIMI_PILOT_MODEL:
+        # These gateway adapters use their own thinking and tool choice policy.
+        # Omit the manual Anthropic budget and narrow via the actual tool list.
         payload.pop("thinking")
         if payload.get("tool_choice", {}).get("type") in {"any", "tool"}:
             payload["tool_choice"] = {"type": "auto"}
@@ -1445,6 +1448,9 @@ async def _call_messages(
     generation_route = (
         "/v1/project-cell/messages" if url.rstrip("/").endswith("/v1/project-cell/messages")
         else "/v1/messages"
+    )
+    kimi_native = (
+        model == KIMI_PILOT_MODEL and generation_route == "/v1/messages" and auth_factory is None
     )
     attempt = 0
     while attempt < _CALL_RETRIES:
@@ -1485,8 +1491,11 @@ async def _call_messages(
         if provider_reconciliation_requested():
             from yleum_api.services.llm_client import require_recovered_response
             try:
-                retained = await require_recovered_response(generation_attempt)
-            except (NativeTranscriptRefusal, ProviderChainExhausted):
+                retained = await (
+                    require_recovered_response(generation_attempt, kimi_native=True) if kimi_native
+                    else require_recovered_response(generation_attempt)
+                )
+            except (NativeTranscriptRefusal, ProviderChainExhausted, SettledKimiOutputInvalid):
                 raise  # Neither terminal receipt permits a replay of this request.
             except LLMError as failure:
                 resumed = await resume_generation_wire(
@@ -1549,16 +1558,17 @@ async def _call_messages(
                 ) as r:
                     accepted_headers = True
                     await r.aread()
+            output_marker = None
             if r.status_code == 502:
-                filter_marker = _gateway_native_error(
+                output_marker = _gateway_native_error(
                     r, url, optional_fields=frozenset({"retry_safe"}),
                 )
                 if (
-                    filter_marker is not None
-                    and set(filter_marker) == {"type", "code", "message", "retry_safe"}
-                    and filter_marker["type"] == filter_marker["code"] == FILTERED_PROVIDER_OUTPUT
-                    and filter_marker["retry_safe"] is False
-                    and isinstance(filter_marker["message"], str)
+                    output_marker is not None
+                    and set(output_marker) == {"type", "code", "message", "retry_safe"}
+                    and output_marker["type"] == output_marker["code"] == FILTERED_PROVIDER_OUTPUT
+                    and output_marker["retry_safe"] is False
+                    and isinstance(output_marker["message"], str)
                 ):
                     raise LLMError(
                         _FILTERED_OUTPUT_SUMMARY, code=FILTERED_PROVIDER_OUTPUT,
@@ -1567,18 +1577,38 @@ async def _call_messages(
             if r.status_code >= 400:
                 try:
                     output_body = r.json()
-                except ValueError:
+                except (ValueError, RecursionError):
                     output_body = None
                 output_error = output_body.get("error") if isinstance(output_body, dict) else None
                 if isinstance(output_error, dict):
-                    for field in ("code", "type"):
-                        if output_error.get(field) in (
-                            "provider_output_invalid", "provider_output_filtered",
+                    output_codes = (output_error.get("code"), output_error.get("type"))
+                    if kimi_native and "provider_output_invalid" in output_codes:
+                        if (
+                            isinstance(output_body, dict)
+                            and set(output_body) == {"type", "error"}
+                            and is_kimi_unusable_output(output_marker)
                         ):
-                            # This response has already been accounted for. Never
-                            # enter generic 502/rate-limit retries or echo its body.
+                            from yleum_api.services.llm_client import require_recovered_response
+
+                            # Only the exact retained, settled response confirms the claim.
+                            try:
+                                await require_recovered_response(
+                                    generation_attempt, kimi_native=True,
+                                )
+                            except SettledKimiOutputInvalid:
+                                raise
+                            except LLMError:
+                                pass
+                        raise LLMError(
+                            "Retained Kimi output has not confirmed the live gateway response",
+                            code="generation_response_indeterminate",
+                            provider_charge_ambiguous=True, retry_safe=False,
+                        ) from None
+                    for code in output_codes:
+                        if code in ("provider_output_invalid", "provider_output_filtered"):
+                            # Keep the legacy stop behavior without echoing the error body.
                             raise RuntimeError(
-                                f"{output_error[field].upper()}: "
+                                f"{code.upper()}: "
                                 "ответ модели не принят; автоматический повтор остановлен."
                             )
             upstream_server_status = _gateway_ambiguous_server_status(r, url)
@@ -1733,6 +1763,10 @@ async def _call_messages(
     raise last or RuntimeError("messages call failed")
 
 
+_CompletionVerdict = str | None | Awaitable[str | None]
+_CompletionCheck = Callable[[Mapping[str, str], Mapping[str, int]], _CompletionVerdict]
+
+
 async def _run_native_segment(
     *,
     model: str = _MODEL,
@@ -1746,7 +1780,7 @@ async def _run_native_segment(
     message_id: Any = None,
     free: bool = False,
     emit: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
-    completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = None,
+    completion_check: _CompletionCheck | None = None,
     max_steps: int = 24,
     allow_max_bash: bool = False,
     portable_cell: bool = False,
@@ -1779,7 +1813,12 @@ async def _run_native_segment(
     """
     settings = get_settings()
     url = messages_url or f"{settings.llm_gateway_url.rstrip('/')}/v1/messages"
+    if model == KIMI_PILOT_MODEL:
+        # Fresh Kimi rounds must carry complete assistant/tool-result pairs.
+        # An already-issued request below is reconciled from the exact saved frame.
+        directed_path = None
 
+    from yleum_api.services.generation.recovery_execution import NativeProviderRedrive
     from yleum_api.services.generation.recovery_tool_receipts import is_reconciling_source_write
     from yleum_api.services.reference_images import user_content
 
@@ -1957,7 +1996,7 @@ async def _run_native_segment(
             stop_reason="managed_source_contract_unresolved", evidence=_evidence(),
         )
 
-    def _completion_gap() -> str | None:
+    async def _completion_gap() -> str | None:
         if edit_source_changed is not None and not edit_source_changed():
             return _EDIT_SOURCE_NUDGE
         if source_repair and not _repair_source_changed():
@@ -1967,7 +2006,8 @@ async def _run_native_segment(
         if completion_check is None:
             return None
         try:
-            return completion_check(written, _evidence())
+            verdict = completion_check(written, _evidence())
+            return await verdict if isinstance(verdict, Awaitable) else verdict
         except Exception as exc:
             log.exception("agent_native.completion_check_failed")
             return f"Product acceptance check failed: {type(exc).__name__}."
@@ -2029,7 +2069,9 @@ async def _run_native_segment(
 
             effective_files = {**baseline_files, **written}
             source_gap = (
-                _completion_gap() if completion_check is not None else max_source_completion_gap(
+                await _completion_gap()
+                if completion_check is not None
+                else max_source_completion_gap(
                     task, effective_files, portable=".omnia/cell.json" in effective_files,
                 )
             )
@@ -2075,7 +2117,7 @@ async def _run_native_segment(
         if final_build.get("ok"):
             successful_tools["build"] = successful_tools.get("build", 0) + 1
             proof_after_write.add("build")
-            gap = _completion_gap()
+            gap = await _completion_gap()
             # A provider turn limit must not turn forgotten verification clicks
             # into a user-visible failed build. When the source is already green
             # and the remaining product-contract gap asks only for deterministic
@@ -2117,7 +2159,7 @@ async def _run_native_segment(
                     break
                 successful_tools[action.name] = successful_tools.get(action.name, 0) + 1
                 proof_after_write.add(action.name)
-                gap = _completion_gap()
+                gap = await _completion_gap()
             if gap:
                 return AgentResult(
                     done=False,
@@ -2333,7 +2375,7 @@ async def _run_native_segment(
                         )
                     elif narrow_turn:
                         assert active_recovery is not None and current_source is not None
-                        diagnostic = source_diagnostic or _completion_gap()
+                        diagnostic = source_diagnostic or await _completion_gap()
                         checking_only = (
                             not force_max_entry_write and not repair_write_required
                             and not edit_write_required and completion_check is not None
@@ -2494,6 +2536,14 @@ async def _run_native_segment(
                         )
             except Exception as exc:
                 raise_if_terminal_cell_error(exc)
+                if isinstance(exc, NativeProviderRedrive):
+                    # The exact old request had no provider effect. Move to a
+                    # new logical step without applying or trusting a response.
+                    saved_frame = None
+                    last_build_ok = None
+                    proof_after_write.clear()
+                    _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
+                    continue
                 if isinstance(exc, ProviderChainExhausted) and continuation is not None:
                     log.warning("agent_native.providers_exhausted", run_id=run_id, stage=call_stage)
                     await continuation.wait(needs_input=True)
@@ -2736,7 +2786,7 @@ async def _run_native_segment(
                 # Prose is not proof. Keep the turn inside the same hard budget
                 # until a real clean build exists; never ship a broken app because
                 # the model happened to finish speaking.
-                gap = _completion_gap() if _done and (
+                gap = await _completion_gap() if _done and (
                     last_build_ok is True or edit_source_changed is not None
                 ) else None
                 if _done and last_build_ok is True and not wrote_since_build and not gap:
@@ -3058,7 +3108,7 @@ async def _run_native_segment(
                         "before calling done."
                     )
                 else:
-                    done_gap = _completion_gap() or ""
+                    done_gap = await _completion_gap() or ""
                 for summary, done_result in pending_done:
                     if done_gap:
                         done_result.update(is_error=True, content="Not done yet: " + done_gap)
@@ -3236,7 +3286,7 @@ async def _run_native_segment(
 NativeSegmentRunner = Callable[
     [
         str,
-        Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None,
+        _CompletionCheck | None,
         Mapping[str, str],
     ],
     Awaitable[AgentResult],
@@ -3268,14 +3318,14 @@ def _merge_segment_evidence(
 
 
 def _cumulative_completion_check(
-    completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None,
+    completion_check: _CompletionCheck | None,
     baseline_files: Mapping[str, str],
     baseline_evidence: Mapping[str, int],
-) -> Callable[[Mapping[str, str], Mapping[str, int]], str | None]:
+) -> _CompletionCheck:
     def check(
         written: Mapping[str, str],
         evidence: Mapping[str, int],
-    ) -> str | None:
+    ) -> _CompletionVerdict:
         if completion_check is None:
             return None
         effective_files = {**baseline_files, **written}
@@ -3292,7 +3342,7 @@ def _cumulative_completion_check(
 async def _run_native_segments(
     *,
     task: str,
-    completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None,
+    completion_check: _CompletionCheck | None,
     max_segments: int | None,
     run_segment: NativeSegmentRunner,
     initial_files: Mapping[str, str] | None = None,
@@ -3494,7 +3544,7 @@ async def run_native_build(
     message_id: Any = None,
     free: bool = False,
     emit: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
-    completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = None,
+    completion_check: _CompletionCheck | None = None,
     max_steps: int = 24,
     max_segments: int | None = 1,
     allow_max_bash: bool = False,
@@ -3527,7 +3577,7 @@ async def run_native_build(
 
     async def run_segment(
         segment_task: str,
-        segment_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None,
+        segment_check: _CompletionCheck | None,
         initial_files: Mapping[str, str],
     ) -> AgentResult:
         nonlocal prior_source_writes, prior_managed_rejection

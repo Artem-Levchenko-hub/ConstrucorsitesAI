@@ -629,7 +629,6 @@ async def test_actual_continuation_claim_serializes_before_deploy_fence(
     test_engine,
     monkeypatch,
 ):
-    from yleum_api.core.errors import ApiError
     from yleum_api.services.generation_runs import prompt_hash
 
     run = await _queued_dispatch(db_session)
@@ -665,15 +664,68 @@ async def test_actual_continuation_claim_serializes_before_deploy_fence(
             await claimant.commit()
             await asyncio.wait_for(fencing, 2)
             await deployer.commit()
-            with pytest.raises(ApiError, match="temporarily paused"):
-                await recovery_execution.claim_continuation(
-                    claimant,
-                    run_id=run.id,
-                    expected_attempt=1,
-                    worker_id="owned",
-                    now=datetime.now(UTC),
-                )
+            assert await recovery_execution.claim_continuation(
+                claimant,
+                run_id=run.id,
+                expected_attempt=1,
+                worker_id="owned",
+                now=datetime.now(UTC),
+            ) is None
             await claimant.rollback()
+        finally:
+            recovery_execution._SESSION_OWNER.reset(token)
+            await owner.execute(text("SELECT pg_advisory_unlock_all()"))
+            await owner.commit()
+
+
+async def test_continuation_claim_does_not_wait_for_exclusive_deploy_fence(
+    db_session,
+    test_engine,
+    monkeypatch,
+):
+    from yleum_api.services.generation_runs import prompt_hash
+
+    run = await _queued_dispatch(db_session)
+    run.status = "running"
+    run.prompt_hash = prompt_hash("Собери приложение")
+    original = _bootstrap_wait(run)
+    run.agent_state = {**run.agent_state, "recovery_v1": original}
+    await db_session.commit()
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    monkeypatch.setattr(
+        recovery_readers, "require_recovery_readers", AsyncMock(return_value="d" * 64)
+    )
+    async with test_engine.connect() as owner, factory() as claimant, factory() as deployer:
+        await owner.execute(
+            text("SELECT pg_advisory_lock(1195724366,:key)"),
+            {"key": int.from_bytes(run.id.bytes[-4:], "big", signed=True)},
+        )
+        await owner.commit()
+        token = recovery_execution._SESSION_OWNER.set(
+            recovery_execution.SessionOwnership(run.id, owner)
+        )
+        try:
+            # This transaction holds the exclusive barrier. The drain row
+            # is invisible to the claimant until the deployer commits.
+            await drain.begin_drain(deployer, "a" * 40)
+            await claimant.execute(text("SET LOCAL lock_timeout = '250ms'"))
+            assert await recovery_execution.claim_continuation(
+                claimant, run_id=run.id, expected_attempt=0,
+                worker_id="owned", now=datetime.now(UTC),
+            ) is None
+            await claimant.rollback()
+            await db_session.refresh(run)
+            assert run.agent_state["recovery_v1"] == original
+
+            # Removing both the uncommitted row and its lock leaves the same
+            # continuation immediately claimable.
+            await deployer.rollback()
+            claim = await recovery_execution.claim_continuation(
+                claimant, run_id=run.id, expected_attempt=0,
+                worker_id="owned", now=datetime.now(UTC),
+            )
+            assert claim is not None and claim.attempt_seq == 1
+            await claimant.commit()
         finally:
             recovery_execution._SESSION_OWNER.reset(token)
             await owner.execute(text("SELECT pg_advisory_unlock_all()"))

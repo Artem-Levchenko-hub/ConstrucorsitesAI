@@ -241,11 +241,29 @@ async def get_balance(user_id: UUID) -> Decimal:
     return Decimal(row["balance_rub"]) if row else Decimal("0")
 
 
-async def precheck_generation_units(user_id: UUID,project_id: UUID | None,run_id: UUID | None,stage: str | None,identity: GenerationProviderIdentity | None) -> bool:
+async def precheck_generation_units(
+    user_id: UUID,
+    project_id: UUID | None,
+    run_id: UUID | None,
+    stage: str | None,
+    identity: GenerationProviderIdentity | None,
+) -> bool:
     from yleum_gateway.services.generation_credit_guard import covered
 
     async with get_pool().acquire() as conn:
         return await covered(conn, user_id, project_id, run_id, stage, identity)
+
+
+async def precheck_kimi_pilot(
+    identity: GenerationProviderIdentity, stage: str, model: str,
+    *, requested_free: bool, message_id: UUID | None = None,
+) -> bool:
+    from yleum_gateway.services.generation_credit_guard import kimi_pilot_allowed
+
+    async with get_pool().acquire() as conn:
+        return await kimi_pilot_allowed(
+            conn, identity, stage, model, requested_free=requested_free, message_id=message_id,
+        )
 
 
 async def precheck_balance(user_id: UUID, estimated_cost_rub: Decimal) -> None:

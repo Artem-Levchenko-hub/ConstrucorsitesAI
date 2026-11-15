@@ -945,6 +945,28 @@ async def test_parked_worker_finishes_its_strict_release_without_resuming_genera
         assert await session.scalar(select(func.count()).select_from(ProjectCellOperation)) == 1
 
 
+async def test_owned_stopped_clock_can_settle_while_deploy_admission_is_closed(clock_owner):
+    from yleum_api.core.errors import ApiError
+    from yleum_api.services.generation.recovery_execution import GenerationYielded
+    from yleum_api.services.generation_deployment_drain import begin_drain, drain_status
+
+    c = clock_owner
+    release = "a" * 40
+    async with c.owned():
+        with pytest.raises(GenerationYielded):
+            await c.driver.wait()
+        async with c.factory() as session:
+            await begin_drain(session, release)
+            await session.commit()
+        with pytest.raises(ApiError) as blocked:
+            await c.driver.account_work()
+        assert blocked.value.code == "generation_draining"
+        await c.driver.account_work(stopped=True)
+        assert not c.driver.state.clock.interval_open
+    async with c.factory() as session:
+        assert (await drain_status(session))["release_sha"] == release
+
+
 async def test_wait_pause_and_cold_crash_preserve_known_work_without_time_refund(clock_owner):
     from yleum_api.models.generation_run import GenerationRun
     from yleum_api.services.generation.recovery_execution import (

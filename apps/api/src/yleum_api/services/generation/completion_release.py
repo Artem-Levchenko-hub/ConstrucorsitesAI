@@ -143,14 +143,14 @@ async def generation_release_pending(session: AsyncSession, run: GenerationRun) 
         recovery_state,
     )
 
-    if isinstance(recovery_state(run), RecoveryStateV2):
-        return False  # Preserve its existing acceptance and activation protocol.
     retained = await session.scalar(select(exists().where(
         ProjectCellWorkspace.generation_run_id == run.id,
         ProjectCellWorkspace.deleted_at.is_(None),
     )))
     if retained:
         return True  # Covers admission before cleanup even creates its intent.
+    if isinstance(recovery_state(run), RecoveryStateV2):
+        return False  # Versioned recovery owns its release and acceptance receipts.
     if not has_completion_release(run):
         return False
     marker = completion_release(run)

@@ -47,7 +47,7 @@ def provider_wait_events(
 
 
 async def recover_generation_response(
-    identity: GenerationProviderIdentity,
+    identity: GenerationProviderIdentity, *, kimi_native: bool = False,
 ) -> dict[str, object] | None:
     """Read a bound durable body; absence is never inferred from transport/404."""
     from yleum_api.services.generation.response_auth import HEADER, mint_generation_response_token
@@ -119,6 +119,15 @@ async def recover_generation_response(
             status, body = result.get("status"), result.get("body")
             if type(status) is not int or not isinstance(body, dict):
                 raise ValueError
+            if (
+                kimi_native and status == 502
+                and set(value) == {"version", "identity", "state", "response"}
+                and set(result) == {"format", "status", "body"}
+                and set(body) == {"type", "error"} and body["type"] == "error"
+                and is_kimi_unusable_output(body["error"])
+            ):
+                # The signed read returns stored only after matching accounting.
+                raise SettledKimiOutputInvalid()
             if status >= 400:
                 raise _gateway_failure(httpx.Response(status, json=body))
             return body
@@ -145,7 +154,7 @@ async def recover_generation_response(
 
 
 async def require_recovered_response(
-    identity: GenerationProviderIdentity | None,
+    identity: GenerationProviderIdentity | None, *, kimi_native: bool = False,
 ) -> dict[str, object]:
     """A resumed logical call reads only its original retained response."""
     if identity is None:
@@ -154,7 +163,10 @@ async def require_recovered_response(
             code="generation_response_indeterminate", retry_safe=False,
             provider_charge_ambiguous=True,
         )
-    result = await recover_generation_response(identity)
+    result = await (
+        recover_generation_response(identity, kimi_native=True) if kimi_native
+        else recover_generation_response(identity)
+    )
     if result is None:
         raise LLMError(
             "Generation response is still pending",
@@ -272,6 +284,27 @@ class NativeTranscriptRefusal(LLMError):
             code="native_transcript_rejected", http_status=400,
             provider_charge_ambiguous=False,
         )
+
+
+class SettledKimiOutputInvalid(LLMError):
+    """The paid Kimi attempt is retained; its unusable output cannot be replayed."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "PROVIDER_OUTPUT_INVALID: ответ модели не принят; автоматический повтор остановлен.",
+            code="provider_output_invalid", http_status=502,
+            provider_charge_ambiguous=False, retry_safe=False,
+        )
+
+
+def is_kimi_unusable_output(error: object) -> bool:
+    return (
+        isinstance(error, dict)
+        and set(error) == {"type", "code", "message", "retry_safe"}
+        and error["type"] == error["code"] == "provider_output_invalid"
+        and error["message"] == "Provider response did not contain a usable assistant turn"
+        and error["retry_safe"] is False
+    )
 
 
 class ProviderChainExhausted(LLMError):

@@ -4,7 +4,7 @@ import json
 import logging
 import sys
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from functools import partial
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -100,6 +100,12 @@ if TYPE_CHECKING:
     from yleum_api.services.generation.recovery_execution import ExecutionDriver
 
 _log = logging.getLogger("yleum_api.routers.messages")
+
+
+@dataclass(frozen=True, slots=True)
+class _LoadedContinuationContext:
+    state: RecoveryStateV2
+    value: dict[str, Any]
 
 
 async def _finish_filtered_repair_message(
@@ -285,6 +291,7 @@ async def resume_agent_generation(claim: ContinuationClaim) -> None:
             ),
             project_info=project_info, prompt_text=data["prompt_text"], runtime=runtime,
             selected_elements=data["selected_elements"], _resume_state=state,
+            _loaded_context=_LoadedContinuationContext(state, saved),
         )
     finally:
         await cleanup_generation_runtime(
@@ -321,6 +328,7 @@ async def run_agent_generation(
     runtime: GenerationRuntime,
     selected_elements: list[dict[str, Any]] | None,
     _resume_state: RecoveryStateV2 | None = None,
+    _loaded_context: _LoadedContinuationContext | None = None,
 ) -> None:
     from yleum_api.services.generation.recovery_execution import (
         execution_enabled,
@@ -328,6 +336,11 @@ async def run_agent_generation(
         require_initial_execution_owner,
     )
     from yleum_api.services.generation.recovery_requirements import freeze_for_run
+
+    # Only the owned resume entry can hand off the already-verified context.
+    # It must share this exact immutable state (claim, ref and binding).
+    if _loaded_context is not None and _loaded_context.state is not _resume_state:
+        raise RecoveryContractError("loaded context belongs to another continuation")
 
     prepare_runtime = partial(
         prepare_agent_runtime,
@@ -403,9 +416,14 @@ async def run_agent_generation(
     if _resume_state is not None:
         if _resume_state.execution.execution_context_ref is None:
             raise RecoveryContractError("pipeline executable context is missing")
-        execution_context = await load_execution_context(
-            _resume_state.identity, _resume_state.execution.execution_context_ref,
-            binding=_resume_state.binding,
+        execution_context = (
+            _loaded_context.value
+            if _loaded_context is not None
+            else await load_execution_context(
+                _resume_state.identity,
+                _resume_state.execution.execution_context_ref,
+                binding=_resume_state.binding,
+            )
         )
         completed = execution_context.get("completed")
         if type(completed) is not dict:

@@ -17,8 +17,11 @@ from yleum_api.models.project_cell import (
 )
 from yleum_api.models.user import User
 from yleum_api.services.orchestrator_client import (
+    EnsureProjectCellResourcesRequest,
     OrchestratorBadRequest,
     OrchestratorUnavailable,
+    ProjectCellCapacityRejection,
+    ProjectCellCapacityWait,
     ProjectCellLeaseObservation,
     ProjectCellResourceResponse,
 )
@@ -35,6 +38,7 @@ from yleum_api.services.project_cell_lifecycle import execute_cell_operation
 from yleum_api.services.project_cells import (
     claim_cell_operation_committed,
     complete_cell_operation,
+    execution_run_id,
     fail_cell_operation,
     mark_cell_operation_indeterminate,
     park_cell_operation_for_capacity,
@@ -424,6 +428,251 @@ async def test_capacity_wait_never_resurrects_terminal_generation(
     assert outcome.status == "cancelled"
     async with factory() as session:
         assert (await session.get(GenerationRun, run.id)).status == terminal_status
+
+
+@pytest.mark.parametrize(
+    ("parked_before_wait", "owned_refusal", "emit_crosses_due", "stop_on_emit"),
+    [
+        (False, True, False, False),
+        (True, True, False, False),
+        (True, False, False, False),
+        (True, True, True, False),
+        (True, True, False, True),
+    ],
+    ids=("fresh-refusal", "saved-refusal", "missing-owner", "emit-crosses-due", "stop-on-emit"),
+)
+async def test_capacity_wait_respects_exact_refusal_due_time(
+    test_engine: AsyncEngine,
+    parked_before_wait: bool,
+    owned_refusal: bool,
+    emit_crosses_due: bool,
+    stop_on_emit: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from yleum_api.services import project_cell_capacity as capacity
+    from yleum_api.services import project_cells
+    from yleum_api.services.generation_runs import apply_cancelled_generation_locked
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    current = datetime.now(UTC)
+
+    class QueueClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is UTC
+            return current
+
+    async def sleep(seconds: float) -> None:
+        nonlocal current
+        current += timedelta(seconds=seconds)
+
+    monkeypatch.setattr(capacity, "datetime", QueueClock)
+    monkeypatch.setattr(project_cells, "datetime", QueueClock)
+    monkeypatch.setattr(capacity, "asyncio", SimpleNamespace(sleep=sleep, timeout=asyncio.timeout))
+    async with factory() as session:
+        owner = User(email=f"{uuid4().hex}@example.test", password_hash="x")
+        session.add(owner)
+        await session.flush()
+        project, run, workspace = await _project_run(
+            session, owner, created_at=current, label="due-refusal",
+        )
+        project.project_cell_enabled = True
+        run.execution_backend = "worker"
+        run.execution_started_at = run.created_at
+        workspace.generation_run_id = run.id
+        profile = "docker-owner-cell-resources-v1"
+        operation, _ = await reserve_cell_operation(
+            session,
+            workspace_id=workspace.id,
+            generation_run_id=run.id,
+            kind="ensure",
+            idempotency_key=f"generation:{run.id}:ensure:{profile}",
+            request={"profile_version": profile},
+        )
+        await session.commit()
+
+    requests: list[EnsureProjectCellResourcesRequest] = []
+    sent_at: list[datetime] = []
+
+    async def ensure(request: EnsureProjectCellResourcesRequest) -> ProjectCellResourceResponse:
+        requests.append(request)
+        sent_at.append(current)
+        if len(requests) <= 2:
+            raise ProjectCellCapacityWait(ProjectCellCapacityRejection(
+                operation_id=request.operation_id,
+                fencing_epoch=request.fencing_epoch,
+                request_digest=request.request_digest,
+                reason="insufficient_memory",
+                retry_after_seconds=1,
+                effect_applied=False,
+            ))
+        return ProjectCellResourceResponse(
+            workspace_id=workspace.id, state="resources_ready", provider_ref="test-cell",
+            fencing_epoch=request.fencing_epoch, checkpoint_ref=None, has_workspace=True,
+            has_agent_home=True, has_postgres=True, has_redis=True,
+        )
+
+    async def emit(_payload: dict[str, object]) -> None:
+        nonlocal current
+        if emit_crosses_due and len(requests) == 1:
+            current += timedelta(seconds=2)
+        if stop_on_emit:
+            async with factory() as session:
+                saved = await session.get(GenerationRun, run.id, with_for_update=True)
+                assert saved is not None
+                await apply_cancelled_generation_locked(session, saved)
+                await session.commit()
+
+    reclaimed_before_attempt: list[int] = []
+
+    async def reclaim(*_args, **_kwargs) -> bool:
+        reclaimed_before_attempt.append(len(requests))
+        return False
+
+    monkeypatch.setattr(
+        "yleum_api.services.project_cell_capacity.hibernate_one_idle_workspace", reclaim,
+    )
+    ownership = execution_run_id.set(run.id)
+    client = SimpleNamespace(ensure=ensure)
+    try:
+        if parked_before_wait:
+            parked = await execute_cell_operation(factory, operation.id, client)
+            assert parked.status == "waiting_capacity"
+            if not owned_refusal or stop_on_emit:
+                async with factory() as session:
+                    saved = await session.get(ProjectCellOperation, operation.id)
+                    assert saved is not None
+                    if not owned_refusal:
+                        saved.execution_run_id = None
+                    if stop_on_emit:
+                        saved.next_attempt_at = current
+                    await session.commit()
+        outcome = await wait_for_capacity(
+            factory,
+            run_id=run.id,
+            operation_id=operation.id,
+            client=client,
+            emit=emit,
+            dispatch_token=uuid4(),
+            initial_attempt=lambda: execute_cell_operation(factory, operation.id, client),
+        )
+    finally:
+        execution_run_id.reset(ownership)
+
+    if stop_on_emit:
+        assert outcome.status == "cancelled" and outcome.operation_id == operation.id
+        assert reclaimed_before_attempt == []
+        assert len(requests) == 1
+        return
+
+    assert outcome.status == "completed" and outcome.operation_id == operation.id
+    assert len(requests) == 3
+    assert {request.operation_id for request in requests} == {operation.id}
+    assert {request.request_digest for request in requests} == {requests[0].request_digest}
+    assert [request.fencing_epoch for request in requests] == [1, 2, 3]
+    assert sent_at[1] - sent_at[0] >= timedelta(seconds=1)
+    assert sent_at[2] - sent_at[1] >= timedelta(seconds=1)
+    assert reclaimed_before_attempt == ([1, 2] if owned_refusal else [2])
+
+
+async def test_long_capacity_wait_renews_dispatch_and_observes_stop(
+    test_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from yleum_api.services import generation_runs
+    from yleum_api.services import project_cell_capacity as capacity
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    started = current = datetime.now(UTC)
+    retry_at = started + timedelta(seconds=75)
+    dispatch_token = uuid4()
+
+    class QueueClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is UTC
+            return current
+
+    async with factory() as session:
+        owner = User(email=f"{uuid4().hex}@example.test", password_hash="x")
+        session.add(owner)
+        await session.flush()
+        _, run, workspace = await _project_run(
+            session, owner, created_at=started, label="long-wait",
+        )
+        run.execution_backend = "worker"
+        workspace.generation_run_id = run.id
+        operation, _ = await reserve_cell_operation(
+            session,
+            workspace_id=workspace.id,
+            generation_run_id=run.id,
+            kind="ensure",
+            idempotency_key=f"generation:{run.id}:ensure:long-wait",
+            request={"profile_version": "docker-owner-cell-resources-v1"},
+        )
+        await session.commit()
+
+    async def ensure(request: EnsureProjectCellResourcesRequest) -> ProjectCellResourceResponse:
+        assert request.fencing_epoch == 1, "the not-yet-due ensure must not be dispatched"
+        raise ProjectCellCapacityWait(ProjectCellCapacityRejection(
+            operation_id=request.operation_id,
+            fencing_epoch=request.fencing_epoch,
+            request_digest=request.request_digest,
+            reason="insufficient_memory",
+            retry_after_seconds=10,
+            effect_applied=False,
+        ))
+
+    sleep_calls: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        nonlocal current
+        assert 0 < seconds <= 10
+        sleep_calls.append(seconds)
+        async with factory() as session:
+            saved = await session.get(GenerationRun, run.id)
+            parked = await session.get(ProjectCellOperation, operation.id)
+            assert saved is not None and parked is not None
+            assert generation_runs.read_capacity_dispatch_claim(saved) == (
+                dispatch_token, current + timedelta(seconds=30),
+            )
+            assert parked.next_attempt_at == retry_at and parked.attempt_count == 1
+            current += timedelta(seconds=seconds)
+            if current >= started + timedelta(seconds=35):
+                saved.status = "cancel_requested"
+                await session.commit()
+
+    async def forbidden_reclamation(*_args, **_kwargs) -> bool:
+        pytest.fail("capacity must not be reclaimed before the retry is due")
+
+    async def emit(_payload: dict[str, object]) -> None:
+        pass
+
+    monkeypatch.setattr(capacity, "datetime", QueueClock)
+    monkeypatch.setattr(generation_runs, "datetime", QueueClock)
+    monkeypatch.setattr(capacity, "asyncio", SimpleNamespace(sleep=sleep, timeout=asyncio.timeout))
+    monkeypatch.setattr(capacity, "hibernate_one_idle_workspace", forbidden_reclamation)
+    ownership = execution_run_id.set(run.id)
+    client = SimpleNamespace(ensure=ensure)
+    try:
+        refused = await execute_cell_operation(factory, operation.id, client)
+        assert refused.status == "waiting_capacity"
+        async with factory() as session:
+            parked = await session.get(ProjectCellOperation, operation.id)
+            assert parked is not None
+            parked.next_attempt_at = retry_at
+            await session.commit()
+        outcome = await wait_for_capacity(
+            factory, run_id=run.id, operation_id=operation.id, client=client, emit=emit,
+            dispatch_token=dispatch_token,
+            initial_attempt=lambda: execute_cell_operation(factory, operation.id, client),
+        )
+    finally:
+        execution_run_id.reset(ownership)
+
+    assert sleep_calls == [10.0, 10.0, 10.0, 10.0]
+    assert current < retry_at
+    assert outcome.status == "cancelled" and outcome.operation_id == operation.id
 
 
 async def test_queue_deadline_precedes_runtime_creation(test_engine: AsyncEngine) -> None:
@@ -859,6 +1108,9 @@ async def test_capacity_wait_reconciles_ensure_after_orchestrator_restart(
             reason="insufficient_memory",
             retry_after_seconds=1,
         )
+        parked = await session.get(ProjectCellOperation, operation.id)
+        assert parked is not None
+        parked.next_attempt_at = datetime.now(UTC)
         await session.commit()
 
     async def no_idle_workspace(*_args: object, **_kwargs: object) -> bool:

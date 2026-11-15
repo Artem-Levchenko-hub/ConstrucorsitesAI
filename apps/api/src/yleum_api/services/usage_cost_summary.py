@@ -12,6 +12,10 @@ from yleum_api.schemas.billing import UsageCostBreakdownPublic
 
 CostKind = Literal["confirmed", "estimated", "unknown"]
 ESTIMATE_BASES = ("token_tariff", "local_token_estimate", "provider_catalog_estimate")
+_RECEIPT_SCOPES = (
+    ("aitunnel", "aitunnel-public-catalog-2026-10-23"),
+    ("llmgw", "llmgw-public-kimi-k3.1-pro-2026-11-14"),
+)
 # At most 80 characters and a two-digit exponent keep every accepted value far
 # within PostgreSQL's unconstrained NUMERIC range, including negative zero.
 NONNEGATIVE_RUB = r"^(\+?([0-9]+(\.[0-9]*)?|\.[0-9]+)|-0+(\.0*)?)([eE][+-]?[0-9]{1,2})?$"
@@ -23,8 +27,8 @@ def classify_cost(provenance: object, stored_cost: Decimal) -> CostKind:
     version = provenance["schema_version"]
     if version not in {1, 2}:
         return "unknown"
-    if version == 2 and (provenance.get("provider_scope") != "aitunnel"
-                        or provenance.get("tariff_source") != "aitunnel-public-catalog-2026-10-23"):
+    identity = (provenance.get("provider_scope"), provenance.get("tariff_source"))
+    if version == 2 and identity not in _RECEIPT_SCOPES:
         return "unknown"
 
     def amount(key: str) -> Decimal | None:
@@ -76,8 +80,13 @@ def cost_classification() -> ColumnElement[str]:
         amount(key) for key in ("effective_cost_rub", "calculated_cost_rub", "reported_cost_rub")
     )
     version = provenance["schema_version"].astext
-    provider_v2 = and_(version == "2", provenance["provider_scope"].astext == "aitunnel",
-                      provenance["tariff_source"].astext == "aitunnel-public-catalog-2026-10-23")
+    provider_v2 = and_(version == "2", or_(*(
+        and_(
+            provenance["provider_scope"].astext == scope,
+            provenance["tariff_source"].astext == tariff,
+        )
+        for scope, tariff in _RECEIPT_SCOPES
+    )))
     supported = and_(
         func.jsonb_typeof(provenance) == "object",
         func.jsonb_typeof(provenance["schema_version"]) == "number",

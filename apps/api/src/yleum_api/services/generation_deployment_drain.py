@@ -25,25 +25,41 @@ _SCOPE = "generation"
 _LOCK = "yleum:generation:deployment-drain:v1"
 
 
-async def require_generation_admission(session: AsyncSession) -> None:
-    from yleum_api.models.deployment_drain import DeploymentDrain
-
-    # Held until the run/operation reservation commits. The deploy's exclusive
-    # lock waits for every pre-fence reservation, closing check-zero/admit races.
+async def lock_generation_admission_gate(session: AsyncSession) -> None:
+    """Serialize with drain state changes until this transaction commits."""
     await session.execute(
         text("SELECT pg_advisory_xact_lock_shared(hashtext(:key))"), {"key": _LOCK}
     )
-    if await session.get(DeploymentDrain, _SCOPE, populate_existing=True) is not None:
+
+
+async def _current_drain(session: AsyncSession) -> DeploymentDrain | None:
+    from yleum_api.models.deployment_drain import DeploymentDrain
+
+    return await session.get(DeploymentDrain, _SCOPE, populate_existing=True)
+
+
+async def require_generation_admission(session: AsyncSession) -> None:
+    # The deploy's exclusive lock waits for every pre-fence reservation.
+    await lock_generation_admission_gate(session)
+    if await _current_drain(session) is not None:
         raise ApiError("generation_draining", "Generation admission is temporarily paused", 503)
 
 
-async def _locked_drain(session: AsyncSession, release_sha: str) -> DeploymentDrain | None:
-    from yleum_api.models.deployment_drain import DeploymentDrain
+async def try_continuation_admission(session: AsyncSession) -> bool:
+    """Keep a successful shared barrier until the claim transaction ends."""
+    # A continuation already owns a per-run session lock that the exclusive
+    # deploy checker treats as active work. Do not wait on that checker.
+    acquired = await session.scalar(
+        text("SELECT pg_try_advisory_xact_lock_shared(hashtext(:key))"), {"key": _LOCK}
+    )
+    return acquired is True and await _current_drain(session) is None
 
+
+async def _locked_drain(session: AsyncSession, release_sha: str) -> DeploymentDrain | None:
     if not re.fullmatch(r"[0-9a-f]{40}", release_sha):
         raise ValueError("a full release SHA is required")
     await session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": _LOCK})
-    row = await session.get(DeploymentDrain, _SCOPE, populate_existing=True)
+    row = await _current_drain(session)
     if row is not None and row.release_sha != release_sha:
         raise ValueError("deployment drain belongs to another release")
     return row

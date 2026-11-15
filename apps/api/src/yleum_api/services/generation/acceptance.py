@@ -28,6 +28,7 @@ from yleum_api.schemas.message import (
     PromptRequest,
     PromptResponse,
 )
+from yleum_api.services.agent_output_budget import KIMI_PILOT_MODEL
 from yleum_api.services.billing_accounts import resolve_billing_account
 from yleum_api.services.build_spec import spec_from_discovery
 from yleum_api.services.discovery import BUILD as DISCOVERY_BUILD
@@ -131,6 +132,8 @@ class PromptAcceptance:
         self.session = session
         self.current_user = current_user
         self.project = project
+        self.settings = get_settings()
+        self.pilot_model: str | None = None
 
     async def accept(self) -> PromptResponse:
         from yleum_api.services.phone_verification import (
@@ -165,6 +168,7 @@ class PromptAcceptance:
             self.unit_free_first_build = bool(context.plan and context.plan.code == "free")
         await self.prepare_adaptation()
         await self.check_admission()
+        await self.prepare_model_pilot()
         from yleum_api.services.generation_billing import admit_policy
         from yleum_api.services.llm_client import set_generation_billing_context
 
@@ -464,21 +468,71 @@ class PromptAcceptance:
             if self.payload.design_preset_id in _PRESETS:
                 self.project.design_preset_id = self.payload.design_preset_id
 
-        # ── Onboarding interview routing ──────────────────────────────────────
-        # On a brand-new project we don't build straight away: we first run a short
-        # discovery so the first generation works from a real brief, not a one-line
-        # idea. Two regimes (progressive supersedes the legacy batch clarify):
-        #   * progressive discovery (default) — ask ONE elementary question at a time,
-        #     adapt, and build when the model decides it has enough (services/discovery).
-        #   * legacy clarify — a single batch of 3–4 questions (kept as a flag fallback).
-        # A select-mode pick, an explicit skip_clarify, or a non-first-build prompt all
-        # bypass the interview entirely and go straight to generation.
-        self.settings = get_settings()
+    async def prepare_model_pilot(self) -> None:
+        if not self.is_first_build or str(self.project_id) not in (
+            self.settings.max_kimi_pilot_project_ids.split(",")
+        ):
+            return
+        # reserve_or_replay owns the project admission lock and handled exact
+        # replays. A later request uses the ordinary model routing.
+        previous = await self.session.scalar(
+            select(GenerationRun.id).where(
+                GenerationRun.project_id == self.project_id,
+                GenerationRun.id != self.generation_run.id,
+                GenerationRun.user_message_id.is_not(None),
+            ).limit(1)
+        )
+        if previous is not None:
+            return
+        from yleum_api.services.generation.recovery_execution import execution_enabled
+        from yleum_api.services.generation.response_auth import valid_response_signing_key
+
+        signing_key = self.settings.generation_response_signing_secret
+        if (
+            self.project.template != "max_miniapp"
+            or self.project.is_imported
+            or self.project.id != self.project_id
+            or self.project.owner_id != self.current_user.id
+            or self.generation_run.user_id != self.current_user.id
+            or self.generation_run.project_id != self.project_id
+            or self.is_free == self.unit_billing
+            or not self.settings.use_generation_worker
+            or not self.settings.generation_recovery_soft_windows_enabled
+            or not self.settings.generation_provider_attempts_enabled
+            or not self.settings.generation_response_retention_enabled
+            or not valid_response_signing_key(
+                signing_key.get_secret_value() if signing_key is not None else None
+            )
+            or not self.settings.use_max_finalization_coordinator
+            or not execution_enabled(self.project_id)
+            or self.credential_redirect
+            or self.explain_failed_build
+            or self.payload.restoration_adaptation is not None
+            or self.payload.supersedes_run_id is not None
+            or self.payload.reference_image_ids
+            or self.payload.selected_elements
+            or self.font_selections
+            or self.resolved_fonts
+        ):
+            raise ApiError("conflict", "Project is not eligible for the Kimi pilot", 409)
+        if self.is_free:
+            from yleum_api.services.entitlements import (
+                has_qa_unlimited_generations,
+                load_plan_context,
+            )
+
+            if self.current_user.role != "admin" or not has_qa_unlimited_generations(
+                self.current_user, await load_plan_context(self.session, self.current_user.id),
+            ):
+                raise ApiError("conflict", "Project is not eligible for the Kimi pilot", 409)
+        self.pilot_model = KIMI_PILOT_MODEL
 
     async def conduct_interview(self) -> None:
         from yleum_api.services.behavior_driver_configuration import meal_canary_request
         from yleum_api.services.generation.meal_acceptance import BUILD_PROMPT
 
+        # The pilot starts from the supplied first-build brief. Do not dispatch
+        # the ordinary discovery/clarify model before the Kimi build is queued.
         self.discovery_result: DiscoveryResult | None = None
         # Async onboarding: set when the slow first-turn plan is deferred out of the
         # request (delivered over WS). No build/ASK this turn — a placeholder streams
@@ -496,6 +550,7 @@ class PromptAcceptance:
             self.is_first_build
             and not getattr(self, "free_chat_limited", False)
             and not getattr(self, "unit_free_first_build", False)
+            and self.pilot_model is None
             and not self.payload.skip_clarify
             and not reviewed_meal_build
             and not self.payload.reference_image_ids
@@ -615,11 +670,12 @@ class PromptAcceptance:
             and not self.credential_redirect and not self.explain_failed_build
         )
 
-        # Model choice is server-side — the user never picks. `force_model` is the
-        # hidden admin override (env FORCE_MODEL). Otherwise the triage decides:
-        # orchestrate → director (Opus) drives prompt-routing + Director→Polish;
-        # cheap → a single reliable Haiku shot (role `edit`).
-        self.force_model = self.settings.force_model or None
+        # Kimi must come from the persisted pilot admission. A generic admin
+        # override cannot reuse the pilot or disable ordinary routing.
+        force_model = self.settings.force_model or ""
+        if force_model.strip().casefold().removeprefix("moonshotai/") == KIMI_PILOT_MODEL:
+            force_model = ""
+        self.force_model = self.pilot_model or force_model or None
         self.routing_model = self.force_model or model_for_role(
             "director" if self.orchestrate else "edit"
         )
@@ -785,7 +841,7 @@ class PromptAcceptance:
                           and self.discovery_result.action == DISCOVERY_BUILD),
             )
             capacity_dispatch_token = uuid4()
-            if get_settings().use_generation_worker:
+            if self.settings.use_generation_worker:
                 self.generation_run.execution_backend = "worker"
             await self.session.commit()
             if self.generation_run.execution_backend == "api":

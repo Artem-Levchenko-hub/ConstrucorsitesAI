@@ -418,6 +418,10 @@ async def test_cost_evidence_breakdown_uses_saved_amounts_and_owner_period_filte
                "effective_cost_rub": "1"}),
         ("0", {"basis": "token_tariff", "calculated_cost_rub": "1"}),
         ("0", {"basis": "provider_reported_rub", "reported_cost_rub": 0}),
+        (".03", {"schema_version": 2, "provider_scope": "llmgw",
+                 "tariff_source": "llmgw-public-kimi-k3.1-pro-2026-11-14",
+                 "basis": "provider_reported_rub", "reported_cost_rub": ".03",
+                 "calculated_cost_rub": None}),
     ]
     inserted = []
     for cost, provenance in evidence:
@@ -455,19 +459,19 @@ async def test_cost_evidence_breakdown_uses_saved_amounts_and_owner_period_filte
     assert result.status_code == 200, result.text
     report = result.json()
     expected = {
-        "confirmed": {"calls": 2, "cost_rub": "1.2345"},
+        "confirmed": {"calls": 3, "cost_rub": "1.2645"},
         "estimated": {"calls": 1, "cost_rub": "0.3000"},
         "unknown": {"calls": 15, "cost_rub": "6.3344"},
     }
     assert report["app_ai_answers"]["cost_breakdown"] == expected
     assert report["total_ai_cost_breakdown"] == expected
-    assert Decimal(report["total_ai_cost_rub"]) == Decimal("7.8689")
+    assert Decimal(report["total_ai_cost_rub"]) == Decimal("7.8989")
     assert report["wallet"]["balance_rub"] == "100.0000"
     assert report["wallet"]["charges"] == 0
     project = await client.get(f"/api/projects/{project_id}/max/usage")
     assert project.status_code == 200, project.text
     # Project totals retain all history; account totals use the requested period.
-    assert project.json()["total_cost_rub"] == 14.8689
+    assert project.json()["total_cost_rub"] == 14.8989
     assert project.json()["total_cost_breakdown"]["unknown"] == {
         "calls": 16, "cost_rub": "13.3344",
     }

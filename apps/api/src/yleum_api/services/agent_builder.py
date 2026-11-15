@@ -60,6 +60,7 @@ from yleum_api.services import llm_client
 from yleum_api.services.agent_build_feedback import render_model_observation
 from yleum_api.services.agent_output_budget import (
     DEFAULT_REPAIR_OUTPUT_TOKENS,
+    KIMI_PILOT_MODEL,
     SONNET55_REPAIR_OUTPUT_TOKENS,
     agent_output_tokens,
     is_sonnet55_model,
@@ -528,6 +529,8 @@ async def run_agent_build(
 
     ``bounded_repair`` limits new requests when finishing restored draft source.
     """
+    if model == KIMI_PILOT_MODEL or escalate_model == KIMI_PILOT_MODEL:
+        raise RecoveryContractError("Kimi pilot cannot use the legacy text agent")
     response_recovery = response_recovery or ResponseRecovery()
     execute = shadow_recovery_executor(
         execute, recovery=recovery, recovery_binding=recovery_binding,

@@ -148,14 +148,22 @@ async def update_owned_clock(
         recovery_state,
     )
     from yleum_api.services.generation.recovery_store import _locked_owner
-    from yleum_api.services.generation_deployment_drain import require_generation_admission
+    from yleum_api.services.generation_deployment_drain import (
+        lock_generation_admission_gate,
+        require_generation_admission,
+    )
 
     previous = driver.state
     if not isinstance(previous, RecoveryStateV3):
         return
     await _require_session_owner(previous.identity.run_id)
     async with driver.factory() as session:
-        await require_generation_admission(session)
+        if stopped:
+            # The stopped accounting transform verifies the existing owner,
+            # physical release and provider journal before closing the clock.
+            await lock_generation_admission_gate(session)
+        else:
+            await require_generation_admission(session)
         run, _ = await _locked_owner(
             session,
             run_id=previous.identity.run_id,
@@ -180,6 +188,8 @@ async def update_owned_clock(
         if current != previous and not same_released_owner:
             raise RecoveryContractError("clock execution owner changed")
         updated = await transform(session, current)
+        if stopped and updated.clock.interval_open:
+            raise RecoveryContractError("stopped accounting must close its work interval")
         await _require_session_owner(run.id)
         updated = updated.model_copy(update={"state_revision": current.state_revision + 1})
         run.agent_state = {**run.agent_state, RECOVERY_KEY: updated.model_dump(mode="json")}

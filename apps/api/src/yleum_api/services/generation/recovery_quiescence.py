@@ -121,6 +121,7 @@ async def _quiesced_physical_run(
     parked_source: Literal["allow", "deny", "require"] = "allow",
 ) -> PhysicalQuiescenceEvidence | None:
     from yleum_api.services.generation.recovery_execution import (
+        _armed_preconnect_wait,
         _initial_quiescent,
         _owned_release_receipt,
         recovery_state,
@@ -197,7 +198,27 @@ async def _quiesced_physical_run(
                     and state.clock.wait_dependency is not None
                     and state.binding.fencing_epoch + 1 == workspace.fencing_epoch
                 )
-                if not advisory_transition:
+                redrive_transition = (
+                    state.binding.fencing_epoch + 1 == workspace.fencing_epoch
+                    and await _armed_preconnect_wait(session, run, state)
+                )
+                prepare_backoff = False
+                if (
+                    not (for_dependency_advisory or redrive_transition)
+                    and parked_source != "require"
+                    and isinstance(state, RecoveryStateV3)
+                    and state.phase == "waiting_dependency"
+                    and project.template == "max_miniapp"
+                    and state.binding.fencing_epoch + 1 == workspace.fencing_epoch
+                ):
+                    from yleum_api.services.generation.recovery_prepare_backoff import (
+                        matches_released_prepare_backoff,
+                    )
+
+                    prepare_backoff = await matches_released_prepare_backoff(
+                        session, run, state, workspace,
+                    )
+                if not (advisory_transition or redrive_transition or prepare_backoff):
                     if (
                         parked_source == "deny" or not isinstance(state, RecoveryStateV3)
                         or (state.phase != "needs_input" and not claimed_preparation)

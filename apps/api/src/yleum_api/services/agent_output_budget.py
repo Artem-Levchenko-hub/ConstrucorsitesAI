@@ -1,5 +1,7 @@
 """Per-response defaults; None leaves the output limit to the provider."""
 
+KIMI_PILOT_MODEL = "kimi-k3.1-pro"
+
 SONNET55_REPAIR_OUTPUT_TOKENS = 128_000
 DEFAULT_REPAIR_OUTPUT_TOKENS = 8192
 

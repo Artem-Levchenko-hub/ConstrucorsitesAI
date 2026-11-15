@@ -416,6 +416,7 @@ async def test_pipeline_commits_bootstrap_context_before_first_runtime_effect(
         ProjectGenerationFacts,
         SourceBaseline,
     )
+    from yleum_api.services.generation.recovery_contract import RecoveryContractError
     from yleum_api.services.generation_runs import (
         load_generation_dispatch,
         mark_capacity_dispatch_admitted,
@@ -448,6 +449,7 @@ async def test_pipeline_commits_bootstrap_context_before_first_runtime_effect(
         AsyncMock(return_value=(dispatch.prompt_text, False, False, False)),
     )
     objects = {}
+    context_reads = []
 
     async def store(project, run_id, data):
         sha = hashlib.sha256(data).hexdigest()
@@ -456,6 +458,7 @@ async def test_pipeline_commits_bootstrap_context_before_first_runtime_effect(
         return key, sha
 
     async def read(project, run_id, *, object_key, digest):
+        context_reads.append(object_key)
         value = objects.get(object_key)
         return value if value is not None and hashlib.sha256(value).hexdigest() == digest else None
 
@@ -467,9 +470,11 @@ async def test_pipeline_commits_bootstrap_context_before_first_runtime_effect(
 
     dispatch_token = uuid4()
     seen_dispatch_tokens = []
+    reads_before_runtime = []
 
     async def runtime_effect(**kwargs):
         seen_dispatch_tokens.append(kwargs["capacity_dispatch_token"])
+        prior_reads = tuple(context_reads)
         async with factory() as check:
             current = await check.get(GenerationRun, run.id)
             state = recovery_execution.recovery_state(current)
@@ -483,6 +488,7 @@ async def test_pipeline_commits_bootstrap_context_before_first_runtime_effect(
             )
             assert context["pipeline"]["prompt_text"] == dispatch.prompt_text
             assert context["pipeline"]["baseline"]["files"] == {"src/Привет.ts": "original"}
+            reads_before_runtime.append((prior_reads, tuple(context_reads[len(prior_reads):])))
         raise ObservedBoundary
 
     monkeypatch.setattr(agent_pipeline, "prepare_agent_runtime", runtime_effect)
@@ -541,9 +547,24 @@ async def test_pipeline_commits_bootstrap_context_before_first_runtime_effect(
                     await session.commit()
                 assert claim is not None
                 settings.generation_recovery_execution_enabled = False
+                context_reads.clear()
                 with pytest.raises(ObservedBoundary):
                     await recovery_execution.resume_generation(claim)
                 agent_pipeline.classify_agent_turn.assert_awaited_once()
+                assert seen_dispatch_tokens == [None, dispatch_token]
+                before, one_verified_load = reads_before_runtime[-1]
+                assert one_verified_load
+                assert before == one_verified_load
+
+                # Another entry still authenticates private bytes from storage.
+                root = one_verified_load[0]
+                objects[root] += b" "
+                context_reads.clear()
+                with pytest.raises(
+                    RecoveryContractError, match="executable context is incomplete or corrupt"
+                ):
+                    await recovery_execution.resume_generation(claim)
+                assert context_reads == [root]
                 assert seen_dispatch_tokens == [None, dispatch_token]
         finally:
             recovery_execution._SESSION_OWNER.reset(token)

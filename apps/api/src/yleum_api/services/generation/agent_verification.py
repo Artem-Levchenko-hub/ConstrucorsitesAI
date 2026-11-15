@@ -11,6 +11,7 @@ from yleum_api.core.errors import ApiError
 from yleum_api.services import (
     agent_builder,
 )
+from yleum_api.services.agent_output_budget import KIMI_PILOT_MODEL
 from yleum_api.services.generation.agent_generation import raise_if_source_checkpoint_failed
 from yleum_api.services.generation.agent_messages import (
     _agent_result_message,
@@ -138,6 +139,7 @@ async def check_backend_and_normalize_css(
         _guard_max = max(0, int(get_settings().agent_gate_max_attempts))
         while (
             get_settings().use_agent_gate_feedback
+            and plan.model != KIMI_PILOT_MODEL
             and not get_settings().use_native_agent
             and not _is_edit
             and not uses_single_max_source_repair(runtime)

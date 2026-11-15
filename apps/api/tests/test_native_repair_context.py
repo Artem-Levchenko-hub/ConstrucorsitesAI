@@ -45,19 +45,22 @@ def repair_arguments(files, *, execute=None, continuation=None):
 
 
 @pytest.fixture
-def isolated_repair(monkeypatch):
+def repair_settings(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://qa:qa@127.0.0.1/unused")
     monkeypatch.setenv("JWT_SECRET", "qa-unit-test-key-never-used-for-production")
     monkeypatch.setenv("USE_MAX_FINALIZATION_COORDINATOR", "true")
     agent_native.get_settings.cache_clear()
+    yield
+    agent_native.get_settings.cache_clear()
 
+
+@pytest.fixture
+def isolated_repair(monkeypatch, repair_settings):
     async def guard(runtime, ids, execute, completion):
         # This unit exercises source context and the real native loop, not runtime proof.
         return execute, lambda _files, _evidence: None
 
     monkeypatch.setattr(agent_runtime, "guard_native_source_contract", guard)
-    yield
-    agent_native.get_settings.cache_clear()
 
 
 def source_from_task(task: str) -> dict:
@@ -339,6 +342,89 @@ async def test_late_exact_edit_uses_complete_loaded_source_without_any_read(
     assert result.done and result.files == {ENTRY: files[ENTRY]}
     assert files[MANIFEST] == before[MANIFEST]
     assert files[ENTRY] == original.replace("ACTUAL_LATE_TITLE", "CURRENT_PROFILE_TITLE")
+
+
+@pytest.mark.parametrize("case", ["removed", "present", "unavailable", "no_op"])
+async def test_source_repair_done_checks_the_current_tree_after_shell_deletion(
+    monkeypatch, repair_settings, case,
+):
+    from tests.test_max_generation_contract import _portable_crm_files
+    from tests.test_max_management_generation import connection_example
+    from yleum_api.services.max_generation_contract import max_source_completion_gap
+
+    before_page = (
+        'import {prepare} from "@/app/shared";\n'
+        + connection_example(("catalog",)).replace(
+            "const {profile}", "prepare();\nconst {profile}", 1,
+        )
+    )
+    page = before_page.replace("</h1>", " — каталог</h1>", 1)
+    removed = "src/app/shared.tsx"
+    clean = {
+        **managed_files(page),
+        ".omnia/cell.json": _portable_crm_files()[".omnia/cell.json"],
+        "src/app/shared.ts": "export function prepare() { return true; }",
+    }
+    files = {
+        **clean,
+        ENTRY: before_page,
+        removed: 'export function prepare() { throw new Error("retired source"); }',
+    }
+    brief = "Preserve the product"
+    assert max_source_completion_gap(brief, clean, portable=True) is None
+    ghost_gap = max_source_completion_gap(brief, files, portable=True)
+    assert ghost_gap and removed in ghost_gap and "throw_statement" in ghost_gap
+
+    calls = []
+    commands = []
+    snapshot_unavailable = False
+
+    async def snapshot():
+        if snapshot_unavailable:
+            raise RuntimeError("snapshot unavailable")
+        return dict(files)
+
+    async def execute(action):
+        nonlocal snapshot_unavailable
+        commands.append(action.name)
+        if action.name == "write_file":
+            files[action.path] = action.args["content"]
+        elif action.name == "bash" and case != "present":
+            files.pop(removed)
+        elif action.name == "build" and case == "unavailable" and removed not in files:
+            snapshot_unavailable = True
+        return {"ok": True, "environment_mutated": action.name == "bash"}
+
+    async def provider(*args, **kwargs):
+        calls.append(deepcopy(args[2]))
+        match len(calls):
+            case 1:
+                return turn(("write_file", {"path": ENTRY, "content": page}))
+            case 3:
+                assert removed in str(calls[-1]) and "Not done yet" in str(calls[-1])
+                return turn(("bash", {"cmd": "Remove the obsolete duplicate module"}))
+            case _:
+                return turn(("build", {}), ("done", {"summary": "Проверено"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", provider)
+    args = repair_arguments(dict(files), execute=execute)
+    args["runtime"].handle = SimpleNamespace(snapshot_files=snapshot)
+    args["plan"].steps = 4
+    args["shell_enabled"] = True
+    result = await agent_finalization.run_native_source_repair(
+        **args, require_edit_from=clean if case == "no_op" else None,
+    )
+
+    assert commands == ["write_file", "build", "build", "bash", "build"]
+    assert len(calls) == 4
+    assert result.done is (case == "removed")
+    assert set(files) == (set(clean) | ({removed} if case == "present" else set()))
+    if case == "present":
+        assert removed in result.summary
+    elif case == "unavailable":
+        assert "Product acceptance check failed" in result.summary
+    elif case == "no_op":
+        assert "Apply the requested edit" in result.summary
 
 
 @pytest.mark.parametrize("source", ["x" * 70_000, "я" * 40_000], ids=["ascii", "utf8"])

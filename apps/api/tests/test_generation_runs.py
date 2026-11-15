@@ -907,6 +907,7 @@ async def test_failed_first_build_explanation_does_not_spawn_another_build(
     settings = SimpleNamespace(
         unlimited_generations=False,
         force_model=None,
+        max_kimi_pilot_project_ids="",
         use_progressive_discovery=False,
         use_clarify_interview=False,
         use_followup_appification=False,
