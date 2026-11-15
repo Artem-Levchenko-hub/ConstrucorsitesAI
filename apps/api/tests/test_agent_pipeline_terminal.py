@@ -586,6 +586,7 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
     from yleum_api.services.generation.recovery_contract import (
         CheckpointRef,
         ContinuationClaim,
+        RecoveryBinding,
         decode_recovery,
     )
     from yleum_api.services.generation.recovery_pipeline import (
@@ -596,6 +597,7 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
 
     raw = bootstrap()
     ids = GenerationIds(*(uuid4() for _ in range(5)))
+    workspace_id = uuid4()
     raw["identity"].update(
         run_id=str(ids.run_id), project_id=str(ids.project_id), user_id=str(ids.user_id)
     )
@@ -635,9 +637,20 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
     }
     if bootstrap_gate == "completed":
         prepared = True
-        state = state.model_copy(update={"execution": state.execution.model_copy(update={
+        raw["cursor"] = "finalization"
+        raw["binding"] = RecoveryBinding(
+            source_sha256="b" * 64, schema_sha256="c" * 64, environment_sha256="d" * 64,
+            workspace_id=str(workspace_id), fencing_epoch=1,
+        ).model_dump(mode="json")
+        raw["checkpoint"] = CheckpointRef(
+            object_key="synthetic/checkpoint", sha256="e" * 64,
+        ).model_dump(mode="json")
+        raw["execution"].update({
             "stage": "finalization", "substep": "checkpoint_ready",
-        })})
+            "physical_state": "active", "control_workspace_id": str(workspace_id),
+            "control_fencing_epoch": 1,
+        })
+        state = decode_recovery(raw)
         context["completed"] = {"agent_entry": entry, "agent_turn": CompletedAgentTurn(
             AgentResult(done=True, summary="saved", files={}, steps=1), None,
             state.incomplete_response_budget,
@@ -687,7 +700,7 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
         refresh_snapshot_files=AsyncMock(return_value={"src/core.ts": "trusted"}),
         current_identity=AsyncMock(),
         is_portable=lambda: True,
-        control_workspace_id=uuid4(),
+        control_workspace_id=workspace_id,
         control_fencing_epoch=1,
     )
     runtime = GenerationRuntime(handle=handle)
