@@ -22,6 +22,7 @@ from yleum_api.services.generation.contracts import (
     uses_autonomous_max_source_repair,
     uses_single_max_source_repair,
 )
+from yleum_api.services.generation.recovery_contract import RecoveryStateV3
 from yleum_api.services.generation.recovery_trace import bounded_recovery_diagnostic
 from yleum_api.services.generation.runtime import (
     _apply_project_cell_preview_files,
@@ -85,9 +86,15 @@ async def recover_stopped_candidate(
     _source_only = getattr(runtime, "coordinator", None) is not None
     _first_max_without_product = not _max_has_generated_snapshot
     autonomous_repair = uses_autonomous_max_source_repair(runtime)
+    continuation = getattr(operations, "continuation", None)
+    reserved_proof_handoff = (
+        _agent_res.stop_reason == "source_deadline"
+        and bool(_agent_res.files)
+        and isinstance(getattr(continuation, "state", None), RecoveryStateV3)
+    )
     repairable_stop = (
         autonomous_repair
-        and _agent_res.stop_reason in _AUTONOMOUS_AGENT_STOPS
+        and (_agent_res.stop_reason in _AUTONOMOUS_AGENT_STOPS or reserved_proof_handoff)
         and (not _provider_failure or _agent_res.stop_reason == "output_limit")
     )
     needs_verified_repair = repairable_stop and not _agent_res.done and (
@@ -112,7 +119,7 @@ async def recover_stopped_candidate(
         and (
             repairable_stop
             or (
-                getattr(operations, "continuation", None) is None
+                continuation is None
                 and uses_single_max_source_repair(runtime)
                 and (
                     (not _provider_failure and _agent_res.stop_reason in _REPAIRABLE_AGENT_STOPS)
@@ -121,13 +128,15 @@ async def recover_stopped_candidate(
             )
         )
     ):
-        # Keep the exact draft for the coordinator. A stopped turn still needs
-        # a repair even when the incomplete product happens to compile.
+        # Keep the exact draft for the coordinator. A V3 source timeout leaves
+        # the proof window to check the whole request. Other incomplete stops
+        # still require a repair even when the draft compiles.
         return (
             replace(
                 _agent_res,
                 summary="Проверяю приложение.",
-                stop_reason=agent_builder.SOURCE_REPAIR_HANDOFF,
+                stop_reason=(agent_builder.SOURCE_FINALIZATION_HANDOFF if reserved_proof_handoff
+                             else agent_builder.SOURCE_REPAIR_HANDOFF),
                 needs_finalization=True,
                 continuation_reason=_agent_res.stop_reason,
             ),

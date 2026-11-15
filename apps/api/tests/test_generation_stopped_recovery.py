@@ -83,6 +83,33 @@ async def test_stopped_candidate_restores_without_preview_and_preserves_cause(st
     assert "no source changes" not in str(error.value)
 
 
+@pytest.mark.parametrize("has_generated_snapshot", [False, True])
+async def test_reserved_source_deadline_passes_the_v3_draft_to_finalization(
+    stopped_recovery, has_generated_snapshot,
+):
+    from yleum_api.services.agent_builder import SOURCE_FINALIZATION_HANDOFF
+    from yleum_api.services.generation.recovery_contract import RecoveryStateV3
+
+    kwargs, tree, _, trace, _ = stopped_recovery
+    runtime = kwargs["runtime"]
+    handle = runtime.handle
+    handle.is_portable = lambda: True
+    handle.snapshot_files = handle.sync_preview
+    runtime.continuation = SimpleNamespace(state=RecoveryStateV3.model_construct())
+    kwargs["operations"].continuation = runtime.continuation
+    kwargs["_max_has_generated_snapshot"] = has_generated_snapshot
+    kwargs["_agent_res"].stop_reason = "source_deadline"
+    kwargs["project_info"].template = "max_miniapp"
+    original = dict(tree)
+    result, *_ = await agent_recovery.recover_stopped_candidate(
+        **kwargs, allow_source_repair=True,
+    )
+    assert result.stop_reason == SOURCE_FINALIZATION_HANDOFF
+    assert result.continuation_reason == "source_deadline"
+    assert not result.done and result.needs_finalization
+    assert tree == original and trace == []
+
+
 @pytest.mark.parametrize("fault_at", ["build", "patch"])
 async def test_rollback_failure_does_not_resume_stopped_candidate(stopped_recovery, fault_at):
     kwargs, tree, baseline, trace, fault = stopped_recovery
