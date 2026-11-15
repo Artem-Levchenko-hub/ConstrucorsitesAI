@@ -24,7 +24,7 @@ from yleum_orchestrator.core.cell_resources import (
     LifecycleMutation,
     identity_labels,
 )
-from yleum_orchestrator.core.workspace_provider import WorkspaceSpec
+from yleum_orchestrator.core.workspace_provider import ReleaseEnvironmentExpectation, WorkspaceSpec
 from yleum_orchestrator.services.cell_admission import CellAdmissionGate, DockerHostCapacityReader
 from yleum_orchestrator.services.cell_lock import WorkspaceOperationLock
 from yleum_orchestrator.services.cell_state import CellCredentialStore, CellStateStore
@@ -35,6 +35,7 @@ from yleum_orchestrator.services.docker_cell_resources import (
     DockerNetworkRecord,
 )
 from yleum_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
+from yleum_orchestrator.services.machine_recovery_environment import RecoveryReleaseRefused
 
 
 def _profile(state_path: Path) -> CellResourceProfile:
@@ -457,6 +458,120 @@ async def test_only_generation_release_requests_trusted_retention(tmp_path):
         spec.workspace_id, release, generation_run_id=spec.generation_run_id,
     )
     assert runtime.halt.await_args.kwargs == {"retain_trusted": True, "generation_release": release}
+
+
+@pytest.mark.parametrize("failure", ["manifest_changed", "capture_unproved", "digest_changed"])
+async def test_strict_release_keeps_lease_until_capture_is_recorded(tmp_path, failure):
+    from unittest.mock import AsyncMock
+
+    manager, _docker, store, _lock = _make_manager(tmp_path)
+    run_id = uuid4()
+    spec = replace(_spec(uuid4()), generation_run_id=run_id)
+    await manager.ensure(spec, _mutation("a", 1))
+    before = store.load(spec.workspace_id)
+    expectation = ReleaseEnvironmentExpectation(
+        source_sha256="a" * 64, environment_sha256="b" * 64,
+    )
+    error = (
+        RecoveryReleaseRefused("manifest_changed", pre_effect=True)
+        if failure == "manifest_changed" else None
+    )
+    halt = AsyncMock(side_effect=error)
+    manager.machine_runtime = SimpleNamespace(root=tmp_path, halt=halt)
+    digest = expectation.release_request_digest(spec.workspace_id, run_id)
+    release = replace(_mutation("b", 2), request_digest=digest)
+    if failure == "digest_changed":
+        expectation = expectation.model_copy(update={"source_sha256": "e" * 64})
+
+    with pytest.raises(RecoveryReleaseRefused) as refusal:
+        await manager.release_generation(
+            spec.workspace_id, release, generation_run_id=run_id,
+            require_environment_proof=expectation,
+        )
+
+    reason = "manifest_changed" if failure == "manifest_changed" else "capture_unproved"
+    assert refusal.value.reason == f"recovery_release_{reason}"
+    assert store.load(spec.workspace_id) == before
+    if failure == "digest_changed":
+        halt.assert_not_awaited()
+    else:
+        halt.assert_awaited_once_with(
+            before, retain_trusted=True, generation_release=release,
+            require_environment_proof=expectation,
+        )
+
+
+@pytest.mark.parametrize("observer_ran", [False, True])
+async def test_strict_release_replays_begun_operation(tmp_path, monkeypatch, observer_ran):
+    from unittest.mock import AsyncMock
+
+    from yleum_orchestrator.services.machine_environment import (
+        MachineEnvironmentRef,
+        VolumeEnvironmentRef,
+    )
+    from yleum_orchestrator.services.machine_recovery_environment import (
+        RunningEnvironment,
+        record_release,
+    )
+    from yleum_orchestrator.services.machine_startup import EnvironmentIdentity
+
+    manager, _docker, store, _lock = _make_manager(tmp_path)
+    run = uuid4()
+    spec = replace(_spec(uuid4()), generation_run_id=run)
+    await manager.ensure(spec, _mutation("a", 1))
+    before = RunningEnvironment(
+        "sha256:" + "a" * 64, EnvironmentIdentity("b" * 64, "c" * 64),
+        "d" * 64, "2026-11-15T00:00:00Z",
+    )
+    expectation = ReleaseEnvironmentExpectation(
+        source_sha256="e" * 64, environment_sha256=before.identity.digest,
+    )
+    digest = expectation.release_request_digest(spec.workspace_id, run)
+    release = replace(_mutation("b", 2), request_digest=digest)
+    volume = CellResourceNames.for_workspace(spec.workspace_id, namespace="test").workspace_volume
+    archived = MachineEnvironmentRef(
+        workspace_id=spec.workspace_id, image_id="sha256:" + "f" * 64,
+        artifact_ref="1" * 32 + ".tar", sha256="2" * 64, size=1,
+        base_image="synthetic", manifest_digest="3" * 64,
+        volumes=(VolumeEnvironmentRef(
+            name=volume, artifact_ref="4" * 32 + ".tar", sha256="5" * 64, size=1,
+        ),),
+    )
+
+    async def halt(state, **_):
+        record_release(
+            tmp_path, state, release, before=before, source=expectation.source_sha256,
+            volume=volume, volume_identity="6" * 64, reference=archived,
+        )
+
+    stopped = AsyncMock(side_effect=halt)
+    manager.machine_runtime = SimpleNamespace(root=tmp_path, halt=stopped)
+    original = type(store).release_generation
+
+    def crash(*_args, **_kwargs):
+        raise SimulatedProcessCrash("after durable controller begin")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(type(store), "release_generation", crash)
+        with pytest.raises(SimulatedProcessCrash):
+            await manager.release_generation(
+                spec.workspace_id, release, generation_run_id=run,
+                require_environment_proof=expectation,
+            )
+    assert type(store).release_generation is original
+    if observer_ran:
+        observed = manager._require_state(spec.workspace_id)
+        assert observed.phase == "indeterminate"
+
+    resolved = await manager.release_generation(
+        spec.workspace_id, release, generation_run_id=run,
+        require_environment_proof=expectation,
+    )
+    current = store.load(spec.workspace_id)
+    assert resolved.fencing_epoch == 2 and resolved.state == "resources_ready"
+    assert current.active_generation_run_id is None
+    assert current.operation(release.operation_id).status == "completed"
+    stopped.assert_awaited_once()
 
 
 @pytest.mark.asyncio

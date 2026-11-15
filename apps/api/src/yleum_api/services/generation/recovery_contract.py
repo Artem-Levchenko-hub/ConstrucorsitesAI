@@ -407,6 +407,15 @@ class RecoveryStateV3(RecoveryStateV2):
     version: Literal[3] = 3  # type: ignore[assignment]
     clock: RecoveryClock
 
+    @property
+    def environment_rebind_supported(self) -> bool:
+        """The owning capability can rebind these cursors without replaying a write."""
+        execution = self.execution
+        return execution.substep == "response_wait" or (
+            execution.substep in {"checkpoint_ready", "request_ready", "agent_entry"}
+            and execution.pending_effect_id is None
+        )
+
     @field_validator("next_check_at")
     @classmethod
     def canonical_due(cls, value: datetime | None) -> datetime | None:

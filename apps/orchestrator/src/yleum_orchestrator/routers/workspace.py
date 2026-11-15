@@ -107,6 +107,7 @@ from yleum_orchestrator.services.machine_environment import (
 from yleum_orchestrator.services.machine_recovery_environment import (
     RecoveryEnvironmentProof,
     RecoveryEnvironmentUnproved,
+    RecoveryReleaseRefused,
     finish_proof,
     running_environment,
     verify_release,
@@ -265,9 +266,26 @@ async def control_workspace(
     try:
         status = await provider.execute_control(
             workspace_id,
-            ControlAction(kind=request.kind, checkpoint_ref=request.checkpoint_ref),
+            ControlAction(
+                kind=request.kind,
+                checkpoint_ref=request.checkpoint_ref,
+                require_environment_proof=request.require_environment_proof,
+            ),
             mutation,
         )
+    except RecoveryReleaseRefused as exc:
+        raise OrchestratorError(
+            code="conflict",
+            message=str(exc),
+            status_code=409,
+            details={
+                "reason": exc.reason,
+                "operation_id": str(mutation.operation_id),
+                "fencing_epoch": mutation.fencing_epoch,
+                "request_digest": mutation.request_digest,
+                **({"effect_applied": False} if exc.pre_effect else {}),
+            },
+        ) from exc
     except (
         CellFenceRejected,
         CellIdentityConflict,

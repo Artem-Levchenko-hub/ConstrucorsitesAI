@@ -225,6 +225,7 @@ class DockerOwnerCanaryProvider:
                 workspace_id,
                 mutation,
                 generation_run_id=generation_run_id,
+                require_environment_proof=action.require_environment_proof,
             )
             return self._status_from_handle(handle, mutation)
         raise WorkspaceProviderUnavailable(_UNAVAILABLE_DETAIL)

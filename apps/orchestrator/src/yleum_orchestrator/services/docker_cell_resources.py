@@ -26,7 +26,11 @@ from yleum_orchestrator.core.cell_resources import (
     identity_labels,
 )
 from yleum_orchestrator.core.config import get_settings
-from yleum_orchestrator.core.workspace_provider import ProjectCellLeaseObservation, WorkspaceSpec
+from yleum_orchestrator.core.workspace_provider import (
+    ProjectCellLeaseObservation,
+    ReleaseEnvironmentExpectation,
+    WorkspaceSpec,
+)
 from yleum_orchestrator.services.cell_admission import CellAdmissionGate, DockerHostCapacityReader
 from yleum_orchestrator.services.cell_lock import WorkspaceOperationLock
 from yleum_orchestrator.services.cell_reservations import CellCapacityReservationStore
@@ -35,12 +39,17 @@ from yleum_orchestrator.services.cell_state import (
     CellStateStore,
     CellWorkspaceState,
 )
+from yleum_orchestrator.services.machine_recovery_environment import (
+    RecoveryReleaseRefused,
+    require_recorded_release_capture,
+)
 
 _log = structlog.get_logger("yleum_orchestrator.cell_capacity")
 
 # Живым считается не только running: контейнер в created или restarting — это
 # ячейка, которая прямо сейчас поднимается, и место у неё отбирать нельзя.
 _LIVE_CONTAINER_STATES = frozenset({"running", "created", "restarting", "paused"})
+_INTERRUPTED_CONTROLLER_PHASE = "running phase recovered as indeterminate"
 
 
 _ALLOWED_HELPER_KINDS = frozenset(
@@ -426,6 +435,7 @@ class DockerCellResourceManager:
         mutation: LifecycleMutation,
         *,
         generation_run_id: UUID,
+        require_environment_proof: ReleaseEnvironmentExpectation | None = None,
     ) -> CellBundleHandle:
         async with self.operation_lock.hold(workspace_id):
             from yleum_orchestrator.services.adaptation_recovery_barrier import (
@@ -434,7 +444,16 @@ class DockerCellResourceManager:
             require_candidate_writers_allowed(self.state_store.root, workspace_id, action="release")
             from yleum_orchestrator.services.source_write_journal import require_source_writes_clear
             require_source_writes_clear(self.state_store.root, workspace_id)
-            state = self._require_state(workspace_id)
+            if (
+                require_environment_proof is not None and mutation.request_digest
+                != require_environment_proof.release_request_digest(workspace_id, generation_run_id)
+            ):
+                raise RecoveryReleaseRefused("capture_unproved")
+            replay = (
+                self._begun_strict_release(workspace_id, mutation, generation_run_id)
+                if require_environment_proof is not None else None
+            )
+            state = replay if replay is not None else self._require_state(workspace_id)
             if state.project_id is None or state.owner_id is None:
                 raise CellResourceError("workspace state missing immutable identity")
             existing = state.operation(mutation.operation_id)
@@ -442,6 +461,14 @@ class DockerCellResourceManager:
                 mutation.request_digest,
                 mutation.fencing_epoch,
             ):
+                if require_environment_proof is not None:
+                    if (self.machine_runtime is None or existing.kind != "release"
+                            or existing.generation_run_id != generation_run_id):
+                        raise RecoveryReleaseRefused("capture_unproved")
+                    require_recorded_release_capture(
+                        self.machine_runtime.root, state, mutation, generation_run_id,
+                        require_environment_proof,
+                    )
                 return CellBundleHandle(
                     workspace_id=workspace_id,
                     provider_ref=state.provider_ref or self._provider_ref(workspace_id),
@@ -460,24 +487,34 @@ class DockerCellResourceManager:
                 profile_version=state.profile_version,
                 generation_run_id=generation_run_id,
             )
-            self._reject_unless_allowed(
-                state, mutation, allow_reconcile=False, recovery_action="release",
-            )
+            if require_environment_proof is not None and self.machine_runtime is None:
+                raise RecoveryReleaseRefused("inventory_unavailable")
             names = state.resource_names
             if names is None:
                 raise CellResourceError("resource names missing")
-            if self.machine_runtime is not None:
-                if state.active_generation_run_id != generation_run_id:
-                    raise CellIdentityConflict("generation release identity mismatch")
-                await self.machine_runtime.halt(
-                    state, retain_trusted=True, generation_release=mutation,
+            if replay is None:
+                self._reject_unless_allowed(
+                    state, mutation, allow_reconcile=False, recovery_action="release",
                 )
-            await self.stateful_begin_or_replay(
-                spec,
-                mutation,
-                kind="release",
-                names=names,
-            )
+                if self.machine_runtime is not None:
+                    if state.active_generation_run_id != generation_run_id:
+                        raise CellIdentityConflict("generation release identity mismatch")
+                    options = {"retain_trusted": True, "generation_release": mutation}
+                    if require_environment_proof is not None:
+                        options["require_environment_proof"] = require_environment_proof
+                    await self.machine_runtime.halt(state, **options)
+            if require_environment_proof is not None:
+                assert self.machine_runtime is not None
+                require_recorded_release_capture(
+                    self.machine_runtime.root, state, mutation, generation_run_id,
+                    require_environment_proof,
+                )
+            if replay is None:
+                await self.stateful_begin_or_replay(
+                    spec, mutation, kind="release", names=names,
+                )
+            else:
+                self._assert_profile_version(state.profile_version)
             released = self.state_store.release_generation(
                 workspace_id,
                 mutation,
@@ -490,6 +527,30 @@ class DockerCellResourceManager:
                 fencing_epoch=mutation.fencing_epoch,
                 resource_names=names,
             )
+
+    def _begun_strict_release(
+        self, workspace_id: UUID, mutation: LifecycleMutation, run_id: UUID,
+    ) -> CellWorkspaceState | None:
+        state = self.state_store.load(workspace_id)
+        if state is None or (
+            state.last_operation_id, state.fencing_epoch, state.active_generation_run_id,
+            state.active_generation_fencing_epoch,
+        ) != (mutation.operation_id, mutation.fencing_epoch, run_id, mutation.fencing_epoch - 1):
+            return None
+        operation = state.operation(mutation.operation_id)
+        if operation is None or (
+            operation.kind, operation.request_digest, operation.fencing_epoch,
+            operation.generation_run_id,
+        ) != ("release", mutation.request_digest, mutation.fencing_epoch, run_id):
+            return None
+        if (operation.status, operation.phase) == ("running", "planned") or (
+            (operation.status, operation.phase, operation.detail)
+            == ("indeterminate", "indeterminate", _INTERRUPTED_CONTROLLER_PHASE)
+        ):
+            # The release only begins after halt, so validation of the original
+            # capture is sufficient to commit its missing terminal transition.
+            return state
+        return None
 
     async def pause_services_without_lock(
         self,
@@ -1675,7 +1736,7 @@ class DockerCellResourceManager:
         if latest is not None and latest.status == "running":
             return self.state_store.mark_indeterminate(
                 workspace_id,
-                detail="running phase recovered as indeterminate",
+                detail=_INTERRUPTED_CONTROLLER_PHASE,
             )
         return state
 

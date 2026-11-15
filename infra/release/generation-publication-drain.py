@@ -242,6 +242,19 @@ _PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES = {
     "services.docker_cell_resources": "eaec1570e7b09616d6ee1461737a2dada016799e7bedb967e24f8b19cf60971a",
     "services.machine_recovery_environment": "28808c4a701a1e62cea1f3e8561573f429a3b588e20540e9164c61cca3bfba1a",
 }
+# Strict release retains the exact pre-stop intent and can finish that same
+# operation after worker or controller restart. Keep the predecessor for the
+# pre-rollout drain and bind request/adapter/backend changes as one bundle.
+_PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES = {
+    **_PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES,
+    "core.workspace_provider": "ed9d72297920d23ef741472380ed0a8c5a3bf9a00fa6aa224814c34484b0216d",
+    "routers.workspace": "436974b304ee4a07dd4782bea63f8e398283f325a703573dc1d69a29c344b2a9",
+    "schemas.workspace": "06d2434103c99af0a68165a9cb6ee228371336db2cee1f18fa09af1f4afae63b",
+    "services.docker_cell_resources": "1dac2ae1e66ecd483a442165154867109e5333b10a6803c3855d3a9564ace4bd",
+    "services.docker_owner_canary_provider": "8c9d1d78d0b95ee8e4b79e4e297765eb422c7d77d40d373b4801c4861204dd20",
+    "services.machine_adapter": "a0c2c48c8ba44666e1221501f284e870a0151913dd5120332db5efbdbb78a7d9",
+    "services.machine_recovery_environment": "208956cd465fd20cc846ba7f72ac339ea9847823ef0506b78d0f6a6d01a4609f",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -264,6 +277,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_READER_WAIT_SOURCES,
     _PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES,
     _PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES,
+    _PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.
@@ -271,8 +285,10 @@ _PORTABLE_QUIESCENCE_CONDITIONAL_SOURCE_NAMES = frozenset(
     {
         "schemas.workspace",
         "core.cell_resources",
+        "core.workspace_provider",
         "services.source_write_journal",
         "services.command_receipts",
+        "services.docker_owner_canary_provider",
         "services.project_migrations",
     }
 )
@@ -508,7 +524,8 @@ def _pending_portable_commands(machine: dict, *, sources: dict[str, str]) -> dic
             sources in (_PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES,
                         _PORTABLE_QUIESCENCE_READER_WAIT_SOURCES,
                         _PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES,
-                        _PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES)
+                        _PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES,
+                        _PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES)
             and len(requests) == 1 and len(pending) <= 1,
             "quiescence_command_scope",
         )

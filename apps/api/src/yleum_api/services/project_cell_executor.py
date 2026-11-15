@@ -27,7 +27,7 @@ from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorks
 from yleum_api.models.user import User
 from yleum_api.services.agent_builder import Action, Executor
 from yleum_api.services.exact_edit import validate_exact_edit
-from yleum_api.services.generation.recovery_contract import RecoveryStateV2
+from yleum_api.services.generation.recovery_contract import RecoveryStateV2, RecoveryStateV3
 from yleum_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
     PREVIOUS_CELL_ENSURE_RECONCILIATION_REQUIRED,
@@ -44,6 +44,7 @@ from yleum_api.services.orchestrator_client import (
     ProjectCellAgentOperationStatus,
     ProjectCellEnvironmentRecoveryProof,
     ProjectCellPreviewSession,
+    ProjectCellReleaseEnvironmentBinding,
     ProjectCellWorkspaceIdentity,
     RestorationAdaptationProof,
     RestorationAdaptationWorkspace,
@@ -83,6 +84,7 @@ from yleum_api.services.project_cells import (
     ProjectCellOwnershipError,
     ProjectCellStateConflict,
     ProjectCellValidationError,
+    _stored_request_payload,
     get_or_create_workspace,
     lock_workspace_operations,
     reserve_cell_operation,
@@ -737,7 +739,7 @@ async def _release_generation_lease(
         GenerationReleasePending,
         retain_completion_release,
     )
-    from yleum_api.services.generation.recovery_contract import RecoveryStateV2, decode_recovery
+    from yleum_api.services.generation.recovery_contract import decode_recovery
     from yleum_api.services.generation.recovery_execution import recovery_state
 
     async def locked_run(session: AsyncSession) -> GenerationRun:
@@ -798,11 +800,34 @@ async def _release_generation_lease(
         if workspace.generation_run_id != generation_run_id:
             raise ProjectCellExecutorUnavailable("Project Cell generation lease changed")
         key = f"generation:{generation_run_id}:release:{profile_version}"
+        request: dict[str, object] = {}
         if isinstance(state, RecoveryStateV2):
             key += f":cycle:{state.execution.lease_cycle_seq}"
+            if state.execution.physical_state == "release_pending":
+                previous = await session.get(
+                    ProjectCellOperation, state.execution.release_operation_id,
+                )
+                if (previous is None or previous.workspace_id != workspace_id
+                        or previous.generation_run_id != run.id or previous.kind != "release"
+                        or previous.idempotency_key != key):
+                    raise ProjectCellExecutorUnavailable("Generation release intent changed")
+                request = _stored_request_payload(previous)
+            elif (isinstance(state, RecoveryStateV3) and state.environment_rebind_supported
+                    and run.status == "running" and state.phase != "needs_input"
+                    and expected_fencing_epoch is None and not completion_ready
+                    and "restoration_adaptation" not in run.agent_state):
+                binding = state.binding
+                if (binding is None or binding.workspace_id != str(workspace_id)
+                        or binding.fencing_epoch != workspace.fencing_epoch
+                        or state.execution.physical_state != "active"):
+                    raise ProjectCellExecutorUnavailable("Generation release binding changed")
+                request = {"require_environment_proof": ProjectCellReleaseEnvironmentBinding(
+                    source_sha256=binding.source_sha256,
+                    environment_sha256=binding.environment_sha256,
+                ).model_dump(mode="json")}
         operation, _ = await reserve_cell_operation(
             session, workspace_id=workspace_id, generation_run_id=generation_run_id,
-            kind="release", idempotency_key=key, request={},
+            kind="release", idempotency_key=key, request=request,
         )
         retain_release(run, operation.id, workspace.fencing_epoch, "release_pending")
         completion_handoff = completion_ready and await retain_completion_release(

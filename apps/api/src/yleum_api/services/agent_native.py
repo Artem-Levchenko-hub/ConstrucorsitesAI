@@ -88,9 +88,11 @@ from yleum_api.services.integration_providers import PROVIDER_MAP
 from yleum_api.services.llm_client import (
     LLMError,
     NativeTranscriptRefusal,
+    ProviderChainExhausted,
     _native_preconnect_details,
     _overload_refusal_details,
     is_durable_native_transcript_refusal,
+    is_provider_chain_exhausted,
     rate_limit_retry_delay,
 )
 from yleum_api.services.max_management_generation import ManagedSourceGap
@@ -1484,8 +1486,8 @@ async def _call_messages(
             from yleum_api.services.llm_client import require_recovered_response
             try:
                 retained = await require_recovered_response(generation_attempt)
-            except NativeTranscriptRefusal:
-                raise  # Proof consumes the old logical step; the exact wire stays closed.
+            except (NativeTranscriptRefusal, ProviderChainExhausted):
+                raise  # Neither terminal receipt permits a replay of this request.
             except LLMError as failure:
                 resumed = await resume_generation_wire(
                     generation_attempt, allow_provider_refusal=(
@@ -1598,6 +1600,8 @@ async def _call_messages(
                 and budget_details.get("upstream_http_status") == 402 else None
             )
             if r.status_code == 503:
+                if is_provider_chain_exhausted(_gateway_native_error(r, url)):
+                    raise ProviderChainExhausted()
                 try:
                     error_body = r.json()
                 except ValueError:
@@ -2490,6 +2494,10 @@ async def _run_native_segment(
                         )
             except Exception as exc:
                 raise_if_terminal_cell_error(exc)
+                if isinstance(exc, ProviderChainExhausted) and continuation is not None:
+                    log.warning("agent_native.providers_exhausted", run_id=run_id, stage=call_stage)
+                    await continuation.wait(needs_input=True)
+                    raise AssertionError("committed wait must leave the invocation") from None
                 if isinstance(exc, TimeoutError) and call_budget.expired():
                     return await _finish_without_provider(
                         steps=step, reason="finalization_reserve",
@@ -2531,6 +2539,7 @@ async def _run_native_segment(
                     str(exc) if str(exc).startswith((
                         "PROVIDER_AUTH_FAILED", "PAYMENT_REQUIRED", "BILLING_UNAVAILABLE",
                         "PROVIDER_OUTPUT_INVALID", "PROVIDER_OUTPUT_FILTERED",
+                        "PROVIDERS_EXHAUSTED",
                     ))
                     else "PROVIDER_UNAVAILABLE: вызов модели не завершился; повторите позже."
                 )

@@ -734,6 +734,217 @@ async def test_health_unknown_reschedules_without_slot_or_refunding(clock_owner,
     probe.assert_awaited_once()
 
 
+@pytest.mark.parametrize(
+    "release", ["owned", "missing", "foreign", "pending", "active", "newer_fence", "old_binding"],
+)
+async def test_health_probes_only_the_current_owned_release_after_fence_advance(
+    clock_owner, monkeypatch, release,
+):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+    from yleum_api.services.generation import provider_health, recovery_dependencies
+    from yleum_api.services.generation.recovery_contract import (
+        CheckpointRef,
+        RecoveryBinding,
+        decode_recovery,
+    )
+    from yleum_api.services.generation.recovery_execution import recovery_state
+    from yleum_api.services.generation.recovery_quiescence import quiesced_recovery_run
+    from yleum_api.services.orchestrator_client import ProjectCellResourceResponse
+
+    c = clock_owner
+    old = c.driver.state
+    workspace = ProjectCellWorkspace(
+        project_id=c.run.project_id, owner_id=c.run.user_id, provider="synthetic",
+        state="ready", fencing_epoch=5 if release == "newer_fence" else 4,
+        generation_run_id=c.run.id if release in {"pending", "active"} else None,
+    )
+    c.session.add(workspace)
+    await c.session.flush()
+    receipt = ProjectCellResourceResponse(
+        workspace_id=uuid4() if release == "foreign" else workspace.id,
+        state="resources_ready", provider_ref="owned", fencing_epoch=4,
+        checkpoint_ref=None,
+        has_workspace=True, has_agent_home=True, has_postgres=True, has_redis=True,
+    )
+    operation_id = uuid4()
+    if release != "missing":
+        c.session.add(ProjectCellOperation(
+            id=operation_id, workspace_id=workspace.id, generation_run_id=c.run.id,
+            kind="release", status="completed", fencing_epoch=4, finished_at=datetime.now(UTC),
+            idempotency_key=str(uuid4()), request_digest="a" * 64,
+            result_payload=receipt.to_wire_json(),
+        ))
+    ref = CheckpointRef(object_key="qa-retained", sha256="d" * 64)
+    binding = RecoveryBinding(
+        workspace_id=str(workspace.id), fencing_epoch=2 if release == "old_binding" else 3,
+        source_sha256="a" * 64, schema_sha256="b" * 64, environment_sha256="c" * 64,
+    )
+    physical_state = {"pending": "release_pending", "active": "active"}.get(release, "released")
+    now = datetime.now(UTC)
+    state = decode_recovery(old.model_copy(update={
+        "cursor": "finalization", "binding": binding, "checkpoint": ref, "context_ref": ref,
+        "phase": "waiting_dependency", "next_check_at": now - timedelta(seconds=1),
+        "clock": old.clock.model_copy(update={
+            "interval_open": False, "wait_dependency": "credentials", "dependency_failures": 1,
+        }),
+        "execution": old.execution.model_copy(update={
+            "stage": "finalization", "substep": "checkpoint_ready", "execution_context_ref": ref,
+            "physical_state": physical_state,
+            "release_operation_id": None if release == "active" else operation_id,
+            "control_workspace_id": workspace.id,
+            "control_fencing_epoch": 3 if release in {"pending", "active"} else 4,
+        }),
+    }).model_dump(mode="json"))
+    c.run.agent_state = {**c.run.agent_state, "recovery_v1": state.model_dump(mode="json")}
+    await c.session.commit()
+
+    probe = AsyncMock(return_value=SimpleNamespace(
+        available_for=lambda dependency: dependency == "credentials",
+    ))
+    monkeypatch.setattr(provider_health, "free_health_for_run", probe)
+    ready = release == "owned"
+    assert await recovery_dependencies.poll_due_dependency(c.factory, c.run.id) is ready
+    assert await recovery_dependencies.poll_due_dependency(c.factory, c.run.id) is ready
+    async with c.factory() as session:
+        run = await session.get(GenerationRun, c.run.id)
+        saved = recovery_state(run)
+        assert await quiesced_recovery_run(
+            session, run, release_sha="a" * 40, snapshot_digest="b" * 64,
+        ) is None
+    if ready:
+        probe.assert_awaited_once_with(
+            run_id=c.run.id, project_id=c.run.project_id, user_id=c.run.user_id,
+            dependency="credentials",
+        )
+        assert saved.state_revision == state.state_revision + 1
+        assert saved.next_check_at >= now and saved.clock.wait_dependency is None
+        assert saved.binding == binding and saved.execution == state.execution
+        assert saved.active_work_ms == state.active_work_ms
+    else:
+        probe.assert_not_awaited()
+        assert saved == state
+
+
+@pytest.mark.parametrize("dispatched", [False, True])
+async def test_parked_worker_finishes_its_strict_release_without_resuming_generation(
+    clock_owner, monkeypatch, dispatched,
+):
+    from unittest.mock import AsyncMock
+
+    from sqlalchemy import func, select
+
+    from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.models.project import Project
+    from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+    from yleum_api.services import project_cell_lifecycle
+    from yleum_api.services.generation import recovery_execution
+    from yleum_api.services.generation.recovery_contract import (
+        CheckpointRef,
+        RecoveryBinding,
+        decode_recovery,
+    )
+    from yleum_api.services.orchestrator_client import ProjectCellResourceResponse
+    from yleum_api.services.project_cells import (
+        claim_cell_operation_committed,
+        execution_run_id,
+        mark_cell_operation_indeterminate,
+        reserve_cell_operation,
+    )
+    from yleum_api.workers import generation
+
+    c = clock_owner
+    project = await c.session.get(Project, c.run.project_id)
+    project.template = "max_miniapp"
+    c.run.execution_backend = "worker"
+    c.run.execution_started_at = datetime.now(UTC)
+    workspace = ProjectCellWorkspace(
+        project_id=c.run.project_id, owner_id=c.run.user_id, provider="synthetic",
+        state="ready", generation_run_id=c.run.id, fencing_epoch=3,
+    )
+    c.session.add(workspace)
+    await c.session.flush()
+    ref = CheckpointRef(object_key="qa-retained", sha256="d" * 64)
+    binding = RecoveryBinding(
+        workspace_id=str(workspace.id), fencing_epoch=3,
+        source_sha256="a" * 64, schema_sha256="b" * 64, environment_sha256="c" * 64,
+    )
+    proof = {
+        "source_sha256": binding.source_sha256,
+        "environment_sha256": binding.environment_sha256,
+    }
+    operation, _ = await reserve_cell_operation(
+        c.session, workspace_id=workspace.id, generation_run_id=c.run.id, kind="release",
+        idempotency_key=f"generation:{c.run.id}:release:profile:cycle:0",
+        request={"require_environment_proof": proof},
+    )
+    old = c.driver.state
+    state = decode_recovery(old.model_copy(update={
+        "cursor": "finalization", "binding": binding, "checkpoint": ref, "context_ref": ref,
+        "phase": "needs_input", "next_check_at": None,
+        "execution": old.execution.model_copy(update={
+            "stage": "finalization", "substep": "checkpoint_ready", "execution_context_ref": ref,
+            "physical_state": "release_pending", "release_operation_id": operation.id,
+            "control_workspace_id": workspace.id, "control_fencing_epoch": 3,
+        }),
+    }).model_dump(mode="json"))
+    c.run.agent_state = {**c.run.agent_state, "recovery_v1": state.model_dump(mode="json")}
+    await c.session.commit()
+    if dispatched:
+        token = execution_run_id.set(c.run.id)
+        try:
+            first = await claim_cell_operation_committed(c.factory, operation.id)
+        finally:
+            execution_run_id.reset(token)
+        assert first.fencing_epoch == 4
+        async with c.factory() as session:
+            await mark_cell_operation_indeterminate(session, operation.id, "lost release response")
+            await session.commit()
+
+    async def controller(_client, method_name, request):
+        assert method_name == "control"
+        assert request.operation_id == operation.id
+        assert request.request_digest == operation.request_digest
+        assert request.workspace_id == workspace.id and request.fencing_epoch == 4
+        assert request.require_environment_proof.model_dump(mode="json") == proof
+        return ProjectCellResourceResponse(
+            workspace_id=workspace.id, state="resources_ready", provider_ref="owned",
+            fencing_epoch=4, checkpoint_ref=None, has_workspace=True, has_agent_home=True,
+            has_postgres=True, has_redis=True,
+        )
+
+    wire = AsyncMock(side_effect=controller)
+    resume = AsyncMock(side_effect=AssertionError("release-only work must not resume generation"))
+    monkeypatch.setattr(project_cell_lifecycle, "_invoke_client", wire)
+    monkeypatch.setattr(recovery_execution, "resume_generation", resume)
+    monkeypatch.setattr(generation, "get_engine", lambda: c.engine)
+    async with c.factory() as session:
+        _, _, due = await generation._load_dispatch_scan(session, [])
+        assert len(due) == 1 and due[0].run_id == c.run.id and due[0].recovery_release
+    assert await generation.execute_dispatch(c.run.id)
+    assert not await generation.execute_dispatch(c.run.id)
+    wire.assert_awaited_once()
+    resume.assert_not_awaited()
+    async with c.factory() as session:
+        run = await session.get(GenerationRun, c.run.id)
+        assert run.status == "running"
+        saved = recovery_execution.recovery_state(run)
+        assert saved.phase == "needs_input" and saved.attempt_seq == state.attempt_seq
+        assert saved.binding == binding and saved.clock == state.clock
+        assert saved.execution.physical_state == "released"
+        assert saved.execution.control_fencing_epoch == 4
+        assert saved.execution.release_operation_id == operation.id
+        workspace_after = await session.get(ProjectCellWorkspace, workspace.id)
+        assert workspace_after.generation_run_id is None and workspace_after.fencing_epoch == 4
+        operation_after = await session.get(ProjectCellOperation, operation.id)
+        assert operation_after.status == "completed"
+        assert operation_after.attempt_count == 1 + int(dispatched)
+        assert await session.scalar(select(func.count()).select_from(ProjectCellOperation)) == 1
+
+
 async def test_wait_pause_and_cold_crash_preserve_known_work_without_time_refund(clock_owner):
     from yleum_api.models.generation_run import GenerationRun
     from yleum_api.services.generation.recovery_execution import (

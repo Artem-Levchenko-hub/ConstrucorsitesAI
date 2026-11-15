@@ -163,9 +163,9 @@ class Chunks(httpx.AsyncByteStream):
         self.closed = True
 
 
-@pytest.mark.parametrize("max_tokens", [8192, 128_000])
+@pytest.mark.parametrize("max_tokens", [8192, 110_000, 128_000])
 async def test_aitunnel_sonnet_stream_at_large_output_limit(monkeypatch, max_tokens):
-    token_count = 128_000
+    token_count = 128_000 if max_tokens == 8192 else max_tokens
     event = encode([chunk({"content": "x"}, object="chat.completion.chunk", created=1741816890)])
     stream = Chunks([
         *([event * 200] * (token_count // 200)),

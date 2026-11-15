@@ -183,6 +183,15 @@ class EnsureProjectCellResourcesRequest:
         }
 
 
+class ProjectCellReleaseEnvironmentBinding(BaseModel):
+    """The committed candidate whose live environment must survive release."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    environment_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 @dataclass(frozen=True, slots=True)
 class ControlProjectCellResourcesRequest:
     workspace_id: UUID
@@ -191,6 +200,7 @@ class ControlProjectCellResourcesRequest:
     operation_id: UUID
     fencing_epoch: int
     request_digest: str
+    require_environment_proof: ProjectCellReleaseEnvironmentBinding | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in _PROJECT_CELL_CONTROL_KINDS:
@@ -205,9 +215,11 @@ class ControlProjectCellResourcesRequest:
             and self.checkpoint_ref is not None
         ):
             raise ValueError(f"checkpoint_ref is forbidden for {self.kind!r}")
+        if self.require_environment_proof is not None and self.kind != "release":
+            raise ValueError("environment proof is only required for a release")
 
     def to_wire_json(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "workspace_id": str(self.workspace_id),
             "kind": self.kind,
             "checkpoint_ref": self.checkpoint_ref,
@@ -215,6 +227,11 @@ class ControlProjectCellResourcesRequest:
             "fencing_epoch": self.fencing_epoch,
             "request_digest": self.request_digest,
         }
+        if self.require_environment_proof is not None:
+            result["require_environment_proof"] = self.require_environment_proof.model_dump(
+                mode="json",
+            )
+        return result
 
 
 @dataclass(frozen=True, slots=True)

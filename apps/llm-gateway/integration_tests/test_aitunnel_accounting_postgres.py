@@ -126,13 +126,28 @@ async def test_durable_aitunnel_preconnect_allows_one_return_without_ping_pong(p
                 child.attempt_id, child.run_id, child.project_id, child.user_id,
                 child.prompt_hash, child.request_sha256, uuid4(), parent.attempt_id,
             )
-        return child
+        return child, call
 
-    primary = await finish(root, "aitunnel", "preconnect")
+    primary, root_call = await finish(root, "aitunnel", "preconnect")
+    scope = {"route": "/v1/chat/completions", "user_id": root.user_id}
+    assert not await text_failover.confirmed_chain_exhausted(root, root_call, **scope)
     assert await text_failover.select_scope(primary, model) == "llmgw"
-    third = await finish(primary, "llmgw", "upstream_refused")
+    third, primary_call = await finish(primary, "llmgw", "upstream_refused")
+    assert await text_failover.confirmed_chain_exhausted(primary, primary_call, **scope)
+    assert not await text_failover.confirmed_chain_exhausted(third, primary_call, **scope)
+    assert not await text_failover.confirmed_chain_exhausted(primary, root_call, **scope)
     with pytest.raises(ModelUnavailableError, match="No untried provider"):
         await text_failover.select_scope(third, model)
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE provider_calls SET tokens_out=1 WHERE id=$1", root_call)
+    assert not await text_failover.confirmed_chain_exhausted(primary, primary_call, **scope)
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE provider_calls SET tokens_out=NULL WHERE id=$1", root_call)
+        await conn.execute(
+            "UPDATE generation_provider_attempts SET phase='indeterminate',terminal_reason=NULL "
+            "WHERE attempt_id=$1", root.attempt_id,
+        )
+    assert not await text_failover.confirmed_chain_exhausted(primary, primary_call, **scope)
 
 
 @pytest.mark.parametrize("changes,expected", [

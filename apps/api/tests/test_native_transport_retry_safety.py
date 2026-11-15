@@ -3,13 +3,17 @@
 import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
+from tests.test_generation_recovery_deadlines import _state
 from yleum_api.services import agent_native
+from yleum_api.services.generation.recovery_execution import GenerationYielded
 from yleum_api.services.generation_failure import failure_for_error
+from yleum_api.services.llm_client import LLMError, ProviderChainExhausted, _gateway_failure
 
 URL = "https://gateway.test/v1/messages"
 SUCCESS = {"content": [], "stop_reason": "end_turn"}
@@ -145,8 +149,6 @@ async def test_native_backup_preconnect_without_a_durable_attempt_stops(monkeypa
 
 @pytest.mark.parametrize("stage", ["connect", "awaiting_headers", "unknown"])
 def test_retained_native_preconnect_uses_the_same_closed_proof(stage):
-    from yleum_api.services.llm_client import _gateway_failure
-
     response = httpx.Response(502, json={"type": "error", "error": {
         "type": "api_error", "details": {**BACKUP_PROOF, "transport_stage": stage},
     }})
@@ -154,6 +156,63 @@ def test_retained_native_preconnect_uses_the_same_closed_proof(stage):
     assert failure.retry_safe is (stage == "connect")
     if failure.retry_safe:
         assert failure.code == "model_unavailable" and failure.provider_scope == "aitunnel"
+
+
+@pytest.mark.parametrize("uncertain", [False, True])
+async def test_confirmed_native_provider_exhaustion_never_creates_a_child(uncertain):
+    payload = {"type": "error", "error": {
+        "type": "model_unavailable", "message": "Synthetic private explanation", "details": {
+            "provider_failure_kind": "providers_exhausted", "provider_charge_ambiguous": uncertain,
+            "retry_safe": False,
+        },
+    }}
+    posted = []
+
+    def wire(request):
+        posted.append(request.method)
+        return httpx.Response(503, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(wire)) as client:
+        with pytest.raises(RuntimeError if uncertain else LLMError) as live:
+            await agent_native._call_messages(client, URL, [], "system")
+    assert posted == ["POST"]
+    cold = _gateway_failure(httpx.Response(503, json=payload))
+    if uncertain:
+        assert cold.code != "providers_exhausted"
+        return
+    for error in (live.value, cold):
+        assert error.code == "providers_exhausted"
+        assert error.provider_charge_ambiguous is False and error.retry_safe is False
+        assert "Synthetic private explanation" not in str(error)
+
+
+@pytest.mark.parametrize("source_repair", [False, True])
+async def test_native_exhausted_chain_pauses_without_touching_source(monkeypatch, source_repair):
+    state = _state()
+    call_model = AsyncMock(side_effect=ProviderChainExhausted())
+    execute = AsyncMock()
+    wait = AsyncMock(side_effect=GenerationYielded(
+        run_id=state.identity.run_id, checkpoint=state.checkpoint,
+        attempt_seq=state.attempt_seq, phase="needs_input",
+    ))
+    monkeypatch.setattr(agent_native, "_call_messages", call_model)
+
+    async def provider(_frame, invoke):
+        return await invoke()
+
+    driver = SimpleNamespace(
+        state=state, context={}, restore_frame=lambda _kind: None, provider=provider, wait=wait,
+    )
+    with pytest.raises(GenerationYielded) as paused:
+        await agent_native.run_native_build(
+            model="claude-sonnet-5.5", system="MAX VERIFICATION OVERRIDE", task="build an app",
+            execute=execute, max_steps=4, portable_cell=True, continuation=driver,
+            source_repair=source_repair,
+        )
+    assert paused.value.phase == "needs_input"
+    wait.assert_awaited_once_with(needs_input=True)
+    call_model.assert_awaited_once()
+    execute.assert_not_awaited()
 
 
 async def test_native_unknown_http_status_preserves_dispatch_diagnostics(monkeypatch):

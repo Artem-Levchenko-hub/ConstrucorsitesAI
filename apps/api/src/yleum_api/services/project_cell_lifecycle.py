@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import cast
 from uuid import UUID
 
@@ -21,6 +22,7 @@ from yleum_api.services.orchestrator_client import (
     ProjectCellCapacityWait,
     ProjectCellOrchestratorClient,
     ProjectCellPreEffectRejection,
+    ProjectCellReleaseEnvironmentBinding,
     ProjectCellResourceResponse,
 )
 from yleum_api.services.project_cells import (
@@ -41,6 +43,13 @@ from yleum_api.services.project_cells import (
 
 _CHECKPOINT_KINDS = frozenset({"pause", "stop", "restore"})
 _STATEFUL_CONTROL_KINDS = frozenset({"wake", "pause", "stop", "destroy", "restore", "release"})
+RELEASE_PROOF_REJECTIONS = frozenset({
+    "recovery_release_source_changed",
+    "recovery_release_manifest_changed",
+    "recovery_release_environment_changed",
+    "recovery_release_inventory_unavailable",
+    "recovery_release_capture_unproved",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,16 +86,22 @@ async def execute_cell_operation(
     session_factory: async_sessionmaker[AsyncSession],
     operation_id: UUID,
     client: ProjectCellOrchestratorClient,
+    *,
+    expected_workspace_fence: int | None = None,
 ) -> ProjectCellOperationOutcome:
     replay = await _maybe_replayable_outcome(session_factory, operation_id)
     if replay is not None:
         return replay
 
+    initial = claim_cell_operation_committed
+    claim = initial if expected_workspace_fence is None else partial(
+        initial, expected_workspace_fence=expected_workspace_fence,
+    )
     try:
         claimed = await _claim_for_dispatch_cancellation_safe(
             session_factory,
             operation_id,
-            claim_cell_operation_committed,
+            claim,
             cancellation_error="cancelled_after_claim",
         )
     except (ProjectCellBusy, ProjectCellStateConflict):
@@ -99,14 +114,20 @@ async def replay_indeterminate_cell_operation(
     session_factory: async_sessionmaker[AsyncSession],
     operation_id: UUID,
     client: ProjectCellOrchestratorClient,
+    *,
+    expected_workspace_fence: int | None = None,
 ) -> ProjectCellOperationOutcome:
     """Redrive the exact durable envelope so provider idempotency proves its effect."""
 
+    reclaim = reclaim_indeterminate_cell_operation_committed
+    claim = reclaim if expected_workspace_fence is None else partial(
+        reclaim, expected_workspace_fence=expected_workspace_fence,
+    )
     try:
         claimed = await _claim_for_dispatch_cancellation_safe(
             session_factory,
             operation_id,
-            reclaim_indeterminate_cell_operation_committed,
+            claim,
             cancellation_error="cancelled_after_reclaim",
         )
     except (ProjectCellBusy, ProjectCellStateConflict):
@@ -145,6 +166,13 @@ async def _dispatch_claimed_cell_operation(
             exc,
         )
     except OrchestratorBadRequest as exc:
+        reason = _strict_release_rejection(claimed, exc)
+        if reason is not None:
+            # The orchestration claim advanced the SQL fence. Only an exact
+            # replay may use that fence, even when the last call was pre-effect.
+            return await _persist_indeterminate_outcome(
+                session_factory, claimed.operation_id, reason,
+            )
         if _is_confirmed_pre_effect_rejection(claimed, exc):
             if replaying_indeterminate:
                 return await _persist_indeterminate_outcome(
@@ -356,6 +384,7 @@ def _build_control_request(
     claimed: ClaimedCellOperation,
 ) -> ControlProjectCellResourcesRequest:
     checkpoint_ref: str | None = None
+    release_proof: ProjectCellReleaseEnvironmentBinding | None = None
     if claimed.kind in _CHECKPOINT_KINDS:
         _require_exact_request(claimed.request, {"checkpoint_ref"})
         raw_checkpoint_ref = claimed.request.get("checkpoint_ref")
@@ -364,6 +393,11 @@ def _build_control_request(
                 f"{claimed.kind!r} request requires non-empty checkpoint_ref"
             )
         checkpoint_ref = raw_checkpoint_ref
+    elif claimed.kind == "release" and "require_environment_proof" in claimed.request:
+        _require_exact_request(claimed.request, {"require_environment_proof"})
+        release_proof = ProjectCellReleaseEnvironmentBinding.model_validate(
+            claimed.request["require_environment_proof"],
+        )
     else:
         _require_exact_request(claimed.request, set())
 
@@ -374,6 +408,7 @@ def _build_control_request(
         operation_id=claimed.operation_id,
         fencing_epoch=claimed.fencing_epoch,
         request_digest=claimed.request_digest,
+        require_environment_proof=release_proof,
     )
 
 
@@ -423,6 +458,27 @@ def _is_confirmed_pre_effect_rejection(
         and rejection.fencing_epoch == claimed.fencing_epoch
         and rejection.request_digest == claimed.request_digest
     )
+
+
+def _strict_release_rejection(
+    claimed: ClaimedCellOperation, exc: OrchestratorBadRequest,
+) -> str | None:
+    if (claimed.kind != "release" or "require_environment_proof" not in claimed.request
+            or exc.status_code != 409 or exc.upstream_code != "conflict"
+            or not isinstance(exc.details, dict)):
+        return None
+    reason = exc.details.get("reason")
+    if (not isinstance(reason, str) or reason not in RELEASE_PROOF_REJECTIONS
+            or exc.details.get("operation_id") != str(claimed.operation_id)
+            or type(exc.details.get("fencing_epoch")) is not int
+            or exc.details["fencing_epoch"] != claimed.fencing_epoch
+            or exc.details.get("request_digest") != claimed.request_digest):
+        return None
+    # Without a definite pre-effect rejection the same reason could come after
+    # an interrupted capture. Preserve generic uncertainty for that envelope.
+    if (reason.endswith("_changed") and exc.details.get("effect_applied") is not False):
+        return None
+    return reason
 
 
 def _validate_response_identity(

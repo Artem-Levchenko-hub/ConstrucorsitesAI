@@ -165,6 +165,10 @@ async def execute_dispatch(run_id: UUID) -> bool:
         _OWNERSHIP_LOST_CANCEL_REASON,
         _run_tracked_prompt,
     )
+    from yleum_api.services.project_cell_recovery_release import (
+        pending_recovery_release,
+        resume_recovery_release,
+    )
 
     engine = get_engine()
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -237,6 +241,10 @@ async def execute_dispatch(run_id: UUID) -> bool:
                         return False
                     if not isinstance(state, RecoveryStateV2):
                         return False
+                    if pending_recovery_release(run, state):
+                        work = asyncio.create_task(resume_recovery_release(factory, run_id, state))
+                        await _await_owned_dispatch(work, ownership, run_id)
+                        return True
                     async with factory() as session:
                         claim = await recovery_execution.claim_continuation(
                             session, run_id=run_id, expected_attempt=state.attempt_seq,
@@ -396,6 +404,7 @@ class HostDispatch:
     status: str = "pending"
     admitted: bool = False
     maintenance: bool = False
+    recovery_release: bool = False
 
 
 def _host_key(host: str | None) -> str:
@@ -486,7 +495,20 @@ def _unstarted_candidates_query(active: Sequence[UUID]) -> Select[Any]:
     )
 
 
+def _recovery_release_pending_clause() -> Any:
+    raw = GenerationRun.agent_state["recovery_v1"]
+    adaptation = GenerationRun.agent_state["restoration_adaptation"]["adaptation_run_id"]
+    return and_(
+        raw["version"].as_string().in_(("2", "3")),
+        raw["binding"]["workspace_id"].as_string().is_not(None),
+        raw["execution"]["physical_state"].as_string() == "release_pending",
+        func.coalesce(adaptation.as_string(), "") != cast(GenerationRun.id, String),
+    )
+
+
 def _maintenance_candidates_query(active: Sequence[UUID]) -> Select[Any]:
+    from yleum_api.services.project_cell_recovery_release import NONRETRYABLE_RELEASE_ERRORS
+
     # Ownership and unknown effects are still decided by execute_dispatch.
     release_intent = cast(
         GenerationRun.agent_state[COMPLETION_RELEASE_KEY]["version"].as_string(), String,
@@ -495,6 +517,32 @@ def _maintenance_candidates_query(active: Sequence[UUID]) -> Select[Any]:
         ProjectCellOperation.generation_run_id == GenerationRun.id,
         ProjectCellOperation.kind == "release",
         ProjectCellOperation.next_attempt_at > datetime.now(UTC),
+    )
+    recovery_release = _recovery_release_pending_clause()
+    raw = GenerationRun.agent_state["recovery_v1"]
+    release_id = raw["execution"]["release_operation_id"]
+    release_proof = ProjectCellOperation.request_payload["request"]["require_environment_proof"]
+    recovery_release_due = exists().where(
+        ProjectCellOperation.generation_run_id == GenerationRun.id,
+        ProjectCellOperation.kind == "release",
+        cast(ProjectCellOperation.id, String) == release_id.as_string(),
+        or_(
+            ProjectCellOperation.status == "completed",
+            and_(
+                ProjectCellOperation.status.in_(("pending", "running", "indeterminate")),
+                release_proof["source_sha256"].as_string()
+                == raw["binding"]["source_sha256"].as_string(),
+                release_proof["environment_sha256"].as_string()
+                == raw["binding"]["environment_sha256"].as_string(),
+                func.coalesce(ProjectCellOperation.error, "").not_in(
+                    sorted(NONRETRYABLE_RELEASE_ERRORS),
+                ),
+                or_(
+                    ProjectCellOperation.next_attempt_at.is_(None),
+                    ProjectCellOperation.next_attempt_at <= datetime.now(UTC),
+                ),
+            ),
+        ),
     )
     return (
         select(GenerationRun.id, ProjectCellWorkspace.orchestrator)
@@ -512,7 +560,10 @@ def _maintenance_candidates_query(active: Sequence[UUID]) -> Select[Any]:
                     GenerationRun.status.in_(ACTIVE_GENERATION_STATUSES),
                     GenerationRun.execution_started_at.is_not(None),
                     ~func.coalesce(release_intent, False),
-                    _recovery_due_clause(),
+                    or_(
+                        and_(recovery_release, recovery_release_due),
+                        and_(~func.coalesce(recovery_release, False), _recovery_due_clause()),
+                    ),
                 ),
                 and_(
                     GenerationRun.status.not_in(ACTIVE_GENERATION_STATUSES),
@@ -584,10 +635,11 @@ async def _load_dispatch_scan(
         HostDispatch(run_id, host)
         for run_id, host in (await session.execute(_unstarted_candidates_query(active))).all()
     ]
-    maintenance = [
-        HostDispatch(run_id, host, maintenance=True)
-        for run_id, host in (await session.execute(_maintenance_candidates_query(active))).all()
-    ]
+    maintenance_rows = (await session.execute(_maintenance_candidates_query(active).add_columns(
+        _recovery_release_pending_clause(),
+    ))).all()
+    maintenance = [HostDispatch(run_id, host, maintenance=True, recovery_release=bool(releasing))
+                   for run_id, host, releasing in maintenance_rows]
     return info, candidates, maintenance
 
 
@@ -644,11 +696,15 @@ async def _run_dispatch_forever() -> None:
 
             # Free health work holds no execution slot. Bound its parallelism
             # by the existing selection budget rather than the full scan size.
+            due_advice = [item for item in starting if not item.recovery_release]
             ready = await asyncio.gather(*(
-                poll_due_dependency(factory, item.run_id) for item in starting
+                poll_due_dependency(factory, item.run_id) for item in due_advice
             ), return_exceptions=True)
-            starting = [item for item, result in zip(starting, ready, strict=True)
-                        if result is True]
+            available = {item.run_id for item, result in zip(due_advice, ready, strict=True)
+                         if result is True}
+            starting = [
+                item for item in starting if item.recovery_release or item.run_id in available
+            ]
             for item in starting:
                 active_info[item.run_id] = item
                 active[item.run_id] = asyncio.create_task(execute_dispatch(item.run_id))

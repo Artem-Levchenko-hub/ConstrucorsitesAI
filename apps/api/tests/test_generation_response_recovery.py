@@ -311,6 +311,58 @@ async def test_cold_held_response_uses_separate_reconcile_purpose_without_model_
         assert [method for method, _ in requests] == ["GET", "POST"]
 
 
+@pytest.mark.parametrize(("overrides", "delay"), [
+    ({"retry_after_seconds": 24}, 24),
+    ({}, 0),
+    ({"upstream_http_status": 402}, None),
+    ({"provider_charge_ambiguous": True}, None),
+    ({"provider_cost_rub": 1}, None),
+    ({"retry_policy": "unknown"}, None),
+])
+async def test_retained_native_key_rate_limit_preserves_only_exact_refusal(monkeypatch, overrides,
+                                                                      delay):
+    settings = SimpleNamespace(
+        generation_response_retention_enabled=True,
+        generation_response_signing_secret=SecretStr("synthetic-test-secret-32-bytes-long"),
+        llm_gateway_url="http://gateway.test",
+    )
+    monkeypatch.setattr("yleum_api.core.config.get_settings", lambda: settings)
+    monkeypatch.setattr(llm_client, "get_settings", lambda: settings)
+
+    def reply(request):
+        assert request.method == "GET"
+        assert request.url.path == f"/_internal/generation-responses/{IDENTITY.attempt_id}"
+        assert response_auth.verify_generation_response_token(
+            request.headers[response_auth.HEADER], purpose="generation_response.read",
+        ) == IDENTITY
+        return httpx.Response(200, json={
+            "version": 1, "identity": IDENTITY.to_wire(), "state": "stored",
+            "response": {"format": "json", "status": 429, "body": {
+                "type": "error", "error": {
+                    "type": "api_error", "message": "Provider rate limit exceeded", "details": {
+                        "upstream_http_status": 429, "provider_refusal_category": "rate_limit",
+                        "provider_charge_ambiguous": False, "retry_safe": True,
+                        "retry_policy": "llmgw_key_rate_limit_v1", **overrides,
+                    },
+                },
+            }},
+        })
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: original(transport=httpx.MockTransport(reply), **kw),
+    )
+    with pytest.raises(llm_client.LLMError) as raised:
+        await llm_client.recover_generation_response(IDENTITY)
+    error = raised.value
+    assert error.retry_after_seconds == delay
+    assert error.retry_safe is (delay is not None)
+    if delay is not None:
+        assert error.upstream_http_status == 429
+        assert error.provider_charge_ambiguous is False
+        assert error.retry_policy == "llmgw_key_rate_limit_v1"
+
+
 def test_record_header_preserves_runner_auth_and_default_none(monkeypatch):
     settings = SimpleNamespace(generation_response_retention_enabled=False)
     monkeypatch.setattr("yleum_api.core.config.get_settings", lambda: settings)

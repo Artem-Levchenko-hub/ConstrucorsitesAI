@@ -15,7 +15,11 @@ from yleum_api.models.project import Project
 from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from yleum_api.models.provider_call import ProviderCall
 from yleum_api.services.generation.provider_attempts import native_transcript_attempt_closed
-from yleum_api.services.generation.recovery_contract import CheckpointRef, RecoveryStateV2
+from yleum_api.services.generation.recovery_contract import (
+    CheckpointRef,
+    RecoveryStateV2,
+    RecoveryStateV3,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +115,8 @@ async def _adaptation_held(
 async def _quiesced_physical_run(
     session: AsyncSession,
     run: GenerationRun,
+    *,
+    for_dependency_advisory: bool = False,
 ) -> PhysicalQuiescenceEvidence | None:
     from yleum_api.services.generation.recovery_execution import (
         _initial_quiescent,
@@ -176,7 +182,16 @@ async def _quiesced_physical_run(
                 if not await _adaptation_held(session, run, state):
                     return None
             elif state.binding.fencing_epoch != workspace.fencing_epoch:
-                return None
+                # Release advances the control fence without rewriting the
+                # checkpoint binding. Only the advisory may use this transition.
+                if not (
+                    for_dependency_advisory
+                    and isinstance(state, RecoveryStateV3)
+                    and state.phase == "waiting_dependency"
+                    and state.clock.wait_dependency is not None
+                    and state.binding.fencing_epoch + 1 == workspace.fencing_epoch
+                ):
+                    return None
             if not await _provider_stopped(session, run):
                 return None
         return PhysicalQuiescenceEvidence(
@@ -188,6 +203,10 @@ async def _quiesced_physical_run(
     except (ValueError, TypeError, KeyError):
         # Unsupported or corrupt state stays byte-for-byte intact and blocks.
         return None
+
+
+async def provider_dependency_quiescent(session: AsyncSession, run: GenerationRun) -> bool:
+    return await _quiesced_physical_run(session, run, for_dependency_advisory=True) is not None
 
 
 async def quiesced_recovery_run(

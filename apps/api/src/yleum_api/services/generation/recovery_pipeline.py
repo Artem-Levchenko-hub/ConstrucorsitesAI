@@ -883,15 +883,10 @@ _ENVIRONMENT_NEEDS_PREPARE = frozenset({"stopped", "missing", "prepare_pending"}
 
 
 def _can_rebind_release_environment(driver: ExecutionDriver) -> bool:
-    execution = driver.state.execution
     return (
         isinstance(driver.state, RecoveryStateV3)
+        and driver.state.environment_rebind_supported
         and callable(getattr(driver, "prove_environment_recovery", None))
-        and (
-            execution.substep == "response_wait"
-            or (execution.substep in {"checkpoint_ready", "request_ready", "agent_entry"}
-                and execution.pending_effect_id is None)
-        )
     )
 
 

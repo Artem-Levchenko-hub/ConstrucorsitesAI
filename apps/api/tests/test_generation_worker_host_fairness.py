@@ -254,7 +254,8 @@ def test_sql_routes_cancel_started_orphan_and_terminal_cleanup_outside_host_queu
         )
         connection.execute(
             "CREATE TABLE project_cell_operations (execution_run_id text, status text, "
-            "generation_run_id text, kind text, next_attempt_at text)"
+            "generation_run_id text, kind text, next_attempt_at text, id text, error text, "
+            "request_payload text)"
         )
         ids = [uuid4() for _ in range(12)]
         cases = [

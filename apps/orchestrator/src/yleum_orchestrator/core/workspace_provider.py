@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import Literal, Protocol
 from uuid import UUID
@@ -51,12 +53,33 @@ WorkspaceResourceState = Literal[
 ]
 
 
+class ReleaseEnvironmentExpectation(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    source_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    environment_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    def release_request_digest(self, workspace_id: UUID, run_id: UUID) -> str:
+        # The API reserves the same canonical operation envelope in SQL.
+        envelope = {
+            "workspace_id": str(workspace_id),
+            "generation_run_id": str(run_id),
+            "kind": "release",
+            "request": {"require_environment_proof": self.model_dump(mode="json")},
+        }
+        encoded = json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class ControlAction:
     kind: Literal["wake", "pause", "stop", "destroy", "restore", "reconcile", "release"]
     checkpoint_ref: str | None = None
+    require_environment_proof: ReleaseEnvironmentExpectation | None = None
 
     def __post_init__(self) -> None:
+        if self.require_environment_proof is not None and self.kind != "release":
+            raise ValueError("environment proof may only be required for generation release")
         if self.kind in {"pause", "stop", "restore"}:
             if self.checkpoint_ref is None:
                 raise ValueError(f"checkpoint_ref is required for {self.kind!r}")

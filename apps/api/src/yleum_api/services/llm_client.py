@@ -274,6 +274,33 @@ class NativeTranscriptRefusal(LLMError):
         )
 
 
+class ProviderChainExhausted(LLMError):
+    """Both route refusals are confirmed for this request. Neither may be replayed."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "PROVIDERS_EXHAUSTED: LLMGW и AITunnel отклонили запрос. "
+            "Автоматический повтор остановлен.",
+            code="providers_exhausted", http_status=503, provider_charge_ambiguous=False,
+        )
+
+
+def is_provider_chain_exhausted(error: object) -> bool:
+    if (
+        not isinstance(error, dict) or set(error) - {"type", "code", "message", "details"}
+        or error.get("type") != "model_unavailable"
+        or error.get("code", "model_unavailable") != "model_unavailable"
+    ):
+        return False
+    details = error.get("details")
+    return (
+        isinstance(details, dict)
+        and set(details) == {"provider_failure_kind", "provider_charge_ambiguous", "retry_safe"}
+        and details["provider_failure_kind"] == "providers_exhausted"
+        and details["provider_charge_ambiguous"] is False and details["retry_safe"] is False
+    )
+
+
 def is_durable_native_transcript_refusal(error: object) -> bool:
     if (
         not isinstance(error, dict) or error.get("type") != "invalid_request_error"
@@ -441,12 +468,18 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
     # Never forward provider messages, raw bodies, headers or URLs to the agent.
     error: dict[str, Any] = {}
     body = _refusal_document(response.content)
-    retained_native_budget = False
+    if (
+        response.status_code == 503 and len(response.content) <= 16_384 and not response.history
+        and isinstance(body, dict) and set(body) == {"type", "error"} and body["type"] == "error"
+        and is_provider_chain_exhausted(body["error"])
+    ):
+        return ProviderChainExhausted()
+    native_rate_refusal = False
     if isinstance(body, dict) and isinstance(body.get("detail"), dict):
         candidate = body["detail"].get("error")
         if isinstance(candidate, dict):
             error = candidate
-    elif (response.status_code in {402, 502} and len(response.content) <= 16_384
+    elif (response.status_code in {402, 429, 502} and len(response.content) <= 16_384
           and not response.history and isinstance(body, dict)
           and not set(body) - {"type", "error"} and body.get("type", "error") == "error"):
         candidate = body.get("error")
@@ -458,12 +491,20 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
                 and candidate.get("type") == "api_error"
                 and candidate.get("code", "api_error") == "api_error"):
             details = candidate.get("details")
-            if (isinstance(details, dict) and details.get("upstream_http_status") == 402
-                    and rate_limit_retry_delay(details) is not None):
-                # Authenticated retained native bodies use this distinct envelope;
-                # only the same closed budget policy is normalized for cold replay.
+            if (
+                isinstance(details, dict)
+                and details.get("upstream_http_status") == response.status_code
+                and rate_limit_retry_delay(details) is not None
+                and (response.status_code == 402 or set(details) <= {
+                    "upstream_http_status", "provider_refusal_category",
+                    "provider_charge_ambiguous", "retry_safe", "retry_policy",
+                    "retry_after_seconds",
+                })
+            ):
+                # Recover the same refusal from the native envelope after restart.
+                # The caller still needs the exact committed SQL parent receipt.
                 error = {"code": "model_unavailable", "details": details}
-                retained_native_budget = True
+                native_rate_refusal = True
     raw_code = error.get("code")
     code = raw_code if isinstance(raw_code, str) and raw_code in _GATEWAY_ERROR_CODES else None
     details = error.get("details")
@@ -533,7 +574,7 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
     )
     rate_delay = (
         rate_limit_retry_delay(details)
-        if (response.status_code == 502 or retained_native_budget) and code == "model_unavailable"
+        if (response.status_code == 502 or native_rate_refusal) and code == "model_unavailable"
         and len(response.content) <= 16_384
         and not response.history
         and error.get("type", "model_unavailable") == "model_unavailable" else None
@@ -576,9 +617,7 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
         provider_charge_ambiguous=ambiguous, retry_safe=retry_safe,
         provider_refusal_category=category,
         retry_after_seconds=rate_delay,
-        retry_policy=(
-            _INFLIGHT_POLICY if rate_delay is not None and upstream == 402 else preconnect_policy
-        ),
+        retry_policy=details["retry_policy"] if rate_delay is not None else preconnect_policy,
         provider_scope=context.get("provider_scope"),
         transport_stage=context.get("transport_stage"),
         provider_call_id=context.get("provider_call_id"),

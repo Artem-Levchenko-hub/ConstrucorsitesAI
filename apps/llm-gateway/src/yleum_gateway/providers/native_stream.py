@@ -29,7 +29,7 @@ MAX_EVENT_BYTES = 2 * 1024 * 1024
 MAX_EVENTS = 100_000
 SONNET55_LARGE_OUTPUT_TOKENS = 128_000
 SONNET55_LARGE_OUTPUT_WIRE_BYTES = 64 * 1024 * 1024
-SONNET55_LARGE_OUTPUT_EVENTS = SONNET55_LARGE_OUTPUT_TOKENS + 4096
+SONNET55_STREAM_EVENT_RESERVE = 4096
 MAX_TOOLS = 256
 TRANSPORT_STAGES = frozenset({"connect", "sending", "awaiting_headers", "headers", "body", "complete"})
 _MILLISECONDS = (
@@ -373,14 +373,20 @@ async def collect_response(
     evidence.pop("upstream_http_status", None)
     if not math.isfinite(budget_seconds) or budget_seconds <= 0:
         raise TimeoutError("Provider response budget exhausted")
-    # One delta per token plus framing and usage must fit in a bounded receipt.
-    large_output = (
+    max_wire_bytes, max_events = MAX_WIRE_BYTES, MAX_EVENTS
+    max_tokens = payload.get("max_tokens")
+    if (
         provider_scope == "aitunnel"
         and payload.get("model") in ("claude-sonnet-5.5", "anthropic/claude-sonnet-5.5")
-        and payload.get("max_tokens") == SONNET55_LARGE_OUTPUT_TOKENS
-    )
-    max_wire_bytes = SONNET55_LARGE_OUTPUT_WIRE_BYTES if large_output else MAX_WIRE_BYTES
-    max_events = SONNET55_LARGE_OUTPUT_EVENTS if large_output else MAX_EVENTS
+        and type(max_tokens) is int and 0 < max_tokens <= SONNET55_LARGE_OUTPUT_TOKENS
+    ):
+        # One delta per token plus framing and usage must fit even when an
+        # authenticated prior response lowered the requested repair budget.
+        max_wire_bytes = max(
+            max_wire_bytes,
+            SONNET55_LARGE_OUTPUT_WIRE_BYTES * max_tokens // SONNET55_LARGE_OUTPUT_TOKENS,
+        )
+        max_events = max(max_events, max_tokens + SONNET55_STREAM_EVENT_RESERVE)
     collector = _Collector(evidence, provider_scope=provider_scope, max_events=max_events)
     request_headers = httpx.Headers(headers)
     request_headers["accept"] = "text/event-stream"

@@ -26,7 +26,8 @@ class NextTypeSourceClosureTests(unittest.TestCase):
         self.guard_lease = self.checker._PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES
         self.reader_wait = self.checker._PORTABLE_QUIESCENCE_READER_WAIT_SOURCES
         self.meal = self.checker._PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES
-        self.current = self.checker._PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES
+        self.release_environment = self.checker._PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES
+        self.current = self.checker._PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES
 
     def test_historical_complete_bundle_is_preserved_and_still_supported(self):
         old_fixture = json.loads((self.directory / "fixtures/platform-bootstrap-v2-quiescence-sources.json").read_bytes())
@@ -110,14 +111,27 @@ class NextTypeSourceClosureTests(unittest.TestCase):
     def test_release_environment_binds_the_new_helper_and_exact_predecessor(self):
         self.checker._require_reviewed_portable_sources(self.meal)
         helper = "services.machine_recovery_environment"
-        self.assertEqual(set(self.current), set(self.meal) | {helper})
+        self.assertEqual(set(self.release_environment), set(self.meal) | {helper})
         self.assertIn(helper, self.checker._PORTABLE_QUIESCENCE_SOURCE_NAMES)
-        changed = {key for key, digest in self.meal.items() if self.current[key] != digest}
+        changed = {key for key, digest in self.meal.items() if self.release_environment[key] != digest}
         self.assertEqual(changed, {"routers.workspace", "services.docker_cell_resources",
                                    "services.docker_machine_backend", "services.machine_adapter"})
         for key in changed:
             with self.subTest(module=key), self.assertRaises(self.checker.PhysicalDrainError):
-                self.checker._require_reviewed_portable_sources({**self.current, key: self.meal[key]})
+                self.checker._require_reviewed_portable_sources(
+                    {**self.release_environment, key: self.meal[key]},
+                )
+
+    def test_resilient_release_requires_complete_successor_bundle(self):
+        previous = self.release_environment
+        self.checker._require_reviewed_portable_sources(previous)
+        self.assertEqual(set(self.current) - set(previous), {
+            "core.workspace_provider", "services.docker_owner_canary_provider",
+        })
+        changed = {key for key, digest in previous.items() if self.current[key] != digest}
+        for key in changed:
+            with self.subTest(module=key), self.assertRaises(self.checker.PhysicalDrainError):
+                self.checker._require_reviewed_portable_sources({**self.current, key: previous[key]})
 
     def test_current_committed_source_closure_matches_linux_git_bytes(self):
         root = self.directory.parents[1] / "apps/orchestrator/src/yleum_orchestrator"

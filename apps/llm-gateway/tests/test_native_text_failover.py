@@ -1,6 +1,7 @@
+import asyncio
 import json
 from http import HTTPStatus
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import httpx
@@ -10,6 +11,9 @@ from fastapi.testclient import TestClient
 from yleum_gateway.main import create_app
 from yleum_gateway.routers import messages_native
 from yleum_gateway.services import billing, provider_calls, text_failover
+from yleum_gateway.services import generation_attempts as attempts
+from yleum_gateway.services import generation_response_capture as capture
+from yleum_gateway.services.generation_identity import GenerationProviderIdentity
 
 
 @pytest.fixture
@@ -419,6 +423,85 @@ def test_durable_native_refusal_wire_matches_api_strict_contract(client, monkeyp
     assert len(posts) == 1 and billing.charge.await_count == 0
     assert provider_calls.finish_call.await_args.kwargs["status"] == "failed"
     assert closed.await_args.kwargs["reason"] == "upstream_refused"
+
+
+@pytest.mark.parametrize(("status", "chain"), [
+    (None, "closed"), (None, "incomplete"), (None, "settlement_failed"), (None, "body_lost"),
+    (402, "closed"), (402, "incomplete"), (402, "settlement_failed"), (429, "closed"),
+])
+async def test_native_exhaustion_uses_only_the_last_confirmed_refusal(monkeypatch, status, chain):
+    monkeypatch.setenv("AITUNNEL_TEXT_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("AITUNNEL_TEXT_API_KEY", "synthetic-backup-key")
+    identity = GenerationProviderIdentity(*(uuid4() for _ in range(4)), "a" * 64, "b" * 64)
+    call_id = uuid4()
+    dispatch = AsyncMock(return_value=call_id)
+    finish = AsyncMock(side_effect=RuntimeError if chain == "settlement_failed" else None)
+    accounting = Mock()
+    monkeypatch.setattr(attempts, "dispatch", dispatch)
+    monkeypatch.setattr(attempts, "finish", finish)
+    monkeypatch.setattr(capture, "confirm_response_accounting", accounting)
+    scope = "aitunnel" if status is None else "llmgw"
+    monkeypatch.setattr(text_failover, "select_scope", AsyncMock(return_value=scope))
+
+    async def confirmed(*_args, **_kwargs):
+        finish.assert_awaited_once()
+        assert finish.await_args.kwargs["reason"] == {
+            None: "preconnect", 402: "rate_limit_refused", 429: "upstream_refused",
+        }[status]
+        return chain == "closed"
+
+    exhausted = AsyncMock(side_effect=confirmed)
+    monkeypatch.setattr(text_failover, "confirmed_chain_exhausted", exhausted)
+    posts = []
+
+    def wire(request):
+        posts.append(request.url.host)
+        if status == 402:
+            return httpx.Response(402, headers={"retry-after": "120"}, json={"error": {
+                "message": "Reservations occupy the available budget.", "code": 402,
+                "metadata": {"reason": "in_flight_budget_exhausted",
+                             "limit_source": "openrouter_in_flight_budget"},
+            }})
+        if status == 429:
+            return httpx.Response(429, json={"error": {"type": "rate_limit_exceeded"}},
+                                  headers={"retry-after": "120"})
+        if chain == "body_lost":
+            raise httpx.ReadTimeout("private transport evidence")
+        raise httpx.ConnectTimeout("private transport evidence")
+
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(wire))
+    response = await messages_native._dispatch_native_provider(
+        identity=identity, model=text_failover.MODEL, payload={"model": text_failover.MODEL},
+        primary_route=("synthetic-primary-key", "https://api.llmgw.ru/v1"),
+        dispatch_options={
+            "route": "/v1/messages", "stage": "native_agent", "run_id": identity.run_id,
+            "project_id": identity.project_id, "user_id": identity.user_id,
+        }, retry_count=1, provider_deadline=asyncio.get_running_loop().time() + 20,
+    )
+    assert posts == [f"api.{scope}.ru"]
+    assert dispatch.await_count == finish.await_count == 1
+    error = json.loads(response.body)["error"]
+    if chain == "closed":
+        assert response.status_code == 503 and error["type"] == "model_unavailable"
+        assert error["details"] == {
+            "provider_failure_kind": "providers_exhausted", "provider_charge_ambiguous": False,
+            "retry_safe": False,
+        }
+    elif chain == "incomplete":
+        assert response.status_code == (status or 502) and error["details"]["retry_safe"] is True
+        if status == 402:
+            assert error["details"]["retry_after_seconds"] == 120
+    else:
+        assert response.status_code == 503 and error["type"] == "billing_unavailable"
+        assert error["details"]["provider_charge_ambiguous"] is True
+    if chain in {"closed", "incomplete"}:
+        exhausted.assert_awaited_once_with(
+            identity, call_id, route="/v1/messages", user_id=identity.user_id,
+        )
+        accounting.assert_called_once()
+    else:
+        exhausted.assert_not_awaited()
+        accounting.assert_not_called()
 
 
 def test_native_backup_model_mismatch_is_closed_without_charge(client, monkeypatch):

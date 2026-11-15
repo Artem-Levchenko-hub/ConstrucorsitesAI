@@ -34,6 +34,50 @@ from yleum_api.services.orchestrator_client import (
     ProjectCellResourceResponse,
     RestorationAdaptationWorkspace,
 )
+from yleum_api.services.project_cell_lifecycle import (
+    _build_control_request,
+    _strict_release_rejection,
+)
+from yleum_api.services.project_cells import ClaimedCellOperation
+
+
+@pytest.mark.parametrize("strict", [False, True])
+def test_recovery_release_binding_survives_cell_dispatch(strict: bool) -> None:
+    binding = {"source_sha256": "1" * 64, "environment_sha256": "2" * 64}
+    request: dict[str, object] = {"require_environment_proof": binding} if strict else {}
+    operation = ClaimedCellOperation(
+        operation_id=uuid4(), workspace_id=uuid4(), project_id=uuid4(), owner_id=uuid4(),
+        generation_run_id=uuid4(), kind="release", request=request,
+        request_digest="a" * 64, fencing_epoch=9,
+    )
+    wire = _build_control_request(operation).to_wire_json()
+    assert ("require_environment_proof" in wire) is strict
+    if strict:
+        assert wire["require_environment_proof"] == binding
+
+
+@pytest.mark.parametrize("case", ["matching", "wrong_fence", "unknown_effect", "not_recovery"])
+def test_recovery_release_rejection_retains_only_bound_reason(case: str) -> None:
+    operation = ClaimedCellOperation(
+        operation_id=uuid4(), workspace_id=uuid4(), project_id=uuid4(), owner_id=uuid4(),
+        generation_run_id=uuid4(), kind="release",
+        request={} if case == "not_recovery" else {"require_environment_proof": {
+            "source_sha256": "1" * 64, "environment_sha256": "2" * 64,
+        }},
+        request_digest="a" * 64, fencing_epoch=9,
+    )
+    reason = "recovery_release_environment_changed"
+    details = {
+        "reason": reason,
+        "operation_id": str(operation.operation_id),
+        "request_digest": operation.request_digest,
+        "fencing_epoch": 8 if case == "wrong_fence" else 9,
+        "effect_applied": None if case == "unknown_effect" else False,
+    }
+    rejection = OrchestratorBadRequest("release refused", 409, details, "conflict")
+    assert _strict_release_rejection(operation, rejection) == (
+        reason if case == "matching" else None
+    )
 
 
 def _activation_contract() -> tuple[

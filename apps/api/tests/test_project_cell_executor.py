@@ -2825,11 +2825,14 @@ async def test_v2_executor_without_owned_effect_never_dispatches(
     assert (len(harness.write_calls), len(harness.exec_calls)) == before
 
 
-async def test_v2_release_records_owned_terminal_operation_before_continuation(
+@pytest.mark.parametrize("mode", ["v2", "v3_continuation", "v3_completion"])
+async def test_release_records_owned_terminal_operation_before_continuation(
     monkeypatch,
     db_session,
     test_engine,
+    mode,
 ):
+    from tests.test_generation_recovery_deadlines import _clock
     from tests.test_generation_recovery_execution import _bootstrap_wait
     from yleum_api.services.generation.recovery_execution import recovery_state
 
@@ -2838,9 +2841,32 @@ async def test_v2_release_records_owned_terminal_operation_before_continuation(
     run.prompt_hash = "a" * 64
     state = _bootstrap_wait(run)
     state["execution"]["physical_state"] = "active"
+    expected_proof = None
+    if mode != "v2":
+        ref = {"object_key": "synthetic-owned-checkpoint", "sha256": "4" * 64}
+        binding = {
+            "workspace_id": str(harness.handle.control_workspace_id),
+            "fencing_epoch": harness.handle.control_fencing_epoch,
+            "source_sha256": "1" * 64,
+            "schema_sha256": "2" * 64,
+            "environment_sha256": "3" * 64,
+        }
+        run.status = "running"
+        state.update(
+            version=3, clock=_clock(datetime.now(UTC)), cursor="agent",
+            binding=binding, checkpoint=ref, context_ref=ref,
+        )
+        state["execution"].update(
+            stage="agent", substep="request_ready", execution_context_ref=ref,
+        )
+        if mode == "v3_continuation":
+            expected_proof = {key: binding[key] for key in ("source_sha256", "environment_sha256")}
     run.agent_state = {"recovery_v1": state}
     await db_session.commit()
-    await harness.handle.release()
+    if mode == "v3_completion":
+        await harness.handle.release_for_completion()
+    else:
+        await harness.handle.release()
     await db_session.refresh(run)
     current = recovery_state(run)
     assert current.execution.physical_state == "released"
@@ -2849,6 +2875,9 @@ async def test_v2_release_records_owned_terminal_operation_before_continuation(
     assert operation.kind == "release" and operation.status == "completed"
     assert operation.generation_run_id == run.id
     assert operation.idempotency_key.endswith(":cycle:0")
+    assert operation.request_payload["request"] == (
+        {} if expected_proof is None else {"require_environment_proof": expected_proof}
+    )
     assert current.execution.control_workspace_id == harness.handle.control_workspace_id
     assert current.execution.control_fencing_epoch == operation.fencing_epoch
 

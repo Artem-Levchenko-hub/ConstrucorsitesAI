@@ -12,7 +12,7 @@ from yleum_api.services.generation import provider_health
 from yleum_api.services.generation.recovery_clock import next_dependency_check
 from yleum_api.services.generation.recovery_contract import RecoveryStateV3
 from yleum_api.services.generation.recovery_execution import RECOVERY_KEY, recovery_state
-from yleum_api.services.generation.recovery_quiescence import _quiesced_physical_run
+from yleum_api.services.generation.recovery_quiescence import provider_dependency_quiescent
 from yleum_api.services.generation.recovery_store import _locked_owner
 from yleum_api.services.generation_deployment_drain import require_generation_admission
 
@@ -32,7 +32,7 @@ async def poll_due_dependency(factory: async_sessionmaker[AsyncSession], run_id:
             state.phase != "waiting_dependency"
             or state.next_check_at is None
             or state.next_check_at > datetime.now(UTC)
-            or await _quiesced_physical_run(session, run) is None
+            or not await provider_dependency_quiescent(session, run)
         ):
             return False
         identity, dependency = state.identity, state.clock.wait_dependency
@@ -48,7 +48,7 @@ async def poll_due_dependency(factory: async_sessionmaker[AsyncSession], run_id:
             session, run_id=run_id, project_id=identity.project_id, user_id=identity.user_id
         )
         current = recovery_state(run)
-        if current != state or await _quiesced_physical_run(session, run) is None:
+        if current != state or not await provider_dependency_quiescent(session, run):
             return False
         available = advisory.available_for(dependency)
         failures = state.clock.dependency_failures + (0 if available else 1)

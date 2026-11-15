@@ -99,6 +99,48 @@ def exhausted_error() -> ModelUnavailableError:
     })
 
 
+async def confirmed_chain_exhausted(
+    identity: GenerationProviderIdentity, call_id: UUID, *, route: str, user_id: UUID | None,
+) -> bool:
+    """Confirm both provider refusals in the exact closed chain, starting at this call."""
+    async with get_pool().acquire() as conn:
+        confirmed = await conn.fetchval(
+            """
+            WITH RECURSIVE chain AS (
+                SELECT attempt_id,parent_attempt_id,provider_call_id,phase,terminal_reason,0 AS depth
+                FROM generation_provider_attempts
+                WHERE attempt_id=$1 AND run_id=$2 AND project_id=$3 AND user_id=$4
+                AND prompt_hash=$5 AND request_sha256=$6 AND provider_call_id=$7
+                UNION ALL
+                SELECT p.attempt_id,p.parent_attempt_id,p.provider_call_id,p.phase,p.terminal_reason,
+                    chain.depth+1
+                FROM chain JOIN generation_provider_attempts p ON p.attempt_id=chain.parent_attempt_id
+                WHERE chain.depth<8 AND p.run_id=$2 AND p.project_id=$3 AND p.user_id=$4
+                AND p.prompt_hash=$5 AND p.request_sha256=$6
+            )
+            SELECT bool_or(chain.parent_attempt_id IS NULL)
+                AND count(DISTINCT c.provider_scope)=2
+                AND bool_and(COALESCE(
+                    chain.phase='closed' AND c.status='failed' AND c.receipt_hash IS NOT NULL
+                    AND c.provider_scope IN ('llmgw','aitunnel') AND c.requested_model=$8
+                    AND c.run_id=$2 AND c.project_id=$3 AND c.route=$9
+                    AND c.user_id IS NOT DISTINCT FROM $10::uuid
+                    AND c.usage_id IS NULL AND c.tokens_in IS NULL AND c.tokens_out IS NULL
+                    AND c.cache_read_tokens IS NULL AND c.cache_write_tokens IS NULL
+                    AND c.calculated_cost_rub IS NULL AND c.provider_cost_rub IS NULL
+                    AND c.provider_cost_usd IS NULL AND c.cost_provenance IS NULL
+                    AND (chain.terminal_reason='preconnect' OR (
+                        c.provider_scope='llmgw'
+                        AND chain.terminal_reason IN ('upstream_refused','rate_limit_refused')
+                    )), FALSE))
+            FROM chain LEFT JOIN provider_calls c ON c.id=chain.provider_call_id
+            """,
+            identity.attempt_id, identity.run_id, identity.project_id, identity.user_id,
+            identity.prompt_hash, identity.request_sha256, call_id, MODEL, route, user_id,
+        )
+    return confirmed is True
+
+
 def credentials(scope: str) -> tuple[str, str]:
     settings = get_settings()
     key = settings.aitunnel_text_api_key

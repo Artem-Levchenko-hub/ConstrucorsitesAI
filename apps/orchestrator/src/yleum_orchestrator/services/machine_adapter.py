@@ -30,6 +30,7 @@ from yleum_orchestrator.core.cell_resources import (
 from yleum_orchestrator.core.errors import OrchestratorError
 from yleum_orchestrator.core.project_machine import MachineManifest
 from yleum_orchestrator.core.stack_registry import get_stack
+from yleum_orchestrator.core.workspace_provider import ReleaseEnvironmentExpectation
 from yleum_orchestrator.services import nginx_writer
 from yleum_orchestrator.services.cell_state import (
     CellCredentialStore,
@@ -52,6 +53,13 @@ from yleum_orchestrator.services.machine_environment import (
     MachineEnvironmentStore,
 )
 from yleum_orchestrator.services.machine_recovery_environment import (
+    RecoveryReleaseRefused,
+    ReleaseCaptureIntent,
+    ReleaseProofFailure,
+    finish_release_database_stop,
+    read_capture_intent,
+    read_release_database,
+    record_capture_intent,
     record_release,
     replay_release_capture,
     running_environment,
@@ -1127,6 +1135,7 @@ class MachineAdapter:
         volumes: tuple[str, ...] | None = None,
         persist: bool = True,
         observer: Any = None,
+        release_intent: ReleaseCaptureIntent | None = None,
     ) -> MachineEnvironmentRef | None:
         from yleum_orchestrator.services.adaptation_recovery_barrier import (
             require_candidate_writers_allowed,
@@ -1146,7 +1155,13 @@ class MachineAdapter:
         )
         store.observer = observer
         saved_ref = backend._metadata().get("environment_ref")
-        seal = await self._seal_identity(backend) if persist else None
+        if release_intent is None:
+            seal = await self._seal_identity(backend) if persist else None
+        else:
+            seal = {"revision": release_intent.source_sha256,
+                    "schema_digest": release_intent.schema_sha256}
+            if release_intent.database_role_protocol == 1:
+                seal["project_db_role_protocol"] = 1
         reference = await machine_effect(
             store.capture,
             manifest_digest=manifest.digest(),
@@ -1180,7 +1195,9 @@ class MachineAdapter:
                 if (seal.get("project_db_role_protocol") == 1
                         and metadata.get("project_database_role_protocol") == 1):
                     metadata["environment_project_db_role_protocol"] = 1
-            write_controller_json(backend.metadata_path, metadata)
+            write_controller_json(
+                backend.metadata_path, metadata, durable=release_intent is not None,
+            )
         return cast(MachineEnvironmentRef, reference)
 
     async def _seal_identity(self, backend: Any) -> dict[str, str | int] | None:
@@ -1950,6 +1967,7 @@ class MachineAdapter:
         self, state: Any, *, remove_network: bool = False, capture: bool = True,
         retain_trusted: bool = False,
         generation_release: LifecycleMutation | None = None,
+        require_environment_proof: ReleaseEnvironmentExpectation | None = None,
     ) -> None:
         from yleum_orchestrator.services.adaptation_recovery_barrier import (
             require_candidate_writers_allowed,
@@ -1958,20 +1976,28 @@ class MachineAdapter:
             self.manager.state_store.root, state.workspace_id, action="quiesce"
         )
         if not self.exists(state.workspace_id):
+            if require_environment_proof is not None:
+                raise RecoveryReleaseRefused("inventory_unavailable")
             return
         machine, backend = self.parts(state)
-        await machine_effect(backend.invalidate_retained_preview)
         recovery = self.recovery_required(state)
         had_machine = capture and not recovery and backend._container() is not None
         reference = None
-        await machine_effect(backend._reconcile_recovery_helpers)
-        if capture and not recovery:
-            if generation_release is not None and had_machine:
-                reference = await self._checkpoint_generation_release(
-                    state, machine, backend, generation_release,
-                )
-            else:
-                reference = await self.checkpoint(state)
+        if require_environment_proof is not None:
+            if not capture or recovery or generation_release is None:
+                raise RecoveryReleaseRefused("inventory_unavailable")
+            reference = await self._checkpoint_generation_release(
+                state, machine, backend, generation_release, expectation=require_environment_proof,
+            )
+        else:
+            await self._prepare_release_capture(backend)
+            if capture and not recovery:
+                if generation_release is not None and had_machine:
+                    reference = await self._checkpoint_generation_release(
+                        state, machine, backend, generation_release,
+                    )
+                else:
+                    reference = await self.checkpoint(state)
         if capture and recovery:
             # Pause a failed environment without certifying or discarding its
             # stopped rootfs. Explicit checkpoint restoration is the recovery path.
@@ -2011,7 +2037,7 @@ class MachineAdapter:
 
     async def _checkpoint_generation_release(
         self, state: Any, machine: ProjectMachine, backend: DockerMachineBackend,
-        release: LifecycleMutation,
+        release: LifecycleMutation, *, expectation: ReleaseEnvironmentExpectation | None = None,
     ) -> MachineEnvironmentRef | None:
         from yleum_orchestrator.routers.runtime import _workspace_revision
         from yleum_orchestrator.routers.workspace import (
@@ -2020,10 +2046,12 @@ class MachineAdapter:
         )
         from yleum_orchestrator.services.active_source_volume import source_volume_call
 
-        if adaptation_database(state, machine.state()):
-            return await self.checkpoint(state)
+        persisted = machine.state()
         epoch = state.active_generation_fencing_epoch
-        if type(epoch) is not int or release.fencing_epoch != epoch + 1:
+        if (adaptation_database(state, persisted) or type(epoch) is not int
+                or release.fencing_epoch != epoch + 1):
+            if expectation is not None:
+                raise RecoveryReleaseRefused("inventory_unavailable")
             return await self.checkpoint(state)
 
         volume = backend.workspace_volume
@@ -2033,6 +2061,9 @@ class MachineAdapter:
             revision = _workspace_revision(await _read_agent_workspace_files(self.manager, volume))
             return identity, revision
 
+        failure: ReleaseProofFailure = "inventory_unavailable"
+        intent = None
+        already_stopped = False
         try:
             files = await _read_agent_workspace_files(self.manager, volume)
             manifest = _machine_manifest(
@@ -2045,24 +2076,109 @@ class MachineAdapter:
             volume_identity = await source_volume_call(
                 self.manager, volume, "source_volume_identity",
             )
+            failure = "capture_unproved"
             replay: MachineEnvironmentRef | None = await machine_effect(
                 replay_release_capture, self.root, state, release, backend,
                 source=source, manifest=manifest_digest, volume_identity=volume_identity,
+                expectation=expectation,
             )
             if replay is not None:
                 if await retained_source() != (volume_identity, source):
                     raise CellIdentityConflict("release replay source changed")
+                if expectation is not None:
+                    await self._prepare_release_capture(backend)
                 return replay
-            before = await machine_effect(running_environment, backend, epoch)
+            if expectation is not None:
+                intent = await machine_effect(
+                    read_capture_intent, self.root, state, release, source=source,
+                    manifest=manifest_digest, volume=volume, volume_identity=volume_identity,
+                    expectation=expectation,
+                )
+                if intent is not None:
+                    already_stopped = await machine_effect(
+                        stopped_environment_matches, backend, epoch,
+                        container_id=intent.previous_container_id,
+                        image_id=intent.previous_image_id,
+                        started_at=intent.previous_started_at,
+                    )
+            failure = "inventory_unavailable"
+            if intent is not None and already_stopped:
+                before = intent.running_environment()
+            else:
+                before = await machine_effect(running_environment, backend, epoch)
         except (
             OrchestratorError, CellResourceError, EnvironmentIntegrityError, OSError,
             ValueError, docker.errors.APIError,
-        ):
+        ) as error:
+            if expectation is not None:
+                if isinstance(error, ReaderInventoryUnavailable):
+                    raise
+                raise RecoveryReleaseRefused(failure) from error
             # Older or unavailable inventory leaves the original halt behavior intact.
             return await self.checkpoint(state)
 
-        reference = await self.checkpoint(state)
+        if expectation is None:
+            reference = await self.checkpoint(state)
+        else:
+            if (before.identity.digest != expectation.environment_sha256
+                    or (intent is not None and intent.running_environment() != before)):
+                raise RecoveryReleaseRefused("environment_changed")
+            if source != expectation.source_sha256:
+                raise RecoveryReleaseRefused("source_changed", pre_effect=not already_stopped)
+            try:
+                effective = MachineManifest.model_validate(persisted.get("manifest"))
+                physical = MachineManifest.model_validate(backend._metadata().get("manifest"))
+            except (OSError, ValueError) as error:
+                raise RecoveryReleaseRefused(
+                    "inventory_unavailable", pre_effect=not already_stopped,
+                ) from error
+            if effective.digest() != manifest_digest or physical.digest() != manifest_digest:
+                raise RecoveryReleaseRefused("manifest_changed", pre_effect=not already_stopped)
+            try:
+                if not already_stopped:
+                    _, database, running = await machine_effect(
+                        read_release_database, backend, epoch,
+                    )
+                    if not running:
+                        raise RecoveryReleaseRefused("inventory_unavailable")
+                    if intent is not None and database != intent.database:
+                        raise RecoveryReleaseRefused("environment_changed")
+                    seal = await self._seal_identity(backend)
+                    if seal is None:
+                        raise RecoveryReleaseRefused("inventory_unavailable", pre_effect=True)
+                    if seal["revision"] != source:
+                        raise RecoveryReleaseRefused("source_changed", pre_effect=True)
+                    _, verified, running = await machine_effect(
+                        read_release_database, backend, epoch,
+                    )
+                    if verified != database or not running:
+                        raise RecoveryReleaseRefused("environment_changed")
+                    if intent is None:
+                        intent = await machine_effect(
+                            record_capture_intent, self.root, state, release, before=before,
+                            source=source, manifest=manifest_digest, volume=volume,
+                            volume_identity=volume_identity, seal=seal, database=database,
+                        )
+                    elif seal["schema_digest"] != intent.schema_sha256:
+                        raise RecoveryReleaseRefused("environment_changed")
+                else:
+                    assert intent is not None
+                    # The original container must still pass the stopped-store
+                    # quiescence guard before completing a partial database stop.
+                    await machine_effect(backend.prepare_capture)
+                    await machine_effect(finish_release_database_stop, backend, epoch, intent)
+                await self._prepare_release_capture(backend)
+                reference = await self.checkpoint(state, release_intent=intent)
+            except (RecoveryReleaseRefused, ReaderInventoryUnavailable):
+                raise
+            except (
+                OrchestratorError, CellResourceError, EnvironmentIntegrityError, OSError,
+                ValueError, docker.errors.APIError,
+            ) as error:
+                raise RecoveryReleaseRefused("capture_unproved") from error
         if reference is None or manifest_digest != reference.manifest_digest:
+            if expectation is not None:
+                raise RecoveryReleaseRefused("capture_unproved")
             return reference
         try:
             metadata = backend._metadata()
@@ -2076,15 +2192,36 @@ class MachineAdapter:
                     started_at=before.started_at,
                 )
             ):
+                if expectation is not None:
+                    raise RecoveryReleaseRefused("capture_unproved")
                 return reference
+            if intent is not None:
+                _, database, running = await machine_effect(read_release_database, backend, epoch)
+                captured_volumes = {entry.name for entry in reference.volumes}
+                if database != intent.database or running or database.physical_volume not in (
+                    captured_volumes
+                ):
+                    raise RecoveryReleaseRefused("capture_unproved")
             await machine_effect(
                 record_release, self.root, state, release, before=before, source=source,
                 volume=volume, volume_identity=volume_identity, reference=reference,
+                durable_archive=expectation is not None,
             )
-        except (OrchestratorError, CellResourceError, OSError, ValueError, docker.errors.APIError):
+        except (
+            OrchestratorError, CellResourceError, OSError, ValueError, docker.errors.APIError,
+        ) as error:
+            if expectation is not None:
+                if isinstance(error, ReaderInventoryUnavailable):
+                    raise
+                raise RecoveryReleaseRefused("capture_unproved") from error
             # A failed optional witness does not change generation release authority.
             pass
         return reference
+
+    @staticmethod
+    async def _prepare_release_capture(backend: DockerMachineBackend) -> None:
+        await machine_effect(backend.invalidate_retained_preview)
+        await machine_effect(backend._reconcile_recovery_helpers)
 
     async def apply_owner_business_config(
         self, state: Any, *, version: int, config: dict[str, Any],

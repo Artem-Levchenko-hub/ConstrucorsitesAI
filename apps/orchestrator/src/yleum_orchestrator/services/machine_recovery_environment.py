@@ -7,12 +7,14 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 from uuid import UUID
 
+import docker  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from yleum_orchestrator.core.cell_resources import CellIdentityConflict, LifecycleMutation
+from yleum_orchestrator.core.workspace_provider import ReleaseEnvironmentExpectation
 from yleum_orchestrator.services.cell_state import (
     CellWorkspaceState,
     _read_plain_json_file,
@@ -31,7 +33,10 @@ from yleum_orchestrator.services.machine_startup import (
     require_startup_admission,
     startup_incarnation,
 )
-from yleum_orchestrator.services.project_machine import write_controller_json
+from yleum_orchestrator.services.project_machine import (
+    sync_controller_parent_chain,
+    write_controller_json,
+)
 
 if TYPE_CHECKING:
     from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend
@@ -44,6 +49,21 @@ _Image = Annotated[str, Field(pattern=r"^sha256:[a-f0-9]{64}$")]
 
 class RecoveryEnvironmentUnproved(CellIdentityConflict):
     """The exact release or transition lacks trustworthy evidence."""
+
+
+ReleaseProofFailure = Literal[
+    "source_changed", "manifest_changed", "environment_changed",
+    "inventory_unavailable", "capture_unproved",
+]
+
+
+class RecoveryReleaseRefused(RecoveryEnvironmentUnproved):
+    """A strict release cannot close its lease without an exact physical witness."""
+
+    def __init__(self, failure: ReleaseProofFailure, *, pre_effect: bool = False) -> None:
+        self.reason = f"recovery_release_{failure}"
+        self.pre_effect = pre_effect
+        super().__init__("generation release environment is unproved")
 
 
 class RecoveryEnvironmentProof(BaseModel):
@@ -74,7 +94,7 @@ class RunningEnvironment:
     previous_image_inventory_sha256: str | None = None
 
 
-class ReleaseEnvironment(BaseModel):
+class ReleaseCaptureBinding(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
     version: Literal[1] = 1
@@ -95,6 +115,33 @@ class ReleaseEnvironment(BaseModel):
     previous_container_id: _Sha
     previous_started_at: str
     previous_image_id: _Image
+
+    def running_environment(self) -> RunningEnvironment:
+        return RunningEnvironment(
+            self.previous_image_id,
+            EnvironmentIdentity(self.previous_content_sha256, self.previous_incarnation),
+            self.previous_container_id, self.previous_started_at,
+        )
+
+
+class ReleaseDatabaseIdentity(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
+
+    container_id: _Sha
+    image_id: _Image
+    started_at: str = Field(
+        pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$",
+    )
+    physical_volume: str
+
+
+class ReleaseCaptureIntent(ReleaseCaptureBinding):
+    schema_sha256: _Sha
+    database_role_protocol: Literal[1] | None = None
+    database: ReleaseDatabaseIdentity
+
+
+class ReleaseEnvironment(ReleaseCaptureBinding):
     artifact_ref_sha256: _Sha
 
 
@@ -135,6 +182,69 @@ def stopped_environment_matches(
     )
 
 
+def read_release_database(
+    backend: DockerMachineBackend, fence: int,
+) -> tuple[Any, ReleaseDatabaseIdentity, bool]:
+    from yleum_orchestrator.services.docker_machine_backend import _PROJECT_POSTGRES_DATA
+
+    postgres = backend._project_postgres()
+    if postgres is None:
+        raise MachineInventoryUnavailable("unavailable")
+    reader_dispatch(postgres.reload)
+    attrs = postgres.attrs
+    labels = (attrs.get("Config") or {}).get("Labels") or {}
+    state = attrs.get("State") or {}
+    mounts = [
+        item for item in (attrs.get("Mounts") or [])
+        if item.get("Destination") == _PROJECT_POSTGRES_DATA
+    ]
+    status = state.get("Status")
+    started_at = state.get("StartedAt")
+    image = attrs.get("Image")
+    running = isinstance(status, str) and status == "running"
+    owned_labels = backend.labels("project-postgres")
+    if (
+        attrs.get("Id") != postgres.id or labels.get("omnia.fencing_epoch") != str(fence)
+        or any(labels.get(key) != value for key, value in owned_labels.items())
+        or not isinstance(status, str) or status not in {"running", "exited"}
+        or not isinstance(started_at, str) or not isinstance(image, str)
+        or state.get("Running") is not running or state.get("Paused") is not False
+        or len(mounts) != 1 or mounts[0].get("Type") != "volume" or mounts[0].get("RW") is not True
+        or mounts[0].get("Name") != backend.project_postgres_volume
+    ):
+        raise RecoveryEnvironmentUnproved("release database identity conflicts")
+    identity = ReleaseDatabaseIdentity(
+        container_id=postgres.id, image_id=image, started_at=started_at,
+        physical_volume=backend.project_postgres_volume,
+    )
+    return postgres, identity, running
+
+
+def finish_release_database_stop(
+    backend: DockerMachineBackend, fence: int, intent: ReleaseCaptureIntent,
+) -> None:
+    from yleum_orchestrator.services.published_machine_backend import PublishedMachineBackend
+
+    postgres, identity, running = read_release_database(backend, fence)
+    if identity != intent.database:
+        raise RecoveryEnvironmentUnproved("release database incarnation changed")
+    if not running:
+        return
+    backend._require_recovery_access("quiesce")
+    # The publication inspector only uses methods shared by the development backend.
+    schema = PublishedMachineBackend.schema_digest(cast(PublishedMachineBackend, backend))
+    if schema != intent.schema_sha256:
+        raise RecoveryEnvironmentUnproved("release database schema changed")
+    postgres, identity, running = read_release_database(backend, fence)
+    if identity != intent.database:
+        raise RecoveryEnvironmentUnproved("release database incarnation changed")
+    if running:
+        postgres.stop(timeout=10)
+    _, identity, running = read_release_database(backend, fence)
+    if identity != intent.database or running:
+        raise RecoveryEnvironmentUnproved("release database stop is unconfirmed")
+
+
 def running_environment(
     backend: DockerMachineBackend, fence: int, *, previous_image_id: str | None = None,
 ) -> RunningEnvironment:
@@ -166,34 +276,111 @@ def _reference_digest(reference: MachineEnvironmentRef) -> str:
     ).encode()).hexdigest()
 
 
-def record_release(
-    root: Path, state: CellWorkspaceState, mutation: LifecycleMutation, *,
+def _capture_binding(
+    state: CellWorkspaceState, mutation: LifecycleMutation, *,
     before: RunningEnvironment, source: str, volume: str, volume_identity: str,
-    reference: MachineEnvironmentRef,
-) -> None:
+    manifest: str,
+) -> ReleaseCaptureBinding:
     epoch = state.active_generation_fencing_epoch
     if (
         state.project_id is None or state.owner_id is None or state.active_generation_run_id is None
         or epoch is None or mutation.fencing_epoch != epoch + 1
-        or reference.workspace_id != state.workspace_id
-        or volume not in {entry.name for entry in reference.volumes}
     ):
         raise RecoveryEnvironmentUnproved("release environment capture conflicts")
-    path = _record_path(root, state.workspace_id, mutation.operation_id)
-    record = ReleaseEnvironment(
+    return ReleaseCaptureBinding(
         workspace_id=state.workspace_id, project_id=state.project_id, owner_id=state.owner_id,
         generation_run_id=state.active_generation_run_id,
         release_operation_id=mutation.operation_id, release_request_sha256=mutation.request_digest,
         previous_fencing_epoch=epoch, release_fencing_epoch=mutation.fencing_epoch,
-        source_sha256=source, manifest_sha256=reference.manifest_digest,
+        source_sha256=source, manifest_sha256=manifest,
         physical_volume=volume, physical_volume_identity=volume_identity,
         previous_content_sha256=before.identity.content_digest,
         previous_incarnation=before.identity.incarnation, previous_image_id=before.image_id,
         previous_container_id=before.container_id, previous_started_at=before.started_at,
+    )
+
+
+def _intent_path(root: Path, workspace: UUID, operation: UUID) -> Path:
+    return _record_path(root, workspace, operation).with_suffix(".capture.json")
+
+
+def record_capture_intent(
+    root: Path, state: CellWorkspaceState, mutation: LifecycleMutation, *,
+    before: RunningEnvironment, source: str, manifest: str,
+    volume: str, volume_identity: str, seal: dict[str, str | int],
+    database: ReleaseDatabaseIdentity,
+) -> ReleaseCaptureIntent:
+    binding = _capture_binding(
+        state, mutation, before=before, source=source, manifest=manifest,
+        volume=volume, volume_identity=volume_identity,
+    )
+    if seal["revision"] != source:
+        raise RecoveryEnvironmentUnproved("release source seal changed")
+    intent = ReleaseCaptureIntent.model_validate({
+        **binding.model_dump(),
+        "schema_sha256": seal["schema_digest"],
+        "database_role_protocol": seal.get("project_db_role_protocol"),
+        "database": database,
+    })
+    path = _intent_path(root, state.workspace_id, mutation.operation_id)
+    if _require_regular_file_path(path, missing_ok=True) is not None:
+        raise RecoveryEnvironmentUnproved("release capture intent already exists")
+    write_controller_json(path, intent.model_dump(mode="json"), durable=True)
+    return intent
+
+
+def read_capture_intent(
+    root: Path, state: CellWorkspaceState, mutation: LifecycleMutation, *,
+    source: str, manifest: str, volume: str, volume_identity: str,
+    expectation: ReleaseEnvironmentExpectation,
+) -> ReleaseCaptureIntent | None:
+    path = _intent_path(root, state.workspace_id, mutation.operation_id)
+    try:
+        info = _require_regular_file_path(path, missing_ok=True)
+        if info is None:
+            return None
+        if info.st_size > 8192:
+            raise RecoveryEnvironmentUnproved("release capture intent is unbounded")
+        intent = ReleaseCaptureIntent.model_validate_json(json.dumps(_read_plain_json_file(path)))
+    except (OSError, RuntimeError, ValueError) as error:
+        raise RecoveryEnvironmentUnproved("release capture intent is invalid") from error
+    exact = _capture_binding(
+        state, mutation, before=intent.running_environment(), source=source, manifest=manifest,
+        volume=volume, volume_identity=volume_identity,
+    )
+    if intent.model_dump(
+        exclude={"schema_sha256", "database_role_protocol", "database"},
+    ) != exact.model_dump():
+        raise RecoveryEnvironmentUnproved("release capture intent binding changed")
+    if not _matches_expectation(intent, expectation):
+        raise RecoveryEnvironmentUnproved("release capture intent expectation changed")
+    sync_controller_parent_chain(path)
+    return intent
+
+
+def record_release(
+    root: Path, state: CellWorkspaceState, mutation: LifecycleMutation, *,
+    before: RunningEnvironment, source: str, volume: str, volume_identity: str,
+    reference: MachineEnvironmentRef, durable_archive: bool = False,
+) -> None:
+    if reference.workspace_id != state.workspace_id or volume not in {
+        entry.name for entry in reference.volumes
+    }:
+        raise RecoveryEnvironmentUnproved("release environment capture conflicts")
+    binding = _capture_binding(
+        state, mutation, before=before, source=source, manifest=reference.manifest_digest,
+        volume=volume, volume_identity=volume_identity,
+    )
+    path = _record_path(root, state.workspace_id, mutation.operation_id)
+    record = ReleaseEnvironment(
+        **binding.model_dump(),
         artifact_ref_sha256=_reference_digest(reference),
     )
     existing = _load_release(root, state.workspace_id, mutation.operation_id)
     if existing is None:
+        if durable_archive:
+            archive = root / "artifacts" / str(state.workspace_id) / reference.artifact_ref
+            sync_controller_parent_chain(archive)
         write_controller_json(path, record.model_dump(mode="json"), durable=True)
     elif existing != record:
         raise RecoveryEnvironmentUnproved("release environment capture was replaced")
@@ -212,10 +399,38 @@ def _load_release(root: Path, workspace_id: UUID, release_id: UUID) -> ReleaseEn
         raise RecoveryEnvironmentUnproved("release environment evidence is invalid") from error
 
 
+def _matches_expectation(
+    record: ReleaseCaptureBinding, expectation: ReleaseEnvironmentExpectation,
+) -> bool:
+    return (
+        record.source_sha256 == expectation.source_sha256
+        and record.running_environment().identity.digest == expectation.environment_sha256
+    )
+
+
+def require_recorded_release_capture(
+    root: Path, state: CellWorkspaceState, mutation: LifecycleMutation, run_id: UUID,
+    expectation: ReleaseEnvironmentExpectation,
+) -> None:
+    try:
+        record = _load_release(root, state.workspace_id, mutation.operation_id)
+    except (OSError, RecoveryEnvironmentUnproved) as error:
+        raise RecoveryReleaseRefused("capture_unproved") from error
+    if record is None or (
+        record.workspace_id, record.project_id, record.owner_id, record.generation_run_id,
+        record.release_operation_id, record.release_request_sha256, record.release_fencing_epoch,
+    ) != (
+        state.workspace_id, state.project_id, state.owner_id, run_id,
+        mutation.operation_id, mutation.request_digest, mutation.fencing_epoch,
+    ) or not _matches_expectation(record, expectation):
+        raise RecoveryReleaseRefused("capture_unproved")
+
+
 def replay_release_capture(
     root: Path, state: CellWorkspaceState, mutation: LifecycleMutation,
     backend: DockerMachineBackend, *, source: str, manifest: str,
     volume_identity: str,
+    expectation: ReleaseEnvironmentExpectation | None = None,
 ) -> MachineEnvironmentRef | None:
     record = _load_release(root, state.workspace_id, mutation.operation_id)
     if record is None:
@@ -233,6 +448,7 @@ def replay_release_capture(
         or (record.source_sha256, record.manifest_sha256) != (source, manifest)
         or (record.physical_volume, record.physical_volume_identity)
         != (backend.workspace_volume, volume_identity)
+        or (expectation is not None and not _matches_expectation(record, expectation))
     ):
         raise RecoveryEnvironmentUnproved("release replay binding changed")
     metadata = backend._metadata()
@@ -249,18 +465,30 @@ def replay_release_capture(
     ):
         raise RecoveryEnvironmentUnproved("release replay artifact changed")
 
-    def require_original_stopped() -> None:
+    def require_original_stopped_or_removed() -> None:
+        if expectation is not None and backend._container() is None:
+            # The exact persisted capture preceded remove. Confirm the original
+            # Docker ID is absent as well as the scoped development name.
+            try:
+                backend.client.containers.get(record.previous_container_id)
+            except docker.errors.NotFound:
+                return
+            raise RecoveryEnvironmentUnproved("release replay container changed")
         if not stopped_environment_matches(
             backend, previous_fence, container_id=record.previous_container_id,
             image_id=record.previous_image_id, started_at=record.previous_started_at,
         ):
             raise RecoveryEnvironmentUnproved("release replay container changed")
 
-    require_original_stopped()
+    require_original_stopped_or_removed()
     MachineEnvironmentStore(
         root / "artifacts", state.workspace_id, backend, max_bytes=backend.disk_bytes,
     ).validate(reference, manifest_digest=manifest)
-    require_original_stopped()
+    require_original_stopped_or_removed()
+    if expectation is not None:
+        # A controller crash after the file rename but before the parent sync
+        # can leave a visible witness. Complete its publication before removal.
+        sync_controller_parent_chain(_record_path(root, state.workspace_id, mutation.operation_id))
     return reference
 
 

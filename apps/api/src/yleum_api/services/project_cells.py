@@ -14,7 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.project import Project
-from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from yleum_api.models.project_cell import (
+    ProjectCellActivityLease,
+    ProjectCellOperation,
+    ProjectCellWorkspace,
+)
 from yleum_api.models.user import User
 from yleum_api.services.generation_execution_context import execution_run_id
 
@@ -586,9 +590,29 @@ async def park_cell_operation_for_capacity(
     await session.flush()
 
 
+async def _require_current_release_owner(
+    session: AsyncSession, workspace: ProjectCellWorkspace, operation: ProjectCellOperation,
+    *, fence: int,
+) -> None:
+    if (
+        operation.kind != "release" or operation.generation_run_id is None
+        or execution_run_id.get() != operation.generation_run_id
+        or workspace.generation_run_id != operation.generation_run_id
+        or workspace.deleted_at is not None or workspace.state != "ready"
+        or workspace.fencing_epoch != fence
+        or await session.scalar(select(ProjectCellActivityLease.operation_id).where(
+            ProjectCellActivityLease.workspace_id == workspace.id,
+            ProjectCellActivityLease.state == "active",
+        ).limit(1)) is not None
+    ):
+        raise ProjectCellStateConflict("recovery release ownership changed before claim")
+
+
 async def claim_cell_operation_committed(
     session_factory: async_sessionmaker[AsyncSession],
     operation_id: UUID,
+    *,
+    expected_workspace_fence: int | None = None,
 ) -> ClaimedCellOperation:
     async with session_factory() as session:
         operation = await session.get(ProjectCellOperation, operation_id)
@@ -607,6 +631,13 @@ async def claim_cell_operation_committed(
         if locked_operation.status not in {"pending", "waiting_capacity"}:
             raise ProjectCellStateConflict(
                 f"cannot claim operation in state {locked_operation.status!r}"
+            )
+        if expected_workspace_fence is not None:
+            if (locked_operation.status != "pending" or locked_operation.fencing_epoch is not None
+                    or locked_operation.execution_run_id is not None):
+                raise ProjectCellStateConflict("recovery release is not an unclaimed reservation")
+            await _require_current_release_owner(
+                session, workspace, locked_operation, fence=expected_workspace_fence,
             )
         request = _stored_request_payload(locked_operation)
 
@@ -639,6 +670,8 @@ async def claim_cell_operation_committed(
 async def reclaim_indeterminate_cell_operation_committed(
     session_factory: async_sessionmaker[AsyncSession],
     operation_id: UUID,
+    *,
+    expected_workspace_fence: int | None = None,
 ) -> ClaimedCellOperation:
     """Replay one uncertain operation with its original durable fence/envelope."""
 
@@ -664,6 +697,13 @@ async def reclaim_indeterminate_cell_operation_committed(
             raise ProjectCellStateConflict("indeterminate operation has no fencing epoch")
         if workspace.fencing_epoch < locked_operation.fencing_epoch:
             raise ProjectCellStateConflict("workspace fence is older than operation fence")
+        if expected_workspace_fence is not None:
+            if (locked_operation.fencing_epoch != expected_workspace_fence
+                    or locked_operation.execution_run_id != locked_operation.generation_run_id):
+                raise ProjectCellStateConflict("recovery release claim changed before replay")
+            await _require_current_release_owner(
+                session, workspace, locked_operation, fence=expected_workspace_fence,
+            )
         active = await session.scalar(
             select(ProjectCellOperation.id)
             .where(

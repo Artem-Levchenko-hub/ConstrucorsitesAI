@@ -15,7 +15,10 @@ from pydantic import (
     model_validator,
 )
 
-from yleum_orchestrator.core.workspace_provider import ProjectCellLeaseObservation
+from yleum_orchestrator.core.workspace_provider import (
+    ProjectCellLeaseObservation,
+    ReleaseEnvironmentExpectation,
+)
 
 
 class WorkspaceAgentPrepareRequest(BaseModel):
@@ -51,6 +54,13 @@ class WorkspaceControlRequest(BaseModel):
     operation_id: UUID
     fencing_epoch: int = Field(gt=0)
     request_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    require_environment_proof: ReleaseEnvironmentExpectation | None = None
+
+    @model_validator(mode="after")
+    def validate_release_expectation(self) -> Self:
+        if self.require_environment_proof is not None and self.kind != "release":
+            raise ValueError("environment proof may only be required for generation release")
+        return self
 
 
 class WorkspaceObserveRequest(BaseModel):
