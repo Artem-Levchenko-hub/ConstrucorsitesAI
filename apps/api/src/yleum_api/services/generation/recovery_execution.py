@@ -1090,6 +1090,7 @@ class ExecutionDriver:
             ProviderEffectCursor,
             provider_effect_scope,
         )
+        from yleum_api.services.llm_client import LLMError
 
         try:
             with provider_effect_scope(cursor):
@@ -1102,10 +1103,17 @@ class ExecutionDriver:
             return response
         except Exception as error:
             timeout_types = (TimeoutError, httpx.ReadTimeout)
-            timeout = isinstance(error, timeout_types) or isinstance(error.__cause__, timeout_types)
+            interrupted = (
+                isinstance(error, timeout_types)
+                or isinstance(error.__cause__, timeout_types)
+                or (
+                    isinstance(error, LLMError) and error.code == "transport"
+                    and error.provider_charge_ambiguous is True and error.retry_safe is False
+                )
+            )
             if (
                 cursor.reconcile_only or not isinstance(self.state, RecoveryStateV3)
-                or not timeout
+                or not interrupted
                 or not await _has_retained_completion(self.factory, self.state)
             ):
                 raise

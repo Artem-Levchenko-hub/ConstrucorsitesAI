@@ -351,7 +351,8 @@ async def test_response_wait_defers_open_attempt_before_claiming_a_cell(
 
 
 @pytest.mark.parametrize("outcome", ["stored", "unknown", "pending"])
-async def test_timeout_reads_retained_completion_under_the_same_lease(monkeypatch, outcome):
+@pytest.mark.parametrize("kind", ["native", "legacy"])
+async def test_timeout_reads_retained_completion_under_the_same_lease(monkeypatch, outcome, kind):
     from unittest.mock import AsyncMock
 
     import httpx
@@ -391,7 +392,11 @@ async def test_timeout_reads_retained_completion_under_the_same_lease(monkeypatc
     driver.save = save
     effects = []
     methods = []
-    response = {"content": [{"type": "text", "text": "retained result"}], "stop_reason": "end_turn"}
+    response = (
+        {"content": [{"type": "text", "text": "retained result"}], "stop_reason": "end_turn"}
+        if kind == "native" else
+        {"choices": [{"message": {"content": "retained result"}, "finish_reason": "stop"}]}
+    )
     ids = state.identity
     identity = GenerationProviderIdentity(
         ids.run_id, ids.project_id, ids.user_id, uuid4(), ids.prompt_hash, "b" * 64,
@@ -438,12 +443,20 @@ async def test_timeout_reads_retained_completion_under_the_same_lease(monkeypatc
         read_only = recovery_reconciliation.provider_reconciliation_requested()
         attempt = recovery_reconciliation.prospective_provider_attempt()
         effects.append((read_only, attempt))
+        if kind == "legacy":
+            reply = await llm_client._chat_post(
+                {"model": "synthetic", "metadata": {}},
+                "http://gateway.test/v1/chat/completions", 90,
+            )
+            return reply.json()
         async with httpx.AsyncClient() as client:
             return await agent_native._call_messages(
                 client, "http://gateway.test/v1/messages", [], "test system",
             )
 
-    frame = {"version": 1, "kind": "native", "value": {}}
+    frame = {"version": 1, "kind": kind, "value": {
+        "attempt": 0, "call_deadline": (datetime.now(UTC) + timedelta(seconds=90)).isoformat(),
+    } if kind == "legacy" else {}}
     if outcome == "stored":
         assert await driver.provider(frame, invoke) == response
         driver.wait.assert_not_awaited()
