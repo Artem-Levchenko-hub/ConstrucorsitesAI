@@ -17,7 +17,7 @@ const editor: LearningDefinition = { id: "editor", title: "Редактор пр
   step("editor-manage", "Управляйте приложением", "Из «Управления» можно перейти к заказам, каталогу, данным приложения и статистике.", { lesson: "operations" }),
   step("editor-services", "Подключите нужные сервисы", "В «Интеграциях» выбирают сервис и проверяют подключение. Обучение не запрашивает доступ и не запускает доработку.", { lesson: "integrations" }),
   step("editor-publish", "Подготовьте запуск", "Кнопка публикации открывает проверку готовности и следующий шаг запуска в MAX.", { lesson: "publish" }),
-  step("editor-projects", "Проекты и аккаунт", "Это меню возвращает к вашим проектам и настройкам аккаунта.", { lesson: "account" }),
+  step("editor-projects", "Проекты и аккаунт", "Это меню возвращает к вашим проектам и настройкам аккаунта.", { lesson: "project" }),
 ] };
 
 const panel = (id: string, title: string, body: string, lesson: GuideLessonId): LearningDefinition => ({ id, title, lesson, steps: [
@@ -27,7 +27,7 @@ const panels = {
   publish: panel("publish", "Проверьте готовность к публикации", "Здесь показаны условия запуска и доступное следующее действие. Проверьте сборку, документы и подключение MAX. Публикацию выполняете вы сами.", "publish"),
   max: panel("max", "Подключите приложение к MAX", "Пройдите этапы подключения бота по порядку. Токены вводят только в предназначенную для них форму, не в диалог с ИИ.", "max-bot"),
   services: panel("services", "Выберите нужную интеграцию", "Выберите сервис и изучите условия подключения. Подключение аккаунта и изменение приложения — отдельные действия; обучение их не выполняет.", "integrations"),
-  navigation: panel("navigation", "Проекты и аккаунт", "Здесь находятся переходы к проектам и настройкам аккаунта. Обучение не переключает проект: выберите нужную ссылку после его закрытия.", "account"),
+  navigation: panel("navigation", "Проекты и аккаунт", "Здесь находятся переходы к проектам и настройкам аккаунта. Обучение не переключает проект: выберите нужную ссылку после его закрытия.", "project"),
   tools: panel("tools", "Инструменты редактора", "В этом окне собраны доступные инструменты проекта. Изучите их назначение перед использованием; обучение ничего не запускает.", "builder"),
   preview: panel("preview", "Предпросмотр приложения", "Здесь можно пройти сценарий пользователя и проверить результат. Обучение не нажимает кнопки внутри приложения и не отправляет его формы.", "builder"),
 };
@@ -50,7 +50,7 @@ const accounts: Record<string, [string, string, string]> = {
   "/billing/plan": ["plan", "Ваш тариф", "Здесь показаны режим эксплуатации приложения и доступные лимиты. Обучение не меняет тариф."],
   "/billing/transactions": ["transactions", "История операций", "Здесь проверяют платежи, начисления и их статусы. Обучение не выполняет финансовых операций."],
 };
-const guide: LearningDefinition = { id: "guide", title: "Руководство Yleum", lesson: "account", steps: [
+const guide: LearningDefinition = { id: "guide", title: "Руководство Yleum", lesson: "project", steps: [
   step("guide-journey", "Ваш путь к запуску", "Переходите по шагам кнопками «Далее» и «Назад»: обучение прокрутит руководство и выделит настоящий заголовок. Действия в приложении остаются за вами."),
   ...guideChapters.map(({ id, title, description }) => step(id, title, description, { selector: `#${id} h2`, lesson: id })),
 ] };
@@ -74,7 +74,7 @@ export function learningForSurface(surface: string): LearningDefinition | null {
 export function learningForRoute(pathname: string, query: string): LearningDefinition | null {
   if (pathname === "/max/guide") return guide;
   const account = accounts[pathname];
-  if (account) return { id: account[0], title: account[1], lesson: pathname.startsWith("/billing") ? "billing" : "account", steps: [
+  if (account) return { id: account[0], title: account[1], lesson: pathname.startsWith("/billing") ? "billing" : "project", steps: [
     step("account-content", account[1], account[2], { selector: ".account-content" }),
     step("account-navigation", "Разделы аккаунта", "Переключайтесь между профилем, безопасностью, балансом, операциями и тарифом."),
     step("account-projects", "Вернитесь к приложениям", "Эта ссылка возвращает в вашу студию.", { lesson: "project" }),

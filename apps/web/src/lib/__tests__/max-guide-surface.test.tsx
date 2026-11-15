@@ -22,7 +22,7 @@ import { guideScreenshots } from "@/components/max/guide/guide-screenshots";
 vi.mock("@/lib/auth-mock", () => ({ getSession: async () => null }));
 
 const chapterIds = [
-  "account", "project", "builder", "settings", "integrations",
+  "project", "builder", "settings", "integrations",
   "max-bot", "publish", "partner", "acceptance", "operations", "billing", "errors", "checklists",
 ];
 
@@ -102,6 +102,7 @@ describe("MAX guide screenshots", () => {
     expect(figures[0].textContent).toContain("«Создать первое приложение» в центре страницы");
     expect(figures[1].textContent).toContain("Укажите название создаваемого приложения");
     expect(figures[1].textContent).toContain("Опишите главные действия");
+    expect(figures[1].querySelector("img")?.getAttribute("src")).toBe("/guide/2026-11-15-redacted/create.png");
   });
 
   it("publishes only flattened redacted PNG files rather than raw captures or fabricated controls", () => {
@@ -211,7 +212,11 @@ describe("MAX guide navigation", () => {
     for (const contents of [desktop, mobile]) {
       const links = Array.from(contents?.querySelectorAll("a") ?? []);
       expect(links.map(link => link.getAttribute("href"))).toEqual(chapterIds.map(id => `#${id}`));
-      expect(links.at(-1)?.textContent).toBe("13Списки для запуска");
+      expect(links.map(link => link.querySelector("span")?.textContent)).toEqual(
+        chapterIds.map((_, index) => String(index + 1).padStart(2, "0")),
+      );
+      expect(links[0]?.textContent).toBe("01Создание приложения");
+      expect(links.at(-1)?.textContent).toBe("12Списки для запуска");
     }
   });
 
@@ -230,10 +235,11 @@ describe("MAX guide navigation", () => {
     expect(page.querySelector("video, a[href^='#video-']")).toBeNull();
     expect(page.body.textContent).not.toMatch(/Видеоуроки|Смотреть видео/);
     expect(page.getElementById("video-lessons")?.querySelector('nav[aria-label="Оглавление"]')).toBeTruthy();
-    expect(page.querySelector('section#start, a[href="#start"], a[href="/max/guide#start"]')).toBeNull();
+    expect(page.querySelector('section#start, section#account, a[href="#start"], a[href="#account"], a[href="/max/guide#start"], a[href="/max/guide#account"]')).toBeNull();
     expect(page.body.textContent).not.toContain("Перед началом");
-    for (const anchor of ["start", "video-start"]) {
-      expect(page.getElementById(anchor)?.closest("section")?.id).toBe("account");
+    expect(page.body.textContent).not.toContain("Создайте аккаунт Yleum");
+    for (const anchor of ["start", "video-start", "account", "video-account"]) {
+      expect(page.getElementById(anchor)?.closest("section")?.id).toBe("project");
     }
 
     for (const id of chapterIds) {
@@ -263,7 +269,7 @@ it("marks the same active chapter on both guide menus through fragments, clicks,
   const computedStyle = window.getComputedStyle;
   vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
     const style = computedStyle(element, pseudo);
-    if (element.id === "account") Object.defineProperty(style, "scrollMarginTop", { value: "92px" });
+    if (element.id === "project") Object.defineProperty(style, "scrollMarginTop", { value: "92px" });
     return style;
   });
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
@@ -339,7 +345,7 @@ it("marks the same active chapter on both guide menus through fragments, clicks,
       window.dispatchEvent(new PopStateEvent("popstate"));
       flushFrames();
     });
-    expect(activeLinks()).toEqual(["#account", "#account"]);
+    expect(activeLinks()).toEqual(["#project", "#project"]);
     expect(host.querySelector("details")?.hasAttribute("open")).toBe(false);
   } finally {
     await act(async () => root.unmount());

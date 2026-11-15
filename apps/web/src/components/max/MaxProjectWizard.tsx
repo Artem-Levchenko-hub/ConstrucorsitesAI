@@ -78,7 +78,15 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!busy && !submitLock.current) onOpenChange(next); }}>
-      <DialogContent data-max-studio data-busy={busy} className="max-project-wizard" onOpenAutoFocus={(event) => { event.preventDefault(); heading.current?.focus(); }} onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }} onInteractOutside={(event) => { if (busy) event.preventDefault(); }}>
+      <DialogContent
+        {...(step === 0 ? { "aria-describedby": undefined } : {})}
+        data-max-studio
+        data-busy={busy}
+        className="max-project-wizard"
+        onOpenAutoFocus={(event) => { event.preventDefault(); heading.current?.focus(); }}
+        onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }}
+        onInteractOutside={(event) => { if (busy) event.preventDefault(); }}
+      >
         <form className="contents" aria-busy={busy} onSubmit={(event) => {
           event.preventDefault();
           if (busy || submitLock.current) return;
@@ -88,7 +96,13 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
           <div className="max-wizard-heading">
             <p className="omnia-kicker text-accent">Новое приложение · Шаг {step + 1} из 4</p>
             <DialogTitle ref={heading} tabIndex={-1} className="mt-3 text-2xl">{titles[step]}</DialogTitle>
-            <DialogDescription className="mt-2">{step === 0 ? "Название и идея станут основой первой сборки" : step === 3 ? "После подтверждения создадим проект и откроем редактор для первой сборки." : "Можно оставить эти поля пустыми и уточнить их позже."}</DialogDescription>
+            {step > 0 && (
+              <DialogDescription className="mt-2">
+                {step === 3
+                  ? "После подтверждения создадим проект и откроем редактор для первой сборки."
+                  : "Можно оставить эти поля пустыми и уточнить их позже."}
+              </DialogDescription>
+            )}
             <progress className="max-wizard-progress" max={4} value={step + 1} aria-label={`Шаг ${step + 1} из 4`} />
           </div>
           {quotaNotice}
@@ -97,11 +111,11 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
               <div className="space-y-2">
                 <Label htmlFor="max-project-name">Название</Label>
                 <Input id="max-project-name" value={values.name} onChange={(event) => onChange({ name: event.target.value })} placeholder="Например, Кофе рядом" maxLength={100} required aria-describedby="max-project-name-hint" />
-                <p id="max-project-name-hint" className="text-xs text-fg-secondary">Не менее 2 символов.</p>
+                <p id="max-project-name-hint" className="text-xs text-fg-secondary">Не менее 2 символов</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="max-project-idea">Что пользователь сможет делать?</Label>
-                <Textarea id="max-project-idea" value={values.idea} onChange={(event) => onChange({ idea: event.target.value })} placeholder="Получать баллы, выбирать награды и оформлять заказ к выдаче" className="min-h-28 resize-y" required aria-describedby="max-project-idea-limit" aria-invalid={ideaTooLong} />
+                <Textarea id="max-project-idea" value={values.idea} onChange={(event) => onChange({ idea: event.target.value })} placeholder="Например, получать баллы, выбирать награды и оформлять заказ к выдаче" className="min-h-28 resize-y" required aria-describedby="max-project-idea-limit" aria-invalid={ideaTooLong} />
                 <p id="max-project-idea-limit" className="text-xs text-fg-secondary">
                   {length} / {MAX_BRIEF_LENGTH} символов
                   {ideaTooShort && <span className="block">Не менее 10 символов</span>}

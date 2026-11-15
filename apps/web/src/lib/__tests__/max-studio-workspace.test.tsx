@@ -249,6 +249,14 @@ it("distinguishes loading, query failure, retry and a real empty workspace", asy
 
 it("validates name and idea, retains answers through Back, and creates only after review", async () => {
   await openWizard();
+  const dialog = document.querySelector('[role="dialog"]')!;
+  const describedText = () => document.getElementById(dialog.getAttribute("aria-describedby") ?? "")?.textContent;
+  expect(dialog.hasAttribute("aria-describedby")).toBe(false);
+  expect(dialog.textContent).not.toContain("Название и идея станут основой первой сборки");
+  expect(dialog.querySelector("#max-project-name-hint")?.textContent).toBe("Не менее 2 символов");
+  expect(dialog.querySelector("#max-project-name")?.getAttribute("aria-describedby")).toBe("max-project-name-hint");
+  expect(dialog.querySelector("#max-project-idea")?.getAttribute("placeholder")).toBe("Например, получать баллы, выбирать награды и оформлять заказ к выдаче");
+  expect(dialog.querySelector("#max-project-idea")?.getAttribute("aria-describedby")).toBe("max-project-idea-limit");
   expect(button("Далее")?.disabled).toBe(true);
   await change("#max-project-name", "Кофе рядом");
   await change("#max-project-idea", "мало");
@@ -256,9 +264,11 @@ it("validates name and idea, retains answers through Back, and creates only afte
   await change("#max-project-idea", "Получать баллы и выбирать награды");
   await click("Далее");
   expect(document.activeElement?.textContent).toBe("Для кого приложение?");
+  expect(describedText()).toBe("Можно оставить эти поля пустыми и уточнить их позже.");
   await change("#max-audience", "Гости кофейни");
   await change("#max-action", "Выбрать награду");
   await click("Назад");
+  expect(dialog.hasAttribute("aria-describedby")).toBe(false);
   expect(document.querySelector<HTMLInputElement>("#max-project-name")?.value).toBe("Кофе рядом");
   await click("Далее");
   expect(document.querySelector<HTMLInputElement>("#max-audience")?.value).toBe("Гости кофейни");
@@ -270,6 +280,7 @@ it("validates name and idea, retains answers through Back, and creates only afte
   await change("#max-brand", "молочный");
   await click("Далее");
   expect(document.activeElement?.textContent).toBe("Проверьте описание");
+  expect(describedText()).toBe("После подтверждения создадим проект и откроем редактор для первой сборки.");
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Выбрать награду");
   expect(mocks.create).not.toHaveBeenCalled();
   await click("Создать проект");
