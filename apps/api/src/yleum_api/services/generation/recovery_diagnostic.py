@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 from sqlalchemy import select, text
@@ -243,6 +243,7 @@ def _timeout_scope(run: GenerationRun) -> dict[str, str]:
 
 async def arm_diagnostic_response_timeout(
     session: AsyncSession, *, run_id: UUID, project_id: UUID, user_id: UUID,
+    release_cell: bool = False,
 ) -> None:
     """Arm a read timeout on the first confirmed response of one admitted QA run."""
     run = await _unused_diagnostic_run(
@@ -252,7 +253,8 @@ async def arm_diagnostic_response_timeout(
         raise ValueError("response timeout requires an internal QA account")
     issued = int(datetime.now(UTC).timestamp())
     token = _signed(
-        {**_timeout_scope(run), "iat": issued, "exp": issued + _TIMEOUT_LIFETIME},
+        {**_timeout_scope(run), "release_cell": release_cell,
+         "iat": issued, "exp": issued + _TIMEOUT_LIFETIME},
         _secret(None), _TIMEOUT_DOMAIN,
     )
     run.agent_state = {**run.agent_state, TIMEOUT_KEY: {"token": token}}
@@ -261,7 +263,7 @@ async def arm_diagnostic_response_timeout(
 
 async def consume_diagnostic_response_timeout(
     factory: async_sessionmaker[AsyncSession], state: RecoveryStateV3,
-) -> bool:
+) -> Literal["replay", "release"] | None:
     """Take a one-shot test intent only after the original response is retained."""
     from yleum_api.services.generation.recovery_execution import (
         _require_session_owner,
@@ -278,38 +280,42 @@ async def consume_diagnostic_response_timeout(
             hint = await session.get(GenerationRun, owner.run_id)
             pending = hint.agent_state.get(TIMEOUT_KEY) if hint is not None else None
             if type(pending) is not dict or set(pending) != {"token"}:
-                return False
+                return None
             await require_generation_admission(session)
             run, _ = await _locked_owner(
                 session, run_id=owner.run_id, project_id=owner.project_id, user_id=owner.user_id,
             )
             raw = run.agent_state.get(TIMEOUT_KEY)
             if type(raw) is not dict or set(raw) != {"token"} or recovery_state(run) != state:
-                return False
+                return None
             claims = _verified(
                 raw["token"], secret=_secret(None), domain=_TIMEOUT_DOMAIN, now=datetime.now(UTC),
                 max_lifetime_seconds=_TIMEOUT_LIFETIME,
             )
             scope = _timeout_scope(run)
+            release_cell = claims.get("release_cell", False)
             if (
-                set(claims) != {*scope, "iat", "exp"}
+                set(claims) - {"release_cell"} != {*scope, "iat", "exp"}
                 or any(claims[key] != value for key, value in scope.items())
+                or type(release_cell) is not bool
                 or run.prompt_hash != owner.prompt_hash
                 or not await _diagnostic_qa_owner(session, owner.user_id)
             ):
-                return False
+                return None
             attempt = await _retained_completion_attempt(session, state)
             if attempt is None:
-                return False
+                return None
             await _require_session_owner(run.id)
             run.agent_state = {
-                **run.agent_state, TIMEOUT_KEY: {**raw, "attempt_id": str(attempt.attempt_id)},
+                **run.agent_state, TIMEOUT_KEY: {
+                    **raw, "attempt_id": str(attempt.attempt_id), "release_cell": release_cell,
+                },
             }
             await session.commit()
-            return True
+            return "release" if release_cell else "replay"
     except (ApiError, ValueError, SQLAlchemyError):
         # The test hook cannot replace a real reply on unknown authorization or commit.
-        return False
+        return None
 
 
 def _saved_intent(

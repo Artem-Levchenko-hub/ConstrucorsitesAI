@@ -683,6 +683,110 @@ async def test_cold_recovery_requires_owned_release_and_source_before_preparing(
         driver.save.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    "case", ["owned", "missing", "foreign", "fence", "changed_source", "transient", "unavailable",
+             "snapshot_transient", "snapshot_unavailable", "prepare_then_transient"],
+)
+async def test_cold_rebind_accepts_only_the_exact_controller_environment_transition(
+    case, monkeypatch,
+):
+    from yleum_api.services.generation import recovery_pipeline
+    from yleum_api.services.generation.recovery_contract import (
+        CheckpointRef,
+        ExecutionCursor,
+        RecoveryBinding,
+        RecoveryStateV3,
+    )
+    from yleum_api.services.orchestrator_client import (
+        OrchestratorMachineInventoryUnavailable,
+        OrchestratorUnavailable,
+    )
+
+    workspace, run_id, project, owner, release_id = (uuid4() for _ in range(5))
+    old = RecoveryBinding(
+        workspace_id=str(workspace), fencing_epoch=3,
+        source_sha256="a" * 64, schema_sha256="b" * 64, environment_sha256="c" * 64,
+    )
+    current = old.model_copy(update={
+        "fencing_epoch": 5, "environment_sha256": "d" * 64,
+        "source_sha256": "e" * 64 if case == "changed_source" else old.source_sha256,
+    })
+    root = uuid4()
+    execution = ExecutionCursor(
+        stage="agent", substep="response_wait", physical_state="released",
+        logical_step_seq=7, provider_effect_id=root, pending_effect_id=root,
+        release_operation_id=release_id, lease_cycle_seq=1,
+        control_workspace_id=workspace, control_fencing_epoch=4,
+        execution_context_ref=CheckpointRef(object_key="qa-retained", sha256="a" * 64),
+    )
+    state = RecoveryStateV3.model_construct(
+        identity=SimpleNamespace(run_id=run_id, project_id=project, user_id=owner),
+        execution=execution, binding=old,
+    )
+    witness = SimpleNamespace(
+        workspace_id=workspace, generation_run_id=run_id, project_id=project,
+        owner_id=uuid4() if case == "foreign" else owner, release_operation_id=release_id,
+        previous_fencing_epoch=3, release_fencing_epoch=4, fencing_epoch=5,
+        source_sha256=old.source_sha256, previous_environment_sha256=old.environment_sha256,
+        environment_sha256=current.environment_sha256,
+    ) if case != "missing" else None
+
+    class Deferred(Exception):
+        pass
+
+    require_release = AsyncMock(return_value=4 if case != "fence" else 3)
+    monkeypatch.setattr(recovery_pipeline, "_require_reacquired_lease", require_release)
+    sleep = AsyncMock()
+    monkeypatch.setattr(recovery_pipeline.asyncio, "sleep", sleep)
+    proof_lookup = AsyncMock(return_value=witness)
+    if case == "transient":
+        proof_lookup.side_effect = [OrchestratorUnavailable("synthetic unavailable"), witness]
+    elif case == "unavailable":
+        proof_lookup.side_effect = OrchestratorUnavailable("synthetic unavailable")
+    snapshot = AsyncMock(return_value=(current, {}))
+    prepare = AsyncMock()
+    if case == "snapshot_transient":
+        snapshot.side_effect = [OrchestratorUnavailable("synthetic unavailable"), (current, {})]
+    elif case == "snapshot_unavailable":
+        snapshot.side_effect = OrchestratorUnavailable("synthetic unavailable")
+    elif case == "prepare_then_transient":
+        snapshot.side_effect = [
+            OrchestratorMachineInventoryUnavailable("stopped", old.source_sha256, "a" * 64),
+            OrchestratorUnavailable("synthetic unavailable"),
+            (current, {}),
+        ]
+        prepare.side_effect = OrchestratorUnavailable("lost synthetic prepare response")
+        monkeypatch.setattr(recovery_execution, "_require_session_owner", AsyncMock())
+    driver = SimpleNamespace(
+        state=state, runtime_control=(workspace, 5), context={"completed": {}},
+        snapshot=snapshot, save=AsyncMock(),
+        prove_environment_recovery=proof_lookup, prepare_environment=prepare,
+        wait=AsyncMock(side_effect=Deferred),
+    )
+    if case in {"owned", "transient", "snapshot_transient", "prepare_then_transient"}:
+        await recovery_pipeline.rebind_continuation(driver)
+        assert require_release.await_count == (2 if case == "prepare_then_transient" else 1)
+        assert all(call.args == (driver,) for call in require_release.await_args_list)
+        assert prepare.await_count == int(case == "prepare_then_transient")
+        assert proof_lookup.await_count == (2 if case == "transient" else 1)
+        assert all(call.args == (release_id,) for call in proof_lookup.await_args_list)
+        driver.save.assert_awaited_once_with(
+            execution, context=driver.context, expected_binding=current,
+        )
+        driver.wait.assert_not_awaited()
+    else:
+        with pytest.raises(Deferred):
+            await recovery_pipeline.rebind_continuation(driver)
+        driver.save.assert_not_awaited()
+        driver.wait.assert_awaited_once_with(needs_input=True)
+        if case in {"changed_source", "snapshot_unavailable"}:
+            driver.prove_environment_recovery.assert_not_awaited()
+        if case == "unavailable":
+            assert proof_lookup.await_count == 3 and sleep.await_count == 2
+        elif case == "snapshot_unavailable":
+            assert snapshot.await_count == 3 and sleep.await_count == 2
+
+
 @pytest.mark.parametrize("saved", [False, True])
 async def test_read_only_provider_cursor_never_creates_an_intent(
     db_session,

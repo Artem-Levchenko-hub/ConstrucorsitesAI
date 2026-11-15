@@ -81,6 +81,7 @@ async def check_backend_and_normalize_css(
     runtime: GenerationRuntime,
     plan: AgentPromptPlan,
     operations: AgentOperations,
+    verification_only: bool = False,
 ) -> None:
     try:
         from yleum_api.services import agent_gate_feedback as _agf
@@ -140,6 +141,7 @@ async def check_backend_and_normalize_css(
             and not get_settings().use_native_agent
             and not _is_edit
             and not uses_single_max_source_repair(runtime)
+            and not verification_only
         ):
             _gv = _backend_verdict()
             _outcomes = [
@@ -205,7 +207,9 @@ async def check_backend_and_normalize_css(
             _migration_candidate,
             preserve_current_database=await _preserves_adaptation_database(runtime, ids),
         )
-        if _migration_errors:
+        # The full coordinator checks the exact source for a verification-only
+        # handoff. The legacy rollback writes are outside the durable journal.
+        if _migration_errors and not verification_only:
             await _abort_unsafe_max_backend(
                 project_id=ids.project_id,
                 project_slug=project_info.slug,
@@ -223,6 +227,16 @@ async def check_backend_and_normalize_css(
                 f"[PP] backend_guardrail VIOLATIONS: {_final_guard.summary}",
                 flush=True,
             )
+            if verification_only:
+                from yleum_api.services.generation.source_checkpoint import (
+                    checkpoint_before_rollback,
+                )
+
+                await checkpoint_before_rollback(operations)
+                raise ApiError(
+                    "unsafe_generated_backend", "MAX managed data isolation verification failed",
+                    422,
+                )
             await _abort_unsafe_max_backend(
                 project_id=ids.project_id,
                 project_slug=project_info.slug,
@@ -246,7 +260,10 @@ async def check_backend_and_normalize_css(
                     f"[PP] sast_gate FINDINGS: {_final_sast.summary}",
                     flush=True,
                 )
-                if uses_single_max_source_repair(runtime) and get_settings().sast_gate_blocking:
+                if (
+                    not verification_only and uses_single_max_source_repair(runtime)
+                    and get_settings().sast_gate_blocking
+                ):
                     await _abort_unsafe_max_backend(
                         project_id=ids.project_id,
                         project_slug=project_info.slug,
@@ -267,7 +284,7 @@ async def check_backend_and_normalize_css(
     # in Turbopack with "@import rules must precede all rules". Repair
     # only import placement before the independent runtime gate; product
     # styles remain entirely model-owned and no extra model call is used.
-    if "src/app/globals.css" in files:
+    if not verification_only and "src/app/globals.css" in files:
         try:
             from yleum_api.services.max_generation_contract import normalize_max_globals_css
 
@@ -582,6 +599,7 @@ async def check_runtime_security_gates(
     project_info: ProjectGenerationFacts,
     plan: AgentPromptPlan,
     operations: AgentOperations,
+    verification_only: bool = False,
 ) -> tuple[list[tuple[str, Any]] | None, str, str]:
     _gate_kind = (
         "functional"
@@ -626,7 +644,9 @@ async def check_runtime_security_gates(
             from yleum_api.services import agent_gate_feedback as _agf2
 
             _rg_attempt = 0
-            _rg_max = max(0, int(get_settings().agent_gate_max_attempts))
+            _rg_max = (
+                0 if verification_only else max(0, int(get_settings().agent_gate_max_attempts))
+            )
             while True:
                 _base = await operations.preview_url()
                 if not _base:
@@ -772,6 +792,7 @@ async def check_coverage_gate(
     runtime: GenerationRuntime,
     plan: AgentPromptPlan,
     operations: AgentOperations,
+    verification_only: bool = False,
 ) -> tuple[list[tuple[str, Any]] | None, str]:
     _coverage_verdict = None
     try:
@@ -799,7 +820,7 @@ async def check_coverage_gate(
             # Managed MAX has its own source and behavior proof. Keep this
             # advisory check without reopening the agent or publishing a
             # partial result ahead of the final verdict.
-            managed_repair = uses_single_max_source_repair(runtime)
+            managed_repair = verification_only or uses_single_max_source_repair(runtime)
             _cov_max = 0 if managed_repair else max(0, int(get_settings().coverage_max_attempts))
             while True:
                 _known = _covg.api_routes_from_files(files)

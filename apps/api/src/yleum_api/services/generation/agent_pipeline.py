@@ -839,6 +839,7 @@ async def run_agent_generation(
             runtime=runtime,
             plan=_prompt_plan,
             operations=_operations,
+            verification_only=_agent_res.requires_verification_only,
         ))
 
         # Honest chat: never surface the raw internal summary on a non-done exit
@@ -973,6 +974,7 @@ async def run_agent_generation(
         project_info=project_info,
         plan=_prompt_plan,
         operations=_operations,
+        verification_only=_agent_res.requires_verification_only,
     ))
 
     # Coverage gate (тезис 2 — «не на зелёном минимуме»). STACK-AGNOSTIC:
@@ -1000,6 +1002,7 @@ async def run_agent_generation(
         runtime=runtime,
         plan=_prompt_plan,
         operations=_operations,
+        verification_only=_agent_res.requires_verification_only,
     ))
 
     _catalog_runtime = _stack.orchestrator_template == "max-miniapp-nextjs"
@@ -1024,6 +1027,7 @@ async def run_agent_generation(
         operations=_operations,
         catalog_runtime=_catalog_runtime,
         source_handoff=_source_handoff,
+        verification_only=_agent_res.requires_verification_only,
         interrupted_source_reason=(
             _agent_res.continuation_reason
             if _agent_res.stop_reason == agent_builder.SOURCE_REPAIR_HANDOFF else None

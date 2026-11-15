@@ -1034,6 +1034,35 @@ class ProjectCellWorkspaceIdentity:
             ) from exc
 
 
+class ProjectCellEnvironmentRecoveryProof(BaseModel):
+    """An owned release artifact linked to its next running incarnation."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    version: Literal[1]
+    workspace_id: UUID
+    project_id: UUID
+    owner_id: UUID
+    generation_run_id: UUID
+    release_operation_id: UUID
+    previous_fencing_epoch: int = Field(gt=0)
+    release_fencing_epoch: int = Field(gt=0)
+    fencing_epoch: int = Field(gt=0)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    previous_environment_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    environment_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def validate_release_fences(self) -> ProjectCellEnvironmentRecoveryProof:
+        if (
+            self.release_fencing_epoch != self.previous_fencing_epoch + 1
+            or self.fencing_epoch != self.release_fencing_epoch + 1
+        ):
+            raise ValueError("invalid generation environment release fences")
+        return self
+
+
 def command_wire_digest(value: object) -> str:
     """The controller's versioned ASCII-escaped canonical command envelope."""
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
@@ -2566,6 +2595,35 @@ async def project_cell_agent_identity(
             ) from error
         raise
     return ProjectCellWorkspaceIdentity.from_json(payload)
+
+
+async def project_cell_environment_recovery_proof(
+    workspace_id: UUID, *, generation_run_id: UUID, fencing_epoch: int,
+    release_operation_id: UUID,
+) -> ProjectCellEnvironmentRecoveryProof | None:
+    """Read the evidence for this release and current lease from the owning controller."""
+    _validate_fencing_epoch(fencing_epoch)
+    try:
+        payload = await _request(
+            "GET", f"/internal/workspaces/{workspace_id}/agent/environment/recovery-proof",
+            params={"generation_run_id": str(generation_run_id), "fencing_epoch": fencing_epoch,
+                    "release_operation_id": str(release_operation_id)},
+        )
+    except OrchestratorBadRequest as error:
+        if (error.status_code == 409 and error.upstream_code == "conflict"
+                and error.details == {"reason": "recovery_environment_unproved"}):
+            return None
+        raise
+    try:
+        if type(payload.get("version")) is not int:
+            raise ValueError("invalid generation environment proof version")
+        return ProjectCellEnvironmentRecoveryProof.model_validate_json(
+            json.dumps(payload, allow_nan=False),
+        )
+    except (TypeError, ValueError) as error:
+        raise OrchestratorUnavailable(
+            "Orchestrator returned an invalid generation proof"
+        ) from error
 
 
 async def project_cell_prepare_environment(

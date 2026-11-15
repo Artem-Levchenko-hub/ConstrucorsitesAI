@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, replace
@@ -11,6 +12,7 @@ from uuid import UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog import get_logger
 
 from yleum_api.services.agent_builder import AgentResult
 from yleum_api.services.design_plugin import DesignContract
@@ -21,11 +23,18 @@ from yleum_api.services.generation.recovery_contract import (
     RecoveryBinding,
     RecoveryContractError,
     RecoveryStateV2,
+    RecoveryStateV3,
 )
 from yleum_api.services.generation.recovery_execution import ExecutionDriver
-from yleum_api.services.orchestrator_client import OrchestratorMachineInventoryUnavailable
+from yleum_api.services.orchestrator_client import (
+    OrchestratorBadRequest,
+    OrchestratorMachineInventoryUnavailable,
+    OrchestratorUnavailable,
+)
 from yleum_api.services.project_cell_executor import ProjectCellExecutorHandle
 from yleum_api.services.promotion_permit import workspace_revision_digest
+
+log = get_logger(__name__)
 
 
 def _record(cls: Any, raw: Any) -> Any:
@@ -789,10 +798,11 @@ def attach_driver(
         snapshot,
         runtime_control=(handle.control_workspace_id, handle.control_fencing_epoch),
         prepare_environment=getattr(handle, "prepare_environment", None),
+        prove_environment_recovery=getattr(handle, "prove_environment_recovery", None),
     )
 
 
-async def _require_reacquired_lease(driver: ExecutionDriver) -> None:
+async def _require_reacquired_lease(driver: ExecutionDriver) -> int:
     from yleum_api.models.project_cell import ProjectCellOperation
     from yleum_api.services.generation.recovery_execution import _owned_release_receipt
 
@@ -821,6 +831,7 @@ async def _require_reacquired_lease(driver: ExecutionDriver) -> None:
             )
         ):
             raise RecoveryContractError("candidate has no owned release receipt")
+    return release_fence
 
 
 async def _prepare_owned_environment(
@@ -864,6 +875,98 @@ async def _bind_initial_candidate(driver: ExecutionDriver) -> None:
         await driver.save(execution, context=driver.context)
 
 
+class _UnprovedReleaseEnvironment(RecoveryContractError):
+    pass
+
+
+_ENVIRONMENT_NEEDS_PREPARE = frozenset({"stopped", "missing", "prepare_pending"})
+
+
+def _can_rebind_release_environment(driver: ExecutionDriver) -> bool:
+    execution = driver.state.execution
+    return (
+        isinstance(driver.state, RecoveryStateV3)
+        and callable(getattr(driver, "prove_environment_recovery", None))
+        and (
+            execution.substep == "response_wait"
+            or (execution.substep in {"checkpoint_ready", "request_ready", "agent_entry"}
+                and execution.pending_effect_id is None)
+        )
+    )
+
+
+def _transient_environment_reader(error: Exception) -> bool:
+    if isinstance(error, OrchestratorMachineInventoryUnavailable):
+        return error.reason in _ENVIRONMENT_NEEDS_PREPARE or error.reason == "unavailable"
+    return isinstance(error, OrchestratorUnavailable) or (
+        isinstance(error, OrchestratorBadRequest)
+        and error.status_code == 409 and error.upstream_code == "container_not_running"
+    )
+
+
+async def _read_released_environment[ReadResult](
+    read: Callable[[], Awaitable[ReadResult]], *, hold_lease: bool, allow_prepare: bool = False,
+) -> ReadResult:
+    if not hold_lease:
+        return await read()
+    for read_attempt in range(3):
+        try:
+            return await read()
+        except (OrchestratorUnavailable, OrchestratorBadRequest) as error:
+            if (allow_prepare and isinstance(error, OrchestratorMachineInventoryUnavailable)
+                    and error.reason in _ENVIRONMENT_NEEDS_PREPARE):
+                raise
+            # A new lease would replace the release that attests the original checkpoint.
+            if read_attempt == 2 or not _transient_environment_reader(error):
+                raise _UnprovedReleaseEnvironment(
+                    "generation environment reader unavailable"
+                ) from error
+            await asyncio.sleep(read_attempt + 1)
+    raise AssertionError("the last environment read must return or raise")
+
+
+async def _rebind_release_environment(
+    driver: ExecutionDriver, old: RecoveryBinding, current: RecoveryBinding,
+) -> bool:
+    """Accept a new full environment identity only from the owning release and startup."""
+    state = driver.state
+    execution = state.execution
+    if (
+        not _can_rebind_release_environment(driver)
+        or old.source_sha256 != current.source_sha256
+        or old.schema_sha256 != current.schema_sha256
+    ):
+        return False
+    release_fence = await _require_reacquired_lease(driver)
+    release_id, prove = execution.release_operation_id, driver.prove_environment_recovery
+    assert release_id is not None and prove is not None
+    proof = await _read_released_environment(lambda: prove(release_id), hold_lease=True)
+    if (
+        proof is None or str(proof.workspace_id) != old.workspace_id
+        or proof.project_id != state.identity.project_id or proof.owner_id != state.identity.user_id
+        or proof.generation_run_id != state.identity.run_id
+        or proof.release_operation_id != release_id
+        or proof.previous_fencing_epoch != old.fencing_epoch
+        or proof.release_fencing_epoch != release_fence
+        or proof.release_fencing_epoch != old.fencing_epoch + 1
+        or proof.fencing_epoch != current.fencing_epoch
+        or driver.runtime_control != (proof.workspace_id, proof.fencing_epoch)
+        or proof.fencing_epoch != proof.release_fencing_epoch + 1
+        or proof.source_sha256 != current.source_sha256
+        or proof.previous_environment_sha256 != old.environment_sha256
+        or proof.environment_sha256 != current.environment_sha256
+    ):
+        raise _UnprovedReleaseEnvironment("generation release environment cannot be verified")
+    # The orchestrator reads inside save recheck the current source and binding.
+    await _read_released_environment(
+        lambda: driver.save(execution, context=driver.context, expected_binding=current),
+        hold_lease=True,
+    )
+    log.info("generation.release_environment_rebound", run_id=str(state.identity.run_id),
+             previous_fence=old.fencing_epoch, fencing_epoch=current.fencing_epoch)
+    return True
+
+
 async def rebind_continuation(driver: ExecutionDriver) -> None:
     """Reprove the retained tree under the new lease before any new logical effect.
 
@@ -889,9 +992,12 @@ async def rebind_continuation(driver: ExecutionDriver) -> None:
     if state.execution.physical_state != "released":
         return
     old = state.binding
+    hold_lease = _can_rebind_release_environment(driver)
     try:
         try:
-            current, _ = await driver.snapshot()
+            current, _ = await _read_released_environment(
+                driver.snapshot, hold_lease=hold_lease, allow_prepare=True,
+            )
         except OrchestratorMachineInventoryUnavailable as error:
             if (
                 driver.prepare_environment is None
@@ -900,8 +1006,13 @@ async def rebind_continuation(driver: ExecutionDriver) -> None:
             ):
                 raise
             await _require_reacquired_lease(driver)
-            await _prepare_owned_environment(driver, error)
-            current, _ = await driver.snapshot()
+            try:
+                await _prepare_owned_environment(driver, error)
+            except OrchestratorUnavailable:
+                if not hold_lease:
+                    raise
+                # Observe the same lease after a lost prepare response.
+            current, _ = await _read_released_environment(driver.snapshot, hold_lease=hold_lease)
         if (
             current.workspace_id != old.workspace_id
             or current.fencing_epoch <= old.fencing_epoch
@@ -915,6 +1026,12 @@ async def rebind_continuation(driver: ExecutionDriver) -> None:
         )
         if current.source_sha256 == old.source_sha256 and same_environment:
             await driver.save(state.execution, context=driver.context)
+            return
+        if hold_lease and (
+            current.source_sha256 != old.source_sha256 or current.schema_sha256 != old.schema_sha256
+        ):
+            raise _UnprovedReleaseEnvironment("released candidate source or schema changed")
+        if await _rebind_release_environment(driver, old, current):
             return
         # No source mutation is licensed by a pending row. This only allows the
         # owning read-only receipt path to establish the full post-state later.
@@ -973,5 +1090,9 @@ async def rebind_continuation(driver: ExecutionDriver) -> None:
             if bound.context_binding != old or str(bound.workspace_id) != old.workspace_id:
                 raise RecoveryContractError("resumed source intent conflicts with retained tree")
             await session.commit()
+    except _UnprovedReleaseEnvironment as error:
+        log.warning("generation.release_environment_unproved", run_id=str(state.identity.run_id),
+                    reason=str(error))
+        await driver.wait(needs_input=True)
     except Exception:
         await driver.wait()

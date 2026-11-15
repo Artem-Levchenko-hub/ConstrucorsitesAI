@@ -44,6 +44,7 @@ from yleum_api.services.generation_deployment_drain import require_generation_ad
 
 if TYPE_CHECKING:
     from yleum_api.services.generation.recovery_reconciliation import ProviderEffectCursor
+    from yleum_api.services.orchestrator_client import ProjectCellEnvironmentRecoveryProof
 
 # Keep the original container key so old strict readers see an unsupported
 # version, rather than ignoring a new sibling namespace and replaying dispatch.
@@ -236,6 +237,27 @@ async def _has_retained_completion(
 ) -> bool:
     async with factory() as session:
         return await _retained_completion_attempt(session, state) is not None
+
+
+async def _is_retained_content_filter(
+    factory: async_sessionmaker[AsyncSession], state: RecoveryStateV3,
+) -> bool:
+    from yleum_api.services.generation.provider_identity import GenerationProviderIdentity
+    from yleum_api.services.llm_client import require_recovered_response
+
+    async with factory() as session:
+        attempt = await _retained_completion_attempt(session, state)
+        if attempt is None:
+            return False
+        identity = GenerationProviderIdentity(
+            attempt.run_id, attempt.project_id, attempt.user_id, attempt.attempt_id,
+            attempt.prompt_hash, attempt.request_sha256,
+        )
+    choices = (await require_recovered_response(identity)).get("choices")
+    return (
+        isinstance(choices, list) and bool(choices) and isinstance(choices[0], dict)
+        and choices[0].get("finish_reason") == "content_filter"
+    )
 
 
 async def _defer_open_response(
@@ -658,6 +680,7 @@ async def commit_execution_cursor(
 async def commit_current_wait(
     factory: async_sessionmaker[AsyncSession], previous: RecoveryStateV2,
     *, runtime_control: tuple[UUID | None, int | None] | None = None,
+    phase: Literal["waiting_dependency", "needs_input"] = "waiting_dependency",
 ) -> RecoveryStateV2:
     """Retain the current committed cursor after an uncertain local write.
 
@@ -728,11 +751,11 @@ async def commit_current_wait(
         if current.phase not in {"working", "repairing", "verifying", "waiting_dependency"}:
             raise RecoveryContractError("wait execution phase changed")
         await _require_session_owner(run.id, compatibility=False)
-        if current.phase == "waiting_dependency" and execution == current.execution:
+        if current.phase == phase and execution == current.execution:
             return current  # Confirmed SQL read, not an inferred commit acknowledgement.
-        wait_at = datetime.now(UTC)
+        wait_at = datetime.now(UTC) if phase == "waiting_dependency" else None
         clock_fields = {}
-        if isinstance(current, RecoveryStateV3):
+        if isinstance(current, RecoveryStateV3) and wait_at is not None:
             from yleum_api.services.generation.recovery_clock import next_dependency_check
             failures = current.clock.dependency_failures + 1
             wait_at = next_dependency_check(run.id, failures=failures, now=wait_at)
@@ -740,7 +763,7 @@ async def commit_current_wait(
                 update={"dependency_failures": failures},
             )
         updated = current.model_copy(update={
-            "phase": "waiting_dependency", "next_check_at": wait_at,
+            "phase": phase, "next_check_at": wait_at,
             "state_revision": current.state_revision + 1, "execution": execution,
             **clock_fields,
         })
@@ -795,6 +818,9 @@ class ExecutionDriver:
     runtime_control: tuple[UUID | None, int | None] | None = None
     before_fresh_provider: Callable[[], Awaitable[None]] | None = None
     prepare_environment: Callable[[str, str], Awaitable[None]] | None = None
+    prove_environment_recovery: (
+        Callable[[UUID], Awaitable[ProjectCellEnvironmentRecoveryProof | None]] | None
+    ) = None
     _reconcile_response: bool = field(init=False)
     _tool_position: int = field(default=0, init=False)
 
@@ -888,10 +914,13 @@ class ExecutionDriver:
         *,
         context: dict[str, Any],
         phase: Literal["working", "waiting_dependency", "reconciling", "needs_input"] = "working",
+        expected_binding: RecoveryBinding | None = None,
     ) -> None:
         from yleum_api.services.generation.recovery_store import save_recovery_checkpoint
 
         binding, files = await self.snapshot()
+        if expected_binding is not None and binding != expected_binding:
+            raise RecoveryContractError("candidate changed after its release environment proof")
         if self.runtime_control is not None:
             workspace_id, fence = self.runtime_control
             if workspace_id is None or fence is None:
@@ -944,12 +973,13 @@ class ExecutionDriver:
         )
         self.context = context
 
-    async def wait(self) -> None:
+    async def wait(self, *, needs_input: bool = False) -> None:
         # The dependency itself may be unavailable. Retain the last confirmed
         # source/context and active/unknown physical status; no stopped inference.
         await self.account_work()
         self.state = await commit_current_wait(
             self.factory, self.state, runtime_control=self.runtime_control,
+            phase="needs_input" if needs_input else "waiting_dependency",
         )
         raise GenerationYielded(
             run_id=self.state.identity.run_id,
@@ -1080,6 +1110,20 @@ class ExecutionDriver:
         self._tool_position += 1
         return observation
 
+    async def _confirm_content_filter(self, error: Exception) -> None:
+        from yleum_api.services.llm_client import LLMError
+
+        if (
+            isinstance(self.state, RecoveryStateV3)
+            and isinstance(error, LLMError) and error.code == "provider_output_filtered"
+            and error.retry_safe is False
+            and await _is_retained_content_filter(self.factory, self.state)
+        ):
+            # A paid, authenticated refusal can hand off the existing draft
+            # for checks. Its body is never used as source.
+            error.provider_charge_ambiguous = False
+            error.finish_reason = "content_filter"
+
     async def _invoke_provider(
         self, cursor: ProviderEffectCursor, invoke: Callable[[], Awaitable[Any]],
     ) -> Any:
@@ -1095,13 +1139,18 @@ class ExecutionDriver:
         try:
             with provider_effect_scope(cursor):
                 response = await invoke()
-            if (
-                not cursor.reconcile_only and isinstance(self.state, RecoveryStateV3)
-                and await consume_diagnostic_response_timeout(self.factory, self.state)
-            ):
-                raise TimeoutError("QA timeout after response retention")
+            if not cursor.reconcile_only and isinstance(self.state, RecoveryStateV3):
+                diagnostic = await consume_diagnostic_response_timeout(self.factory, self.state)
+                if diagnostic == "release":
+                    await self.wait()
+                if diagnostic == "replay":
+                    raise TimeoutError("QA timeout after response retention")
+            elif cursor.reconcile_only and not cursor.dispatch.resume_authorized:
+                log.info("generation.provider_response_reconciled",
+                         run_id=str(cursor.claim.run_id), logical_step_seq=cursor.logical_step_seq)
             return response
         except Exception as error:
+            await self._confirm_content_filter(error)
             timeout_types = (TimeoutError, httpx.ReadTimeout)
             interrupted = (
                 isinstance(error, timeout_types)
@@ -1124,8 +1173,12 @@ class ExecutionDriver:
             reconcile_only=True, retained_only=True, outer_attempt=cursor.outer_attempt,
             outer_allowance=cursor.outer_allowance, call_deadline=cursor.call_deadline,
         )
-        with provider_effect_scope(replay):
-            response = await invoke()
+        try:
+            with provider_effect_scope(replay):
+                response = await invoke()
+        except LLMError as error:
+            await self._confirm_content_filter(error)
+            raise
         log.info(
             "generation.retained_provider_response_reused",
             run_id=str(replay.claim.run_id), logical_step_seq=replay.logical_step_seq,

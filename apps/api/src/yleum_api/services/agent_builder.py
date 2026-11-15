@@ -81,6 +81,7 @@ from yleum_api.services.generation.recovery_clock import contract_deadline
 from yleum_api.services.generation.recovery_contract import (
     IncompleteResponseBudget,
     RecoveryContractError,
+    RecoveryStateV3,
 )
 from yleum_api.services.generation.recovery_trace import provider_error_context
 from yleum_api.services.generation.source_repair_context import MAX_REPAIR_CONTEXT_BYTES
@@ -206,6 +207,7 @@ _SOURCE_HANDOFF_SNAPSHOT_SECONDS = 5.0
 _DURABLE_DEADLINE_CHECK_SECONDS = 60.0
 SOURCE_FINALIZATION_HANDOFF = "source_finalization_handoff"
 SOURCE_REPAIR_HANDOFF = "source_repair_handoff"
+FILTERED_PROVIDER_OUTPUT = "provider_output_filtered"
 SOURCE_HANDOFF_REASONS = frozenset({SOURCE_FINALIZATION_HANDOFF, SOURCE_REPAIR_HANDOFF})
 
 
@@ -237,6 +239,15 @@ class AgentResult:
     proof_checkpoint: object | None = None
     # Preserve the cause when finite legacy loops promote a green abort to done.
     continuation_reason: str = ""
+
+    @property
+    def requires_verification_only(self) -> bool:
+        return (
+            self.stop_reason == SOURCE_FINALIZATION_HANDOFF
+            and not self.done
+            and self.needs_finalization
+            and self.continuation_reason == FILTERED_PROVIDER_OUTPUT
+        )
 
 
 def parse_action(reply: str) -> Action | None:
@@ -511,6 +522,7 @@ async def run_agent_build(
     continuation: ExecutionDriver | None = None,
     report_managed_build_gap: bool = False,
     bounded_repair: bool = False,
+    allow_filtered_source_handoff: bool = False,
 ) -> AgentResult:
     """Continue a progressing candidate without a new run, cell or blind replay.
 
@@ -645,6 +657,7 @@ async def run_agent_build(
             report_managed_build_gap=report_managed_build_gap,
             reserve_full_provider_window=reserve_full_provider_window,
             bounded_repair=bounded_repair,
+            allow_filtered_source_handoff=allow_filtered_source_handoff,
         )
         restored = None
         cumulative_files.update(result.files)
@@ -740,6 +753,7 @@ async def _run_agent_segment(
     report_managed_build_gap: bool = False,
     reserve_full_provider_window: bool = False,
     bounded_repair: bool = False,
+    allow_filtered_source_handoff: bool = False,
 ) -> AgentResult:
     """Drive the plan→act→observe loop until the model says done or budget hits.
 
@@ -1404,6 +1418,17 @@ async def _run_agent_segment(
                     diagnostic["error_origin"] = "gateway"
                 if emit:
                     await emit("agent.provider_error", diagnostic)
+                if (
+                    allow_filtered_source_handoff and coordinator_handoff and uses_gateway
+                    and isinstance(getattr(continuation, "state", None), RecoveryStateV3)
+                    and failure is not None and failure.code == FILTERED_PROVIDER_OUTPUT
+                    and failure.finish_reason == "content_filter"
+                    and failure.provider_charge_ambiguous is False and failure.retry_safe is False
+                ):
+                    return _handoff_source(AgentResult(
+                        done=False, summary="", files=written, steps=step,
+                        transcript=convo, stop_reason=FILTERED_PROVIDER_OUTPUT,
+                    ))
                 if not will_retry:
                     cause = str(failure) if failure is not None else (
                         "Не получен подтверждённый результат LLM-запроса."

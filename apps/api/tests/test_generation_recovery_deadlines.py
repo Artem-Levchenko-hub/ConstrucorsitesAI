@@ -257,6 +257,27 @@ async def clock_owner(db_session, test_engine, monkeypatch):
     )
 
 
+async def test_unproved_recovery_parks_the_original_cursor_without_a_due_claim(clock_owner):
+    from yleum_api.services.generation import recovery_execution as execution
+
+    c = clock_owner
+    old = c.driver.state
+    async with c.owned():
+        parked = await execution.commit_current_wait(c.factory, old, phase="needs_input")
+        async with c.factory() as session:
+            claim = await execution.claim_continuation(
+                session, run_id=c.run.id, expected_attempt=old.attempt_seq,
+                worker_id="cold", now=datetime.now(UTC) + timedelta(hours=1),
+            )
+            assert claim is None
+            await session.commit()
+    await c.session.refresh(c.run)
+    assert execution.recovery_state(c.run) == parked
+    assert parked.phase == "needs_input" and parked.next_check_at is None
+    assert parked.execution == old.execution and parked.attempt_seq == old.attempt_seq
+    assert parked.checkpoint == old.checkpoint and parked.clock == old.clock
+
+
 @pytest.mark.parametrize("provider_phase", ["dispatching", "indeterminate", "closed"])
 async def test_response_wait_defers_open_attempt_before_claiming_a_cell(
     clock_owner, monkeypatch, provider_phase,
@@ -475,7 +496,69 @@ async def test_timeout_reads_retained_completion_under_the_same_lease(monkeypatc
     assert driver.state.execution.logical_step_seq == state.execution.logical_step_seq + 1
 
 
-async def test_operator_timeout_consumes_one_confirmed_qa_response(clock_owner, monkeypatch):
+@pytest.mark.parametrize("finish", ["content_filter", "stop", None])
+@pytest.mark.parametrize("after_timeout", [False, True])
+async def test_only_the_owned_retained_filter_hands_the_draft_to_verification(
+    monkeypatch, finish, after_timeout,
+):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from yleum_api.services import llm_client
+    from yleum_api.services.generation import recovery_execution
+    from yleum_api.services.generation.recovery_contract import ContinuationClaim
+
+    @asynccontextmanager
+    async def sessions():
+        yield object()
+
+    state = _state()
+    owner = state.identity
+    claim = ContinuationClaim(
+        run_id=owner.run_id, token=uuid4(), attempt_seq=state.attempt_seq,
+        worker_id="qa-worker", expires_at=datetime.now(UTC) + timedelta(minutes=1),
+    )
+    state = state.model_copy(update={"continuation_claim": claim})
+    driver = recovery_execution.ExecutionDriver(sessions, state, {}, AsyncMock())
+    driver.soft_boundary = AsyncMock()
+    driver.save = AsyncMock()
+    driver.wait = AsyncMock(side_effect=RuntimeError("committed wait"))
+    attempt = SimpleNamespace(
+        run_id=owner.run_id, project_id=owner.project_id, user_id=owner.user_id,
+        attempt_id=uuid4(), prompt_hash=owner.prompt_hash, request_sha256="a" * 64,
+    )
+    monkeypatch.setattr(recovery_execution, "_retained_completion_attempt", AsyncMock(
+        return_value=attempt if finish is not None else None,
+    ))
+    reader = AsyncMock(return_value={"choices": [{"finish_reason": finish}]})
+    monkeypatch.setattr(llm_client, "require_recovered_response", reader)
+    error = llm_client.LLMError("filtered", code="provider_output_filtered")
+    invoke = AsyncMock(side_effect=[TimeoutError("synthetic"), error] if after_timeout else error)
+    frame = {"version": 1, "kind": "native", "value": {}}
+    if finish == "content_filter":
+        with pytest.raises(llm_client.LLMError) as raised:
+            await driver.provider(frame, invoke)
+        assert raised.value is error and error.provider_charge_ambiguous is False
+        assert error.finish_reason == "content_filter"
+        driver.wait.assert_not_awaited()
+    else:
+        with pytest.raises(RuntimeError, match="committed wait"):
+            await driver.provider(frame, invoke)
+        driver.wait.assert_awaited_once_with()
+        assert error.provider_charge_ambiguous is None
+    assert invoke.await_count == (2 if after_timeout and finish is not None else 1)
+    if finish is not None:
+        assert reader.await_args.args[0].attempt_id == attempt.attempt_id
+        reader.assert_awaited_once()
+    else:
+        reader.assert_not_awaited()
+
+
+@pytest.mark.parametrize("release_cell", [False, True])
+async def test_operator_timeout_consumes_one_confirmed_qa_response(
+    clock_owner, monkeypatch, release_cell,
+):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
@@ -506,7 +589,7 @@ async def test_operator_timeout_consumes_one_confirmed_qa_response(clock_owner, 
     monkeypatch.setattr(
         diagnostic, "_diagnostic_qa_owner", AsyncMock(return_value=True), raising=False,
     )
-    await diagnostic.arm_diagnostic_response_timeout(c.session, **scope)
+    await diagnostic.arm_diagnostic_response_timeout(c.session, **scope, release_cell=release_cell)
     await c.session.commit()
 
     retained = AsyncMock(return_value=None)
@@ -522,10 +605,11 @@ async def test_operator_timeout_consumes_one_confirmed_qa_response(clock_owner, 
         assert not await consume(c.factory, c.driver.state)
         attempt = uuid4()
         retained.return_value = SimpleNamespace(attempt_id=attempt)
-        assert await consume(c.factory, c.driver.state)
+        assert await consume(c.factory, c.driver.state) == ("release" if release_cell else "replay")
         assert not await consume(c.factory, c.driver.state)
     await c.session.refresh(c.run)
     assert c.run.agent_state[diagnostic.TIMEOUT_KEY]["attempt_id"] == str(attempt)
+    assert c.run.agent_state[diagnostic.TIMEOUT_KEY]["release_cell"] is release_cell
     assert execution.recovery_state(c.run) == c.driver.state
 
 

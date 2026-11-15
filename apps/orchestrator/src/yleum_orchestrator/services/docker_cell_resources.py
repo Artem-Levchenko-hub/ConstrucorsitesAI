@@ -469,7 +469,9 @@ class DockerCellResourceManager:
             if self.machine_runtime is not None:
                 if state.active_generation_run_id != generation_run_id:
                     raise CellIdentityConflict("generation release identity mismatch")
-                await self.machine_runtime.halt(state, retain_trusted=True)
+                await self.machine_runtime.halt(
+                    state, retain_trusted=True, generation_release=mutation,
+                )
             await self.stateful_begin_or_replay(
                 spec,
                 mutation,

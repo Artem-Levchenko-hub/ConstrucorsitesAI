@@ -99,6 +99,18 @@ from yleum_orchestrator.services.cell_state import CellWorkspaceState
 from yleum_orchestrator.services.docker_cell_resources import DockerCellResourceManager
 from yleum_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
 from yleum_orchestrator.services.generation_reader_inventory import build_reader_dispatch_wait
+from yleum_orchestrator.services.machine_environment import (
+    EnvironmentIntegrityError,
+    MachineEnvironmentRef,
+    MachineEnvironmentStore,
+)
+from yleum_orchestrator.services.machine_recovery_environment import (
+    RecoveryEnvironmentProof,
+    RecoveryEnvironmentUnproved,
+    finish_proof,
+    running_environment,
+    verify_release,
+)
 from yleum_orchestrator.services.machine_startup import (
     MachineInventoryUnavailable,
     PrepareBinding,
@@ -1221,6 +1233,88 @@ async def get_workspace_agent_identity(
             manifest=manifest,
             environment_digest=environment,
         )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/agent/environment/recovery-proof",
+    response_model=RecoveryEnvironmentProof,
+)
+async def get_workspace_agent_environment_recovery_proof(
+    workspace_id: UUID,
+    generation_run_id: UUID,
+    fencing_epoch: int,
+    release_operation_id: UUID,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> RecoveryEnvironmentProof:
+    """Read controller evidence for one completed release and its immediate successor."""
+    from yleum_orchestrator.services.project_migrations import adaptation_database
+
+    verify_internal_token(x_internal_token)
+    manager = _require_docker_resource_manager(_workspace_provider(workspace_id))
+    async with manager.operation_lock.hold(workspace_id):
+        state, volume = await _workspace_volume_identity(manager, workspace_id)
+        _require_generation_lease_match(
+            state, generation_run_id=generation_run_id, fencing_epoch=fencing_epoch,
+        )
+        try:
+            runtime = manager.machine_runtime
+            if runtime is None or not runtime.exists(workspace_id):
+                raise RecoveryEnvironmentUnproved("portable generation is unavailable")
+            machine, backend = runtime.parts(state)
+            if adaptation_database(state, machine.state()) or backend.workspace_volume != volume:
+                raise RecoveryEnvironmentUnproved("ordinary generation volume is unavailable")
+            volume_identity = await source_volume_call(manager, volume, "source_volume_identity")
+            files = await _read_agent_workspace_files(manager, volume)
+            manifest = _machine_manifest(files, manager=manager, workspace_id=workspace_id)
+            if manifest is None:
+                raise RecoveryEnvironmentUnproved("release manifest is unavailable")
+            revision = _workspace_revision(files)
+            manifest_digest = manifest.digest()
+            release = verify_release(
+                runtime.root, state, generation_run_id, fencing_epoch, release_operation_id,
+                source=revision, manifest=manifest_digest, volume=volume,
+                volume_identity=volume_identity,
+            )
+            require_prepare_identity_clear(
+                manager.state_store.root, state, revision, manifest_digest, volume,
+            )
+            metadata = backend._metadata()
+            reference = MachineEnvironmentRef.model_validate(metadata.get("environment_ref"))
+            if (
+                metadata.get("restored_image") != reference.image_id
+                or metadata.get("environment_revision") != revision
+                or reference.base_image != backend.base_image
+                or metadata.get("restore_in_progress") or metadata.get("restore_target")
+                or metadata.get("pending_image")
+            ):
+                raise RecoveryEnvironmentUnproved("release environment artifact changed")
+            current = await machine_effect(
+                running_environment, backend, fencing_epoch,
+                previous_image_id=release.previous_image_id,
+            )
+            proof = finish_proof(runtime.root, state, release, reference, current, fencing_epoch)
+            store = MachineEnvironmentStore(
+                runtime.root / "artifacts", workspace_id, backend, max_bytes=backend.disk_bytes,
+            )
+            await machine_effect(store.validate, reference, manifest_digest=manifest_digest)
+            final_volume = await source_volume_call(manager, volume, "source_volume_identity")
+            final_source = _workspace_revision(await _read_agent_workspace_files(manager, volume))
+            if (
+                (final_volume, final_source) != (volume_identity, revision)
+                or await machine_effect(backend.startup_incarnation) != current.identity.incarnation
+            ):
+                raise RecoveryEnvironmentUnproved("recovery identity changed during verification")
+            return proof
+        except (RecoveryEnvironmentUnproved, EnvironmentIntegrityError, ValueError) as error:
+            raise OrchestratorError(
+                code="conflict", message="generation recovery environment is unproved",
+                status_code=409, details={"reason": "recovery_environment_unproved"},
+            ) from error
+        except (CellResourceError, OSError) as error:
+            raise OrchestratorError(
+                code="container_not_running", message="cycle recovery inventory is unavailable",
+                status_code=409, details={"reason": "recovery_environment_unavailable"},
+            ) from error
 
 
 @router.post("/workspaces/{workspace_id}/agent/environment/prepare")

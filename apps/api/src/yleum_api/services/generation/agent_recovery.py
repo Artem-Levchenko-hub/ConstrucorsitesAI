@@ -148,6 +148,11 @@ async def recover_stopped_candidate(
         f"generation stopped ({_agent_res.stop_reason or 'incomplete'}): {_agent_res.summary}",
         max_bytes=2000,
     )
+    if _must_restore_previous and _agent_res.stop_reason == agent_builder.FILTERED_PROVIDER_OUTPUT:
+        from yleum_api.services.generation.source_checkpoint import checkpoint_before_rollback
+
+        await checkpoint_before_rollback(operations)
+        raise RuntimeError(_stopped_cause)
     _rollback_error: Exception | None = None
     _rollback_verified = False
     if _must_restore_previous and baseline.sha and not _first_max_without_product:

@@ -42,6 +42,7 @@ from yleum_api.services.orchestrator_client import (
     OrchestratorUnavailable,
     ProjectCellAgentExecResponse,
     ProjectCellAgentOperationStatus,
+    ProjectCellEnvironmentRecoveryProof,
     ProjectCellPreviewSession,
     ProjectCellWorkspaceIdentity,
     RestorationAdaptationProof,
@@ -55,6 +56,7 @@ from yleum_api.services.orchestrator_client import (
     project_cell_apply_business_config,
     project_cell_apply_draft,
     project_cell_create_preview_session,
+    project_cell_environment_recovery_proof,
     project_cell_prepare_environment,
     project_cell_prepare_restoration_adaptation,
     project_cell_prove_restoration_adaptation,
@@ -683,6 +685,9 @@ class ProjectCellExecutorHandle:
     seed_business_config: Callable[[int, dict[str, Any]], Awaitable[None]] | None = None
     resolve_full_build_operation: (
         Callable[[str, str], Awaitable[tuple[UUID, UUID] | None]] | None
+    ) = None
+    prove_environment_recovery: (
+        Callable[[UUID], Awaitable[ProjectCellEnvironmentRecoveryProof | None]] | None
     ) = None
 
 
@@ -1502,6 +1507,16 @@ async def maybe_create_project_cell_executor(
             )
         except (OrchestratorBadRequest, OrchestratorUnavailable) as error:
             raise OrchestratorUnavailable("Owned environment startup requires recovery") from error
+
+    async def _prove_environment_recovery(
+        release_operation_id: UUID,
+    ) -> ProjectCellEnvironmentRecoveryProof | None:
+        if not _is_portable():
+            raise ProjectCellExecutorUnavailable("Generation recovery requires a portable cell")
+        return await project_cell_environment_recovery_proof(
+            agent_workspace_id, generation_run_id=leased_run_id, fencing_epoch=fencing_epoch,
+            release_operation_id=release_operation_id,
+        )
 
     async def _run_role(
         role: ProjectCellCommandRole,
@@ -2338,6 +2353,9 @@ async def maybe_create_project_cell_executor(
         ),
         current_identity=_current_identity,
         prepare_environment=_prepare_environment if not restoration_adaptation else None,
+        prove_environment_recovery=(
+            _prove_environment_recovery if not restoration_adaptation else None
+        ),
         run_role=_run_role,
         replay_role_response=_replay_role_response,
         runtime_probe=_runtime_probe,

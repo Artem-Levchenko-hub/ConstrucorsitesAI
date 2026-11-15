@@ -2530,3 +2530,18 @@ async def test_portable_owner_start_reattaches_a_machine_left_on_an_older_epoch(
     # Одна переприкрепляющая пауза — на эпоху ячейки; повтор здоровую машину не трогает.
     assert resumes == [6]
     assert machine_state["epoch"] == 6 and machine_state["ready_epoch"] == 6
+
+
+async def test_environment_recovery_proof_missing_at_owned_fence_is_conflict(monkeypatch, tmp_path):
+    workspace_id = uuid4()
+    provider, _manager, _docker, run = await _ready_provider(tmp_path, workspace_id)
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _: provider)
+    async with _client() as client:
+        response = await client.get(
+            f"/internal/workspaces/{workspace_id}/agent/environment/recovery-proof",
+            params={"generation_run_id": str(run), "fencing_epoch": 4,
+                    "release_operation_id": str(uuid4())},
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+        )
+    assert response.status_code == 409
+    assert response.json()["error"]["details"] == {"reason": "recovery_environment_unproved"}

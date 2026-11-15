@@ -632,6 +632,9 @@ async def execute_agent_turn(
                 False if plan.bare_stack else get_settings().agent_require_green_before_done
             ),
             coordinator_handoff=runtime.legacy_coordinator_handoff(),
+            allow_filtered_source_handoff=(
+                project_info.template == "max_miniapp" and allow_autonomous_source_repair
+            ),
             completion_check=_completion_check,
             report_managed_build_gap=uses_single_max_source_repair(runtime),
             bounded_repair=bounded_repair,
@@ -683,11 +686,20 @@ async def execute_agent_turn(
         and not (baseline.sha and _max_has_generated_snapshot)
     ):
         raise RuntimeError(_provider_failure)
+    recorded_writes = _agent_res.files
     if runtime.handle is not None:
         _agent_res.files = await runtime.handle.export_files()
     if _agent_res.stop_reason == "checkpoint_error":
         return _agent_res, _provider_failure
+    filtered = _agent_res.requires_verification_only
     if edit_source_changed is not None and not edit_source_changed() and not _provider_failure:
+        if filtered:
+            return replace(
+                _agent_res,
+                needs_finalization=False,
+                stop_reason=agent_builder.FILTERED_PROVIDER_OUTPUT,
+                summary="Провайдер отфильтровал ответ. Правка не изменила исходный код.",
+            ), None
         if not allow_autonomous_source_repair or _agent_res.stop_reason in {
             "infra_error", "error",
         }:
@@ -703,12 +715,44 @@ async def execute_agent_turn(
     # contain the original request's attributable work. Keep that distinction
     # without inventing a new write or bypassing any normal finalization gate.
     resumed_product = False
+    current_tree = None
     if (_max_seed_files and not _agent_res.files and not _is_edit
             and restored_source is not None and operations.snapshot_files is not None):
+        current_tree = await operations.snapshot_files()
         resumed_product = _resumed_product_delta(
             runtime.migration_baseline or {**baseline.files, **_max_seed_files},
-            restored_source, await operations.snapshot_files(),
+            restored_source, current_tree,
         )
+    if filtered and _max_seed_files and not _agent_res.files:
+        # A re-acquired cell may use the retained draft as its export baseline.
+        # Attribute prior writes only when the saved loop and current tree agree.
+        source_delta: dict[str, str] = {}
+        if callable(snapshot_reader):
+            from yleum_api.services.generation.agent_finalization import _is_edit_source_path
+            from yleum_api.services.max_generation_contract import _is_product_source
+
+            reference = runtime.migration_baseline or {**baseline.files, **_max_seed_files}
+            current = current_tree if current_tree is not None else await snapshot_reader()
+            source_delta = {
+                path: content for path, content in current.items() if reference.get(path) != content
+            }
+            source_delta.update(dict.fromkeys(reference.keys() - current.keys(), ""))
+            is_candidate_source = _is_edit_source_path if _is_edit else _is_product_source
+            resumed_product = resumed_product or any(
+                recorded_writes.get(path) == content
+                and is_candidate_source(path)
+                and (_is_edit or bool(content.strip()))
+                for path, content in source_delta.items()
+            )
+        if not resumed_product:
+            return replace(
+                _agent_res,
+                files=source_delta,
+                needs_finalization=False,
+                stop_reason=agent_builder.FILTERED_PROVIDER_OUTPUT,
+                summary="Провайдер отфильтровал ответ. Исходники приложения не подтверждены.",
+            ), None
+        _agent_res.files = source_delta
     if _max_seed_files and not _agent_res.files and not resumed_product:
         await operations.emit(
             "agent.stalled",
@@ -770,6 +814,7 @@ async def complete_empty_legacy_build(
     if (
         not _is_edit
         and not files
+        and not _agent_res.requires_verification_only
         and get_settings().use_agentic_builder
         and not get_settings().use_native_agent
         and not uses_single_max_source_repair(runtime)

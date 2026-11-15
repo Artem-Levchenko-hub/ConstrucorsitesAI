@@ -515,6 +515,21 @@ class DockerMachineBackend:
 
     def environment_identity(self) -> EnvironmentIdentity:
         """Bind fresh package inventory to one actual running Docker incarnation."""
+        return self._read_environment_identity()[0]
+
+    def environment_recovery_identity(
+        self, previous_image_id: str,
+    ) -> tuple[EnvironmentIdentity, str]:
+        """Compare an already attested image's inventory without rewriting live identity."""
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", previous_image_id) is None:
+            raise CellIdentityConflict("previous environment image identity is invalid")
+        identity, comparison = self._read_environment_identity(previous_image_id)
+        assert comparison is not None
+        return identity, comparison
+
+    def _read_environment_identity(
+        self, previous_image_id: str | None = None,
+    ) -> tuple[EnvironmentIdentity, str | None]:
         try:
             if "startup_recovery_barrier" in self._metadata():
                 raise CellResourceError("startup recovery hold is active")
@@ -552,21 +567,25 @@ class DockerMachineBackend:
             raise CellResourceError("machine environment inventory is invalid") from exc
         if startup_incarnation(machine) != incarnation or machine.attrs.get("Image") != image:
             raise CellIdentityConflict("machine startup incarnation changed during inventory")
-        canonical = json.dumps(
-            {
-                "base_image": self.base_image,
-                "controller_revision": _ENVIRONMENT_REVISION,
-                "image_id": image,
-                "inventory": inventory,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        identity = EnvironmentIdentity(hashlib.sha256(canonical).hexdigest(), incarnation)
+        def content_digest(image_id: str) -> str:
+            canonical = json.dumps(
+                {
+                    "base_image": self.base_image,
+                    "controller_revision": _ENVIRONMENT_REVISION,
+                    "image_id": image_id,
+                    "inventory": inventory,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            return hashlib.sha256(canonical).hexdigest()
+
+        identity = EnvironmentIdentity(content_digest(image), incarnation)
         metadata = self._metadata()
         metadata["environment_digest"] = identity.digest
         write_controller_json(self.metadata_path, metadata)
-        return identity
+        comparison = content_digest(previous_image_id) if previous_image_id is not None else None
+        return identity, comparison
 
     def startup_incarnation(self) -> str:
         machine = self._container()

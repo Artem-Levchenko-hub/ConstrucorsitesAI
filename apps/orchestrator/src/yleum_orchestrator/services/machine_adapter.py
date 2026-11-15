@@ -27,6 +27,7 @@ from yleum_orchestrator.core.cell_resources import (
     LifecycleMutation,
     identity_labels,
 )
+from yleum_orchestrator.core.errors import OrchestratorError
 from yleum_orchestrator.core.project_machine import MachineManifest
 from yleum_orchestrator.core.stack_registry import get_stack
 from yleum_orchestrator.services import nginx_writer
@@ -46,8 +47,15 @@ from yleum_orchestrator.services.generation_reader_inventory import (
     reader_dispatch,
 )
 from yleum_orchestrator.services.machine_environment import (
+    EnvironmentIntegrityError,
     MachineEnvironmentRef,
     MachineEnvironmentStore,
+)
+from yleum_orchestrator.services.machine_recovery_environment import (
+    record_release,
+    replay_release_capture,
+    running_environment,
+    stopped_environment_matches,
 )
 from yleum_orchestrator.services.machine_services import MachineServiceFailed, MachineServices
 from yleum_orchestrator.services.machine_startup import (
@@ -1941,6 +1949,7 @@ class MachineAdapter:
     async def halt(
         self, state: Any, *, remove_network: bool = False, capture: bool = True,
         retain_trusted: bool = False,
+        generation_release: LifecycleMutation | None = None,
     ) -> None:
         from yleum_orchestrator.services.adaptation_recovery_barrier import (
             require_candidate_writers_allowed,
@@ -1957,7 +1966,12 @@ class MachineAdapter:
         reference = None
         await machine_effect(backend._reconcile_recovery_helpers)
         if capture and not recovery:
-            reference = await self.checkpoint(state)
+            if generation_release is not None and had_machine:
+                reference = await self._checkpoint_generation_release(
+                    state, machine, backend, generation_release,
+                )
+            else:
+                reference = await self.checkpoint(state)
         if capture and recovery:
             # Pause a failed environment without certifying or discarding its
             # stopped rootfs. Explicit checkpoint restoration is the recovery path.
@@ -1994,6 +2008,83 @@ class MachineAdapter:
             await machine_effect(
                 backend.record_retained_preview, reference, epoch=machine.state()["epoch"]
             )
+
+    async def _checkpoint_generation_release(
+        self, state: Any, machine: ProjectMachine, backend: DockerMachineBackend,
+        release: LifecycleMutation,
+    ) -> MachineEnvironmentRef | None:
+        from yleum_orchestrator.routers.runtime import _workspace_revision
+        from yleum_orchestrator.routers.workspace import (
+            _machine_manifest,
+            _read_agent_workspace_files,
+        )
+        from yleum_orchestrator.services.active_source_volume import source_volume_call
+
+        if adaptation_database(state, machine.state()):
+            return await self.checkpoint(state)
+        epoch = state.active_generation_fencing_epoch
+        if type(epoch) is not int or release.fencing_epoch != epoch + 1:
+            return await self.checkpoint(state)
+
+        volume = backend.workspace_volume
+
+        async def retained_source() -> tuple[str, str]:
+            identity = await source_volume_call(self.manager, volume, "source_volume_identity")
+            revision = _workspace_revision(await _read_agent_workspace_files(self.manager, volume))
+            return identity, revision
+
+        try:
+            files = await _read_agent_workspace_files(self.manager, volume)
+            manifest = _machine_manifest(
+                files, manager=self.manager, workspace_id=state.workspace_id,
+            )
+            if manifest is None:
+                raise CellIdentityConflict("release manifest is unavailable")
+            manifest_digest = manifest.digest()
+            source = _workspace_revision(files)
+            volume_identity = await source_volume_call(
+                self.manager, volume, "source_volume_identity",
+            )
+            replay: MachineEnvironmentRef | None = await machine_effect(
+                replay_release_capture, self.root, state, release, backend,
+                source=source, manifest=manifest_digest, volume_identity=volume_identity,
+            )
+            if replay is not None:
+                if await retained_source() != (volume_identity, source):
+                    raise CellIdentityConflict("release replay source changed")
+                return replay
+            before = await machine_effect(running_environment, backend, epoch)
+        except (
+            OrchestratorError, CellResourceError, EnvironmentIntegrityError, OSError,
+            ValueError, docker.errors.APIError,
+        ):
+            # Older or unavailable inventory leaves the original halt behavior intact.
+            return await self.checkpoint(state)
+
+        reference = await self.checkpoint(state)
+        if reference is None or manifest_digest != reference.manifest_digest:
+            return reference
+        try:
+            metadata = backend._metadata()
+            if (
+                metadata.get("environment_revision") != source
+                or metadata.get("environment_ref") != reference.model_dump(mode="json")
+                or await retained_source() != (volume_identity, source)
+                or not await machine_effect(
+                    stopped_environment_matches, backend, epoch,
+                    container_id=before.container_id, image_id=before.image_id,
+                    started_at=before.started_at,
+                )
+            ):
+                return reference
+            await machine_effect(
+                record_release, self.root, state, release, before=before, source=source,
+                volume=volume, volume_identity=volume_identity, reference=reference,
+            )
+        except (OrchestratorError, CellResourceError, OSError, ValueError, docker.errors.APIError):
+            # A failed optional witness does not change generation release authority.
+            pass
+        return reference
 
     async def apply_owner_business_config(
         self, state: Any, *, version: int, config: dict[str, Any],

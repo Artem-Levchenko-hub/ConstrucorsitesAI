@@ -439,9 +439,10 @@ async def finalize_max_candidate(
     source_handoff: bool = False,
     interrupted_source_reason: str | None = None,
     render_core_on_rejection: Callable[[], Awaitable[dict[str, str]]] | None = None,
+    verification_only: bool = False,
 ) -> FinalizedAgentSource:
     _max_finalization_proof: ProofBundle | None = None
-    if runtime.coordinator is not None and files:
+    if runtime.coordinator is not None and (files or verification_only):
         from yleum_api.services.max_finalization import MaxFinalizationStatus
 
         assert runtime.handle is not None
@@ -456,7 +457,7 @@ async def finalize_max_candidate(
             (_is_edit or _max_has_generated_snapshot)
             and runtime.handle.prove_restoration_adaptation is None
         )
-        requires_edit = check_edit and source_change_required(prompt_text)
+        requires_edit = check_edit and (verification_only or source_change_required(prompt_text))
 
         async def unchanged_candidate() -> EditSourceChangeVerdict | None:
             assert runtime.handle is not None
@@ -470,7 +471,7 @@ async def finalize_max_candidate(
 
         # A healthy unchanged tree cannot prove that the requested edit happened.
         # Check before spending minutes on a production build or running SQL.
-        if check_edit:
+        if check_edit and not verification_only:
             unchanged = await unchanged_candidate()
             if unchanged is not None:
                 if unchanged.failure and not autonomous_repair:
@@ -483,6 +484,8 @@ async def finalize_max_candidate(
         async def _repair_finalization_source(
             detail: str, source_failure: SourceFailure | None = None,
         ) -> bool:
+            if verification_only:
+                raise RuntimeError("MAX_FINALIZATION_FAILED: provider output filtered")
             assert runtime.handle is not None
             assert runtime.coordinator is not None
             repair_files = await runtime.handle.snapshot_files()
@@ -539,7 +542,9 @@ async def finalize_max_candidate(
                 options["continuation"] = continuation
             if autonomous_repair:
                 options["autonomous_source_repair"] = True
-            if single_repair:
+            if verification_only:
+                options["max_source_repairs"] = 0
+            elif single_repair:
                 options["max_source_repairs"] = int(
                     not getattr(runtime, "source_repair_started", False)
                 )
@@ -569,7 +574,10 @@ async def finalize_max_candidate(
             if _finalization.status is MaxFinalizationStatus.CANCELLED:
                 raise asyncio.CancelledError
             if _finalization.status is not MaxFinalizationStatus.COMPLETE:
-                raise RuntimeError("MAX_FINALIZATION_FAILED: " + _finalization.redacted_detail)
+                cause = "Провайдер отфильтровал ответ. " if verification_only else ""
+                raise RuntimeError(
+                    "MAX_FINALIZATION_FAILED: " + cause + _finalization.redacted_detail
+                )
         except AdaptationActivationPending:
             raise
         except Exception as exc:
@@ -583,6 +591,10 @@ async def finalize_max_candidate(
 
             await checkpoint_before_rollback(operations)
             raise_if_terminal_cell_error(exc)
+            if verification_only:
+                # The rejected source remains private. This controller phase
+                # has no journal authority to restore a physical workspace.
+                raise
             from yleum_api.services.restorations import adaptation_activation_holds_generation_lease
 
             if await adaptation_activation_holds_generation_lease(

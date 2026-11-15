@@ -452,9 +452,11 @@ async def test_only_generation_release_requests_trusted_retention(tmp_path):
     await manager.ensure(spec, _mutation("a", 1))
     runtime = SimpleNamespace(halt=AsyncMock())
     manager.machine_runtime = runtime
-    await manager.release_generation(spec.workspace_id, _mutation("b", 2),
-                                     generation_run_id=spec.generation_run_id)
-    assert runtime.halt.await_args.kwargs == {"retain_trusted": True}
+    release = _mutation("b", 2)
+    await manager.release_generation(
+        spec.workspace_id, release, generation_run_id=spec.generation_run_id,
+    )
+    assert runtime.halt.await_args.kwargs == {"retain_trusted": True, "generation_release": release}
 
 
 @pytest.mark.asyncio

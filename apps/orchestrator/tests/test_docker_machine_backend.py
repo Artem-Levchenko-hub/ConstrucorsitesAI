@@ -2298,3 +2298,25 @@ def test_pending_quiesce_cannot_restart_before_explicit_restore(tmp_path):
     write_controller_json(runtime.metadata_path, {"quiesce_state": "pending"})
     with pytest.raises(Exception, match="quiesce"):
         runtime.ensure(MachineManifest.model_validate(payload()), 7)
+
+
+def test_generation_resume_compares_inventory_without_relabeling_actual_image(tmp_path):
+    runtime = backend(tmp_path)
+    container = _InventoryContainer()
+    runtime._container = lambda: container
+    previous_image = container.attrs["Image"]
+    before = runtime.environment_identity()
+
+    container.attrs["Image"] = "sha256:" + "e" * 64
+    container.attrs["State"]["StartedAt"] = "2026-10-31T08:01:00.123456789Z"
+    current, comparison = runtime.environment_recovery_identity(previous_image)
+
+    assert comparison == before.content_digest
+    assert current.digest != before.digest
+    assert current == runtime.environment_identity()
+    container.exec_run = lambda *args, **kwargs: SimpleNamespace(
+        exit_code=0, output=b'[{"inventory":"changed"}]',
+    )
+    changed, comparison = runtime.environment_recovery_identity(previous_image)
+    assert comparison != before.content_digest
+    assert changed.incarnation == current.incarnation and changed.digest != current.digest
