@@ -16,7 +16,6 @@ const items: OrderItem[] = [
 ];
 const pastOrders: PastOrder[] = [
   { date: "24 сентября", dateTime: "2026-09-24", item: { title: "Флэт уайт", detail: "200 мл · 1 шт.", price: 260, art: "flatwhite" } },
-  { date: "21 сентября", dateTime: "2026-09-21", item: { title: "Чизкейк нью-йорк", detail: "1 порция", price: 290, art: "cheesecake" } },
 ];
 
 function OrderRow({ item }: { item: OrderItem }) {

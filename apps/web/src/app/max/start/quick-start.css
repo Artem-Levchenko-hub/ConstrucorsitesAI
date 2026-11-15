@@ -1,3 +1,7 @@
+.max-quick-start .max-start-kicker {
+  font-size: 12px;
+}
+
 .max-quick-start .max-start-grid {
   display: grid;
   gap: 18px;

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useActionState } from "react";
 import { recoverAuthAction } from "@/lib/auth-action-recovery";
 import { AuthPageRefresh } from "@/components/auth/AuthPageRefresh";
+import { PasswordField } from "@/components/auth/PasswordField";
 import { useTranslations } from "next-intl";
 import { loginAction } from "@/app/(auth)/actions";
 import { Button } from "@/components/ui/button";
@@ -40,10 +41,11 @@ export function LoginForm({ next }: { next?: string }) {
             Забыли пароль?
           </Link>
         </div>
-        <Input
+        <PasswordField
           id="password"
           name="password"
-          type="password"
+          showLabel={t("showPassword")}
+          hideLabel={t("hidePassword")}
           autoComplete="current-password"
           required
         />

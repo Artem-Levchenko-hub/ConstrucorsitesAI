@@ -141,23 +141,23 @@ const cafeMenu = {
   ],
   "Десерты": [
     {
-      id: "che", title: "Чизкейк", note: "1 порция · Нью-Йорк", price: 290, art: "cheesecake",
+      id: "che", title: "Чизкейк", note: "1 порция", price: 290, art: "cheesecake",
       ingredients: ["Сливочный сыр", "Песочное печенье", "Яйцо", "Сливки", "Сахар"],
     },
     {
-      id: "che-berry", title: "Малиновый чизкейк", note: "1 порция · с ягодным соусом", price: 320, art: "cheesecake",
+      id: "che-berry", title: "Малиновый чизкейк", note: "1 порция", price: 320, art: "cheesecake",
       ingredients: ["Сливочный сыр", "Песочное печенье", "Яйцо", "Сливки", "Малина", "Сахар"],
     },
     {
-      id: "medovik", title: "Медовик", note: "1 порция · со сметанным кремом", price: 280, art: "cheesecake",
+      id: "medovik", title: "Медовик", note: "1 порция", price: 280, art: "cheesecake",
       ingredients: ["Пшеничная мука", "Мёд", "Яйцо", "Сливочное масло", "Сметана", "Сахар"],
     },
     {
-      id: "carrot", title: "Морковный торт", note: "1 порция · с грецкими орехами", price: 310, art: "cheesecake",
+      id: "carrot", title: "Морковный торт", note: "1 порция", price: 310, art: "cheesecake",
       ingredients: ["Морковь", "Пшеничная мука", "Яйцо", "Грецкий орех", "Сливочный сыр", "Корица", "Сахар"],
     },
     {
-      id: "napoleon", title: "Торт «Наполеон»", note: "1 порция · с заварным кремом", price: 300, art: "cheesecake",
+      id: "napoleon", title: "Торт «Наполеон»", note: "1 порция", price: 300, art: "cheesecake",
       ingredients: ["Слоёное тесто на сливочном масле", "Молоко", "Яйцо", "Сахар", "Ваниль"],
     },
   ],

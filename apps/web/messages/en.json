@@ -42,6 +42,8 @@
       "emailLabel": "Email",
       "emailPlaceholder": "you@example.com",
       "passwordLabel": "Password",
+      "showPassword": "Show password",
+      "hidePassword": "Hide password",
       "passwordPlaceholder": "15 to 128 characters",
       "confirmLabel": "Confirm password",
       "confirmPlaceholder": "repeat password",

@@ -40,7 +40,14 @@ it("shows all three supplied plans and their lifetime or monthly allowances with
     ["1,00 ₽", "Проектов: 3", "Публикаций: 3", "Генераций в месяц: 2", "Правок в месяц: 25"],
     ["6 990,00 ₽", "Проектов: 10", "Публикаций: 10", "Генераций в месяц: 5", "Правок в месяц: 50"],
   ];
-  cards.forEach((card, index) => expected[index].forEach(value => expect(text(card)).toContain(value)));
+  cards.forEach((card, index) => {
+    expected[index].forEach(value => expect(text(card)).toContain(value));
+    const rows = Array.from(card.querySelectorAll("li")).map(text);
+    expect(rows.slice(-2)).toEqual([
+      "Подключение ЮKassa: Да",
+      `Постоянно работающих приложений: ${index === 0 ? 0 : 1}`,
+    ]);
+  });
   expect(text(cards[0])).toContain("один раз на аккаунт");
   expect(text(cards[1])).toContain("после каждой успешной ежемесячной оплаты");
   expect(reversed.map(plan => plan.code)).toEqual(originalOrder);

@@ -175,9 +175,9 @@ export function FeedbackScreen() {
   return (
     <ScreenChrome name="Студия «Линия»" section="Отзыв о визите" bodyKey={submitted ? "review" : "form"}
       bar={submitted ? (
-        <button type="button" className="ys-bar-button" onClick={reset}>Оценить ещё раз</button>
+        <button type="button" className="ys-bar-button ys-example-footer ys-example-footer--action" onClick={reset}>Оценить ещё раз</button>
       ) : (
-        <button type="submit" form={formId} className="ys-bar-button is-on" disabled={!rating}>Отправить отзыв</button>
+        <button type="submit" form={formId} className="ys-bar-button ys-example-footer ys-example-footer--action is-on" disabled={!rating}>Отправить отзыв</button>
       )}>
       {submitted ? (
         <div className="ys-feature-example ys-review-result">

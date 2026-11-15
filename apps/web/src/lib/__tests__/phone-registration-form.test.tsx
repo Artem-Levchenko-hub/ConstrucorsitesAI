@@ -141,12 +141,13 @@ it("toggles each password independently without submitting, replacing inputs or 
     const first = await toggle("Показать пароль");
     expect(password.type).toBe("text"); expect(confirm.type).toBe("password");
     expect(document.activeElement).toBe(password);
-    expect(first.getAttribute("aria-pressed")).toBe("true");
+    expect(first.getAttribute("aria-label")).toBe("Скрыть пароль");
     await toggle("Показать повтор пароля");
     expect(confirm.type).toBe("text");
     first.focus();
     await toggle("Скрыть пароль");
     expect(password.type).toBe("password"); expect(confirm.type).toBe("text");
+    expect(first.getAttribute("aria-label")).toBe("Показать пароль");
     expect(document.activeElement).toBe(first);
     expect(container.querySelector('input[name="password"]')).toBe(password);
     expect(container.querySelector('input[name="confirm"]')).toBe(confirm);

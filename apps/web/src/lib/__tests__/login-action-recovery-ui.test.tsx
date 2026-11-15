@@ -16,6 +16,30 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
 
+it("reveals the login password with a native focusable button without submitting", async () => {
+  await act(async () => root.render(<LoginForm />));
+  const password = container.querySelector<HTMLInputElement>("#password")!;
+  const toggle = container.querySelector<HTMLButtonElement>('button[aria-controls="password"]');
+  expect(password.type).toBe("password");
+  expect(password.autocomplete).toBe("current-password");
+  expect(password.required).toBe(true);
+  expect(toggle?.type).toBe("button");
+  expect(toggle?.tabIndex).toBe(0);
+  expect(toggle?.getAttribute("aria-label")).toBe("showPassword");
+  password.value = "synthetic123";
+  toggle!.focus();
+  expect(document.activeElement).toBe(toggle);
+  await act(async () => toggle!.click());
+  expect(password.type).toBe("text");
+  expect(toggle?.getAttribute("aria-label")).toBe("hidePassword");
+  await act(async () => toggle!.click());
+  expect(password.type).toBe("password");
+  expect(toggle?.getAttribute("aria-label")).toBe("showPassword");
+  expect(container.querySelector("#password")).toBe(password);
+  expect(password.value).toBe("synthetic123");
+  expect(loginAction).not.toHaveBeenCalled();
+});
+
 it("a stale login action leaves a recoverable form instead of a client exception", async () => {
   vi.mocked(loginAction).mockRejectedValue(Object.assign(new Error('Server Action "previous-version" was not found on the server.'), { name: "UnrecognizedActionError" }));
   await act(async () => root.render(<LoginForm next="/max/qa-project" />));

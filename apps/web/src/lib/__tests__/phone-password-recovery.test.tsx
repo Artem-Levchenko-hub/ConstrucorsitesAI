@@ -27,7 +27,33 @@ it("keeps password recovery on email and reset links without requesting SMS", as
     await change("input[type=email]", "owner@example.com"); await submit();
     expect(container.querySelector("[role=status]")?.textContent).toContain("письмо");
     await act(async () => root.render(<PasswordResetForm token="email-recovery-token" />));
-    await change("#reset-password", "violet lantern drifts"); await change("#reset-confirm", "violet lantern drifts"); await submit();
+    await change("#reset-password", "violet lantern drifts");
+    await change("#reset-confirm", "violet lantern drifts");
+    const password = container.querySelector<HTMLInputElement>("#reset-password")!;
+    const confirm = container.querySelector<HTMLInputElement>("#reset-confirm")!;
+    const reveal = container.querySelector<HTMLButtonElement>('button[aria-controls="reset-password"]');
+    const revealConfirm = container.querySelector<HTMLButtonElement>('button[aria-controls="reset-confirm"]');
+    for (const input of [password, confirm]) {
+      expect(input.type).toBe("password");
+      expect(input.autocomplete).toBe("new-password");
+    }
+    for (const button of [reveal, revealConfirm]) {
+      expect(button?.type).toBe("button");
+      expect(button?.tabIndex).toBe(0);
+    }
+    expect(reveal?.getAttribute("aria-label")).toBe("Показать новый пароль");
+    expect(revealConfirm?.getAttribute("aria-label")).toBe("Показать повтор пароля");
+    await act(async () => reveal!.click());
+    expect(password.type).toBe("text");
+    expect(confirm.type).toBe("password");
+    expect(reveal?.getAttribute("aria-label")).toBe("Скрыть новый пароль");
+    await act(async () => revealConfirm!.click());
+    await act(async () => reveal!.click());
+    expect(password.type).toBe("password");
+    expect(confirm.type).toBe("text");
+    expect(revealConfirm?.getAttribute("aria-label")).toBe("Скрыть повтор пароля");
+    expect(calls).toHaveLength(1);
+    await submit();
     expect(container.textContent).toContain("Пароль изменён");
     expect(container.querySelector('a[href="/login"]')).not.toBeNull();
     expect(calls).toEqual([

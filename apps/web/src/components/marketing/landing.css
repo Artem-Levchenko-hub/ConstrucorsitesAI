@@ -76,8 +76,25 @@
 .yl-header nav { display: flex; gap: 26px; margin-inline: auto; font-size: 14px; color: var(--yl-ink-2); }
 .yl-header nav a:hover { color: var(--yl-ink); }
 .yl-header__actions { display: flex; align-items: center; gap: 18px; }
-.yl-login { font-size: 14px; font-weight: 500; color: var(--yl-ink-2); }
-.yl-login:hover { color: var(--yl-ink); }
+.yl a.yl-login {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding-inline: 18px;
+  border-radius: 10px;
+  background: var(--color-brand-blue, #0062ee);
+  box-shadow: 0 2px 8px rgb(0 98 238 / 0.18);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 650;
+  white-space: nowrap;
+  transition: background-color .16s ease, box-shadow .16s ease;
+}
+.yl a.yl-login:hover {
+  background: #0056d2;
+  box-shadow: 0 3px 12px rgb(0 98 238 / 0.26);
+}
 
 /* Кнопка в теле страницы — нейтральная: синий приберегается для финала. */
 .yl-cta {
@@ -231,7 +248,7 @@
   flex-direction: column;
   min-width: 0;
   padding: clamp(16px, 3svh, 26px) clamp(16px, 2vw, 26px);
-  border: 1px solid transparent;
+  border: 2px solid transparent;
   border-radius: 18px;
   background: linear-gradient(var(--yl-card), var(--yl-card)) padding-box, var(--yl-plan-accent) border-box;
 }
@@ -247,15 +264,16 @@
 }
 .yl-price span { font: 400 13px/1.4 var(--font-inter), sans-serif; letter-spacing: 0; color: var(--yl-ink-3); }
 .yl-plan ul { display: grid; gap: 6px; margin-block: 16px 14px; }
-.yl-plan li { display: flex; gap: 9px; font-size: 14px; line-height: 1.4; color: var(--yl-ink-2); }
+.yl-plan li { display: flex; gap: 6px; font-size: 14px; line-height: 1.4; color: var(--yl-ink-2); }
 .yl-plan li::before {
   content: "";
   flex: none;
-  width: 6px;
-  height: 6px;
-  margin-top: .5em;
+  width: 12px;
+  height: 12px;
+  margin-top: calc(.7em - 6px);
   border-radius: 50%;
   background: var(--yl-plan-accent);
+  mask-image: radial-gradient(circle, #000 15%, rgb(0 0 0 / .7) 35%, transparent 70%);
 }
 .yl-plan .yl-note { margin-top: auto; font-size: 12px; line-height: 1.45; }
 .yl .yl-plan-cta { justify-content: center; min-height: 44px; margin-top: 14px; }
@@ -287,7 +305,9 @@
 /* ── 9. финальный экран ──────────────────────────────────────────────────── */
 .yl-sendoff {
   padding-block: clamp(80px, 10vw, 170px);
-  background: var(--gradient-brand, linear-gradient(135deg, #25c6fb, #0062ee 38%, #2441f7 62%, #804ffa 84%, #c472fa));
+  background:
+    linear-gradient(to bottom, var(--yl-card), rgb(255 255 255 / .45) 32px, transparent clamp(64px, 8vw, 128px)),
+    var(--gradient-brand, linear-gradient(135deg, #25c6fb, #0062ee 38%, #2441f7 62%, #804ffa 84%, #c472fa));
   color: #fff;
   text-align: center;
 }
@@ -313,6 +333,7 @@
   .yl-diff-ask svg { transform: rotate(90deg); }
   .yl-footer-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .yl-header nav { display: none; }
+  .yl-header__actions { margin-inline-start: auto; }
   .yl-shop-peek { display: none; }
 }
 
@@ -489,7 +510,6 @@
 @media (max-width: 360px) {
   .yl-header__inner, .yl-header__actions { gap: 8px; }
   .yl-header .yl-cta { padding-inline: 10px; font-size: 12px; }
-  .yl-header .yl-login { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; font-size: 13px; }
 }
 
 /* ── то, что обычно настраивают неделями ────────────────────────────────── */

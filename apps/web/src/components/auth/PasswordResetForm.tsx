@@ -4,8 +4,8 @@ import { FormEvent, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, Check, Loader2 } from "lucide-react";
 
+import { PasswordField } from "@/components/auth/PasswordField";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { apiFetch } from "@/lib/api/client";
 import { newPasswordError, PASSWORD_HELP, PASSWORD_MIN_LENGTH } from "@/lib/password-policy";
@@ -79,9 +79,10 @@ export function PasswordResetForm({ token }: { token: string }) {
     <form onSubmit={submit} className="space-y-4">
       <div className="space-y-2">
         <Label htmlFor="reset-password">Новый пароль</Label>
-        <Input
+        <PasswordField
           id="reset-password"
-          type="password"
+          showLabel="Показать новый пароль"
+          hideLabel="Скрыть новый пароль"
           value={password}
           onChange={(event) => { setPassword(event.target.value); setError(null); }}
           minLength={PASSWORD_MIN_LENGTH}
@@ -94,9 +95,10 @@ export function PasswordResetForm({ token }: { token: string }) {
       </div>
       <div className="space-y-2">
         <Label htmlFor="reset-confirm">Повторите пароль</Label>
-        <Input
+        <PasswordField
           id="reset-confirm"
-          type="password"
+          showLabel="Показать повтор пароля"
+          hideLabel="Скрыть повтор пароля"
           value={confirm}
           onChange={(event) => setConfirm(event.target.value)}
           minLength={PASSWORD_MIN_LENGTH}

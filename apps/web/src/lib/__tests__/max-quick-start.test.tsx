@@ -13,6 +13,8 @@ describe("MAX quick-start navigation", () => {
     const cards = [...page.querySelectorAll("ol > li")];
     const destinations = ["project", "builder", "settings", "max-bot", "publish", "acceptance"];
 
+    expect(page.querySelector("h1")?.textContent).toContain("шесть шагов");
+    expect(page.querySelector("h1 + p")?.textContent).toContain("галочка появится после выполнения шага");
     expect(cards).toHaveLength(6);
     cards.forEach((card, index) => {
       const title = card.querySelector("h2")!.textContent;

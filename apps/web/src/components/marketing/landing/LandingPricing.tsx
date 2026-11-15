@@ -12,7 +12,6 @@ const LIMIT_ROWS = [
   ["max_projects", "Проектов"],
   ["static_publish_slots", "Публикаций"],
   ["team_seats", "Мест в команде"],
-  ["always_on_slots", "Постоянно работающих приложений"],
 ] as const;
 
 function isCount(value: unknown): value is number {
@@ -70,14 +69,20 @@ export function LandingPricing({ plans, signedIn = false }: { plans: BillingPlan
           const name = isFree ? "Бесплатный" : plan.name;
           const target = `${planPath}?plan=${plan.code}`;
           const href = signedIn ? target : isFree ? "/max/register" : `/login?next=${encodeURIComponent(target)}`;
+          const { entitlements } = plan;
+          const limitRow = (key: string, label: string) => {
+            const value = entitlements[key];
+            return value === undefined ? [] : [{
+              key, label, value: value === null ? "Без ограничений" : String(value),
+            }];
+          };
           const rows = [
-            ...LIMIT_ROWS.flatMap(([key, label]) => plan.entitlements[key] === undefined ? [] : [{
-              key, label, value: plan.entitlements[key] === null ? "Без ограничений" : String(plan.entitlements[key]),
-            }]),
+            ...LIMIT_ROWS.flatMap(([key, label]) => limitRow(key, label)),
             ...planAllowanceRows(plan),
-            ...(typeof plan.entitlements.integrations === "boolean" ? [{
-              key: "integrations", label: "Подключение ЮKassa", value: plan.entitlements.integrations ? "Да" : "Нет",
+            ...(typeof entitlements.integrations === "boolean" ? [{
+              key: "integrations", label: "Подключение ЮKassa", value: entitlements.integrations ? "Да" : "Нет",
             }] : []),
+            ...limitRow("always_on_slots", "Постоянно работающих приложений"),
           ];
           return (
             <article key={plan.id} className="yl-plan">

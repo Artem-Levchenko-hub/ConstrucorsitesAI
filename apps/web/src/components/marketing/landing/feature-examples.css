@@ -14,7 +14,7 @@
 .ys-example-footer strong { font-variant-numeric: tabular-nums; }
 .ys-example-label { font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
 
-.ys-example-footer {
+.ys-bar > .ys-example-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -25,6 +25,7 @@
   border-radius: 10px;
   font-size: 12px;
 }
+.ys-bar > .ys-example-footer--action { justify-content: center; }
 .ys-example-footer strong { font-size: 15px; }
 .ys-example-footer--estimate { background: #e8f4ef; color: #185740; }
 .ys-example-footer--lesson { background: #f3ebfa; color: #56337b; }

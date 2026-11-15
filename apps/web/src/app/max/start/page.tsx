@@ -18,7 +18,7 @@ import "./quick-start.css";
 
 export const metadata: Metadata = {
   title: "Быстрый старт — Yleum",
-  description: "Шесть последовательных этапов от идеи до рабочего приложения в MAX.",
+  description: "Шесть шагов от идеи до рабочего приложения в MAX.",
   alternates: { canonical: "/max/start" },
 };
 
@@ -81,13 +81,13 @@ export default async function MaxQuickStartPage() {
 
       <section className="border-b border-[#2b2d32] bg-[#121519] text-white">
         <div className="mx-auto max-w-[1120px] px-5 py-14 sm:px-8 sm:py-20">
-          <p className="omnia-kicker text-accent">Быстрый старт</p>
+          <p className="omnia-kicker max-start-kicker text-accent">Быстрый старт</p>
           <h1 className="mt-4 max-w-[760px] text-[42px] font-semibold leading-[1.04] tracking-[-.05em] sm:text-[62px]">
-            От идеи до запуска за шесть этапов
+            От идеи до запуска за шесть шагов
           </h1>
           <p className="mt-5 max-w-[700px] text-sm leading-7 text-white/55 sm:text-base">
-            На каждом этапе Yleum показывает одно следующее действие. Галочка
-            появляется после серверной проверки, а не после перехода по странице.
+            Идите по порядку от создания проекта до проверки приложения в MAX.
+            В Yleum галочка появится после выполнения шага.
           </p>
         </div>
       </section>

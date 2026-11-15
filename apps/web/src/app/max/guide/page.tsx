@@ -16,11 +16,12 @@ import { BrandMark } from "@/components/marketing/BrandMark";
 import { GuideLearning } from "@/components/learning/ProductLearning";
 import { MaxHelpHeader } from "@/components/max/MaxHelpHeader";
 import { GoldenPathVisual, GuideScreenshot } from "@/components/max/guide/GuideVisuals";
-import { guideChapters, type GuideLessonId } from "@/lib/guide-lessons";
+import type { GuideLessonId } from "@/lib/guide-lessons";
 import { getMaxHelpBrandProps } from "@/lib/max-help-brand";
 import { maxStaffEnabled } from "@/lib/max-staff-path";
 import "@/components/max/max-studio.css";
 import "@/components/marketing/max-public.css";
+import { GuideNavigation } from "./GuideNavigation";
 import "./guide-page.css";
 
 export const metadata: Metadata = {
@@ -128,19 +129,6 @@ function Checklist({ title, items }: { title: string; items: string[] }) {
   );
 }
 
-function ChapterLinks() {
-  return (
-    <div className="guide-chapter-links">
-      {guideChapters.map(({ id, title, number }) => (
-        <a key={id} href={`#${id}`}>
-          <span className="w-6 shrink-0 font-mono text-[10px] text-[#828491]">{number}</span>
-          {title}
-        </a>
-      ))}
-    </div>
-  );
-}
-
 export default async function MaxGuidePage() {
   const brand = await getMaxHelpBrandProps("/");
   return (
@@ -175,19 +163,7 @@ export default async function MaxGuidePage() {
       </section>
 
       <div id="video-lessons" className="guide-contents mx-auto grid max-w-[1440px] gap-8 px-4 sm:px-7 lg:grid-cols-[225px_minmax(0,1fr)] lg:gap-10">
-        <aside className="hidden lg:block">
-          <nav aria-label="Оглавление" className="guide-desktop-toc">
-            <p className="omnia-kicker px-3 text-[#828491]">Оглавление</p>
-            <div className="guide-desktop-toc-links" role="group" aria-label="Главы руководства" tabIndex={0}><ChapterLinks /></div>
-          </nav>
-        </aside>
-
-        <div className="min-w-0">
-          <details className="mt-6 rounded-xl border border-[#2b2d32] bg-[#191b20] p-4 lg:hidden">
-            <summary className="cursor-pointer text-sm font-semibold">Оглавление руководства</summary>
-            <nav aria-label="Главы руководства" className="mt-3"><ChapterLinks /></nav>
-          </details>
-
+        <GuideNavigation>
           <GuideSection id="start" number="00" eyebrow="Перед началом" title="Подготовьте идею, почту и телефон" lead="Начать можно с простого описания: для кого приложение и что человек должен в нём сделать. Бота и внешние сервисы вы подключите, когда дойдёте до запуска.">
             <div className="grid gap-4 sm:grid-cols-2">
               {[
@@ -417,7 +393,7 @@ export default async function MaxGuidePage() {
               </div>
             </div>
           </GuideSection>
-        </div>
+        </GuideNavigation>
       </div>
 
       <footer className="border-t border-[#2b2d32] bg-[#191b20] px-4 py-10 sm:px-7">

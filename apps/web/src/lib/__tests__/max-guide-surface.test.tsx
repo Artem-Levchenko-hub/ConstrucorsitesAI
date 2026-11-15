@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -212,4 +214,112 @@ describe("MAX guide navigation", () => {
       expect(page.getElementById(`video-${id}`)?.closest("section")?.id).toBe(id);
     }
   });
+});
+
+
+it("marks the same active chapter on both guide menus through fragments, clicks, scroll and history", async () => {
+  const page = await MaxGuidePage();
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const originalLocation = window.location.href;
+  const reactEnvironment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const actEnvironment = reactEnvironment.IS_REACT_ACT_ENVIRONMENT;
+  reactEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+  const frames = new Map<number, FrameRequestCallback>();
+  let nextFrame = 0;
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => {
+    frames.set(++nextFrame, callback);
+    return nextFrame;
+  });
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation(frame => { frames.delete(frame); });
+  const chapterPositions = new Map<string, number>();
+  const computedStyle = window.getComputedStyle;
+  vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
+    const style = computedStyle(element, pseudo);
+    if (element.id === "start") Object.defineProperty(style, "scrollMarginTop", { value: "92px" });
+    return style;
+  });
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return new DOMRect(0, chapterPositions.get(this.id) ?? 1000, 300, 500);
+  });
+
+  const activeLinks = () => [...host.querySelectorAll('a[aria-current="location"]')]
+    .map(link => link.getAttribute("href"));
+  function flushFrames() {
+    const pending = [...frames];
+    frames.clear();
+    pending.forEach(([, callback]) => callback(0));
+  }
+  function positionChapter(id: string) {
+    const activeIndex = chapterIds.indexOf(id);
+    chapterIds.forEach((chapter, index) => {
+      chapterPositions.set(chapter, 92 + (index - activeIndex) * 500);
+    });
+  }
+  try {
+    positionChapter("project");
+    window.history.replaceState(null, "", "/max/guide#project");
+    await act(async () => root.render(page));
+    await act(async () => { flushFrames(); });
+    expect(activeLinks()).toEqual(["#project", "#project"]);
+
+    const clicked = host.querySelector<HTMLAnchorElement>('.guide-chapter-links a[href="#builder"]')!;
+    await act(async () => {
+      const navigated = new Promise<void>(resolve => {
+        window.addEventListener("hashchange", () => resolve(), { once: true });
+      });
+      positionChapter("builder");
+      clicked.click();
+      await navigated;
+      flushFrames();
+    });
+    expect(window.location.hash).toBe("#builder");
+    expect(activeLinks()).toEqual(["#builder", "#builder"]);
+
+    await act(async () => {
+      positionChapter("settings");
+      window.dispatchEvent(new Event("scroll"));
+      flushFrames();
+    });
+    expect(activeLinks()).toEqual(["#settings", "#settings"]);
+
+    await act(async () => {
+      window.history.replaceState(null, "", "/max/guide#video-amocrm");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(activeLinks()).toEqual(["#settings", "#settings"]);
+    await act(async () => {
+      positionChapter("max-bot");
+      flushFrames();
+    });
+    expect(activeLinks()).toEqual(["#max-bot", "#max-bot"]);
+    expect(window.location.hash).toBe("#video-amocrm");
+
+    await act(async () => {
+      positionChapter("publish");
+      window.dispatchEvent(new Event("scroll"));
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+      flushFrames();
+    });
+    expect(activeLinks()).toEqual(["#publish", "#publish"]);
+
+    await act(async () => {
+      chapterPositions.clear();
+      window.history.replaceState(null, "", "/max/guide");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      flushFrames();
+    });
+    expect(activeLinks()).toEqual(["#start", "#start"]);
+    expect(host.querySelector("details")?.hasAttribute("open")).toBe(false);
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    window.history.replaceState(null, "", originalLocation);
+    reactEnvironment.IS_REACT_ACT_ENVIRONMENT = actEnvironment;
+    vi.restoreAllMocks();
+  }
 });

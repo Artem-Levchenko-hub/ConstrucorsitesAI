@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, startTransition, useActionState, useEffect, useState, type InputHTMLAttributes, type ReactNode } from "react";
+import { Fragment, startTransition, useActionState, useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { recoverAuthAction } from "@/lib/auth-action-recovery";
 import { AuthPageRefresh } from "@/components/auth/AuthPageRefresh";
-import { ArrowRight, Eye, EyeOff } from "lucide-react";
+import { PasswordField } from "@/components/auth/PasswordField";
+import { ArrowRight } from "lucide-react";
 import { RequiredCheckboxMessage, useRequiredCheckboxValidation } from "@/components/forms/required-checkbox-validation";
 
 import { maxRegisterAction } from "@/app/(auth)/actions";
@@ -19,20 +20,6 @@ const recoverableAction = recoverAuthAction(maxRegisterAction);
 
 function RequiredMark() {
   return <span aria-hidden="true">*</span>;
-}
-
-function PasswordField({ revealLabel, className, ...props }: Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & { revealLabel: string }) {
-  const [visible, setVisible] = useState(false);
-  const Icon = visible ? Eye : EyeOff;
-  return <div className="relative">
-    <Input {...props} type={visible ? "text" : "password"} className={`${className ?? ""} pr-14`} />
-    <button type="button" aria-label={`${visible ? "Скрыть" : "Показать"} ${revealLabel}`} aria-controls={props.id} aria-pressed={visible}
-      onPointerDown={event => { if (event.button === 0) event.preventDefault(); }}
-      onClick={() => setVisible(previous => !previous)}
-      className="absolute right-1 top-1/2 inline-flex size-11 -translate-y-1/2 items-center justify-center rounded-md text-fg-secondary hover:text-fg-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
-      <Icon size={19} aria-hidden="true" />
-    </button>
-  </div>;
 }
 
 export function MaxRegisterForm({ next = "/max", children, existingSession = false }: { next?: string; children?: ReactNode; existingSession?: boolean }) {
@@ -99,7 +86,8 @@ export function MaxRegisterForm({ next = "/max", children, existingSession = fal
           <PasswordField
             id="max-password"
             name="password"
-            revealLabel="пароль"
+            showLabel="Показать пароль"
+            hideLabel="Скрыть пароль"
             autoComplete="new-password"
             required
             minLength={PASSWORD_MIN_LENGTH}
@@ -116,7 +104,8 @@ export function MaxRegisterForm({ next = "/max", children, existingSession = fal
           <PasswordField
             id="max-confirm"
             name="confirm"
-            revealLabel="повтор пароля"
+            showLabel="Показать повтор пароля"
+            hideLabel="Скрыть повтор пароля"
             autoComplete="new-password"
             required
             minLength={PASSWORD_MIN_LENGTH}

@@ -1,3 +1,8 @@
+/* Native fragments land at the chapter offset before the scroll indicator updates. */
+:root:has(.max-guide-page) {
+  scroll-behavior: auto;
+}
+
 .max-guide-page .guide-journey-wrap {
   max-width: 1320px;
   margin: 56px auto 0;
@@ -213,6 +218,25 @@
 .max-guide-page .guide-chapter-links a:hover {
   background: var(--color-surface);
   color: var(--color-accent-secondary);
+}
+
+.max-guide-page .guide-chapter-link-number {
+  color: var(--color-fg-tertiary);
+}
+
+.max-guide-page .guide-chapter-links a[aria-current="location"] {
+  background: var(--color-accent-subtle);
+  color: var(--color-accent-secondary);
+  font-weight: 600;
+}
+
+.max-guide-page .guide-chapter-links a[aria-current="location"] .guide-chapter-link-number {
+  color: inherit;
+}
+
+.max-guide-page .guide-chapter-links a:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
 }
 
 .max-guide-page details > summary {

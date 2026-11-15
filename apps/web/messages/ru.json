@@ -42,6 +42,8 @@
       "emailLabel": "Email",
       "emailPlaceholder": "вы@почта.ru",
       "passwordLabel": "Пароль",
+      "showPassword": "Показать пароль",
+      "hidePassword": "Скрыть пароль",
       "passwordPlaceholder": "от 15 до 128 символов",
       "confirmLabel": "Подтверждение",
       "confirmPlaceholder": "повторите пароль",

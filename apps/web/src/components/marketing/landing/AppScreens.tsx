@@ -101,7 +101,7 @@ function CafePreview({ enhanced = false }: { enhanced?: boolean }) {
       <Tiles items={CAFE_MENU} />
       <p className="ys-kicker">Часто берут вместе</p>
       <PickRow art="croissant" title="Круассан с миндалём" note="Испекли в 7:30" price="190 ₽" />
-      <PickRow art="cheesecake" title="Чизкейк нью-йорк" note="1 порция · 120 г" price="290 ₽" />
+      <PickRow art="cheesecake" title="Чизкейк нью-йорк" note="1 порция" price="290 ₽" />
       <Strip title="Бонусная карта" note="Шестой кофе в подарок" value="4 из 6" />
     </ScreenChrome>
   );
@@ -151,7 +151,8 @@ export function ShopScreen() {
 /** Карта постоянного гостя. */
 export function LoyaltyScreen() {
   return (
-    <ScreenChrome name={CAFE_DEMO.name} section="Ваши бонусы" bar={<b>Потратить бонусы</b>}>
+    <ScreenChrome name={CAFE_DEMO.name} section="Ваши бонусы"
+      bar={<b className="ys-example-footer ys-example-footer--action">Потратить бонусы</b>}>
       <div className="ys-hero-card ys-hero-card--loyalty">
         <span>Накоплено</span>
         <strong>640</strong>
@@ -210,7 +211,7 @@ export function ScreenCollage({ screens }: { screens: { kind: ScreenKind; descri
         {screens.map(({ kind, description }) => {
           const label = interactiveExamples[kind];
           return (
-            <div className="ys-collage-item" key={kind}>
+            <div className="ys-collage-item" data-screen={kind} key={kind}>
               <p className="ys-collage-description">{description}</p>
               <div className={label ? "ys-collage-interactive" : undefined} role={label ? "group" : undefined}
                 aria-label={label} aria-hidden={label ? undefined : true} inert={!label}>

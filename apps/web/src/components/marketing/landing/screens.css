@@ -483,6 +483,9 @@ button.ys-action { cursor: pointer; }
 }
 .ys-collage-item { display: grid; grid-template-rows: minmax(64px, auto) auto; align-content: start; gap: 16px; width: 208px; flex-shrink: 0; }
 .ys-collage-description { margin: 0; font-size: 13px; line-height: 1.6; color: #55555f; text-align: center; text-wrap: balance; }
+.ys-collage-item[data-screen="status"] :is(.ys-row strong, .ys-row b, .ys-promo strong) { font-size: 14px; }
+.ys-collage-item[data-screen="status"] :is(.ys-step, .ys-order-date, .ys-strip strong, .ys-strip b) { font-size: 12px; }
+.ys-collage-item[data-screen="status"] :is(.ys-kicker, .ys-note, .ys-row small, .ys-strip small) { font-size: 10px; }
 
 /* Телефон в ленте уже настоящего, но экран внутри должен остаться ТЕМ ЖЕ.
    Если просто отдать содержимому 208 пикселей, оно перевёрстывается под узкую
@@ -609,12 +612,18 @@ button.ys-action { cursor: pointer; }
 .ys-coverflow {
   --ys-coverflow-width: clamp(230px, 72vw, 278px);
   --ys-coverflow-shift: clamp(118px, 28vw, 232px);
+  --ys-coverflow-content-scale: .65;
+  --ys-coverflow-target: calc(44px / var(--ys-coverflow-content-scale));
   display: grid;
   justify-items: center;
   gap: 4px;
   min-width: 0;
   width: 100%;
 }
+@supports (zoom: calc(320px / 320px)) {
+  .ys-coverflow { --ys-coverflow-content-scale: min(.8, calc(var(--ys-coverflow-width) / 320px)); }
+}
+.ys-coverflow :is(.ys-phone-status, .ys-phone-viewport) { zoom: var(--ys-coverflow-content-scale); }
 .ys-coverflow-track {
   position: relative;
   isolation: isolate;
@@ -673,9 +682,13 @@ button.ys-action { cursor: pointer; }
 .ys-tabs button:focus-visible { outline: 2px solid var(--color-brand-blue, #0062ee); outline-offset: 4px; }
 .ys-coverflow-slide[data-position="active"] .ys-screen-body { overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; }
 .ys-coverflow .ys-stepper { gap: 4px; }
-.ys-coverflow .ys-stepper button { flex: none; width: 44px; height: 44px; }
+.ys-coverflow .ys-stepper button { flex: none; width: var(--ys-coverflow-target); height: var(--ys-coverflow-target); }
+.ys-coverflow .ys-catalog-info {
+  min-width: calc(24px / var(--ys-coverflow-content-scale));
+  min-height: calc(24px / var(--ys-coverflow-content-scale));
+}
 .ys-coverflow .ys-slots button,
-.ys-coverflow .ys-bar-button { min-height: 44px; }
+.ys-coverflow .ys-bar-button { min-height: var(--ys-coverflow-target); }
 @media (min-width: 720px) {
   .ys-coverflow {
     --ys-coverflow-width: clamp(170px, calc((100svh - 168px) * 9 / 19.5), 320px);
