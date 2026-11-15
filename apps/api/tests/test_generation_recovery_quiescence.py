@@ -69,18 +69,57 @@ async def test_resume_cli_rejects_invalid_context_before_database(monkeypatch, f
     engine.assert_not_called()
 
 
+@pytest.mark.parametrize("fault", ["extra", "duplicate", "bool", "target", "run", "oversize"])
+async def test_parked_source_cli_rejects_invalid_context_before_database(monkeypatch, fault):
+    import io
+    import json
+    import sys
+    from unittest.mock import Mock
+
+    from yleum_api.core import db
+
+    context = {"version": 1, "release_sha": "a" * 40, "run_id": str(uuid4())}
+    if fault == "extra":
+        context["trusted"] = True
+    elif fault == "bool":
+        context["version"] = True
+    elif fault == "target":
+        context["release_sha"] = "f" * 40
+    elif fault == "run":
+        context["run_id"] = "{" + context["run_id"] + "}"
+    raw = json.dumps(context)
+    if fault == "duplicate":
+        raw = raw[:-1] + ', "version": 1}'
+    elif fault == "oversize":
+        raw = " " * 4097 + raw
+    engine = Mock(side_effect=AssertionError("invalid CLI input accessed database"))
+    monkeypatch.setattr(db, "get_engine", engine)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(raw))
+    with pytest.raises(ValueError):
+        await drain._command("parked-source-check", "a" * 40)
+    engine.assert_not_called()
+
+
 @pytest.mark.parametrize("existing", [None, "f" * 40])
-async def test_resume_requires_existing_exact_drain(db_session, test_engine, existing):
+@pytest.mark.parametrize("mode", ["resume", "parked"])
+async def test_owned_checks_require_existing_exact_drain(db_session, test_engine, existing, mode):
     from yleum_api.models.deployment_drain import DeploymentDrain
 
     if existing:
         await drain.begin_drain(db_session, existing)
         await db_session.commit()
-    context = drain.ReleaseCaptureContext(**release_capture())
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     async with factory() as checking:
         with pytest.raises(ValueError):
-            await drain._resume_classification(checking, context)
+            if mode == "resume":
+                await drain._resume_classification(
+                    checking, drain.ReleaseCaptureContext(**release_capture()),
+                )
+            else:
+                await drain._parked_source_classification(
+                    checking,
+                    drain.ParkedSourceCheck(version=1, release_sha="a" * 40, run_id=uuid4()),
+                )
     row = await db_session.get(DeploymentDrain, "generation")
     assert (row.release_sha if row else None) == existing
 
@@ -362,6 +401,92 @@ async def released_wait(session):
     assert recovery_execution.recovery_state(run) is not None
     await session.commit()
     return run, workspace, release
+
+
+@pytest.mark.parametrize("case", [
+    "selected", "missing", "unproved", "other_parked", "legacy_wait", "reader_lost", "operation",
+])
+async def test_parked_source_bridge_classifies_only_the_selected_run(
+    db_session, test_engine, monkeypatch, case,
+):
+    from tests.test_generation_recovery_deadlines import _clock
+    from yleum_api.models.deployment_drain import DeploymentDrain
+    from yleum_api.models.project_cell import ProjectCellOperation
+    from yleum_api.services.generation import parked_source_recovery
+
+    async def parked():
+        run, workspace, _ = await released_wait(db_session)
+        raw = run.agent_state["recovery_v1"]
+        raw = {
+            **raw,
+            "version": 3, "phase": "needs_input", "next_check_at": None, "cursor": "finalization",
+            "binding": {**raw["binding"], "fencing_epoch": workspace.fencing_epoch - 1},
+            "clock": {**_clock(datetime.now(UTC)), "interval_open": False},
+            "execution": {
+                **raw["execution"], "stage": "finalization", "substep": "checkpoint_ready",
+            },
+        }
+        run.agent_state = {**run.agent_state, "recovery_v1": raw}
+        await db_session.commit()
+        return run, workspace, raw
+
+    run, workspace, raw = await parked()
+    if case == "other_parked":
+        await parked()
+    elif case == "legacy_wait":
+        await released_wait(db_session)
+    elif case == "operation":
+        db_session.add(ProjectCellOperation(
+            workspace_id=workspace.id, generation_run_id=run.id, kind="ensure",
+            status="pending", idempotency_key="other operation", request_digest="a" * 64,
+        ))
+    await drain.begin_drain(db_session, "a" * 40)
+    await db_session.commit()
+
+    proof = AsyncMock(return_value=case != "unproved")
+    monkeypatch.setattr(parked_source_recovery, "parked_source_repair", proof)
+    readers = AsyncMock(return_value="d" * 64)
+    if case == "reader_lost":
+        readers.side_effect = ["d" * 64, RecoveryContractError("reader inventory changed")]
+    monkeypatch.setattr(drain, "require_recovery_readers", readers)
+    context = drain.ParkedSourceCheck(
+        version=1, release_sha="a" * 40, run_id=uuid4() if case == "missing" else run.id,
+    )
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as checking:
+        result = await drain._parked_source_classification(checking, context)
+        assert await checking.scalar(text("SHOW transaction_read_only")) == "on"
+    assert result.selected_verified == (case not in {"missing", "unproved", "reader_lost"})
+    assert result.active == {
+        "generations": int(case in {"missing", "unproved", "other_parked", "reader_lost"}),
+        "operations": int(case == "operation"), "leases": 0, "restorations": 0,
+    }
+    assert result.drained == (case in {"selected", "legacy_wait"})
+    assert set(result.to_wire()) == {
+        "version", "release_sha", "basis", "active", "selected_verified", "drained",
+    }
+    if case == "missing":
+        proof.assert_not_awaited()
+    else:
+        proof.assert_awaited_once()
+        assert proof.await_args.args[1].id == context.run_id
+    assert [call.kwargs for call in readers.await_args_list] == [{"own": False}] * 2
+    await db_session.refresh(run)
+    assert run.agent_state["recovery_v1"] == raw and run.status == "running"
+    assert await db_session.get(DeploymentDrain, "generation") is not None
+    if case in {"selected", "missing", "other_parked"}:
+        async with factory() as checking:
+            resumed = await drain._resume_classification(
+                checking, drain.ReleaseCaptureContext(**release_capture()),
+                parked_source_run=context.run_id,
+            )
+        assert resumed.drained is (case == "selected")
+        assert resumed.parked_source_verified is (case != "missing")
+        if case == "missing":
+            async with factory() as ending:
+                with pytest.raises(RecoveryContractError, match="physically quiescent"):
+                    await drain.end_drain(ending, "a" * 40, parked_source_run=context.run_id)
+            assert await db_session.get(DeploymentDrain, "generation") is not None
 
 
 @pytest.mark.parametrize(

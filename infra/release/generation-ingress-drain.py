@@ -15,6 +15,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from uuid import UUID
 
 VHOST = Path("/etc/nginx/sites-available/yleum.ru")
 MAP = Path("/etc/nginx/conf.d/yleum-generation-drain.conf")
@@ -60,8 +61,16 @@ def write_atomic(path: Path, content: bytes, mode: int = 0o600) -> None:
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
         os.chmod(name, mode)
         os.replace(name, path)
+        if hasattr(os, "O_DIRECTORY"):
+            parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(parent)
+            finally:
+                os.close(parent)
     finally:
         if os.path.exists(name):
             os.unlink(name)
@@ -124,10 +133,33 @@ def owned(release: str) -> dict[str, object]:
     return data
 
 
-def begin(release: str) -> None:
+def parked_source_scope(release: str) -> str | None:
+    path = STATE / (release + ".parked-source.json")
+    selected = None
+    if path.is_symlink():
+        raise RuntimeError("parked source scope path is a symbolic link")
+    if path.exists():
+        value = json.loads(path.read_bytes())
+        if (
+            type(value) is not dict
+            or set(value) != {"release_sha", "run_id"} or value["release_sha"] != release
+            or type(value["run_id"]) is not str or str(UUID(value["run_id"])) != value["run_id"]
+        ):
+            raise RuntimeError("parked source scope is corrupt")
+        selected = value["run_id"]
+    if (STATE / "active.json").exists() and owned(release).get("parked_source_run") != selected:
+        raise RuntimeError("parked source scope conflicts with the ingress barrier")
+    return selected
+
+
+def begin(release: str, parked_source_run: str | None = None) -> None:
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    selected = parked_source_scope(release)
+    if selected is not None and selected != parked_source_run:
+        raise RuntimeError("ingress drain has another parked source scope")
     if (STATE / "active.json").exists():
-        owned(release)
+        if selected != parked_source_run:
+            raise RuntimeError("ingress drain has another parked source scope")
         probe()
         return
     if MAP.exists():
@@ -138,6 +170,11 @@ def begin(release: str) -> None:
     backup = STATE / (release + ".original.conf")
     if backup.exists() and backup.read_bytes() != source:
         raise RuntimeError("existing backup differs; do not overwrite it")
+    if parked_source_run is not None and selected is None:
+        write_atomic(
+            STATE / (release + ".parked-source.json"),
+            json.dumps({"release_sha": release, "run_id": parked_source_run}).encode(),
+        )
     write_atomic(backup, source)
     write_atomic(MAP, MAP_BODY, 0o644)
     write_atomic(VHOST, blocked, mode)
@@ -153,6 +190,8 @@ def begin(release: str) -> None:
         "blocked_sha": digest(blocked),
         "mode": mode,
     }
+    if parked_source_run is not None:
+        data["parked_source_run"] = parked_source_run
     write_atomic(STATE / "active.json", json.dumps(data, sort_keys=True).encode())
     # From here onward errors retain the owned state and barrier. No EXIT cleanup.
     command("systemctl", "reload", "nginx")
@@ -181,15 +220,35 @@ def end(release: str) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("begin", "check", "end"))
+    parser.add_argument(
+        "action", choices=("begin", "check", "end", "parked-source-scope", "clear-parked-source"),
+    )
     parser.add_argument("release_sha")
+    parser.add_argument("parked_source_run", nargs="?")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.release_sha):
         parser.error("full release SHA required")
+    selected = args.parked_source_run
+    if selected is not None and (
+        args.action not in {"begin", "clear-parked-source"} or str(UUID(selected)) != selected
+    ):
+        parser.error("expected a canonical parked source UUID")
     if args.action == "begin":
-        begin(args.release_sha)
+        begin(args.release_sha, selected)
     elif args.action == "end":
         end(args.release_sha)
+    elif args.action == "parked-source-scope":
+        print(json.dumps({
+            "parked_source_run": parked_source_scope(args.release_sha),
+            "ingress_active": (STATE / "active.json").exists(),
+        }))
+        raise SystemExit(0)
+    elif args.action == "clear-parked-source":
+        if (STATE / "active.json").exists() or selected is None:
+            raise RuntimeError("parked source scope can only clear after ingress ends")
+        if parked_source_scope(args.release_sha) != selected:
+            raise RuntimeError("parked source scope cannot clear for a different run")
+        (STATE / (args.release_sha + ".parked-source.json")).unlink()
     else:
         owned(args.release_sha)
         probe()

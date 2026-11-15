@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 from uuid import UUID
 
 from sqlalchemy import select, text
@@ -117,6 +118,7 @@ async def _quiesced_physical_run(
     run: GenerationRun,
     *,
     for_dependency_advisory: bool = False,
+    parked_source: Literal["allow", "deny", "require"] = "allow",
 ) -> PhysicalQuiescenceEvidence | None:
     from yleum_api.services.generation.recovery_execution import (
         _initial_quiescent,
@@ -145,6 +147,7 @@ async def _quiesced_physical_run(
         if held:
             return None
         execution = state.execution
+        parked_source_verified = False
         if execution.physical_state == "no_effects":
             if not await _initial_quiescent(session, run.id):
                 return None
@@ -183,17 +186,32 @@ async def _quiesced_physical_run(
                     return None
             elif state.binding.fencing_epoch != workspace.fencing_epoch:
                 # Release advances the control fence without rewriting the
-                # checkpoint binding. Only the advisory may use this transition.
-                if not (
+                # checkpoint binding. Accept only a scoped, verified transition.
+                advisory_transition = (
                     for_dependency_advisory
                     and isinstance(state, RecoveryStateV3)
                     and state.phase == "waiting_dependency"
                     and state.clock.wait_dependency is not None
                     and state.binding.fencing_epoch + 1 == workspace.fencing_epoch
-                ):
-                    return None
+                )
+                if not advisory_transition:
+                    if (
+                        parked_source == "deny" or not isinstance(state, RecoveryStateV3)
+                        or state.phase != "needs_input"
+                        or state.binding.fencing_epoch + 1 != workspace.fencing_epoch
+                    ):
+                        return None
+                    from yleum_api.services.generation.parked_source_recovery import (
+                        parked_source_repair,
+                    )
+
+                    parked_source_verified = await parked_source_repair(session, run, state)
+                    if not parked_source_verified:
+                        return None
             if not await _provider_stopped(session, run):
                 return None
+        if parked_source == "require" and not parked_source_verified:
+            return None
         return PhysicalQuiescenceEvidence(
             run.id,
             state.checkpoint,
@@ -206,7 +224,9 @@ async def _quiesced_physical_run(
 
 
 async def provider_dependency_quiescent(session: AsyncSession, run: GenerationRun) -> bool:
-    return await _quiesced_physical_run(session, run, for_dependency_advisory=True) is not None
+    return await _quiesced_physical_run(
+        session, run, for_dependency_advisory=True, parked_source="deny",
+    ) is not None
 
 
 async def quiesced_recovery_run(

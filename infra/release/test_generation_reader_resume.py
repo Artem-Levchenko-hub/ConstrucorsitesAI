@@ -90,6 +90,23 @@ class ResumeSourceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.module.decode_context(base64.b64encode(raw.encode()).decode(), "a" * 40)
 
+    def launch(self, program, context, *mode):
+        output = io.BytesIO()
+        with tarfile.open(
+            fileobj=output, mode="w", format=tarfile.PAX_FORMAT, pax_headers={"comment": "a" * 40}
+        ) as archive:
+            for name, text in {"__init__.py": "", "services/__init__.py": "",
+                               "services/generation_deployment_drain.py": program}.items():
+                data = text.encode()
+                item = tarfile.TarInfo("apps/api/src/yleum_api/" + name)
+                item.size = len(data)
+                archive.addfile(item, io.BytesIO(data))
+        return subprocess.run(
+            [sys.executable, "-B", str(Path(__file__).with_name("generation-reader-resume.py")),
+             "a" * 40, base64.b64encode(json.dumps(context).encode()).decode(), *mode],
+            input=output.getvalue(), capture_output=True, timeout=10,
+        )
+
     def test_fresh_process_imports_only_archived_target_and_sanitizes_failure(self):
         prefix = '''import json, sys
 assert "reader-target-check-" in __file__
@@ -103,22 +120,33 @@ context = json.load(sys.stdin)
         ]
         for program, expected in programs:
             with self.subTest(expected=expected):
-                output = io.BytesIO()
-                with tarfile.open(fileobj=output, mode="w", format=tarfile.PAX_FORMAT,
-                                  pax_headers={"comment": "a" * 40}) as archive:
-                    for name, text in {"__init__.py": "", "services/__init__.py": "",
-                                       "services/generation_deployment_drain.py": program}.items():
-                        data = text.encode()
-                        item = tarfile.TarInfo("apps/api/src/yleum_api/" + name)
-                        item.size = len(data)
-                        archive.addfile(item, io.BytesIO(data))
-                result = subprocess.run([sys.executable, "-B", str(Path(__file__).with_name("generation-reader-resume.py")),
-                                         "a" * 40, base64.b64encode(json.dumps(self.context()).encode()).decode()],
-                                        input=output.getvalue(), capture_output=True, timeout=10)
+                result = self.launch(program, self.context())
                 self.assertEqual(result.returncode, expected, result.stderr)
                 self.assertNotIn(b"DO_NOT_EMIT_PRIVATE_PAYLOAD", result.stdout + result.stderr)
                 value = json.loads(result.stdout)
                 self.assertEqual(value["drained"], expected == 0)
+
+    def test_first_capture_does_not_accept_drain_without_exact_parked_proof(self):
+        context = {"version": 1, "release_sha": "a" * 40,
+                   "run_id": "11111111-1111-4111-8111-111111111111"}
+        program = '''import json, sys
+assert "reader-target-check-" in __file__
+assert sys.argv[1:] == ["parked-source-check", "a" * 40]
+context = json.load(sys.stdin)
+assert context.pop("run_id") == "11111111-1111-4111-8111-111111111111"
+result = dict(context, basis="parked_source_recovery", active=dict.fromkeys(
+    ["generations", "operations", "leases", "restorations"], 0))
+'''
+        for selected, expected in ((True, 0), (False, 75)):
+            with self.subTest(selected=selected):
+                result = self.launch(
+                    program + f'print(json.dumps(dict(result, selected_verified={selected}, '
+                    'drained=True)))', context, "parked-source",
+                )
+                self.assertEqual(result.returncode, expected, result.stderr)
+                self.assertNotIn(context["run_id"].encode(), result.stdout)
+        invalid = self.launch(program, self.context(), "parked-source")
+        self.assertEqual(invalid.returncode, 75)
 
 
 if __name__ == "__main__":

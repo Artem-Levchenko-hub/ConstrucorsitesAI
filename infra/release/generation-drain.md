@@ -511,3 +511,34 @@ recloses admission and repeats every gate. Any new admitted work is drained by
 that normal protocol. Never remove a foreign marker/row, skip a failing gate,
 apply this procedure after runtime replacement, or infer rollback readiness from
 health or an empty SQL count alone.
+
+### Rolling out recovery for a parked source check
+
+A MAX V3 run can exhaust its editing window at a source check and release its
+workspace. The saved source binding remains on the preceding fence. To introduce
+support for this retired state, use the exact pushed revision with green CI and
+the explicitly selected run:
+
+```sh
+infra/release/deploy-prod.sh "$FIX_SHA" --no-web --parked-source-run "$RUN_ID"
+```
+
+The existing ingress and SQL fences close first. Before recording the normal
+reader captures, the launcher verifies the current reader inventory, then
+executes the exact target's read-only SQL classifier. It requires the current
+release owner and affirmative proof of the selected parked check. Controller
+physical checks and the rest of the owned release protocol still apply.
+
+The selected check binds the run, original snapshot, retained context and source,
+terminal provider journals and exact completed workspace release. The source
+fingerprint must match the recorded server diagnosis for a located
+`throw_statement`. Each other run and pending operation still participates in
+the drain. The target worker can claim the qualifying parked run once after
+admission reopens. Its original editing clock, project data and billing identity
+travel with the checkpoint. The current source check and repair policy run again
+under the new workspace fence before any model dispatch.
+The ingress owner records the selected UUID before the first reader capture.
+Retries recover that selection from root-owned state. The record survives the
+end of ingress and clears after SQL admission and both reader inhibits complete.
+Once these checks are installed on the serving revision, normal releases also
+recognize proven retired source checks as durable waits.

@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, String, and_, cast, exists, func, or_, select, text, update
+from sqlalchemy import Select, String, and_, case, cast, exists, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
@@ -574,7 +574,14 @@ def _maintenance_candidates_query(active: Sequence[UUID]) -> Select[Any]:
                 ),
             ),
         )
-        .order_by(GenerationRun.created_at, GenerationRun.id)
+        .order_by(
+            case((and_(
+                GenerationRun.status == "running",
+                raw["phase"].as_string() == "needs_input",
+                raw["execution"]["physical_state"].as_string() == "released",
+            ), 1), else_=0),
+            GenerationRun.created_at, GenerationRun.id,
+        )
         .limit(100)
     )
 
@@ -585,11 +592,34 @@ def _recovery_due_clause() -> Any:
     No cast of untrusted JSON dates: strict decoding and an exact due check run
     again under claim ownership. This predicate cannot authorize execution.
     """
-    raw = GenerationRun.agent_state["recovery_v1"]
+    from yleum_api.services.generation.parked_source_recovery import PARKED_SOURCE_REDRIVE_KEY
+    from yleum_api.services.max_management_generation import PARKED_THROW_DIAGNOSTIC_PREFIX
+
+    marker = GenerationRun.agent_state
+    raw = marker["recovery_v1"]
     phase = raw["phase"].as_string()
     due = func.replace(raw["next_check_at"].as_string(), "Z", "+00:00")
+    detail = marker["max_finalization"]["terminal_reason"].as_string()
     return or_(
         func.coalesce(raw["version"].as_string(), "") != "3",
+        and_(
+            phase == "needs_input",
+            raw["execution"]["stage"].as_string() == "finalization",
+            raw["execution"]["substep"].as_string() == "checkpoint_ready",
+            raw["execution"]["physical_state"].as_string() == "released",
+            raw["execution"]["pending_effect_id"].as_string().is_(None),
+            raw["clock"]["stage"].as_string() == "edit",
+            raw["clock"]["interval_open"].as_string() == "false",
+            raw["clock"]["repair_granted"].as_string() == "false",
+            marker[PARKED_SOURCE_REDRIVE_KEY].as_string().is_(None),
+            detail.startswith(
+                PARKED_THROW_DIAGNOSTIC_PREFIX + " Source location: src/app/", autoescape=True,
+            ),
+            detail.contains(
+                "; AST throw_statement; reason unsupported_statement; fingerprint ",
+                autoescape=True,
+            ),
+        ),
         and_(
             phase != "needs_input",
             or_(

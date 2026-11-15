@@ -16,6 +16,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import unittest
 from contextlib import ExitStack, contextmanager, nullcontext, redirect_stdout
 from dataclasses import replace
@@ -586,8 +587,60 @@ class MaintenanceShellTests(unittest.TestCase):
         self.assertEqual(core[:5], ["core", "capture", "--release", TARGET, "--owner-nonce"])
         self.assertEqual(commerce, ["commerce", *core[1:]])
 
+    def test_completed_scope_cleanup_requires_existing_release_to_be_fully_open(self):
+        script = f"SHA={TARGET}\n"
+        script += """case_kind="$1"
+api_maintenance() {
+    if [ "$case_kind" = sql ]; then printf '{"release_sha":"owned"}'; else printf '{"release_sha":null}'; fi
+}
+reader_control() {
+    if [ "$2" = verify-current ]; then [ "$case_kind" != stale ]; return; fi
+    if [ "$case_kind" = commerce ] && [ "$1" = commerce ]; then
+        printf '{"owner":{"release":"owned"}}'
+    else
+        printf '{"owner":null}'
+    fi
+}
+ingress_drain() { printf '%s' "$1"; }
+"""
+        script += shell_function("clear_finished_parked_scope") + "\nclear_finished_parked_scope\n"
+        for case_kind in ("sql", "commerce", "stale", "finished"):
+            with self.subTest(case=case_kind):
+                result = self.execute(script, arguments=(case_kind,))
+                if case_kind == "finished":
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, b"clear-parked-source")
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, b"")
+
 
 class CanonicalDeployContractTests(unittest.TestCase):
+    def test_ingress_holds_exact_parked_scope_across_restarts_and_its_own_end(self):
+        gate = load_source("test_ingress_parked_scope", "generation-ingress-drain.py")
+        selected = "11111111-1111-4111-8111-111111111111"
+        different = "22222222-2222-4222-8222-222222222222"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vhost, nginx_map, state = root / "vhost", root / "map", root / "state"
+            vhost.write_bytes(b"server { location /api/ { proxy_pass http://fixture; } }")
+            with patch.multiple(
+                gate, VHOST=vhost, MAP=nginx_map, STATE=state,
+                command=MagicMock(), probe=MagicMock(),
+            ):
+                gate.begin(TARGET, selected)
+                self.assertEqual(gate.parked_source_scope(TARGET), selected)
+                with self.assertRaisesRegex(RuntimeError, "another parked source scope"):
+                    gate.begin(TARGET, different)
+                with self.assertRaisesRegex(RuntimeError, "another release"):
+                    gate.parked_source_scope(CURRENT)
+                gate.end(TARGET)
+                self.assertEqual(gate.parked_source_scope(TARGET), selected)
+                with self.assertRaisesRegex(RuntimeError, "another parked source scope"):
+                    gate.begin(TARGET, different)
+                gate.begin(TARGET, selected)
+                self.assertEqual(gate.parked_source_scope(TARGET), selected)
+
     def test_all_serving_api_python_calls_are_external_to_reader_cgroups(self):
         source = (HERE / "deploy-prod.sh").read_text(encoding="utf-8")
         # Gateway's independent retirement check deliberately retains Docker exec.

@@ -16,6 +16,9 @@
 #                         шлюза (yleum-prod-gw) с --no-deps, проверить его health на :8101
 #     --bootstrap-admission первый выпуск: старый API ещё не имеет durable drain;
 #                         ingress + read-only gate → target migration/fence → обычный rollout
+#     --parked-source-run UUID
+#                         read-only проверка точного остановленного MAX run перед захватом ролей;
+#                         только для переезда на проверенный релиз восстановления
 #     --repair-window N   окно починки адаптации (RESTORATION_ADAPTATION_REPAIR_SECONDS), по умолчанию 3600:
 #                         пишется в .env платформы и сверяется в отрендеренном compose (защита от отката к умолчанию)
 #                         (compose и api берут её из docker-compose.yml / config.py)
@@ -46,6 +49,7 @@ RESUME_NONCE=""
 CONTROL_SHA=""
 REPAIR_OVERRIDE=0
 GENERATION_WINDOW=""
+PARKED_SOURCE_RUN=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-web) WEB=0 ;;
@@ -55,6 +59,7 @@ while [ $# -gt 0 ]; do
     --generation-window) GENERATION_WINDOW="${2:?}"; shift ;;
     --gateway) GW=1 ;;
     --bootstrap-admission) BOOTSTRAP=1 ;;
+    --parked-source-run) PARKED_SOURCE_RUN="${2:?}"; shift ;;
     --finalize-owned-release) FINALIZE_NONCE="${2:?}"; shift ;;
     --resume-owned-release) RESUME_NONCE="${2:?}"; shift ;;
     --control-revision) CONTROL_SHA="${2:?}"; shift ;;
@@ -62,6 +67,14 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+if [ -n "$PARKED_SOURCE_RUN" ]; then
+  [[ "$PARKED_SOURCE_RUN" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
+    && [ "$API" = 1 ] && [ "$BOOTSTRAP" = 0 ] \
+    && [ -z "$FINALIZE_NONCE$RESUME_NONCE$CONTROL_SHA" ] || {
+      echo "--parked-source-run requires a canonical UUID and normal API rollout" >&2
+      exit 2
+    }
+fi
 if [ -n "$GENERATION_WINDOW" ]; then
   # Only canonical decimal seconds may enter the remote shell command.
   [[ "$GENERATION_WINDOW" != *[!0-9]* && "$GENERATION_WINDOW" =~ ^[1-9][0-9]{1,3}$ ]] \
@@ -109,8 +122,13 @@ api_maintenance() {
   ssh max-core "sudo -n python3 -c 'import base64; exec(compile(base64.b64decode(\"$launcher\"), \"release-api-maintenance\", \"exec\"))' '$arguments'"
 }
 ingress_drain() {
+  local scope=""
+  if { [ "$1" = begin ] || [ "$1" = clear-parked-source ]; } \
+    && [ -n "${PARKED_SOURCE_RUN:-}" ]; then
+    scope=" $PARKED_SOURCE_RUN"
+  fi
   git -C "$REPO" show "$SHA:infra/release/generation-ingress-drain.py" \
-    | ssh max-core "sudo python3 - $1 $SHA"
+    | ssh max-core "sudo python3 - $1 $SHA$scope"
 }
 publication_drain() {
   local gate_revision="${CONTROL_SHA:-$SHA}"
@@ -135,9 +153,21 @@ database_quiescence() {
     ingress_drain check || return
     git -C "$REPO" show "$SHA:apps/api/src/yleum_api/services/generation_deployment_drain.py" \
       | api_maintenance - bootstrap-check "$SHA"
+  elif [ -n "${PARKED_SOURCE_RUN:-}" ]; then
+    parked_source_check
   else
     api_maintenance -m yleum_api.services.generation_deployment_drain check "$SHA"
   fi
+}
+
+parked_source_check() {
+  local context loader
+  ingress_drain check || return
+  reader_control core verify-current --release "$API_RUNTIME_SHA" || return
+  context=$(python3 -c 'import base64,json,sys; print(base64.b64encode(json.dumps({"version":1,"release_sha":sys.argv[1],"run_id":sys.argv[2]}).encode()).decode())' "$SHA" "$PARKED_SOURCE_RUN") || return
+  loader=$(git -C "$REPO" show "$SHA:infra/release/generation-reader-resume.py" | base64 -w0) || return
+  git -C "$REPO" archive --format=tar "$SHA" apps/api/src \
+    | api_maintenance -c "import base64; exec(compile(base64.b64decode(\"$loader\"), \"target-parked-source-check\", \"exec\"))" "$SHA" "$context" parked-source
 }
 
 reader_control() {
@@ -149,6 +179,19 @@ reader_control() {
     git -C "$REPO" show "$SHA:infra/release/generation-reader-inventory.py" \
       | ssh max-core "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes commerce '$command'"
   fi
+}
+
+clear_finished_parked_scope() {
+  api_maintenance -m yleum_api.services.generation_deployment_drain status "$SHA" \
+    | python3 -c 'import json,sys; state=json.load(sys.stdin); assert "release_sha" in state and state["release_sha"] is None' \
+    || return
+  local host
+  for host in core commerce; do
+    reader_control "$host" prepare-owner --release "$SHA" \
+      | python3 -c 'import json,sys; assert json.load(sys.stdin)=={"owner":None}' || return
+  done
+  reader_control core verify-current --release "$SHA" || return
+  ingress_drain clear-parked-source
 }
 
 reader_prepare_retry() {
@@ -190,6 +233,10 @@ READER_OWNER
 
 reader_resume_check() {
   local core_context commerce_context context loader
+  local scope=()
+  if [ -n "${PARKED_SOURCE_RUN:-}" ]; then
+    scope=(resume-parked-source "$PARKED_SOURCE_RUN")
+  fi
   core_context=$(reader_control core capture-context --release "$SHA" --owner-nonce "$READER_NONCE") || return
   commerce_context=$(reader_control commerce capture-context --release "$SHA" --owner-nonce "$READER_NONCE") || return
   context=$(python3 - "$SHA" "$READER_NONCE" "$core_context" "$commerce_context" <<'READER_CONTEXT'
@@ -208,7 +255,7 @@ READER_CONTEXT
   # New process + exact committed package before any app imports. Installed
   # image contributes dependencies only; import/schema incompatibility denies.
   git -C "$REPO" archive --format=tar "$SHA" apps/api/src \
-    | api_maintenance -c "import base64; exec(compile(base64.b64decode(\"$loader\"), \"target-reader-resume\", \"exec\"))" "$SHA" "$context"
+    | api_maintenance -c "import base64; exec(compile(base64.b64decode(\"$loader\"), \"target-reader-resume\", \"exec\"))" "$SHA" "$context" "${scope[@]}"
 }
 
 reader_before() {
@@ -828,9 +875,16 @@ PY
   reader_control commerce verify-owner --release "$SHA" --owner-nonce "$READER_NONCE"
   reader_target
   ingress_drain end
-  api_maintenance -m yleum_api.services.generation_deployment_drain end "$SHA"
+  if [ -n "${PARKED_SOURCE_RUN:-}" ]; then
+    api_maintenance -m yleum_api.services.generation_deployment_drain end-parked-source "$SHA" "$PARKED_SOURCE_RUN"
+  else
+    api_maintenance -m yleum_api.services.generation_deployment_drain end "$SHA"
+  fi
   reader_control core clear --release "$SHA" --owner-nonce "$READER_NONCE"
   reader_control commerce clear --release "$SHA" --owner-nonce "$READER_NONCE"
+  if [ -n "${PARKED_SOURCE_RUN:-}" ]; then
+    ingress_drain clear-parked-source
+  fi
 }
 
 say "выкатка $SHA api=$API web=$WEB gateway=$GW legal=${LEGAL:-по умолчанию образа} repair=$REPAIR generation=${GENERATION_WINDOW:-сохранено}"
@@ -838,6 +892,16 @@ git -C "$REPO" fetch -q origin
 git -C "$REPO" merge-base --is-ancestor "$SHA" origin/main || { echo "ревизия $SHORT не лежит в origin/main — выкатываем только то, что в main" >&2; exit 2; }
 if [ -n "$CONTROL_SHA" ]; then
   control_preflight
+fi
+if [ -n "$PARKED_SOURCE_RUN" ]; then
+  [ "$(git -C "$REPO" rev-parse HEAD)" = "$SHA" ] \
+    && [ -z "$(git -C "$REPO" status --porcelain --untracked-files=all)" ] \
+    && cmp -s "$REPO/infra/release/deploy-prod.sh" <(git -C "$REPO" show "$SHA:infra/release/deploy-prod.sh") \
+    && [ "$(cd "$REPO" && gh run list --workflow ci.yml --branch main --commit "$SHA" --limit 1 \
+      --json headSha,status,conclusion --jq '.[0] | [.headSha,.status,.conclusion] | join(" ")')" = "$SHA completed success" ] || {
+      echo "parked source requires exact clean pushed source and green main CI" >&2
+      exit 75
+    }
 fi
 
 say "core: замок выкатки"
@@ -847,6 +911,30 @@ trap 'ssh max-core rm -f /opt/omnia/.deploy.lock >/dev/null 2>&1 || true' EXIT
 
 API_RUNTIME_SHA=$(api_maintenance --describe-runtime)
 [[ "$API_RUNTIME_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "API runtime revision is unconfirmed" >&2; exit 75; }
+if [ "$API" = 1 ]; then
+  scope_status=$(ingress_drain parked-source-scope | python3 -c '
+import json, sys
+from uuid import UUID
+state = json.load(sys.stdin)
+assert type(state) is dict and set(state) == {"parked_source_run", "ingress_active"}
+scope = state["parked_source_run"]
+assert scope is None or (type(scope) is str and str(UUID(scope)) == scope)
+assert type(state["ingress_active"]) is bool
+print(scope or "-", int(state["ingress_active"]))
+')
+  read -r scope ingress_active <<< "$scope_status"
+  if [ "$scope" != "-" ]; then
+    [ -z "$PARKED_SOURCE_RUN" ] || [ "$PARKED_SOURCE_RUN" = "$scope" ] || {
+      echo "existing ingress drain has another parked source scope" >&2; exit 75;
+    }
+    PARKED_SOURCE_RUN="$scope"
+    if [ "$ingress_active" = 0 ] && [ "$API_RUNTIME_SHA" = "$SHA" ] \
+      && clear_finished_parked_scope; then
+      say "завершённый релиз $SHORT: запись восстановления убрана"
+      exit 0
+    fi
+  fi
+fi
 if [ -n "$FINALIZE_NONCE" ]; then
   finalize_preflight
   finish_owned_release

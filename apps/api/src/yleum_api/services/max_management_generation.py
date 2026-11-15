@@ -26,6 +26,19 @@ from yleum_api.schemas.max_management import ManagementContract
 from yleum_api.services.max_management_contract import parse_management_contract
 
 _MANIFEST = ".omnia/management.json"
+PARKED_THROW_DIAGNOSTIC_PREFIX = (
+    "Managed source connection analysis cannot prove call or binding effects. "
+    "Simplify the identified source shape to a passive expression or explicit "
+    "body statements; do not change unrelated bindings or replace live SDK data "
+    "with static records."
+)
+_TYPESCRIPT_SOURCE_PATH = r"src/[A-Za-z0-9_./-]{1,180}\.tsx?"
+_PARKED_THROW_DIAGNOSTIC = re.compile(
+    re.escape(PARKED_THROW_DIAGNOSTIC_PREFIX)
+    + rf" Source location: ({_TYPESCRIPT_SOURCE_PATH}):"
+    r"([1-9][0-9]{0,6}):([1-9][0-9]{0,6});"
+    r" AST throw_statement; reason unsupported_statement; fingerprint ([a-f0-9]{16})\."
+)
 _MAX_COLLECTION_ITEMS = 16
 _CATALOG_SCALAR_FIELDS = {
     "id", "title", "category", "description", "price", "availability",
@@ -163,7 +176,7 @@ _SourceIssue = tuple[str, int, int, str, str, str]
 
 
 def _source_issue(node: Node, path: str, reason: str) -> _SourceIssue:
-    safe_path = path if re.fullmatch(r"src/[A-Za-z0-9_./-]{1,180}\.tsx?", path) else "source"
+    safe_path = path if re.fullmatch(_TYPESCRIPT_SOURCE_PATH, path) else "source"
     return (
         safe_path, node.start_point.row + 1, node.start_point.column + 1,
         node.type, reason, _rejection_fingerprint(node),
@@ -177,6 +190,44 @@ def _issue_detail(issue: _SourceIssue | None) -> str:
     return (
         f" Source location: {path}:{row}:{column}; "
         f"AST {kind}; reason {reason}; fingerprint {fingerprint}."
+    )
+
+
+def _editable_app_source(path: str) -> bool:
+    return (
+        path.startswith("src/app/") and not path.startswith("src/app/api/")
+        and posixpath.normpath(path) == path
+    )
+
+
+def matches_parked_throw_diagnostic(detail: str, files: Mapping[str, str]) -> bool:
+    """Match one stored source issue without interpreting the managed contract."""
+    match = _PARKED_THROW_DIAGNOSTIC.fullmatch(detail)
+    if match is None:
+        return False
+    path, row, column, fingerprint = match.groups()
+    if not _editable_app_source(path):
+        return False
+    from yleum_api.services.repo import MAX_FILE_BYTES
+
+    source = files.get(path)
+    if not isinstance(source, str) or len(source) > MAX_FILE_BYTES:
+        return False
+    try:
+        encoded = source.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    if len(encoded) > MAX_FILE_BYTES:
+        return False
+    root = Parser(_language()).parse(encoded).root_node
+    if root.has_error:
+        return False
+    line, offset = int(row), int(column)
+    point = (line - 1, offset - 1)
+    node = root.named_descendant_for_point_range(point, point)
+    return node is not None and node.type == "throw_statement" and (
+        _source_issue(node, path, "unsupported_statement")
+        == (path, line, offset, "throw_statement", "unsupported_statement", fingerprint)
     )
 
 
@@ -2149,6 +2200,7 @@ class ManagedSourceObligation(StrEnum):
     PROFILE_FIELD = "profile_field"
     CATALOG_RENDER = "catalog_render"
     CATALOG_SELECTION = "catalog_selection"
+    THROW_STATEMENT = "throw_statement"
     ORDER_HISTORY = "order_create_history"
     LEAD_HISTORY = "lead_create_history"
     BOOKING_HISTORY = "booking_create_history"
@@ -2265,13 +2317,20 @@ def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
     if connections.steps > 4000:
         return "Managed source connection analysis exceeded its bounded AST budget.", frozenset()
     if connections.unsupported_effects:
-        return (
-            "Managed source connection analysis cannot prove call or binding effects. "
-            "Simplify the identified source shape to a passive expression or explicit "
-            "body statements; do not change unrelated bindings or replace live SDK data "
-            "with static records." + _issue_detail(connections.first_unsupported),
-            frozenset(),
-        )
+        issue = connections.first_unsupported
+        effect_detail = PARKED_THROW_DIAGNOSTIC_PREFIX + _issue_detail(issue)
+        if issue is not None:
+            path, _, _, kind, reason, _ = issue
+            if (
+                (kind, reason) == ("throw_statement", "unsupported_statement")
+                and _editable_app_source(path)
+            ):
+                return ManagedSourceGap(
+                    effect_detail,
+                    obligation=ManagedSourceObligation.THROW_STATEMENT,
+                    contract_hash=contract.contract_hash,
+                ), frozenset()
+        return effect_detail, frozenset()
     if connections.unsupported_constant_control:
         return (
             "Managed source connection analysis cannot prove unsupported constant control.",

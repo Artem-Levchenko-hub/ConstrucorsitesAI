@@ -1,6 +1,7 @@
 """New management is explicit; legacy config/data never silently gains privileges."""
 
 import json
+import re
 from pathlib import Path
 from subprocess import run
 from uuid import uuid4
@@ -9,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from yleum_api.schemas.max_studio import MaxProjectConfigPayload
+from yleum_api.services import max_management_generation
 from yleum_api.services.max_content_delivery import public_business_config
 from yleum_api.services.max_management_contract import build_management_contract
 from yleum_api.services.max_management_generation import (
@@ -1129,9 +1131,113 @@ def test_unsupported_effect_diagnostic_names_actual_ast_location_without_source_
     )
     gap = management_source_gap(connection_files(source, ("leads",)))
     assert gap is not None and "Source location: src/app/page.tsx:" in gap
+    assert gap.obligation is None
     assert "AST switch_statement; reason unsupported_statement" in gap
     assert "DO-NOT-ECHO-THIS-VALUE" not in gap
     assert "instead of default, rest" not in gap
+
+
+def test_located_throw_is_a_typed_repair_obligation_without_connection_authority():
+    source = LEAD_STATUS_PAGE.replace(
+        "if (status === 'pending') return;",
+        "try { if (status === 'pending') throw new Error(format(response.status)); } "
+        "catch (error) { setStatus('failed'); return; }",
+    )
+    files = connection_files(source, ("leads",))
+    gap = management_source_gap(files)
+    assert gap is not None
+    assert gap.obligation is ManagedSourceObligation.THROW_STATEMENT
+    assert "AST throw_statement; reason unsupported_statement" in gap
+    assert "format(response.status)" not in gap
+    assert management_implemented_capabilities(files) == frozenset()
+
+    shifted = management_source_gap(connection_files("\n" + source, ("leads",)))
+    assert shifted is not None and shifted.rejection_key() == gap.rejection_key()
+    assert ManagedSourceGap(str(gap)).obligation is None
+
+
+def test_throw_in_unsupported_loop_does_not_get_statement_repair_authority():
+    source = LEAD_STATUS_PAGE.replace(
+        "if (status === 'pending') return;",
+        "for (const value of [1]) { throw new Error('stop'); }",
+    )
+    gap = management_source_gap(connection_files(source, ("leads",)))
+    assert gap is not None and gap.obligation is None
+    assert "AST throw_statement; reason unsupported_loop_control" in gap
+
+
+def test_throw_outside_app_source_does_not_get_statement_repair_authority():
+    files = connection_files(
+        "import {reject} from '@/components/reject';\n" + LEAD_STATUS_PAGE.replace(
+            "if (status === 'pending') return;", "if (status === 'pending') reject();",
+        ),
+        ("leads",),
+    )
+    files["src/components/reject.ts"] = "export function reject() { throw new Error('stop'); }"
+    gap = management_source_gap(files)
+    assert gap is not None and gap.obligation is None
+    assert "Source location: src/components/reject.ts:" in gap
+    assert "AST throw_statement; reason unsupported_statement" in gap
+
+
+@pytest.fixture
+def parked_throw_checkpoint():
+    source = LEAD_STATUS_PAGE.replace(
+        "if (status === 'pending') return;",
+        "try { if (status === 'ожидание') throw new Error(format(response.status)); } "
+        "catch (error) { setStatus('failed'); return; }",
+    )
+    gap = management_source_gap(connection_files(source, ("leads",)))
+    assert gap is not None and gap.obligation is ManagedSourceObligation.THROW_STATEMENT
+    return str(gap), {"src/app/page.tsx": source}
+
+
+def test_parked_throw_matches_checkpoint_without_management_manifest(parked_throw_checkpoint):
+    detail, files = parked_throw_checkpoint
+    prefix = max_management_generation.PARKED_THROW_DIAGNOSTIC_PREFIX
+    assert detail.split(" Source location:", 1)[0] == prefix
+    assert max_management_generation.matches_parked_throw_diagnostic(detail, files)
+
+
+@pytest.mark.parametrize("change", [
+    "fingerprint", "source", "path", "traversal", "row", "column", "reason",
+    "trailing", "malformed", "missing",
+])
+def test_parked_throw_rejects_changed_or_malformed_evidence(parked_throw_checkpoint, change):
+    detail, files = parked_throw_checkpoint
+    path = "src/app/page.tsx"
+    if change == "fingerprint":
+        detail = re.sub(r"fingerprint [a-f0-9]{16}", "fingerprint " + "0" * 16, detail)
+    elif change == "source":
+        files[path] = files[path].replace("response.status", "response.message")
+    elif change in {"path", "traversal"}:
+        replacement = ("src/components/page.tsx" if change == "path"
+                       else "src/app/../app/page.tsx")
+        files[replacement] = files[path]
+        detail = detail.replace(path, replacement)
+    elif change == "row":
+        files[path] = "\n" + files[path]
+    elif change == "column":
+        detail = re.sub(r":(\d+); AST", lambda match: f":{int(match[1]) + 1}; AST", detail)
+    elif change == "reason":
+        detail = detail.replace("unsupported_statement", "unsupported_loop_control")
+    elif change == "trailing":
+        detail += "\n"
+    elif change == "missing":
+        files.clear()
+    else:
+        files[path] += "\nconst invalid = ;"
+    assert not max_management_generation.matches_parked_throw_diagnostic(detail, files)
+
+
+def test_parked_throw_does_not_parse_sources_over_the_byte_limit(parked_throw_checkpoint):
+    from yleum_api.services.repo import MAX_FILE_BYTES
+
+    detail, files = parked_throw_checkpoint
+    path = "src/app/page.tsx"
+    files[path] += "\n// " + "ю" * (MAX_FILE_BYTES // 2)
+    assert len(files[path]) < MAX_FILE_BYTES
+    assert not max_management_generation.matches_parked_throw_diagnostic(detail, files)
 
 
 @pytest.mark.parametrize("initial", ["[]", "[{}]"])

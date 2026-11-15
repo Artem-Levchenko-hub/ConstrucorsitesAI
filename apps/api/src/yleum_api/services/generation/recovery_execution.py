@@ -317,14 +317,24 @@ async def claim_continuation(
         not isinstance(state, RecoveryStateV2)
         or state.attempt_seq != expected_attempt
         or (isinstance(state, RecoveryStateV3) and state.clock.wait_dependency is not None)
-        or state.phase not in {
-            "waiting_dependency", "reconciling", "working", "repairing", "verifying",
-        }
         or (
             state.phase in {"waiting_dependency", "reconciling"}
             and (state.next_check_at is None or state.next_check_at > now)
         )
     ):
+        return None
+    parked_repair = state.phase == "needs_input"
+    if parked_repair:
+        from yleum_api.services.generation.parked_source_recovery import (
+            PARKED_SOURCE_REDRIVE_KEY,
+            parked_source_repair,
+        )
+
+        if not await parked_source_repair(session, run, state):
+            return None
+    elif state.phase not in {
+        "waiting_dependency", "reconciling", "working", "repairing", "verifying",
+    }:
         return None
     if isinstance(state, RecoveryStateV3) and await _defer_open_response(session, run, state, now):
         return None
@@ -373,7 +383,10 @@ async def claim_continuation(
             "next_check_at": None,
         }
     )
-    run.agent_state = {**run.agent_state, RECOVERY_KEY: updated.model_dump(mode="json")}
+    persisted = {**run.agent_state, RECOVERY_KEY: updated.model_dump(mode="json")}
+    if parked_repair:
+        persisted[PARKED_SOURCE_REDRIVE_KEY] = state.state_revision
+    run.agent_state = persisted
     await session.flush()
     return claim
 

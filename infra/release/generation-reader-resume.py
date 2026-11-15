@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fresh-process exact-target SQL retry check; root verifies both captures first."""
+"""Fresh-process exact-target checks for an owned retry or a scoped first capture."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ CONTEXT_KEYS = {
     "core_capture_sha256",
     "commerce_capture_sha256",
 }
+PARKED_CONTEXT_KEYS = {"version", "release_sha", "run_id"}
 
 
 def require(condition: object) -> None:
@@ -55,6 +56,19 @@ def decode_context(encoded: str, revision: str) -> dict:
         require(
             isinstance(value[key], str) and re.fullmatch(r"[0-9a-f]{64}", value[key])
         )
+    return value
+
+
+def decode_parked_context(encoded: str, revision: str) -> dict:
+    require(re.fullmatch(r"[0-9a-f]{40}", revision) and len(encoded) <= 1024)
+    value = json.loads(base64.b64decode(encoded, validate=True), object_pairs_hook=unique_object)
+    require(type(value) is dict and set(value) == PARKED_CONTEXT_KEYS)
+    require(
+        type(value["version"]) is int and value["version"] == 1
+        and value["release_sha"] == revision
+        and isinstance(value["run_id"], str)
+        and str(UUID(value["run_id"])) == value["run_id"]
+    )
     return value
 
 
@@ -104,9 +118,23 @@ def extract_source(payload: bytes, revision: str, root: Path) -> Path:
 
 
 def main() -> int:
-    require(len(sys.argv) == 3 and "yleum_api" not in sys.modules)
-    revision, encoded = sys.argv[1:]
-    context = decode_context(encoded, revision)
+    require(len(sys.argv) in (3, 4, 5) and "yleum_api" not in sys.modules)
+    revision, encoded = sys.argv[1:3]
+    parked = len(sys.argv) == 4
+    scoped_resume = len(sys.argv) == 5
+    extra: list[str] = []
+    if parked:
+        require(sys.argv[3] == "parked-source")
+        context = decode_parked_context(encoded, revision)
+        command = "parked-source-check"
+    else:
+        context = decode_context(encoded, revision)
+        command = "resume-check"
+        if scoped_resume:
+            scope, run_id = sys.argv[3:]
+            require(scope == "resume-parked-source" and str(UUID(run_id)) == run_id)
+            command = "resume-parked-source-check"
+            extra = [run_id]
     payload = sys.stdin.buffer.read(MAX_ARCHIVE + 1)
     with tempfile.TemporaryDirectory(prefix="reader-target-check-") as temp:
         source = extract_source(payload, revision, Path(temp))
@@ -115,7 +143,7 @@ def main() -> int:
         require(
             spec is not None and spec.origin == str(source / "yleum_api/__init__.py")
         )
-        sys.argv = ["generation_deployment_drain", "resume-check", revision]
+        sys.argv = ["generation_deployment_drain", command, revision, *extra]
         sys.stdin = io.StringIO(json.dumps(context))
         output, errors = io.StringIO(), io.StringIO()
         code = 0
@@ -130,15 +158,27 @@ def main() -> int:
                 code = exc.code
         require(len(output.getvalue()) <= 8192)
         result = json.loads(output.getvalue(), object_pairs_hook=unique_object)
-        require(
-            type(result) is dict
-            and set(result) == CONTEXT_KEYS | {"basis", "active", "drained"}
-        )
-        require(all(result[key] == context[key] for key in CONTEXT_KEYS))
-        require(
-            result["basis"] == "owned_release_capture"
-            and type(result["drained"]) is bool
-        )
+        require(type(result) is dict and type(result.get("drained")) is bool)
+        if parked:
+            require(
+                set(result) == {"version", "release_sha", "basis", "active",
+                                "selected_verified", "drained"}
+                and result["basis"] == "parked_source_recovery"
+                and type(result["selected_verified"]) is bool
+                and type(result["version"]) is int
+                and result["version"] == context["version"]
+                and result["release_sha"] == revision
+            )
+            selected = result["selected_verified"]
+        else:
+            fields = CONTEXT_KEYS | {"basis", "active", "drained"}
+            if scoped_resume:
+                fields.add("parked_source_verified")
+            require(set(result) == fields)
+            require(all(result[key] == context[key] for key in CONTEXT_KEYS))
+            require(result["basis"] == "owned_release_capture")
+            selected = result.get("parked_source_verified", True)
+            require(type(selected) is bool)
         counts = result["active"]
         require(
             type(counts) is dict
@@ -146,7 +186,7 @@ def main() -> int:
         )
         require(all(type(count) is int and count >= 0 for count in counts.values()))
         require(
-            result["drained"] == (not any(counts.values()))
+            result["drained"] == (selected and not any(counts.values()))
             and (code == 0) == result["drained"]
         )
         print(json.dumps(result, sort_keys=True))
