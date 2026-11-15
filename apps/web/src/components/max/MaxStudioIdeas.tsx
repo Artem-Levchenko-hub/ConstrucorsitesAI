@@ -55,7 +55,7 @@ export function MaxStudioIdeas({ onPick }: { onPick: (idea: MaxStudioIdea) => vo
   return (
     <section className="max-studio-ideas" aria-labelledby="max-ideas-heading">
       <header>
-        <h2 id="max-ideas-heading">Готовые приложения</h2>
+        <h2 id="max-ideas-heading">Шаблоны</h2>
         <p>Открой готовое приложение и поправь его под себя</p>
       </header>
       <div className="max-studio-ideas-grid">

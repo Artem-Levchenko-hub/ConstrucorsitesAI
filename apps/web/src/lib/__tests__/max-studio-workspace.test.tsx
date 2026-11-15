@@ -102,7 +102,7 @@ it.each(["create", "empty-state", "ready-idea"])("opens the wizard directly from
   await renderHome(`entrance-${entrance}`);
   await settle(() => expect(container.textContent).toContain("Первого приложения ещё нет"));
   if (entrance === "ready-idea") await act(async () => container.querySelector<HTMLButtonElement>(".max-studio-idea")!.click());
-  else await click(entrance === "create" ? "Создать приложение" : "Описать свою идею");
+  else await click(entrance === "create" ? "Создать приложение" : "Создать первое приложение");
   expect(document.querySelector("#max-project-name")).not.toBeNull();
   const name = document.querySelector<HTMLInputElement>("#max-project-name")!;
   const idea = document.querySelector<HTMLTextAreaElement>("#max-project-idea")!;
@@ -208,8 +208,8 @@ it("preserves quota admission while allowing the owner to review a ready idea", 
   await renderHome("exhausted-owner");
   await settle(() => expect(container.textContent).toContain("Первого приложения ещё нет"));
   expect(button("Создать приложение").disabled).toBe(true);
-  expect(button("Описать свою идею").disabled).toBe(true);
-  await click("Создать приложение"); await click("Описать свою идею");
+  expect(button("Создать первое приложение").disabled).toBe(true);
+  await click("Создать приложение"); await click("Создать первое приложение");
   expect(document.querySelector("#max-project-name")).toBeNull();
   await act(async () => container.querySelector<HTMLButtonElement>(".max-studio-idea")!.click());
   expect(document.querySelector<HTMLInputElement>("#max-project-name")?.value).toBe("Кофейня");
@@ -222,6 +222,7 @@ it("preserves quota admission while allowing the owner to review a ready idea", 
 it("keeps search editable with a clear action when no names match", async () => {
   mocks.list.mockResolvedValue([project]);
   await render(); await settle(() => expect(container.textContent).toContain("Кофе рядом"));
+  expect(container.textContent).not.toContain("Создать первое приложение");
   await change('input[placeholder="Найти проект"]', "несуществующий");
   expect(container.querySelector('input[placeholder="Найти проект"]')).toBeTruthy();
   expect(container.textContent).toContain("Ничего не найдено");
@@ -242,6 +243,8 @@ it("distinguishes loading, query failure, retry and a real empty workspace", asy
   expect(container.textContent).not.toContain("Первого приложения ещё нет");
   await click("Проверить ещё раз");
   await settle(() => expect(container.textContent).toContain("Первого приложения ещё нет"));
+  expect(container.textContent).not.toContain("Продолжите работу или запустите новую идею в MAX.");
+  expect(button("Создать первое приложение")).toBeDefined();
 });
 
 it("validates name and idea, retains answers through Back, and creates only after review", async () => {
@@ -416,7 +419,7 @@ it("предлагает готовые идеи вместо пустых дв�
   mocks.list.mockResolvedValue([project]);
   mocks.readiness.mockResolvedValue({ items: [{ id: "build", done: true }] });
   await render();
-  await settle(() => expect(container.textContent).toContain("Готовые приложения"));
+  await settle(() => expect(container.querySelector("#max-ideas-heading")?.textContent).toBe("Шаблоны"));
   expect(container.textContent).toContain("Открой готовое приложение и поправь его под себя");
   const ideas = [...container.querySelectorAll<HTMLButtonElement>(".max-studio-idea")];
   expect(ideas).toHaveLength(3);

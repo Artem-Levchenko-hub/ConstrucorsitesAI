@@ -27,7 +27,6 @@ const steps = [
     number: "01",
     title: "Создайте проект",
     text: "Назовите приложение и одним предложением опишите, что сможет делать пользователь.",
-    result: "Проект в редакторе, первая сборка уже запущена.",
     href: "/max/guide#project",
     icon: Smartphone,
   },
@@ -35,7 +34,6 @@ const steps = [
     number: "02",
     title: "Проверьте сборку",
     text: "Откройте основные экраны в мобильном предпросмотре и попросите агента исправить найденное.",
-    result: "Основной сценарий проверен в превью.",
     href: "/max/guide#builder",
     icon: Check,
   },
@@ -43,7 +41,6 @@ const steps = [
     number: "03",
     title: "Заполните данные",
     text: "Добавьте сведения о продукте, владельце, поддержке, контенте и реальных функциях.",
-    result: "Данные, контент и обязательные страницы заполнены.",
     href: "/max/guide#settings",
     icon: FileCheck2,
   },
@@ -51,7 +48,6 @@ const steps = [
     number: "04",
     title: "Подключите безопасный вход MAX",
     text: "Создайте и промодерируйте бота в MAX Partner, затем один раз добавьте его секрет через защищённую форму Yleum.",
-    result: "Безопасный вход MAX готов к запуску.",
     href: "/max/guide#max-bot",
     icon: Bot,
   },
@@ -59,7 +55,6 @@ const steps = [
     number: "05",
     title: "Опубликуйте",
     text: "Запустите production-развёртывание и дождитесь постоянного HTTPS-адреса.",
-    result: "Приложение доступно по постоянной HTTPS-ссылке.",
     href: "/max/guide#publish",
     icon: Rocket,
   },
@@ -67,7 +62,6 @@ const steps = [
     number: "06",
     title: "Проверьте запуск в MAX",
     text: "Вставьте production URL в MAX Partner и откройте приложение в реальном клиенте. Webhook Yleum подготовит автоматически.",
-    result: "Приложение открывается в MAX по кнопке запуска.",
     href: "/max/guide#acceptance",
     icon: ShieldCheck,
   },
@@ -108,13 +102,10 @@ export default async function MaxQuickStartPage() {
                   <h2>{step.title}</h2>
                   <p>{step.text}</p>
                 </div>
-                <div className="max-start-card-footer">
-                  <Link href={step.href} className="max-start-instruction" aria-label={`Подробная инструкция: ${step.title}`}>
-                    Подробная инструкция
-                    <ArrowRight size={17} aria-hidden="true" />
-                  </Link>
-                  <p className="max-start-outcome"><span className="max-start-outcome-marker" aria-hidden="true" /><span>{step.result}</span></p>
-                </div>
+                <Link href={step.href} className="max-start-instruction" aria-label={`Подробная инструкция: ${step.title}`}>
+                  Подробная инструкция
+                  <ArrowRight size={17} aria-hidden="true" />
+                </Link>
               </li>
             );
           })}

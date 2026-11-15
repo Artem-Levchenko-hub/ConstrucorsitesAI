@@ -277,9 +277,10 @@ describe("product learning", () => {
     vi.mocked(HTMLElement.prototype.scrollIntoView).mockImplementation(function (this: HTMLElement, options) {
       targetRect = { ...targetRect, top: this.matches(".guide-chapter") && typeof options === "object" && options.block === "start" ? 201.5 : 336.73 };
     });
-    await act(async () => root.render(<><div data-learning="guide-journey">Путь</div>{["start", "account", "project", "builder", "settings"].map(id => <section key={id} id={id} className="guide-chapter"><h2 id={`${id}-title`}>{id}</h2></section>)}<GuideLearning /></>));
+    const chapters = ["account", "project", "builder", "settings"];
+    await act(async () => root.render(<><div data-learning="guide-journey">Путь</div>{chapters.map(id => <section key={id} id={id} className="guide-chapter"><h2 id={`${id}-title`}>{id}</h2></section>)}<GuideLearning /></>));
     await click("Перейти в режим обучения");
-    for (let index = 0; index < 5; index++) await click("Далее");
+    for (let index = 0; index < chapters.length; index++) await click("Далее");
     const assertGeometry = () => {
       const card = document.querySelector<HTMLElement>(".learning-card")!;
       const spotlight = document.querySelector<HTMLElement>(".learning-spotlight")!;

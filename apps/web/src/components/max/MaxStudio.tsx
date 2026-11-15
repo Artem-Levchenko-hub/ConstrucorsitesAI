@@ -255,7 +255,6 @@ export function MaxStudio({ email }: { email: string }) {
             <div>
               <p className="omnia-kicker text-accent">Ваша студия</p>
               <h1>Мои приложения</h1>
-              <p>Продолжите работу или запустите новую идею в MAX.</p>
             </div>
             <Button data-learning="create-project" size="lg" disabled={quota.initialExhausted} onClick={openWizard}>
               <Plus className="size-4" /> Создать приложение
@@ -296,7 +295,7 @@ export function MaxStudio({ email }: { email: string }) {
               <FolderKanban className="mx-auto size-7 text-accent" />
               <h2>Первого приложения ещё нет</h2>
               <p>Опишите задачу своими словами — ИИ соберёт рабочее приложение внутри MAX. Или возьмите готовую идею ниже.</p>
-              <Button disabled={quota.initialExhausted} onClick={openWizard}>Описать свою идею</Button>
+              <Button disabled={quota.initialExhausted} onClick={openWizard}>Создать первое приложение</Button>
             </section>
           ) : (
             <section className="max-projects-list" aria-label="Приложения">

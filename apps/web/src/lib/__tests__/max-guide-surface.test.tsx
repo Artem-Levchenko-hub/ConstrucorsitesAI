@@ -22,7 +22,7 @@ import { guideScreenshots } from "@/components/max/guide/guide-screenshots";
 vi.mock("@/lib/auth-mock", () => ({ getSession: async () => null }));
 
 const chapterIds = [
-  "start", "account", "project", "builder", "settings", "integrations",
+  "account", "project", "builder", "settings", "integrations",
   "max-bot", "publish", "partner", "acceptance", "operations", "billing", "errors", "checklists",
 ];
 
@@ -81,6 +81,27 @@ describe("MAX guide screenshots", () => {
     expect(document.getElementById("settings")?.textContent).not.toContain("«Данные» → «Контент»");
     expect(document.body.textContent).not.toContain("Шаг 6 из 6");
     expect(document.body.textContent).not.toContain("Расширенные настройки → Настроить");
+  });
+
+  it("shows the empty cabinet before the wizard and numbers the creation instructions in order", async () => {
+    const page = new DOMParser().parseFromString(renderToStaticMarkup(await MaxGuidePage()), "text/html");
+    const project = page.getElementById("project")!;
+    expect(page.body.textContent).not.toContain("От регистрации и первой сборки");
+    expect(project.querySelector(".guide-chapter-lead")).toBeNull();
+    const figures = [...project.querySelectorAll<HTMLElement>("[data-guide-screenshot]")];
+    expect(figures.map(figure => figure.dataset.guideScreenshot)).toEqual([
+      "projects", "create", "create-audience", "create-functions", "create-review",
+    ]);
+    figures.forEach((figure, index) => {
+      expect(figure.querySelector("h3")?.textContent).toMatch(new RegExp(`^Шаг ${index + 1} · `));
+      const instructions = [...figure.querySelectorAll(".guide-screenshot__callouts li")];
+      expect(instructions.every(instruction => !instruction.textContent?.endsWith("."))).toBe(true);
+    });
+    expect(figures[0].querySelectorAll("svg > g")).toHaveLength(2);
+    expect(figures[0].textContent).toContain("«Создать приложение» в правом верхнем углу");
+    expect(figures[0].textContent).toContain("«Создать первое приложение» в центре страницы");
+    expect(figures[1].textContent).toContain("Укажите название создаваемого приложения");
+    expect(figures[1].textContent).toContain("Опишите главные действия");
   });
 
   it("publishes only flattened redacted PNG files rather than raw captures or fabricated controls", () => {
@@ -209,6 +230,11 @@ describe("MAX guide navigation", () => {
     expect(page.querySelector("video, a[href^='#video-']")).toBeNull();
     expect(page.body.textContent).not.toMatch(/Видеоуроки|Смотреть видео/);
     expect(page.getElementById("video-lessons")?.querySelector('nav[aria-label="Оглавление"]')).toBeTruthy();
+    expect(page.querySelector('section#start, a[href="#start"], a[href="/max/guide#start"]')).toBeNull();
+    expect(page.body.textContent).not.toContain("Перед началом");
+    for (const anchor of ["start", "video-start"]) {
+      expect(page.getElementById(anchor)?.closest("section")?.id).toBe("account");
+    }
 
     for (const id of chapterIds) {
       expect(page.getElementById(`video-${id}`)?.closest("section")?.id).toBe(id);
@@ -237,7 +263,7 @@ it("marks the same active chapter on both guide menus through fragments, clicks,
   const computedStyle = window.getComputedStyle;
   vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
     const style = computedStyle(element, pseudo);
-    if (element.id === "start") Object.defineProperty(style, "scrollMarginTop", { value: "92px" });
+    if (element.id === "account") Object.defineProperty(style, "scrollMarginTop", { value: "92px" });
     return style;
   });
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
@@ -313,7 +339,7 @@ it("marks the same active chapter on both guide menus through fragments, clicks,
       window.dispatchEvent(new PopStateEvent("popstate"));
       flushFrames();
     });
-    expect(activeLinks()).toEqual(["#start", "#start"]);
+    expect(activeLinks()).toEqual(["#account", "#account"]);
     expect(host.querySelector("details")?.hasAttribute("open")).toBe(false);
   } finally {
     await act(async () => root.unmount());

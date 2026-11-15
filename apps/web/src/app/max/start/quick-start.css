@@ -67,14 +67,14 @@
   line-height: 1.75;
 }
 
-.max-quick-start .max-start-card-footer { margin-top: 27px; }
-
 .max-quick-start .max-start-instruction {
   display: inline-flex;
   min-height: 46px;
+  align-self: flex-start;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
+  margin-top: 27px;
   padding: 11px 16px;
   border: 1px solid rgb(0 98 238 / 22%);
   border-radius: 9px;
@@ -95,24 +95,6 @@
 .max-quick-start .max-start-instruction:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 4px;
-}
-
-.max-quick-start .max-start-outcome {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  margin: 15px 0 0;
-  color: var(--color-fg-tertiary);
-  font-size: 12px;
-  line-height: 1.7;
-}
-
-.max-quick-start .max-start-outcome-marker {
-  flex-shrink: 0;
-  width: 10px;
-  height: 1px;
-  margin-top: 10px;
-  background: var(--color-border-strong);
 }
 
 @media (hover: hover) {

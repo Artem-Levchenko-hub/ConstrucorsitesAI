@@ -50,7 +50,7 @@ const accounts: Record<string, [string, string, string]> = {
   "/billing/plan": ["plan", "Ваш тариф", "Здесь показаны режим эксплуатации приложения и доступные лимиты. Обучение не меняет тариф."],
   "/billing/transactions": ["transactions", "История операций", "Здесь проверяют платежи, начисления и их статусы. Обучение не выполняет финансовых операций."],
 };
-const guide: LearningDefinition = { id: "guide", title: "Руководство Yleum", lesson: "start", steps: [
+const guide: LearningDefinition = { id: "guide", title: "Руководство Yleum", lesson: "account", steps: [
   step("guide-journey", "Ваш путь к запуску", "Переходите по шагам кнопками «Далее» и «Назад»: обучение прокрутит руководство и выделит настоящий заголовок. Действия в приложении остаются за вами."),
   ...guideChapters.map(({ id, title, description }) => step(id, title, description, { selector: `#${id} h2`, lesson: id })),
 ] };

@@ -43,7 +43,7 @@ function GuideSection({
   number: string;
   eyebrow: string;
   title: string;
-  lead: string;
+  lead?: string;
   legacyAnchors?: readonly string[];
   children: ReactNode;
 }) {
@@ -55,7 +55,7 @@ function GuideSection({
         ))}
         <p className="guide-chapter-eyebrow"><span>{number}</span>{eyebrow}</p>
         <h2 id={`${id}-title`}>{title}</h2>
-        <p className="guide-chapter-lead">{lead}</p>
+        {lead && <p className="guide-chapter-lead">{lead}</p>}
       </header>
       <div className="guide-chapter-body">
         {children}
@@ -140,7 +140,6 @@ export default async function MaxGuidePage() {
           <div>
             <p className="omnia-kicker text-accent">Yleum / Руководство</p>
             <h1 className="mt-6 max-w-[940px] text-[42px] font-semibold leading-[1.02] tracking-[-.05em] sm:text-[62px] lg:text-[76px]">Как создать приложение и запустить его в MAX</h1>
-            <p className="mt-7 max-w-[750px] text-base leading-7 text-white/60 sm:text-lg">От регистрации и первой сборки до каталога, подключения бота и ежедневной работы. На настоящих экранах показываем, куда нажать, зачем это нужно и что проверить после.</p>
             <div className="mt-8 flex flex-wrap gap-3">
               <div className="guide-learning-entry"><GuideLearning /></div>
               <Link href="/max/start" className="omnia-button omnia-button-primary min-h-11 px-5">Быстрый старт <ArrowRight className="size-4" aria-hidden="true" /></Link>
@@ -156,7 +155,7 @@ export default async function MaxGuidePage() {
               <li>Снимок можно открыть крупнее по ссылке под ним.</li>
               <li>Проверяйте результат каждого шага в своём приложении.</li>
             </ul>
-            <p className="mt-5 border-t border-white/10 pt-4 text-xs leading-5 text-white/45">Обновлено <time dateTime="2026-11-06">6 ноября 2026 года</time>. Источник и дата каждого снимка указаны под ним.</p>
+            <p className="mt-5 border-t border-white/10 pt-4 text-xs leading-5 text-white/45">Обновлено <time dateTime="2026-11-15">15 ноября 2026 года</time>. Источник и дата каждого снимка указаны под ним.</p>
           </div>
         </div>
         <div className="guide-journey-wrap"><GoldenPathVisual /></div>
@@ -164,26 +163,7 @@ export default async function MaxGuidePage() {
 
       <div id="video-lessons" className="guide-contents mx-auto grid max-w-[1440px] gap-8 px-4 sm:px-7 lg:grid-cols-[225px_minmax(0,1fr)] lg:gap-10">
         <GuideNavigation>
-          <GuideSection id="start" number="00" eyebrow="Перед началом" title="Подготовьте идею, почту и телефон" lead="Начать можно с простого описания: для кого приложение и что человек должен в нём сделать. Бота и внешние сервисы вы подключите, когда дойдёте до запуска.">
-            <div className="grid gap-4 sm:grid-cols-2">
-              {[
-                ["Email и телефон", "Email нужен для входа и восстановления пароля. Телефон подтверждается кодом по SMS при регистрации."],
-                ["Один понятный сценарий", "Например: выбрать услугу и оставить заявку. Сначала проверьте это действие, затем добавляйте остальные возможности."],
-                ["Данные для приложения", "Подготовьте названия, описания, цены и фотографии своих товаров или услуг. Можно добавить их позже."],
-                ["Доступ к кабинету MAX", "Перед запуском понадобится бот в MAX для бизнеса. Проверка бизнеса и модерация бота проходят на стороне MAX."],
-              ].map(([title, text]) => (
-                <article key={title} className="rounded-xl border border-[#2b2d32] bg-[#191b20] p-5">
-                  <h3 className="text-sm font-semibold">{title}</h3>
-                  <p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{text}</p>
-                </article>
-              ))}
-            </div>
-            <Note title="Подключайте только нужные сервисы">Добавляйте сервисы, если они нужны вашему сценарию. Путь до первого запуска показан на карте выше; к каждому этапу можно перейти отдельно.</Note>
-          </GuideSection>
-
-          <GuideSection id="account" number="01" eyebrow="Регистрация и вход" title="Создайте аккаунт Yleum" lead="При регистрации нужны email, телефон и пароль. Номер подтверждается по SMS один раз; в дальнейшем вы входите по email и паролю.">
-            <p className="text-sm leading-6 text-[#9fa1b1]">После регистрации и входа вы попадёте к своим приложениям. На снимке ниже показан этот результат.</p>
-            <GuideScreenshot id="projects" />
+          <GuideSection id="account" number="01" eyebrow="Регистрация и вход" title="Создайте аккаунт Yleum" lead="При регистрации нужны email, телефон и пароль. Номер подтверждается по SMS один раз; в дальнейшем вы входите по email и паролю." legacyAnchors={["start", "video-start"]}>
             <StepList steps={[
               { title: "Заполните форму", text: <>Откройте <Link href="/max/register" className="text-accent hover:underline">регистрацию</Link>. Укажите рабочий email и телефон с кодом страны. Придумайте пароль и повторите его. Актуальные требования показаны рядом с полем пароля.</> },
               { title: "Прочитайте условия и продолжите", text: <>Отметьте обязательные согласия и нажмите <strong>«Продолжить»</strong>. Получение новостей выбирайте по желанию.</> },
@@ -192,14 +172,9 @@ export default async function MaxGuidePage() {
             ]} />
           </GuideSection>
 
-          <GuideSection id="project" number="02" eyebrow="Создание приложения" title="Расскажите, что вы хотите сделать" lead="Проект хранит ваше приложение, его данные и подключения. В мастере четыре шага: идея, аудитория, функции с оформлением и проверка описания.">
+          <GuideSection id="project" number="02" eyebrow="Создание приложения" title="Расскажите, что вы хотите сделать">
+            <GuideScreenshot id="projects" />
             <GuideScreenshot id="create" />
-            <StepList steps={[
-              { title: "Нажмите «Создать приложение»", text: <>Откройте <Link href="/max" className="text-accent hover:underline">свои приложения</Link>. Укажите название и опишите, что сможет делать пользователь. Выберите подходящий тип приложения.</> },
-              { title: "Уточните аудиторию и главное действие", text: <>Например: «Гости кофейни выбирают напиток и отправляют заказ к выдаче». Это помогает ИИ понять, какие экраны и кнопки нужны.</> },
-              { title: "Выберите функции и оформление", text: <>Отметьте нужные возможности и разделы управления. Если пока не уверены в стиле или цветах, оставьте предложенные значения — их можно уточнить позже.</> },
-              { title: "Проверьте описание и создайте проект", text: <>На последнем шаге убедитесь, что главная задача описана верно, и нажмите <strong>«Создать проект»</strong>.</>, result: "Открылся редактор нового приложения." },
-            ]} />
             <details className="rounded-xl border border-[#2b2d32] bg-[#191b20] p-5">
               <summary className="cursor-pointer text-sm font-semibold">Показать остальные шаги создания</summary>
               <div className="mt-5 space-y-7">

@@ -18,6 +18,8 @@ describe("MAX quick-start navigation", () => {
     expect(cards).toHaveLength(6);
     cards.forEach((card, index) => {
       const title = card.querySelector("h2")!.textContent;
+      expect(card.querySelectorAll("p")).toHaveLength(1);
+      expect(card.querySelector("h2 + p")?.textContent?.trim()).toBeTruthy();
       const link = card.querySelector<HTMLAnchorElement>("a")!;
       expect(link.textContent).toContain("Подробная инструкция");
       expect(link.getAttribute("aria-label")).toBe(`Подробная инструкция: ${title}`);

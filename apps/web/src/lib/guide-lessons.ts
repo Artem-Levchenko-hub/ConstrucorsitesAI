@@ -1,7 +1,6 @@
 import { maxStaffEnabled } from "@/lib/max-staff-path";
 
 const allGuideChapters = [
-  { id: "start", number: "00", title: "Перед началом", description: "Определите задачу приложения и главный сценарий клиента." },
   { id: "account", number: "01", title: "Регистрация и вход", description: "Изучите порядок входа и подтверждения аккаунта." },
   { id: "project", number: "02", title: "Создание приложения", description: "Пройдите от описания идеи до подтверждения данных проекта." },
   { id: "builder", number: "03", title: "Редактор и проверка", description: "Узнайте, как описывать изменения и проверять результат." },
