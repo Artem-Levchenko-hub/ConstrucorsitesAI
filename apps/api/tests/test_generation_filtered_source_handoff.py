@@ -246,7 +246,7 @@ async def test_confirmed_filter_attribution_survives_cold_executor_baseline(
         _agent_res=result, _is_edit=False, _max_has_generated_snapshot=False,
         _max_seed_files=seeds, _max_shell_enabled=False,
         baseline=baseline, ids=ids, is_free=False, project_info=project,
-        prompt_text="Build a product", runtime=runtime, plan=SimpleNamespace(),
+        prompt_text="Build a product", runtime=runtime, plan=SimpleNamespace(model="sonnet"),
         operations=operations, allow_autonomous_source_repair=True,
     )
 

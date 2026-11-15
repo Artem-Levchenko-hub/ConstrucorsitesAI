@@ -139,11 +139,11 @@ async def check_backend_and_normalize_css(
         _guard_max = max(0, int(get_settings().agent_gate_max_attempts))
         while (
             get_settings().use_agent_gate_feedback
-            and plan.model != KIMI_PILOT_MODEL
+            and not verification_only
             and not get_settings().use_native_agent
             and not _is_edit
             and not uses_single_max_source_repair(runtime)
-            and not verification_only
+            and plan.model != KIMI_PILOT_MODEL
         ):
             _gv = _backend_verdict()
             _outcomes = [

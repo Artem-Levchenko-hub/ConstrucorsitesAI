@@ -286,7 +286,7 @@ async def test_each_repair_pass_carries_what_the_earlier_ones_were_told(
         assert kwargs["source_repair"] is True
         # A repair which attempts done without build gets the same accepted
         # baseline contract, not a new baseline from its mutable candidate.
-        assert "changed without a new canonical" in kwargs["completion_check"]({}, {})
+        assert "changed without a new canonical" in await kwargs["completion_check"]({}, {})
         return SimpleNamespace(stop_reason="done", summary="", files={}, steps=1)
 
     monkeypatch.setattr(agent_native, "run_native_build", run_native_build)
