@@ -49,6 +49,30 @@ def loop(monkeypatch):
     return coordinator, files, builds, run
 
 
+async def test_consecutive_fast_checks_each_add_only_their_active_time(monkeypatch, loop):
+    from yleum_api.services import generation_metrics
+
+    coordinator, _, _, run = loop
+    coordinator.emit = AsyncMock()
+    phase = finalization.GenerationPhase.FAST_CHECK
+    checkpoint = SimpleNamespace(proof_key="fixture", operation_id=None, to_json=dict)
+    now = 1000
+    monkeypatch.setattr(generation_metrics, "_to_epoch_millis", lambda _: now)
+
+    await coordinator._phase_started(phase, checkpoint)
+    now = 1100
+    await coordinator._phase_started(phase, checkpoint)
+    now = 2000
+    await coordinator._phase_finished(phase)
+
+    now = 4000
+    await coordinator._phase_started(phase, checkpoint)
+    now = 7000
+    await coordinator._phase_finished(phase)
+
+    assert run.agent_state["max_finalization"]["phase_ms"]["fast_check"] == 4000
+
+
 async def test_three_productive_repairs_reach_real_compiler_success(loop):
     coordinator, files, builds, _ = loop
     repairs = []

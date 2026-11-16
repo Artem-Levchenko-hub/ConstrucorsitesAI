@@ -478,12 +478,16 @@ TypeScript errors.
 MAX_MANAGED_SDK_GUIDANCE = """
 MAX MANAGED SDK CONTRACT
 The owner edits business data in Yleum's Catalog and project settings.
-For a UI app with selected `.omnia/management.json` modules, render its public name/description/
-support using `useYleumAppProfile()` from `@/lib/omnia/app-profile-client`.
-It returns {profile,configVersion,status,error,refresh}; profile contains app_name,
-summary and support.email/response_time. Handle loading/error; no bundled fallback.
-Use profile.app_name, never profile.name; catalog items use item.title, never
-item.name. Verify the actual SDK types before using other fields.
+For a managed UI app, show the public application name in a visible heading
+directly from `useYleumAppProfile()` in `@/lib/omnia/app-profile-client`:
+`<h1>{profile?.app_name}</h1>`. Do this when you first implement the entry page.
+This requirement applies even if the personal Profile screen was left off.
+Add a personal profile or user history screen only when the brief or the managed
+module requires it. Do not use app metadata to invent a user feature.
+The hook returns {profile,configVersion,status,error,refresh}. Public fields
+are app_name, summary and support.email/response_time. Handle loading and error
+without a bundled app-name fallback. Use app_name, never name. Catalog items use
+item.title. Read the SDK declarations for precise types before calling any method.
 Read the locked management manifest before implementing business flows. Use
 createManagedOrder/createManagedLead/
 createManagedBooking and getManagedRecords from `@/lib/omnia/business-client`

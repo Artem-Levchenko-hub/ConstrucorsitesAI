@@ -6,7 +6,7 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING, NamedTuple, TypedDict
+from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict
 from uuid import UUID
 
 from yleum_api.core.config import get_settings
@@ -296,11 +296,32 @@ async def run_native_source_repair(
     )
     from yleum_api.services.generation.agent_runtime import guard_native_source_contract
     from yleum_api.services.max_generation_contract import max_source_completion_gap
+    from yleum_api.services.max_management_generation import management_source_gap
 
     continuation = getattr(operations, "continuation", None)
     accounting = getattr(operations, "response_recovery", None)
     model_baseline = baseline
     autonomous_repair = uses_autonomous_max_source_repair(runtime)
+
+    def actionable_managed_gap(files: Mapping[str, str]) -> str | None:
+        try:
+            gap = management_source_gap(files)
+        except RecursionError:
+            # An inconclusive speed check must leave normal compiler feedback available.
+            return None
+        return str(gap) if gap is not None and gap.rejection_key() is not None else None
+
+    managed_preflight = False
+    if autonomous_repair and continuation is None and source_failure is None and feedback:
+        managed_preflight = actionable_managed_gap(baseline) == feedback
+        if managed_preflight:
+            task += (
+                "\n\nRepair the reported managed source connection first. "
+                "When the diagnostic names a file, start at that location. "
+                "Apply the smallest direct source edit and use build to verify. "
+                "Build reports any remaining managed source rejection before running "
+                "the compiler. Resolve that diagnostic before trying another build."
+            )
     single_repair = (
         not autonomous_repair and continuation is None and uses_single_max_source_repair(runtime)
     )
@@ -418,6 +439,24 @@ async def run_native_source_repair(
         repair_execute = checkpoint_source_actions(
             execute=repair_execute, snapshot=snapshot, checkpoint=checkpoint,
         )
+    if managed_preflight:
+        assert runtime.handle is not None
+        read_repair_source = runtime.handle.snapshot_files
+        checked_execute = repair_execute
+
+        async def preflight_build(action: agent_builder.Action) -> dict[str, Any]:
+            if action.name == "build":
+                gap = actionable_managed_gap(await read_repair_source())
+                if gap is not None:
+                    detail = bounded_recovery_diagnostic(gap, max_bytes=4000)
+                    return {
+                        "ok": False,
+                        "detail": f"Managed source preflight: {detail}",
+                        "environment_mutated": False,
+                    }
+            return await checked_execute(action)
+
+        repair_execute = preflight_build
     directed_path = None
     if callable(snapshot):
         directed_path = directed_repair_target(

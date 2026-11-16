@@ -529,6 +529,70 @@ async def test_secret_in_entry_is_not_redacted_into_an_inexact_edit(monkeypatch,
     native.assert_not_called()
 
 
+@pytest.mark.parametrize("diagnostic", ["managed", "compiler", "inconclusive"])
+async def test_known_managed_repair_skips_compiler_until_source_gap_is_fixed(
+    monkeypatch, isolated_repair, diagnostic,
+):
+    from yleum_api.services import max_management_generation as management
+    from yleum_api.services.agent_builder import Action
+
+    from .test_max_management_generation import connection_example, connection_files
+
+    modules = ("catalog", "leads")
+    source = connection_example(modules)
+    before = connection_files(source.replace("{profile?.app_name}", "Рацион"), modules)
+    after = connection_files(source, modules)
+    analyze = management.management_source_gap
+    initial_gap = analyze(before)
+    assert initial_gap is not None and "useYleumAppProfile" in initial_gap
+    assert analyze(after) is None
+    files = dict(before)
+    physical = []
+    analyses = 0
+
+    def check_source(source):
+        nonlocal analyses
+        analyses += 1
+        if diagnostic == "inconclusive" and analyses == 2:
+            raise RecursionError("syntax tree exceeds the preflight bound")
+        return analyze(source)
+
+    monkeypatch.setattr(management, "management_source_gap", check_source)
+
+    async def snapshot():
+        return dict(files)
+
+    async def execute(action):
+        physical.append(action.name)
+        if action.name == "write_file":
+            files[ENTRY] = action.args["content"]
+        return {"ok": True, "detail": "physical check"}
+
+    async def native(**request):
+        assert request["run_id"] == "r"
+        build = Action("build", {}, "")
+        first = await request["execute"](build)
+        if diagnostic == "managed":
+            assert first["ok"] is False and "useYleumAppProfile" in first["detail"]
+            assert (await request["execute"](build))["ok"] is False
+        else:
+            assert first == {"ok": True, "detail": "physical check"}
+        await request["execute"](Action("write_file", {"path": ENTRY, "content": source}))
+        assert await request["execute"](build) == {"ok": True, "detail": "physical check"}
+        return AgentResult(False, "candidate still needs physical finalization", {ENTRY: source}, 3)
+
+    monkeypatch.setattr(agent_native, "run_native_build", native)
+    args = repair_arguments(before, execute=execute)
+    args["runtime"].coordinator = object()
+    args["runtime"].handle = SimpleNamespace(snapshot_files=snapshot, is_portable=lambda: True)
+    args["operations"].snapshot_files = snapshot
+    feedback = "TS2300 duplicate identifier" if diagnostic == "compiler" else str(initial_gap)
+    result = await agent_finalization.run_native_source_repair(**args, feedback=feedback)
+    assert result.files == {ENTRY: source}
+    expected = [] if diagnostic == "managed" else ["build"]
+    assert physical == [*expected, "write_file", "build"]
+
+
 async def test_legacy_repair_request_is_unchanged(monkeypatch):
     native = AsyncMock(return_value=AgentResult(False, "candidate", {}, 0))
     monkeypatch.setattr(agent_native, "run_native_build", native)

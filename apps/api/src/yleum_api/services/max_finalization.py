@@ -533,6 +533,7 @@ class MaxFinalizationCoordinator:
             )
             if not self._fast_check_unavailable(result):
                 return result
+        assert result is not None
         raise MaxVerificationUnavailable(GenerationPhase.FAST_CHECK, result.redacted_detail)
 
     @staticmethod
@@ -3153,7 +3154,11 @@ class MaxFinalizationCoordinator:
         async with self.session_factory() as session:
             run = await self._locked_run(session)
             state = run.agent_state.get("max_finalization", {})
-            if not isinstance(state, dict) or state.get("current_phase") != phase.value:
+            if (
+                not isinstance(state, dict)
+                or state.get("current_phase") != phase.value
+                or type(state.get("current_phase_started_at_ms")) is not int
+            ):
                 record_phase_started(run, phase)
             root = dict(run.agent_state)
             raw_finalization = root.get("max_finalization")

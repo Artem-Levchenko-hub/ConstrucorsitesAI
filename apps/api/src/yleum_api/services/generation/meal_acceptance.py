@@ -57,8 +57,9 @@ def mode_for_prompt(prompt: str) -> Literal["build", "edit"] | None:
 
 MEAL_AGENT_GUIDE = """MEAL ACCEPTANCE CONTRACT FOR THIS REVIEWED BRIEF
 Keep the platform session and managed kit. Use product SQL scoped by getMaxUser().id.
-Use the fixed Meal title and avoid eager server actions during boot. Load product data
-through the reviewed same-origin GET endpoints instead.
+Use the public name from useYleumAppProfile in the visible app heading.
+Use the fixed Meal title in the downloaded PDF. Avoid eager server actions during boot.
+Load product data through the reviewed same-origin GET endpoints.
 The installed candidate browser checks visible navigation via data-testid meal-nav-plan,
 meal-nav-shopping, meal-nav-store (labels Рацион, Покупки, Магазин). Provide three distinct
 visible dishes via meal-open-breakfast, meal-open-lunch, meal-open-dinner with meal-dish-name
