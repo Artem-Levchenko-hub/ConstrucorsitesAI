@@ -86,6 +86,58 @@ def _container(workload: dict[str, Any], name: str) -> dict[str, Any]:
     return next(c for c in workload["spec"]["template"]["spec"]["containers"] if c["name"] == name)
 
 
+@pytest.mark.parametrize("app_cpu_cores", [0.1, 0.25, 0.5, 1.0, 2.0])
+@pytest.mark.parametrize("seeded", [False, True])
+def test_small_app_cpu_reservation_includes_init_peak_without_lowering_caps(
+    app_cpu_cores: float, seeded: bool,
+) -> None:
+    spec = _spec(app_cpu_cores=app_cpu_cores)
+    if not seeded:
+        spec = _spec(app_cpu_cores=app_cpu_cores, seed_volumes=())
+    pods = {
+        obj["metadata"]["name"]: obj["spec"]["template"]["spec"]
+        for obj in kp.build_objects(spec)
+        if obj["kind"] in {"Deployment", "StatefulSet"}
+    }
+    expected = {
+        "app": min(200, int(app_cpu_cores * 500)),
+        "core": 50,
+        "core-postgres": 25,
+        "project-postgres": 25,
+        "redis": 10,
+        "analytics-relay": 10,
+        "boundary": 30,
+    }
+    effective = {}
+    for name, pod in pods.items():
+        running = sum(int(c["resources"]["requests"]["cpu"][:-1]) for c in pod["containers"])
+        init_peak = max((
+            int(c.get("resources", {}).get("requests", {}).get("cpu", "0m")[:-1])
+            for c in pod.get("initContainers", [])
+        ), default=0)
+        effective[name] = max(running, init_peak)
+    assert effective == expected
+    assert sum(effective.values()) == 150 + min(200, int(app_cpu_cores * 500))
+    expected_resources = {
+        "app": ("512Mi", {"cpu": f"{int(app_cpu_cores * 1000)}m", "memory": "1024Mi"}),
+        "core": ("256Mi", {"memory": "768Mi"}),
+        "core-postgres": ("128Mi", {"memory": "512Mi"}),
+        "project-postgres": ("128Mi", {"memory": "512Mi"}),
+        "redis": ("32Mi", {"memory": "128Mi"}),
+        "analytics-relay": ("16Mi", {"cpu": "100m", "memory": "64Mi"}),
+        "boundary": ("32Mi", {"memory": "96Mi"}),
+    }
+    for name, (memory, limits) in expected_resources.items():
+        resources = pods[name]["containers"][0]["resources"]
+        assert resources["requests"]["memory"] == memory
+        assert resources["limits"] == limits
+    bootstrap = pods["core"]["initContainers"][0]["resources"]
+    assert bootstrap == {
+        "requests": {"cpu": "25m", "memory": "64Mi"},
+        "limits": {"cpu": "500m", "memory": "256Mi"},
+    }
+
+
 def test_owner_capability_is_controller_bound_and_not_a_bot_credential() -> None:
     from yleum_orchestrator.services.owner_management_identity import owner_management_environment
 

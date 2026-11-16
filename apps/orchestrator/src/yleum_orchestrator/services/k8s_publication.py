@@ -69,6 +69,18 @@ ACME_SOLVER_PORT = 8089
 # Official redis image: its entrypoint switches to this user via gosu when started as
 # root, which needs capabilities the pod drops; starting as the user skips that.
 _REDIS_UID = 999
+# Scheduling shares for a small published app, independent of burst CPU limits.
+# Include init containers: Kubernetes reserves their peak for the pod's lifetime.
+_CPU_REQUEST_MILLICORES = {
+    "app": 200,
+    "core": 50,
+    "postgres": 25,
+    "redis": 10,
+    "relay": 10,
+    "boundary": 30,
+    "bootstrap": 25,
+    "seed": 25,
+}
 
 
 class PublicationPlacementError(OrchestratorError):
@@ -194,6 +206,24 @@ def _millicores(value: float) -> str:
     return f"{max(50, int(value * 1000))}m"
 
 
+def _resources(
+    component: str, memory_request: str, memory_limit: str, *, cpu_limit: str | None = None,
+    cpu_request_cap_cores: float | None = None,
+) -> dict[str, dict[str, str]]:
+    limits = {"memory": memory_limit}
+    if cpu_limit is not None:
+        limits["cpu"] = cpu_limit
+    requested = _CPU_REQUEST_MILLICORES[component]
+    cpu_request = (
+        f"{requested}m" if cpu_request_cap_cores is None
+        else _millicores(min(requested / 1000, cpu_request_cap_cores))
+    )
+    return {
+        "requests": {"cpu": cpu_request, "memory": memory_request},
+        "limits": limits,
+    }
+
+
 def _env(values: dict[str, str]) -> list[dict[str, str]]:
     return [{"name": key, "value": str(value)} for key, value in sorted(values.items())]
 
@@ -258,7 +288,7 @@ def _seed_init_container(
             }
         ],
         "volumeMounts": [{"name": mount_name, "mountPath": "/seed"}],
-        "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"memory": "256Mi"}},
+        "resources": _resources("seed", "64Mi", "256Mi"),
     }
 
 
@@ -586,10 +616,7 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
                                 "image": spec.redis_image,
                                 "args": ["--save", "", "--appendonly", "no", "--maxmemory", "96mb"],
                                 "ports": [{"containerPort": 6379}],
-                                "resources": {
-                                    "requests": {"cpu": "20m", "memory": "32Mi"},
-                                    "limits": {"memory": "128Mi"},
-                                },
+                                "resources": _resources("redis", "32Mi", "128Mi"),
                                 "securityContext": {
                                     "runAsUser": _REDIS_UID,
                                     "runAsGroup": _REDIS_UID,
@@ -670,10 +697,9 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
                                         "tcpSocket": {"port": 3128},
                                         "periodSeconds": 3,
                                     },
-                                    "resources": {
-                                        "requests": {"cpu": "10m", "memory": "16Mi"},
-                                        "limits": {"cpu": "100m", "memory": "64Mi"},
-                                    },
+                                    "resources": _resources(
+                                        "relay", "16Mi", "64Mi", cpu_limit="100m",
+                                    ),
                                     "securityContext": {
                                         "runAsUser": 65534,
                                         "runAsGroup": 65534,
@@ -765,10 +791,9 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
                                         },
                                     },
                                 ],
-                                "resources": {
-                                    "requests": {"cpu": "100m", "memory": "64Mi"},
-                                    "limits": {"cpu": "500m", "memory": "256Mi"},
-                                },
+                                "resources": _resources(
+                                    "bootstrap", "64Mi", "256Mi", cpu_limit="500m",
+                                ),
                                 "securityContext": {
                                     "allowPrivilegeEscalation": False,
                                     "readOnlyRootFilesystem": True,
@@ -818,10 +843,9 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
                                     "periodSeconds": 5,
                                     "failureThreshold": 24,
                                 },
-                                "resources": {
-                                    "requests": {"cpu": "100m", "memory": "256Mi"},
-                                    "limits": {"memory": _bytes(spec.core_memory_bytes)},
-                                },
+                                "resources": _resources(
+                                    "core", "256Mi", _bytes(spec.core_memory_bytes),
+                                ),
                                 "securityContext": {
                                     "allowPrivilegeEscalation": False,
                                     "capabilities": {"drop": ["ALL"]},
@@ -983,16 +1007,12 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
                                 "ports": [{"containerPort": app_port, "name": "http"}],
                                 "volumeMounts": app_mounts,
                                 "readinessProbe": readiness,
-                                "resources": {
-                                    "requests": {
-                                        "cpu": _millicores(spec.app_cpu_cores / 2),
-                                        "memory": _bytes(spec.app_memory_bytes // 2),
-                                    },
-                                    "limits": {
-                                        "cpu": _millicores(spec.app_cpu_cores),
-                                        "memory": _bytes(spec.app_memory_bytes),
-                                    },
-                                },
+                                "resources": _resources(
+                                    "app", _bytes(spec.app_memory_bytes // 2),
+                                    _bytes(spec.app_memory_bytes),
+                                    cpu_limit=_millicores(spec.app_cpu_cores),
+                                    cpu_request_cap_cores=spec.app_cpu_cores / 2,
+                                ),
                                 "securityContext": {
                                     "allowPrivilegeEscalation": False,
                                     "capabilities": {"drop": ["ALL"]},
@@ -1045,10 +1065,7 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
                                     "initialDelaySeconds": 2,
                                     "periodSeconds": 3,
                                 },
-                                "resources": {
-                                    "requests": {"cpu": "50m", "memory": "32Mi"},
-                                    "limits": {"memory": "96Mi"},
-                                },
+                                "resources": _resources("boundary", "32Mi", "96Mi"),
                                 "securityContext": {
                                     "allowPrivilegeEscalation": False,
                                     "capabilities": {"drop": ["ALL"]},
@@ -1208,10 +1225,7 @@ def _postgres_statefulset(
                                 "periodSeconds": 5,
                                 "timeoutSeconds": 5,
                             },
-                            "resources": {
-                                "requests": {"cpu": "50m", "memory": "128Mi"},
-                                "limits": {"memory": "512Mi"},
-                            },
+                            "resources": _resources("postgres", "128Mi", "512Mi"),
                             "securityContext": {
                                 "runAsUser": _POSTGRES_UID,
                                 "runAsGroup": _POSTGRES_UID,
