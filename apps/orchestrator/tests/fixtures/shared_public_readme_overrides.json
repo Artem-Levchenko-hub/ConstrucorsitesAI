@@ -18,5 +18,9 @@
   "max-miniapp-nextjs/SYSTEM_PROMPT.md": {
     "sha256": "885c9e0acd5ffc57b7d4abb93e9a0a7a616af470b1a9f5b05e0db1d9365c85e0",
     "mode": "100644"
+  },
+  "max-miniapp-nextjs/.omnia/skills/max-ui-design.md": {
+    "sha256": "323f51864d907ea4456fb745c84e41366544968ceff0a307f7a2c8a2e690163f",
+    "mode": "100644"
   }
 }

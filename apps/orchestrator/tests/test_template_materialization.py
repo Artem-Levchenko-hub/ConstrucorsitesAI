@@ -137,6 +137,7 @@ assert set(CHECKOUT_RECEIPT_OVERRIDES) == {
 # The frozen Git tree remains the baseline; deliberate MAX integration changes
 # are pinned as explicit overrides instead of rewriting historical hashes.
 assert set(README_OVERRIDES) == {
+    "max-miniapp-nextjs/.omnia/skills/max-ui-design.md",
     "max-miniapp-nextjs/README.md",
     "max-miniapp-nextjs/SYSTEM_PROMPT.md",
     "max-miniapp-nextjs/src/app/api/omnia/integrations/[...path]/route.ts",
