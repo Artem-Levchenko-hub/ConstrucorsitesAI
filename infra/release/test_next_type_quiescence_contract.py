@@ -27,7 +27,8 @@ class NextTypeSourceClosureTests(unittest.TestCase):
         self.reader_wait = self.checker._PORTABLE_QUIESCENCE_READER_WAIT_SOURCES
         self.meal = self.checker._PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES
         self.release_environment = self.checker._PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES
-        self.current = self.checker._PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES
+        self.resilient_release = self.checker._PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES
+        self.current = self.checker._PORTABLE_QUIESCENCE_COMMAND_STATUS_SOURCES
 
     def test_historical_complete_bundle_is_preserved_and_still_supported(self):
         old_fixture = json.loads((self.directory / "fixtures/platform-bootstrap-v2-quiescence-sources.json").read_bytes())
@@ -124,14 +125,24 @@ class NextTypeSourceClosureTests(unittest.TestCase):
 
     def test_resilient_release_requires_complete_successor_bundle(self):
         previous = self.release_environment
+        successor = self.resilient_release
         self.checker._require_reviewed_portable_sources(previous)
-        self.assertEqual(set(self.current) - set(previous), {
+        self.assertEqual(set(successor) - set(previous), {
             "core.workspace_provider", "services.docker_owner_canary_provider",
         })
-        changed = {key for key, digest in previous.items() if self.current[key] != digest}
+        changed = {key for key, digest in previous.items() if successor[key] != digest}
         for key in changed:
             with self.subTest(module=key), self.assertRaises(self.checker.PhysicalDrainError):
-                self.checker._require_reviewed_portable_sources({**self.current, key: previous[key]})
+                self.checker._require_reviewed_portable_sources({**successor, key: previous[key]})
+
+    def test_command_status_keeps_the_complete_incumbent_bundle_and_changes_only_workspace(self):
+        self.checker._require_reviewed_portable_sources(self.resilient_release)
+        self.checker._require_reviewed_portable_sources(self.current)
+        self.assertEqual(set(self.current), set(self.resilient_release))
+        self.assertEqual(
+            {name for name in self.current if self.current[name] != self.resilient_release[name]},
+            {"routers.workspace"},
+        )
 
     def test_current_committed_source_closure_matches_linux_git_bytes(self):
         root = self.directory.parents[1] / "apps/orchestrator/src/yleum_orchestrator"

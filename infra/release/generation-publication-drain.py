@@ -255,6 +255,12 @@ _PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES = {
     "services.machine_adapter": "a0c2c48c8ba44666e1221501f284e870a0151913dd5120332db5efbdbb78a7d9",
     "services.machine_recovery_environment": "208956cd465fd20cc846ba7f72ac339ea9847823ef0506b78d0f6a6d01a4609f",
 }
+# Command status can read running progress without the writer lock. Terminal
+# status still requires a clear source journal. Keep the same producer proofs.
+_PORTABLE_QUIESCENCE_COMMAND_STATUS_SOURCES = {
+    **_PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES,
+    "routers.workspace": "5fde41535169cc18d5c1b8497e04d2f416fa1594d892bcf1eea9d168f9d1eff1",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -278,6 +284,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES,
     _PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES,
     _PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES,
+    _PORTABLE_QUIESCENCE_COMMAND_STATUS_SOURCES,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.
@@ -525,7 +532,8 @@ def _pending_portable_commands(machine: dict, *, sources: dict[str, str]) -> dic
                         _PORTABLE_QUIESCENCE_READER_WAIT_SOURCES,
                         _PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES,
                         _PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES,
-                        _PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES)
+                        _PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES,
+                        _PORTABLE_QUIESCENCE_COMMAND_STATUS_SOURCES)
             and len(requests) == 1 and len(pending) <= 1,
             "quiescence_command_scope",
         )
