@@ -34,6 +34,10 @@ from yleum_api.services.orchestrator_client import project_cell_agent_identity
 from yleum_api.services.promotion_permit import workspace_revision_digest
 
 
+class RecoveryRunCancelled(RecoveryContractError):
+    """The locked and owned generation row already records a cancellation."""
+
+
 async def _locked_owner(
     session: AsyncSession, *, run_id: UUID, project_id: UUID, user_id: UUID,
 ) -> tuple[GenerationRun, Project]:
@@ -42,8 +46,12 @@ async def _locked_owner(
     run = await session.get(GenerationRun, run_id, with_for_update=True, populate_existing=True)
     if (
         project is None or project.owner_id != user_id or run is None
-        or run.project_id != project_id or run.user_id != user_id or run.status != "running"
+        or run.project_id != project_id or run.user_id != user_id
     ):
+        raise RecoveryContractError("recovery run ownership is not active")
+    if run.status in {"cancel_requested", "cancelled"}:
+        raise RecoveryRunCancelled("recovery run ownership is not active")
+    if run.status != "running":
         raise RecoveryContractError("recovery run ownership is not active")
     return run, project
 

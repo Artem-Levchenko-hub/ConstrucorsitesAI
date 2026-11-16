@@ -582,9 +582,12 @@ async def run_agent_generation(
         continuation = attach_driver(factory, _resume_state, execution_context, runtime.handle)
         runtime.continuation = continuation
         assert runtime.handle is not None
-        retired_native_repair = await rebind_continuation(
-            continuation, allow_expired_retirement=runtime.coordinator is not None,
-        ) is True
+        if uses_autonomous_max_source_repair(runtime):
+            retired_native_repair = await rebind_continuation(
+                continuation, allow_expired_retirement=True,
+            ) is True
+        else:
+            await rebind_continuation(continuation)
         if runtime.coordinator is not None:
             runtime.coordinator.continuation = continuation
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import replace
@@ -38,7 +39,7 @@ from yleum_api.services.generation.recovery_reconciliation import (
     ProviderWireReservation,
     provider_root_effect_id,
 )
-from yleum_api.services.generation.recovery_store import _locked_owner
+from yleum_api.services.generation.recovery_store import RecoveryRunCancelled, _locked_owner
 from yleum_api.services.orchestrator_client import OrchestratorUnavailable
 from yleum_api.services.project_cell_errors import ProjectCellInfrastructureError
 from yleum_api.services.project_cells import lock_workspace_operations
@@ -452,6 +453,9 @@ async def resume_with_prepare_backoff(
         ):
             try:
                 await _defer_unchanged_prepare(factory, before, started_at)
+            except RecoveryRunCancelled:
+                # The locked owner already confirmed the cancellation.
+                raise asyncio.CancelledError from None
             except Exception as error:
                 # Preserve the original outcome. A failed proof or SQL write
                 # cannot authorize a replacement cursor or terminal failure.

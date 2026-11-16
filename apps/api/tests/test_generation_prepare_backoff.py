@@ -279,13 +279,19 @@ async def _failed_resume(c, monkeypatch, edge):
     cancel = AsyncMock()
     monkeypatch.setattr(supervisor, "finalize_generation_run", finalize)
     monkeypatch.setattr(supervisor, "_finalize_cancelled_generation", cancel)
-
-    async def wait_for_cancel(_):
+    async def wait_for_cancel(*_):
         import asyncio
 
         await asyncio.Event().wait()
 
     monkeypatch.setattr(supervisor, "_wait_for_generation_cancel", wait_for_cancel)
+    if edge == "cancelled":
+        # Let the worker handle an already-committed cancellation before either
+        # watcher sees it, even if the supervisor's next status read fails.
+        monkeypatch.setattr(generation, "_ownership_monitor", wait_for_cancel)
+        monkeypatch.setattr(
+            supervisor, "recovery_failure_outcome", AsyncMock(return_value="preserve"),
+        )
     calls = []
 
     async def resume(claim):
