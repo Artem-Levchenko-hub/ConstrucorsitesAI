@@ -173,8 +173,10 @@ export function MaxLivePreview({
       && isGenerationActive(query.state.data) ? 5_000 : false,
   });
   const currentRun = latestGeneration.data?.project_id === project.id ? latestGeneration.data : null;
+  const builtSnapshots = new Set(versions.flatMap(version => version.status === "ready" && version.snapshot_id ? [version.snapshot_id] : []));
   const lastAcceptedVersion = historyCurrent ? versions.find(version => version.is_current
-    && version.snapshot_id === currentSnapshotId && ["ready", "unchanged"].includes(version.status)) : null;
+    && version.snapshot_id === currentSnapshotId && version.snapshot_id && builtSnapshots.has(version.snapshot_id)
+    && (version.status === "ready" || version.status === "unchanged")) : null;
   const currentAcceptance = acceptedPreviewState({
     acceptedSnapshotId: currentSnapshotId,
     acceptedAt: currentRun?.acceptance?.accepted_at ?? null,
@@ -197,9 +199,7 @@ export function MaxLivePreview({
   const acceptedGenerationId = confirmedRunId ?? (
     confirmedPreview?.projectId === project.id && confirmedPreview.snapshotId === currentSnapshotId
       ? confirmedPreview.runId : null);
-  const acceptedSnapshotId = lastAcceptedVersion?.snapshot_id ?? (
-    currentAcceptance.isCurrentRequestComplete && currentRun?.acceptance?.snapshot_id
-      ? currentSnapshotId : null);
+  const acceptedSnapshotId = lastAcceptedVersion?.snapshot_id ?? (acceptedGenerationId ? currentSnapshotId : null);
   const acceptedPreview = acceptedPreviewState({
     acceptedSnapshotId, acceptedAt: currentRun?.acceptance?.accepted_at ?? null, currentRun,
   });
@@ -208,7 +208,7 @@ export function MaxLivePreview({
   // likewise not proof that no working version exists. iframe load can also
   // come from an HTTP error page, so a remembered URL is not build evidence.
   const noSuccessfulBuild = !snapshotsLoading && !historyError && historyCurrent && !hasOlder &&
-    !versions.some((version) => version.status === "ready" || version.status === "unchanged");
+    builtSnapshots.size === 0 && !acceptedSnapshotId;
   const terminalRunStatus = currentRun?.status === "failed" || currentRun?.status === "cancelled"
     ? currentRun.status : null;
   const terminalMessageStatus = messages.isSuccess && lastMessage?.role === "assistant" &&

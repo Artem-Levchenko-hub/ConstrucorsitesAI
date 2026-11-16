@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import math
 import re
 from http import HTTPStatus
 from typing import Any
@@ -12,7 +14,13 @@ import httpx
 
 from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.db import get_pool
-from yleum_gateway.core.errors import GatewayError, ModelUnavailableError
+from yleum_gateway.core.errors import (
+    DispatchDeadlineError,
+    GatewayError,
+    ModelUnavailableError,
+    UpstreamProviderError,
+)
+from yleum_gateway.providers.rate_limit import POLICY as KEY_RATE_LIMIT_POLICY
 from yleum_gateway.services.generation_identity import GenerationProviderIdentity
 from yleum_gateway.services.provider_calls import LLMGW_BALANCE_REFUSED
 
@@ -99,6 +107,75 @@ def exhausted_error() -> ModelUnavailableError:
     })
 
 
+def primary_retry_after(candidate: object) -> int | None:
+    if (not isinstance(candidate, dict) or candidate.get("retry_policy") != KEY_RATE_LIMIT_POLICY
+            or candidate.get("retry_safe") is not True):
+        return None
+    delay = candidate.get("retry_after_seconds")
+    return delay if type(delay) is int and 0 <= delay <= 86_400 else None
+
+
+def primary_rate_limit_error(delay: int) -> UpstreamProviderError:
+    return UpstreamProviderError("Primary provider rate limit exceeded", details={
+        "upstream_http_status": 429, "provider_refusal_category": "rate_limit",
+        "provider_charge_ambiguous": False, "retry_safe": True,
+        "retry_policy": KEY_RATE_LIMIT_POLICY, "retry_after_seconds": delay,
+    })
+
+
+async def primary_retry_after_backup(identity: GenerationProviderIdentity, call_id: UUID) -> int | None:
+    """Read the previous primary cooldown only behind an exact uncharged backup failure."""
+    async with get_pool().acquire() as conn:
+        delay = await conn.fetchval(
+            """
+            SELECT GREATEST(0, CEIL(EXTRACT(EPOCH FROM
+                (pc.finished_at - now())) + pc.retry_after_seconds))::int
+            FROM generation_provider_attempts a
+            JOIN generation_provider_attempts p ON p.attempt_id=a.parent_attempt_id
+            JOIN provider_calls c ON c.id=a.provider_call_id
+            JOIN provider_calls pc ON pc.id=p.provider_call_id
+            WHERE a.provider_call_id=$1 AND a.run_id=$2 AND a.project_id=$3 AND a.user_id=$4
+            AND a.prompt_hash=$5 AND a.request_sha256=$6
+            AND p.run_id=a.run_id AND p.project_id=a.project_id AND p.user_id=a.user_id
+            AND p.prompt_hash=a.prompt_hash AND p.request_sha256=a.request_sha256
+            AND a.phase='closed' AND a.terminal_reason='preconnect'
+            AND c.provider_scope='aitunnel' AND c.status='failed' AND c.receipt_hash IS NOT NULL
+            AND c.usage_id IS NULL AND c.tokens_in IS NULL AND c.tokens_out IS NULL
+            AND c.cache_read_tokens IS NULL AND c.cache_write_tokens IS NULL
+            AND c.calculated_cost_rub IS NULL AND c.provider_cost_rub IS NULL
+            AND c.provider_cost_usd IS NULL AND c.cost_provenance IS NULL
+            AND p.phase='closed' AND p.terminal_reason='upstream_refused'
+            AND pc.provider_scope='llmgw' AND pc.status='failed' AND pc.receipt_hash IS NOT NULL
+            AND pc.retry_after_seconds IS NOT NULL AND pc.route=c.route
+            AND c.requested_model=$7 AND pc.requested_model=$7
+            """,
+            call_id, identity.run_id, identity.project_id, identity.user_id,
+            identity.prompt_hash, identity.request_sha256, MODEL,
+        )
+    return delay if type(delay) is int and 0 <= delay <= 86_400 else None
+
+
+async def retry_after_backup_preconnect(
+    identity: GenerationProviderIdentity | None, call_id: UUID, primary_retry_at: float | None,
+) -> int | None:
+    if identity is not None:
+        return await primary_retry_after_backup(identity, call_id)
+    if primary_retry_at is not None:
+        return max(0, math.ceil(primary_retry_at - asyncio.get_running_loop().time()))
+    return None
+
+
+async def _wait_for_primary_cooldown(delay: object, deadline: float | None) -> None:
+    if type(delay) is not int or not 0 < delay <= 86_400:
+        return
+    loop = asyncio.get_running_loop()
+    if deadline is not None and loop.time() + delay >= deadline:
+        raise DispatchDeadlineError()
+    await asyncio.sleep(delay)
+    if deadline is not None and loop.time() >= deadline:
+        raise DispatchDeadlineError()
+
+
 async def confirmed_chain_exhausted(
     identity: GenerationProviderIdentity, call_id: UUID, *, route: str, user_id: UUID | None,
 ) -> bool:
@@ -120,6 +197,7 @@ async def confirmed_chain_exhausted(
             )
             SELECT bool_or(chain.parent_attempt_id IS NULL)
                 AND count(DISTINCT c.provider_scope)=2
+                AND count(c.retry_after_seconds)=0
                 AND bool_and(COALESCE(
                     chain.phase='closed' AND c.status='failed' AND c.receipt_hash IS NOT NULL
                     AND c.provider_scope IN ('llmgw','aitunnel') AND c.requested_model=$8
@@ -315,7 +393,7 @@ def primary_balance_refused(response: httpx.Response, category: str | None) -> b
 async def select_scope(
     identity: GenerationProviderIdentity | None, model: str, *,
     run_id: UUID | None = None, project_id: UUID | None = None, user_id: UUID | None = None,
-    cell_route: str | None = None,
+    cell_route: str | None = None, deadline: float | None = None,
 ) -> str:
     """Route new steps using a committed balance refusal, and retries using their parent."""
     if model != MODEL:
@@ -329,6 +407,8 @@ async def select_scope(
     )
     if identity is None and not run_scoped:
         return "llmgw"
+    delay = None
+    balance_refused = False
     try:
         async with get_pool().acquire() as conn:
             parent = None
@@ -350,7 +430,8 @@ async def select_scope(
                         WHERE chain.depth<8 AND p.run_id=$2 AND p.project_id=$3 AND p.user_id=$4
                         AND p.prompt_hash=$5 AND p.request_sha256=$6
                     )
-                    SELECT p.phase,p.terminal_reason,c.status,c.receipt_hash,c.provider_scope,
+                    SELECT p.phase,p.terminal_reason,c.id AS provider_call_id,
+                        c.status,c.receipt_hash,c.provider_scope,
                         (SELECT array_agg(DISTINCT pc.provider_scope) FROM chain AS history
                          JOIN provider_calls pc ON pc.id=history.provider_call_id) AS tried_scopes,
                         EXISTS (SELECT 1 FROM chain WHERE parent_attempt_id IS NULL)
@@ -373,11 +454,27 @@ async def select_scope(
                     "ORDER BY finished_at DESC,created_at DESC,id DESC LIMIT 1",
                     run_id, project_id, user_id, model, LLMGW_BALANCE_REFUSED, cell_route,
                 )
-                return "aitunnel" if balance_refused else "llmgw"
+                if run_scoped and not balance_refused:
+                    delay = await conn.fetchval(
+                        "SELECT CEIL(EXTRACT(EPOCH FROM MAX(finished_at + "
+                        "retry_after_seconds * interval '1 second' - now())))::int "
+                        "FROM provider_calls WHERE run_id=$1 AND project_id=$2 "
+                        "AND user_id IS NOT DISTINCT FROM $3::uuid "
+                        "AND requested_model=$4 AND ($3::uuid IS NOT NULL OR route=$5) "
+                        "AND provider_scope='llmgw' AND status='failed' AND receipt_hash IS NOT NULL "
+                        "AND retry_after_seconds IS NOT NULL "
+                        "AND finished_at + retry_after_seconds * interval '1 second' > now()",
+                        run_id, project_id, user_id, model, cell_route,
+                    )
     except Exception:
         from yleum_gateway.services.generation_attempts import AttemptConflict
 
         raise AttemptConflict("Provider routing could not be confirmed") from None
+    if parent is None:
+        if balance_refused:
+            return "aitunnel"
+        await _wait_for_primary_cooldown(delay, deadline)
+        return "llmgw"
     reason = parent["terminal_reason"]
     scope = parent["provider_scope"]
     backup_parent = scope == "aitunnel"
@@ -396,4 +493,10 @@ async def select_scope(
         alternate = alternate_scope(model, scope, reason, set(parent["tried_scopes"]))
         if alternate is not None:
             return alternate
+        if (identity is not None and backup_parent and reason == "preconnect"
+                and isinstance(call_id := parent.get("provider_call_id"), UUID)):
+            delay = await primary_retry_after_backup(identity, call_id)
+            if delay is not None:
+                await _wait_for_primary_cooldown(delay, deadline)
+                return "llmgw"
     raise ModelUnavailableError("No untried provider is confirmed for this attempt")

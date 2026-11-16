@@ -335,6 +335,36 @@ async def test_coordinator_adopts_after_and_refreshes_only_cheap_dimensions_once
 
 
 @pytest.mark.asyncio
+async def test_after_startup_retries_fast_check_timeout_without_rebuilding(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from yleum_api.services import max_finalization
+
+    c, before, after, calls, *_ = coordinator_fixture()
+    execute = c._execute_role
+
+    async def first_fast_check_times_out(**kwargs):
+        result = await execute(**kwargs)
+        role = executor.ProjectCellCommandRole.FAST_CHECK
+        if result.role is role and sum(actual is role for actual, _ in calls) == 1:
+            return replace(result, timed_out=True, ok=False, redacted_detail="timed out")
+        return result
+
+    c._execute_role = first_fast_check_times_out
+    monkeypatch.setattr(max_finalization.asyncio, "sleep", AsyncMock())
+    build, _, proof = await c._run_full_build_result(await c._proof(before), before)
+    _, rejected = await c._revalidate_full_build_startup(proof, after, build)
+
+    assert rejected is None
+    assert [role for role, _ in calls] == [
+        executor.ProjectCellCommandRole.FULL_BUILD,
+        executor.ProjectCellCommandRole.BOOTSTRAP,
+        executor.ProjectCellCommandRole.FAST_CHECK,
+        executor.ProjectCellCommandRole.FAST_CHECK,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_actual_old_opaque_environment_only_success_stays_red():
     c, before, _after, calls, _stored, _artifact, _dim, _outcome = coordinator_fixture(
         with_transition=False

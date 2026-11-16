@@ -72,6 +72,7 @@ type DiscoveryChoices = {
 export function ChatPanel({
   projectId,
   projectSlug,
+  ownerId,
   basePath = `/max/${projectId}`,
   currentSnapshotId,
   draftRef,
@@ -79,6 +80,7 @@ export function ChatPanel({
 }: {
   projectId: string;
   projectSlug: string;
+  ownerId?: string;
   basePath?: string;
   currentSnapshotId?: string | null;
   draftRef?: Ref<PromptInputHandle>;
@@ -90,9 +92,10 @@ export function ChatPanel({
   const modelId = "topmix-v1";
   const quota = useOwnerChatQuota();
   const authoredPending = useRef(false);
-  const { submit, cancel, cancelPending, pendingPrompt } = usePromptStream(
+  const { submit, cancel, cancelPending, retryPending, restoreExpiredPending, pendingPrompt, pendingPhase } = usePromptStream(
     projectId,
     projectSlug,
+    ownerId,
   );
   const toggleChat = useWorkspaceStore((s) => s.toggleChat);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -135,11 +138,12 @@ export function ChatPanel({
       text: string,
       selections: SelectedElement[],
       opts?: PromptSubmitOptions,
+      replay = Boolean(opts?.idempotencyKey),
     ): Promise<boolean> => {
       // An explicit stable key may be an already accepted request whose response
       // was lost; only the server can adjudicate that replay. Fresh manual sends
       // must not become a second queued message on Free.
-      if (!opts?.idempotencyKey && (quota.exhausted || (quota.limited && authoredPending.current))) {
+      if (!replay && (quota.exhausted || (quota.limited && authoredPending.current))) {
         toast.info(FREE_CHAT_UPGRADE_MESSAGE);
         return false;
       }
@@ -228,12 +232,13 @@ export function ChatPanel({
     [modelId, projectId, qc, submit, quota.exhausted, quota.limited],
   );
 
-  const handleSubmit = async (text: string, selections: SelectedElement[], references?: PromptReferenceSubmit): Promise<PromptInputSubmitResult> => {
+  const handleSubmit = async (text: string, selections: SelectedElement[], { idempotencyKey, referenceImages, fontSelections }: PromptReferenceSubmit, replay: boolean): Promise<PromptInputSubmitResult> => {
     let referencesExpired = false;
-    const accepted = await submitWithCredentialIntake(text, selections, references ? {
-      ...references,
-      onReferenceImagesExpired: () => { referencesExpired = true; },
-    } : undefined);
+    const accepted = await submitWithCredentialIntake(text, selections, {
+      idempotencyKey,
+      ...(referenceImages.length ? { referenceImages, onReferenceImagesExpired: () => { referencesExpired = true; } } : {}),
+      ...(fontSelections?.length ? { fontSelections } : {}),
+    }, replay);
     return referencesExpired ? { accepted: false, reason: "reference_images_expired" } : accepted;
   };
 
@@ -499,8 +504,11 @@ export function ChatPanel({
           quotaNotice={<OwnerChatQuotaNotice {...quota} />}
           onCancel={cancel}
           onCancelPending={cancelPending}
+          onRetryPending={retryPending}
+          onRestoreExpiredPending={restoreExpiredPending}
           isStreaming={isStreaming}
           pendingPrompt={pendingPrompt}
+          pendingPhase={pendingPhase}
           textareaRef={inputRef}
           placeholder="Опишите приложение или изменения…"
           ariaLabel="Опишите изменение MAX Mini App"

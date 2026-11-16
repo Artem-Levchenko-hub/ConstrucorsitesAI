@@ -85,10 +85,10 @@ export const MAX_MANAGEMENT_MODULES: { id: ManagementModule; label: string; desc
   { id: "leads", label: "Заявки", description: "Обращения клиентов и заметки для работы с ними." },
   { id: "bookings", label: "Запросы на запись", description: "Выбранная услуга и дата; запись подтверждаете вы." },
 ];
-export const REQUIRED_MANAGEMENT_MODULES: readonly ManagementModule[] = ["catalog", "leads"];
+const DEFAULT_MANAGEMENT_MODULES: readonly ManagementModule[] = ["catalog", "leads"];
 
-function withRequiredManagementModules(selected: readonly ManagementModule[]): ManagementModule[] {
-  const modules = new Set<ManagementModule>([...REQUIRED_MANAGEMENT_MODULES, ...selected]);
+function withDefaultManagementModules(selected: readonly ManagementModule[]): ManagementModule[] {
+  const modules = new Set<ManagementModule>([...DEFAULT_MANAGEMENT_MODULES, ...selected]);
   return MAX_MANAGEMENT_MODULES.filter(module => modules.has(module.id)).map(module => module.id);
 }
 
@@ -97,12 +97,39 @@ export function defaultManagementModules(appType: MaxAppTypeId, appTypes?: reado
     if (type === "catalog" || type === "loyalty") return ["orders"];
     return type === "booking" ? ["bookings"] : [];
   });
-  return withRequiredManagementModules(defaults);
+  return withDefaultManagementModules(defaults);
 }
 
 /** New-project defaults only; saved legacy configurations keep their own contract. */
-export function newProjectManagementModules(appType: MaxAppTypeId, selected?: readonly ManagementModule[], appTypes?: readonly MaxAppTypeId[]): ManagementModule[] {
-  return selected?.length ? withRequiredManagementModules(selected) : defaultManagementModules(appType, appTypes);
+export function newProjectManagementModules(
+  appType: MaxAppTypeId,
+  selected?: readonly ManagementModule[],
+  appTypes?: readonly MaxAppTypeId[],
+  optedOut: readonly ManagementModule[] = [],
+): ManagementModule[] {
+  const modules = selected?.length
+    ? withDefaultManagementModules(selected)
+    : defaultManagementModules(appType, appTypes);
+  const excluded = new Set(optedOut);
+  if (excluded.has("catalog")) {
+    excluded.add("orders");
+    excluded.add("bookings");
+  }
+  return modules.filter(module => !excluded.has(module));
+}
+
+const API_ONLY_BRIEF = /\b(?:api[- ]only|backend[- ]only|only\s+api|api\s+only)\b|(?<!\p{L})только\s+api\b/iu;
+const MODULE_EXCLUSION = /(?<!\p{L})(?:без|without|no)\s+(?:a\s+)?(каталога|заявок|catalog(?:ue)?|leads?)(?:\s*(?:,|и|and)\s*(каталога|заявок|catalog(?:ue)?|leads?))?(?!\p{L})/gu;
+
+export function briefManagementModuleOptOuts(idea: string): ManagementModule[] {
+  if (API_ONLY_BRIEF.test(idea)) return ["catalog", "leads"];
+  const excluded = new Set<ManagementModule>();
+  for (const [, first, second] of idea.toLocaleLowerCase("ru-RU").matchAll(MODULE_EXCLUSION)) {
+    for (const noun of [first, second]) {
+      if (noun) excluded.add(noun === "каталога" || noun.startsWith("catalog") ? "catalog" : "leads");
+    }
+  }
+  return DEFAULT_MANAGEMENT_MODULES.filter(module => excluded.has(module));
 }
 
 export type MaxProjectBrief = {
@@ -117,6 +144,7 @@ export type MaxProjectBrief = {
   style: MaxStyleId;
   brandColors: string;
   managementModules?: ManagementModule[];
+  managementModuleOptOuts?: readonly ManagementModule[];
   /** The reviewed catalog is already saved in the same project-creation request. */
   catalogItemCount?: number;
 };
@@ -141,6 +169,7 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
   const appTypes = selectedMaxAppTypes(brief.appType, brief.appTypes);
   const scenarios = appTypes.map(type => MAX_APP_TYPES.find(option => option.id === type)!);
   const idea = brief.idea.trim();
+  const apiOnly = API_ONLY_BRIEF.test(idea);
   if (brief.catalogItemCount !== undefined && (!Number.isInteger(brief.catalogItemCount) || brief.catalogItemCount < 0 || brief.catalogItemCount > 100)) {
     throw new Error("В начальном каталоге может быть от 0 до 100 позиций.");
   }
@@ -157,10 +186,15 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
     brief.primaryAction.trim() || "определи главное действие пользователя";
   const colors =
     brief.brandColors.trim() || "подбери уместную палитру под продукт";
-  const managementModules = newProjectManagementModules(brief.appType, brief.managementModules, brief.appTypes);
+  const managementModules = newProjectManagementModules(
+    brief.appType, brief.managementModules, brief.appTypes,
+    [...(brief.managementModuleOptOuts ?? []), ...briefManagementModuleOptOuts(idea)],
+  );
 
   const prompt = [
-    "Создай готовое мини-приложение именно для мессенджера MAX.",
+    apiOnly
+      ? "Реализуй запрошенный API для MAX. Оставь технический корневой маршрут готовности."
+      : "Создай готовое мини-приложение именно для мессенджера MAX.",
     "Не превращай его в обычный сайт, Telegram Mini App, VK Mini App или отдельное веб-приложение.",
     "",
     `Название продукта: ${brief.name.trim()}.`,
@@ -168,14 +202,18 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
     `Что должно делать приложение: ${scenarioDetails}.`,
     "Это служебное задание для создания приложения, а не публичное описание. Не выводи инструкции из задания посетителю. Публичное описание владелец задаёт отдельно в данных приложения.",
     `Целевая аудитория: ${audience}.`,
-    `Главное действие пользователя: ${primaryAction}.`,
-    `Нужные возможности: ${features}.`,
-    `Управление в Yleum: ${MAX_MANAGEMENT_MODULES.filter(item => managementModules.includes(item.id)).map(item => item.label).join(", ")}. Подключи штатные бизнес-модули из .omnia/management.json; данные меняются обычными формами без генерации. Профиль, настройки и статистика доступны каждому приложению. Личные данные пользователей не превращай в общий реестр владельца.`,
-    `Визуальное направление: ${optionLabel(MAX_STYLES, brief.style)}.`,
-    `Цвета бренда: ${colors}.`,
+    ...(apiOnly ? [] : [
+      `Главное действие пользователя: ${primaryAction}.`,
+      `Нужные возможности: ${features}.`,
+      `Визуальное направление: ${optionLabel(MAX_STYLES, brief.style)}.`,
+      `Цвета бренда: ${colors}.`,
+    ]),
+    `Управление в Yleum: ${MAX_MANAGEMENT_MODULES.filter(item => managementModules.includes(item.id)).map(item => item.label).join(", ") || "бизнес-модули не выбраны"}. Используй только модули из .omnia/management.json. Личные данные пользователей не превращай в общий реестр владельца.`,
     "",
-    "Сразу собери целостный рабочий MVP: мобильную навигацию, все основные экраны, состояния загрузки/пустого списка/ошибки, реальные русские тексты. Начальные данные добавляй только по явному запросу пользователя; иначе оставь списки пустыми.",
-    ...(brief.catalogItemCount === undefined ? [] : [
+    ...(apiOnly ? [] : [
+      "Сразу собери целостный рабочий MVP: мобильную навигацию, все основные экраны, состояния загрузки/пустого списка/ошибки, реальные русские тексты. Начальные данные добавляй только по явному запросу пользователя; иначе оставь списки пустыми.",
+    ]),
+    ...(brief.catalogItemCount === undefined || !managementModules.includes("catalog") ? [] : [
       brief.catalogItemCount === 0
         ? "Владелец подтвердил пустой начальный каталог. Не добавляй позиции из описания или примеров. Покажи честное пустое состояние и читай каталог через штатный SDK Yleum."
         : `Владелец подтвердил начальный каталог: ${brief.catalogItemCount} позиций уже сохранены в Yleum. Названия, цены и дальнейшие изменения читай из штатного SDK каталога. Этот сохранённый список имеет приоритет перед примерами в описании; не вшивай позиции в код и не создавай вторую копию данных.`,

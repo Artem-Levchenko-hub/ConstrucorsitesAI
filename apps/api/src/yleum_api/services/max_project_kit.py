@@ -478,16 +478,19 @@ TypeScript errors.
 MAX_MANAGED_SDK_GUIDANCE = """
 MAX MANAGED SDK CONTRACT
 The owner edits business data in Yleum's Catalog and project settings.
-For a new app with `.omnia/management.json`, render its public name/description/
+For a UI app with selected `.omnia/management.json` modules, render its public name/description/
 support using `useYleumAppProfile()` from `@/lib/omnia/app-profile-client`.
 It returns {profile,configVersion,status,error,refresh}; profile contains app_name,
 summary and support.email/response_time. Handle loading/error; no bundled fallback.
 Use profile.app_name, never profile.name; catalog items use item.title, never
 item.name. Verify the actual SDK types before using other fields.
-Read the locked management manifest before implementing business flows. Selected
-orders/leads/bookings MUST use createManagedOrder/createManagedLead/
-createManagedBooking and getManagedRecords from `@/lib/omnia/business-client`.
-Do not replace a selected managed module with a custom SQL table or generic action.
+Read the locked management manifest before implementing business flows. Use
+createManagedOrder/createManagedLead/
+createManagedBooking and getManagedRecords from `@/lib/omnia/business-client`
+for the selected Yleum-managed orders, leads and bookings. For separate
+provider-owned flows use the connected service's documented contract and receipt.
+Submit each business intent once through its flow's write method. Do not replace
+a selected managed module with a custom SQL table or generic action.
 Read business-client.ts and business-server.ts for the exact typed signatures.
 Each create takes operationKey (one UUID per deliberate intent), customerName
 (explicit form input, never a fabricated MAX profile), optional contacts/comment.
@@ -584,7 +587,7 @@ rendered profile is still mandatory. Without that manifest, preserve the existin
 legacy contract/data; do not invent or silently enable owner-managed modules.
 Only implement modules selected by the locked manifest. An unsupported source
 shape can be rejected despite compiling: rewrite its connections into this direct
-form in the SAME run, preserving data/intent state, then build and call done.
+form in the SAME run, preserving data/intent state. Follow the active completion checks.
 Bookings take serviceId and requestedFor (timezone-bearing ISO); they are requests
 until the owner confirms them. Do not invent free slots, capacity or payment.
 Private/personal features outside these selected modules keep their existing
@@ -646,24 +649,22 @@ rewrite platform-owned files.
     + "\n\n"
     + """
 On a FULL BUILD, there is deliberately no product home page or visual template.
-Create src/app/page.tsx, the product styling, domain screens, components and API
-behaviour required by the brief from scratch. A thin shell, decorative tabs,
-static demo response or fake timer is not a finished application. Persist user actions with
-`createMaxAction` and read them with `getMaxActions` (optionally paginated with
-`{ limit, cursor }`), both from `@/lib/omnia/integration-client`.
+For requested UI create src/app/page.tsx, product styles, domain screens and
+working behavior. An explicit API-only brief needs its product APIs and a
+technical root route. Use `createMaxAction` and `getMaxActions` for generic
+persisted user activity, with optional pagination via `{ limit, cursor }`.
+Use the Yleum business SDK or the connected provider method for the business
+flow it owns. Read history from the same system and submit each intent once.
 Do not impose arbitrary limits on the number of business listings or records a
 user can create. Use pagination for reading large lists; a page size is not a
 creation quota. Add a business quota only when the owner explicitly requests it.
 Never fabricate the current user's history, profile, progress, workouts, meals
 or metrics with demo/mock/test constants.
-Load user-owned state from `getMaxActions`; if no records exist, show an honest
-empty/onboarding state. Static immutable reference catalogs are allowed only when
-they are clearly separate from user activity. In an attested project-owner sandbox
-you may extend `src/lib/db/schema.ts`, use Drizzle in product routes, and create
-feature APIs outside the reserved `/api/max/*` and `/api/omnia/*` namespaces.
-Every user-owned query MUST call `requireMaxUser()` and scope reads/writes by
-`maxUserId: user.id`; never trust an id from the request body. Without the attested
-sandbox, fall back to the managed action client.
+Show an honest empty state when no user records exist. Keep static reference
+catalogs separate from user activity. Add product API routes outside the reserved
+`/api/max/*` and `/api/omnia/*` namespaces. In this legacy MAX stack, persist
+user data through the managed SDK. Keep direct database imports in platform-owned
+code. Authorize every product-owned API request with the trusted MAX identity.
 For new/updated product flows, import `trackMaxActivity` from `@/lib/omnia/client`.
 Its only event codes are `screen_view`, `item_view`, `button_click`, `cart_add`,
 `checkout_start`, `form_submit`, `order_created`, `booking_created`, `lead_created`.

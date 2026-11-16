@@ -330,6 +330,43 @@ def test_route_retains_bounded_receipt_failure_without_replay_or_billing(
     assert "private" not in result.text and "private" not in str(receipt)
 
 
+def test_aitunnel_text_output_limit_without_usage_keeps_only_bounded_diagnostics(
+    monkeypatch, neutralize_lifespan, neutralize_side_effects,
+):
+    setup_route(monkeypatch)
+    monkeypatch.setenv("AITUNNEL_TEXT_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("AITUNNEL_TEXT_API_KEY", "synthetic-backup-key")
+    reset_settings_cache()
+    monkeypatch.setattr(chat.text_failover, "select_scope", AsyncMock(return_value="aitunnel"))
+    requests = []
+
+    def reply(request):
+        requests.append(request)
+        return httpx.Response(200, headers={"x-aitunnel-output-capped": "4096"}, content=encode([
+            chunk({"content": "private partial output"}, model="claude-sonnet-5.5"),
+            chunk(finish="length", model="claude-sonnet-5.5"), "[DONE]",
+        ]))
+
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(reply))
+    with TestClient(create_app()) as client:
+        response = client.post("/v1/chat/completions", json={
+            "model": "claude-sonnet-5.5", "max_tokens": 8192,
+            "messages": [{"role": "user", "content": "synthetic"}],
+        })
+
+    assert response.status_code == 502 and len(requests) == 1
+    details = response.json()["detail"]["error"]["details"]
+    assert details["provider_scope"] == "aitunnel"
+    assert details["provider_stream_outcome"] == "output_limit"
+    assert details["provider_output_cap_tokens"] == 4096
+    assert details["provider_receipt_failure"] == "receipt_incomplete"
+    assert details["provider_charge_ambiguous"] is True and details["retry_safe"] is False
+    assert "private partial output" not in response.text
+    chat.provider_calls.finish_call.assert_awaited_once()
+    assert chat.provider_calls.finish_call.await_args.kwargs["status"] == "ambiguous"
+    chat.billing.charge.assert_not_awaited()
+
+
 @pytest.mark.parametrize("failure", ["timeout", "oversize"])
 @pytest.mark.parametrize("reported_cost", [None, "1.23"])
 def test_error_headers_status_survives_native_body_failure(

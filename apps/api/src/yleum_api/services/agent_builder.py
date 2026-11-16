@@ -90,6 +90,7 @@ from yleum_api.services.generation_deadline import MIN_PROVIDER_WINDOW_SECONDS
 from yleum_api.services.max_generation_contract import _is_product_source
 from yleum_api.services.max_management_generation import ManagedSourceGap
 from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
+from yleum_api.services.portable_cell_contract import MAX_COORDINATOR_HANDOFF, is_max_stack_guide
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 from yleum_api.services.secret_safety import max_model_write_rejection
 
@@ -775,6 +776,8 @@ async def _run_agent_segment(
     )
     from yleum_api.services.reference_images import user_content
 
+    if coordinator_handoff and MAX_COORDINATOR_HANDOFF not in system_prompt:
+        system_prompt = f"{system_prompt}\n\n{MAX_COORDINATOR_HANDOFF}"
     convo: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content(user_prompt, reference_images, native=False)},
@@ -1194,15 +1197,6 @@ async def _run_agent_segment(
                 written, last_build_ok if not coordinator_handoff or fast_check_fresh else None,
                 source_change_pending=_source_change_pending(),
             )
-            if coordinator_handoff:
-                note += (
-                    "\nMAX FINALIZATION HANDOFF: build runs FAST_CHECK only. After a fresh "
-                    "clean build and completed source changes, call done to HAND OFF the "
-                    "candidate; done hands off a candidate, not an accepted product. "
-                    "The server coordinator MUST still run full build, runtime "
-                    "and release checks before accepting it. Do not repeat deferred runtime "
-                    "checks or rewrite clean source just to obtain runtime proof here."
-                )
             if note:
                 call_msgs = [
                     {"role": call_msgs[0]["role"], "content": call_msgs[0]["content"] + note},
@@ -1414,6 +1408,8 @@ async def _run_agent_segment(
                     "completion_tokens": failure.completion_tokens if failure is not None else None,
                 }
                 diagnostic.update(provider_error_context(failure))
+                if failure is not None:
+                    diagnostic.update(failure.provider_stream_context)
                 local_deadline = failure is not None and failure.code in {
                     "deadline_before_dispatch", "response_deadline_exceeded",
                 }
@@ -2211,10 +2207,10 @@ full build, runtime and release before acceptance.
 decide and act. One action per reply."""
 
 
-EDIT_SYSTEM_PROMPT = """You are editing an EXISTING, working Next.js app inside a \
+_TEXT_EDIT_PROTOCOL = """You are editing an EXISTING, working Next.js app inside a \
 live container. Make ONLY the change the user asks — do NOT rebuild the app or \
 touch unrelated files. Work like a developer: find the right file, read it, make \
-the minimal edit, run the build, fix any error, then done.
+the minimal edit and fix concrete errors.
 
 PROTOCOL — every reply: ONE short sentence of reasoning, then EXACTLY ONE action block:
 <omnia:action name="ACTION">{json args}</omnia:action>
@@ -2225,23 +2221,45 @@ ACTIONS:
 - edit_file  {"path": "...", "search": "EXACT TEXT", "replace": "NEW TEXT"} — preferred: minimal patch
 - write_file {"path": "...", "content": "FULL FILE"} — only when creating a new file
 - list_dir   {"path": "..."}
-- build      {}                                     — typecheck; fix real errors
+- build      {}                                     — check source and return errors
 - bash       {"cmd": "..."}                         — run a shell command if needed
 - read_logs  {}                                     — live dev-server logs (runtime errors)
-- runtime_check {"path": "/"}                        — open the changed route, confirm it still renders
-- done       {"summary": "what changed"}            — in MAX FINALIZATION HANDOFF after fresh clean FAST_CHECK; otherwise after build and runtime_check
+- done       {"summary": "what changed"}
+"""
 
-RULES:
+_TEXT_EDIT_DIRECT_PROOF = """
+- runtime_check {"path": "/"}                        — open the changed route, confirm it still renders
+After the last edit, run build and runtime_check before calling done.
+"""
+
+_TEXT_ENTITY_EDIT_RULES = """RULES:
 - This is a SURGICAL EDIT. Change the minimum. Do NOT regenerate entities/pages \
 that already work. The engine, auth, RBAC, kit and globals are fixed template \
 files — never touch them. To add a data section, add `entities/<Name>.json` + a \
-page that renders <CrudResource entity="Name"/>.
-- grep/read to find the exact spot, prefer edit_file (search must be copied \
-byte-for-byte from what you read), build, fix, done.
+page that renders <CrudResource entity="Name"/>."""
+
+_TEXT_MAX_EDIT_RULES = """RULES:
+- This is a SURGICAL EDIT. Trace the affected route, components and data access in \
+the current MAX app. Preserve platform-owned auth, MAX Bridge and managed files. \
+Use the existing MAX SDK and project APIs. Adjust product-owned components, styles \
+and routes only where the requested change requires it."""
+
+_TEXT_EDIT_WORK_STYLE = """- grep/read to find the exact spot and prefer edit_file (search must be copied \
+byte-for-byte from what you read).
 - Be fast and minimal — a small edit needs only a few steps. One action per reply."""
 
+EDIT_SYSTEM_PROMPT = "\n\n".join(
+    (
+        _TEXT_EDIT_PROTOCOL.strip(),
+        _TEXT_EDIT_DIRECT_PROOF.strip(),
+        f"{_TEXT_ENTITY_EDIT_RULES}\n{_TEXT_EDIT_WORK_STYLE}",
+    )
+)
 
-def build_edit_system_prompt(stack_guide: str | None = None) -> str:
+
+def build_edit_system_prompt(
+    stack_guide: str | None = None, *, coordinator_handoff: bool = False,
+) -> str:
     """Compose the surgical editor with the current stack's hard invariants.
 
     Builds already receive ``SYSTEM_PROMPT.md`` through ``build_system_prompt``.
@@ -2251,13 +2269,21 @@ def build_edit_system_prompt(stack_guide: str | None = None) -> str:
     while preserving the platform contract. Empty input is byte-identical to the
     legacy prompt.
     """
-    if not stack_guide or not stack_guide.strip():
-        return EDIT_SYSTEM_PROMPT
-    return (
-        EDIT_SYSTEM_PROMPT
-        + "\n\nSTACK-SPECIFIC CONTRACT — preserve these invariants on every edit:\n"
-        + stack_guide.strip()
-    )
+    is_max = coordinator_handoff or is_max_stack_guide(stack_guide or "")
+    if is_max:
+        parts = [_TEXT_EDIT_PROTOCOL.strip(), f"{_TEXT_MAX_EDIT_RULES}\n{_TEXT_EDIT_WORK_STYLE}"]
+        if not coordinator_handoff:
+            parts.insert(1, _TEXT_EDIT_DIRECT_PROOF.strip())
+    else:
+        parts = [EDIT_SYSTEM_PROMPT]
+    if stack_guide and stack_guide.strip():
+        parts.append(
+            "STACK-SPECIFIC CONTRACT — preserve these invariants on every edit:\n"
+            + stack_guide.strip()
+        )
+    if coordinator_handoff:
+        parts.append(MAX_COORDINATOR_HANDOFF)
+    return "\n\n".join(parts)
 
 
 # ── Per-stack prompts (the loop builds on ANY stack, not just entities) ──────
@@ -2271,10 +2297,8 @@ def build_edit_system_prompt(stack_guide: str | None = None) -> str:
 
 _TEMPLATES_DIR = Path(__file__).resolve().parents[4] / "orchestrator" / "templates"
 
-LOOP_PROTOCOL = """You are an autonomous full-stack engineer building a REAL app \
-inside a live container, working like a developer: make changes, run the build, \
-read the REAL errors, fix them — until the build is clean and the app actually \
-works. You take ONE action at a time and observe its result before the next.
+_TEXT_BUILD_PROTOCOL = """You are an autonomous full-stack engineer building a REAL app \
+inside a live container. You take ONE action at a time and observe its result before the next.
 
 PROTOCOL — every reply: ONE short sentence of reasoning, then EXACTLY ONE action block:
 <omnia:action name="ACTION">{json args}</omnia:action>
@@ -2287,42 +2311,41 @@ ACTIONS:
 - provider_docs {"provider": "aitunnel", "query": "authentication and chat completions"} — read bounded official provider documentation; never pass credentials or arbitrary URLs
 - write_file {"path": "...", "content": "FULL FILE CONTENT"}   — create/overwrite a whole file
 - edit_file  {"path": "...", "search": "EXACT TEXT", "replace": "NEW TEXT"}
-- build      {}                                — real typecheck; returns the actual errors
+- build      {}                                — check source and return errors
 - bash       {"cmd": "pnpm test"}              — run a shell command (lint / test / install)
 - read_logs  {}                                — live dev-server stdout/stderr (RUNTIME errors build can't see)
-- runtime_check {"path": "/"}                  — open a real route, get the REAL HTTP status + crash file
-- probe      {"method":"POST","path":"/api/...","body":{...}}  — outside MAX FINALIZATION HANDOFF, make a REAL request AS A LOGGED-IN test user; returns the EXACT status+body. The only way to prove an interactive feature works end-to-end (catches a 4xx on a user POST that build/runtime_check miss)
-- verify_isolation {"create":{"method":"POST","path":"/api/<resource>","body":{...}},"read":{"path":"/api/<resource>/{id}"}}  — outside MAX FINALIZATION HANDOFF, PROVE no data leak: logs in TWO users, user A creates the resource, then asserts user B is DENIED reading it AND it is absent from B's list. Run this for EVERY owned resource — a green build never proves isolation
-- done       {"summary": "what you built"}     — in MAX FINALIZATION HANDOFF after fresh clean FAST_CHECK; otherwise after build, runtime and functional probes
+- done       {"summary": "what you built"}
+"""
 
-WORK STYLE: explore MINIMALLY, spend most steps WRITING, never repeat an identical \
+_TEXT_DIRECT_PROOF = """
+- runtime_check {"path": "/"}                  — open a real route, get the REAL HTTP status + crash file
+- probe      {"method":"POST","path":"/api/...","body":{...}}  — make a real request as a logged-in test user and observe status and response
+- verify_isolation {"create":{"method":"POST","path":"/api/<resource>","body":{...}},"read":{"path":"/api/<resource>/{id}"}}  — exercise authenticated permission checks with two users
+
+After the last source change, run build and fix errors. Use runtime_check on the main routes, \
+read_logs to diagnose failures and re-check after fixing. Prove requested interactive features \
+with probe as a logged-in user and verify_isolation on every owned resource. Call done when \
+the build, runtime and applicable functional probes pass.
+"""
+
+_TEXT_WORK_STYLE = """WORK STYLE: explore MINIMALLY, spend most steps WRITING, never repeat an identical \
 read or write, never ask the user questions — decide and act. When an EXTERNAL library's \
 API bites you (a build error about a wrong signature, a renamed export, a removed option), \
-call `docs` for that library BEFORE guessing — current docs beat a stale memory. When you author tests, \
-run them with bash. Outside MAX FINALIZATION HANDOFF, after the build is clean, \
-`runtime_check` the main route(s) — a \
-typecheck-clean app can still crash on render; if it 5xx, `read_logs`, fix, re-check. \
-Outside MAX FINALIZATION HANDOFF, for an INTERACTIVE feature (send a message, save, submit a form, log in), a clean build \
-and a 200 page do NOT prove it works — the real failure is a 4xx on the user's POST that \
-a screenshot can never show. After editing one, `read_logs` and look for a 4xx/5xx with \
-its reason — the server logs the EXACT cause (e.g. a rejected/mismatched field); fix until \
-the action's own request is 2xx, not just until the page loads. PROVE it with `probe`: \
-perform the real action as a logged-in user (e.g. probe POST to create a resource, then \
-probe POST to act on it) and require a 2xx with the expected body before `done`. \
+call `docs` for that library BEFORE guessing — current docs beat a stale memory. Run applicable \
+local tests with bash. \
 For any OWNED data (records a user creates and others must not see), scope EVERY query \
 by the authenticated user (the session user id) — never return rows the current user \
-does not own, and protect every data route with auth. Outside MAX FINALIZATION HANDOFF, prove it with `verify_isolation` \
-on that resource: a green build and a working create do NOT prove that another user can't \
-read it. Fix until isolation passes before `done`. \
-In MAX FINALIZATION HANDOFF, done hands off a candidate, not an accepted product: \
-the server coordinator owns mandatory full build, signed runtime and release checks. \
-Keep authenticated owner scoping and applicable isolated local tests; A/B owner isolation remains unverified \
-unless an actual two-user check provides evidence. Report that limit honestly. \
-Do not call deferred runtime/probe tools from this source-editing loop. \
+does not own, and protect every data route with auth. \
 One action per reply."""
 
+LOOP_PROTOCOL = "\n\n".join(
+    (_TEXT_BUILD_PROTOCOL.strip(), _TEXT_DIRECT_PROOF.strip(), _TEXT_WORK_STYLE)
+)
 
-def build_system_prompt(stack_guide: str, skills: str | None = None) -> str:
+
+def build_system_prompt(
+    stack_guide: str, skills: str | None = None, *, coordinator_handoff: bool = False,
+) -> str:
     """Compose the agent system prompt for ANY stack: the shared loop protocol +
     the stack-specific guide (typically a template's SYSTEM_PROMPT.md). Same loop,
     right primitives — so the model can build a realtime app, a CRUD app or an API
@@ -2332,9 +2355,15 @@ def build_system_prompt(stack_guide: str, skills: str | None = None) -> str:
     first draft already carries the security/a11y/perf canons the gates enforce —
     knowledge ALIGNED with enforcement. None/empty → unchanged (current behaviour).
     """
-    parts = [LOOP_PROTOCOL, stack_guide.strip()]
+    protocol = (
+        f"{_TEXT_BUILD_PROTOCOL.strip()}\n\n{_TEXT_WORK_STYLE}"
+        if coordinator_handoff else LOOP_PROTOCOL
+    )
+    parts = [protocol, stack_guide.strip()]
     if skills and skills.strip():
         parts.append(skills.strip())
+    if coordinator_handoff:
+        parts.append(MAX_COORDINATOR_HANDOFF)
     return "\n\n".join(parts)
 
 

@@ -112,6 +112,23 @@ def test_ts2554_keeps_concrete_source_location():
     assert failure.allowed_paths == ("src/app/page.tsx",)
 
 
+def test_typescript_message_about_a_connection_is_still_a_type_error():
+    detail = ('src/app/page.tsx(4,3): error TS2322: Type '
+              '"connection refused" is not assignable to type "ready".')
+    assert classify(detail).kind == "type_error"
+    assert classify(detail + "\ncommand timed out").kind == "infrastructure"
+
+
+def test_controller_react_effect_diagnostic_has_one_repair_path():
+    detail = ('src/app/page.tsx:7: self-cancelling React effect: '
+              'the timer is cleared before it can fire')
+    failure = classify(detail)
+    assert failure.kind == "react_effect"
+    assert failure.allowed_paths == ("src/app/page.tsx",)
+    assert not classify(detail, finished=False).allowed_paths
+    assert not classify(detail.replace("src/app", "../other")).allowed_paths
+
+
 @pytest.mark.parametrize("target,files,kind,paths", [
     ("missing-library", alias_files(), "external_package", ()),
     ("@/components/Missing", alias_files({"paths": {"@/*": ["src/*", "other/*"]}}),

@@ -513,8 +513,9 @@ async def _restore_project_cell_source(
     baseline: Mapping[str, str],
 ) -> None:
     changed = await handle.export_files()
-    writes = {path: baseline[path] for path in changed if path in baseline}
-    deletes = tuple(path for path in changed if path not in baseline)
+    applied = await _applied_migration_paths(handle)
+    writes = {path: baseline[path] for path in changed if path in baseline and path not in applied}
+    deletes = tuple(path for path in changed if path not in baseline and path not in applied)
     await handle.stage_patch(writes, deletes)
     restored = await handle.sync_preview()
     if restored.failure is not None:
@@ -522,6 +523,11 @@ async def _restore_project_cell_source(
             restored.failure,
             runtime_absent=getattr(restored, "runtime_absent", False),
         )
+
+
+async def _applied_migration_paths(handle: ProjectCellExecutorHandle) -> frozenset[str]:
+    reader = getattr(handle, "applied_migration_paths", None)
+    return await reader() if reader is not None else frozenset()
 
 
 async def _apply_project_cell_preview_files(

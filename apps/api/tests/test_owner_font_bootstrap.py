@@ -20,10 +20,12 @@ from yleum_api.services.generation.contracts import GenerationIds, SourceBaselin
 from yleum_api.services.reference_images import request_identity
 
 
+@pytest.mark.parametrize("selection", [None, [{"selector": "#checkout"}]])
 async def test_font_apply_lost_ack_cold_retry_snapshot_and_ordinary_edit(
     db_session,
     monkeypatch,
     font_storage,
+    selection,
 ):
     user, project = await reference_owner(db_session)
     asset = await font_assets.create_font(
@@ -34,7 +36,8 @@ async def test_font_apply_lost_ack_cold_retry_snapshot_and_ordinary_edit(
     )
     await font_assets.bind_message_fonts(db_session, project.id, user.id, bindings)
     message = Message(
-        project_id=project.id, role="user", content="Apply font", font_selections=bindings
+        project_id=project.id, role="user", content="Apply font", font_selections=bindings,
+        selected_elements=selection,
     )
     assistant = Message(project_id=project.id, role="assistant", content="")
     db_session.add_all([message, assistant])
@@ -76,7 +79,12 @@ async def test_font_apply_lost_ack_cold_retry_snapshot_and_ordinary_edit(
     monkeypatch.setattr(font_assets, "fetch_family", lambda *a: pytest.fail("new font resolve"))
     prepared = await stage_owner_fonts(factory=factory, ids=ids, baseline=baseline, runtime=runtime)
     assert len(writes) == 1
-    assert json.loads(prepared["typography.json"])["heading"] == "Yleum Test Font"
+    typography = json.loads(prepared["typography.json"])
+    if selection:
+        assert typography["scoped_owner_roles"]["all"]["family"] == "Yleum Test Font"
+        assert typography["owner_roles"] == {} and "heading" not in typography
+    else:
+        assert typography["heading"] == "Yleum Test Font"
     initial = repo.init_from_files(project.id, source, "font source")
     committed = repo.commit_files(
         project.id, source, "font exact snapshot", initial, exact_tree=True

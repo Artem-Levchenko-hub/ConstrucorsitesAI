@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 
 _MAX_HOME_PAGE = "src/app/page.tsx"
+MAX_PRODUCT_READINESS_PATH = "/api/yleum-readiness"
+_READ_HANDLER = re.compile(r"(?m)^\s*export\s+(?:(?:async\s+)?function|const)\s+GET\b")
 _PORTABLE_ROOT_FALLBACKS: tuple[tuple[str, str], ...] = (
     ("/support", "src/app/support/page.tsx"),
     ("/legal/privacy", "src/app/legal/privacy/page.tsx"),
     ("/legal/terms", "src/app/legal/terms/page.tsx"),
 )
+
+
+def resolve_max_business_probe_path(files: Mapping[str, str]) -> str | None:
+    """Opt in via the reserved, read-only product endpoint, without guessing API paths."""
+    for extension in ("ts", "js"):
+        source = files.get(f"src/app{MAX_PRODUCT_READINESS_PATH}/route.{extension}", "")
+        if _READ_HANDLER.search(source):
+            return MAX_PRODUCT_READINESS_PATH
+    return None
 
 
 def _nonempty_file(files: Mapping[str, str], path: str) -> bool:
@@ -41,4 +53,8 @@ def resolve_max_runtime_probe_paths(
     return normalized_path, fallback_paths
 
 
-__all__ = ["resolve_max_runtime_probe_paths"]
+__all__ = [
+    "MAX_PRODUCT_READINESS_PATH",
+    "resolve_max_business_probe_path",
+    "resolve_max_runtime_probe_paths",
+]

@@ -26,6 +26,39 @@ def rejection(details=None, code="model_unavailable"):
     }}})
 
 
+async def test_aitunnel_text_output_cap_is_reported_without_replaying(monkeypatch):
+    posts, events = [], []
+
+    def reply(request):
+        posts.append(request)
+        return rejection({
+            "provider_scope": "aitunnel", "transport_stage": "body",
+            "provider_receipt_failure": "receipt_incomplete", "provider_charge_ambiguous": True,
+            "provider_stream_outcome": "output_limit", "provider_output_cap_tokens": 4096,
+            "retry_safe": False,
+        })
+
+    async def execute(action):
+        pytest.fail("an incomplete receipt must not execute model output")
+
+    async def emit(kind, data):
+        events.append((kind, data))
+
+    install_transport(monkeypatch, reply)
+    result = await agent_builder.run_agent_build(
+        system_prompt="s", user_prompt="t", model="claude-sonnet-5.5",
+        execute=execute, emit=emit, max_steps=2,
+    )
+
+    diagnostic = next(data for kind, data in events if kind == "agent.provider_error")
+    assert len(posts) == 1 and result.stop_reason == "provider_error"
+    assert diagnostic["provider_stream_outcome"] == "output_limit"
+    assert diagnostic["provider_output_cap_tokens"] == 4096
+    assert diagnostic["finish_reason"] == "length"
+    assert diagnostic["provider_charge_ambiguous"] is True and diagnostic["will_retry"] is False
+    assert "предел" in result.summary and "synthetic-private-key" not in result.summary
+
+
 @pytest.mark.parametrize('category,message', [
     ('funds', 'Недостаточно средств у LLM-провайдера.'),
     ('access', 'LLM-провайдер отклонил доступ к запросу.'),

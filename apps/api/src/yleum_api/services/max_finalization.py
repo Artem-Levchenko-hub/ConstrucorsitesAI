@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, TypedDict, cast
-from uuid import UUID, uuid5
+from uuid import UUID, uuid4, uuid5
 
 if TYPE_CHECKING:
     from yleum_api.services.generation.recovery_execution import ExecutionDriver
@@ -82,6 +82,7 @@ from yleum_api.services.max_runtime_probe import MaxRuntimeProbe
 from yleum_api.services.notes_acceptance_browser import NotesDriver
 from yleum_api.services.orchestrator_client import (
     OrchestratorMachineInventoryUnavailable,
+    OrchestratorUnavailable,
     ProjectCellAgentOperationStatus,
     RestorationAdaptationProof,
     RestorationAdaptationWorkspace,
@@ -138,6 +139,13 @@ _MAX_REPAIR_STRATEGIES_WITHOUT_PROGRESS = 3
 # How often the watchdog looks again while a sealed hand-off runs under its own ceiling.
 _SEALED_RECHECK_SECONDS = 15.0
 _FULL_BUILD_DETAIL_PREFIX = f"[build-contract:{MAX_FULL_BUILD_CONTRACT_VERSION}]"
+_FAST_CHECK_DEPENDENCY = "[fast-check-dependency]"
+_RUNTIME_SOURCE_FAILURE = "[runtime-source-failure]\n"
+_VERIFICATION_RETRY_DELAYS = (0.0, 1.0, 3.0)
+_RELEASE_DEPENDENCY_CHECKS = frozenset({
+    "signed_preview_session", "security gate executed", "transport_security",
+    "signed preview transport unavailable",
+})
 
 
 def _product_source_fingerprint(files: Mapping[str, str]) -> str:
@@ -171,6 +179,18 @@ async def _discard_event(
 
 class MaxFinalizationConflict(RuntimeError):
     """The durable checkpoint no longer belongs to the active fenced identity."""
+
+
+class MaxVerificationUnavailable(ProjectCellInfrastructureError):
+    """A check could not produce a verdict for the current candidate."""
+
+    def __init__(self, phase: GenerationPhase, detail: str) -> None:
+        self.phase = phase
+        self.detail = bounded_redacted_diagnostic(detail, max_bytes=1024)
+        super().__init__("MAX_VERIFICATION_UNAVAILABLE")
+
+    def __str__(self) -> str:
+        return f"{self.code}: {self.phase.value}: {self.detail}"
 
 
 class AdaptationBaselineUnavailable(RuntimeError):
@@ -364,6 +384,9 @@ class MaxFinalizationCoordinator:
         self.behavior_driver = behavior_driver
         self.continuation = continuation
         self.emit = emit or _discard_event
+        self.checkpoint_verification_candidate: (
+            Callable[[dict[str, str], str], Awaitable[None]] | None
+        ) = None
         self._last_files: dict[str, str] | None = None
         self._last_prompt: str | None = None
         self._transient_source_receipts: dict[UUID, _TransientSourceReceipt] = {}
@@ -488,15 +511,35 @@ class MaxFinalizationCoordinator:
         if bootstrap.outcome != ProofOutcome.GREEN.value:
             return bootstrap
         result = await self._find(proof, ProofDimension.FAST_CHECK)
-        if result is not None:
+        if result is not None and not self._fast_check_unavailable(result):
             await self._counter("proof_hit")
             return result
-        return await self._run_role_result(
-            proof=proof,
-            identity=identity,
-            dimension=ProofDimension.FAST_CHECK,
-            role=ProjectCellCommandRole.FAST_CHECK,
-            phase=GenerationPhase.FAST_CHECK,
+        return await self._run_fast_check(proof, identity, result)
+
+    async def _run_fast_check(
+        self, proof: ProjectCellProof, identity: ProofIdentity,
+        result: ProjectCellProofResult | None,
+    ) -> ProjectCellProofResult:
+        for delay in (0, 1):
+            if delay:
+                await asyncio.sleep(delay)
+            result = await self._run_role_result(
+                proof=proof,
+                identity=identity,
+                dimension=ProofDimension.FAST_CHECK,
+                role=ProjectCellCommandRole.FAST_CHECK,
+                phase=GenerationPhase.FAST_CHECK,
+                retry_after=result.operation_id if result is not None else None,
+            )
+            if not self._fast_check_unavailable(result):
+                return result
+        raise MaxVerificationUnavailable(GenerationPhase.FAST_CHECK, result.redacted_detail)
+
+    @staticmethod
+    def _fast_check_unavailable(result: ProjectCellProofResult) -> bool:
+        return (
+            result.outcome == ProofOutcome.RED.value
+            and result.redacted_detail.startswith(_FAST_CHECK_DEPENDENCY)
         )
 
     async def retired_fast_check(self) -> ProjectCellProofResult:
@@ -699,6 +742,8 @@ class MaxFinalizationCoordinator:
             if not _current_build_result(build, current_digest):
                 build = None
                 refresh_dependents = True
+            else:
+                self._last_files = current_files
         if build is None:
             before_build = identity
             build, identity, proof = await self._run_full_build_result(proof, identity)
@@ -737,6 +782,13 @@ class MaxFinalizationCoordinator:
                 artifact_digest=build_digest,
             )
         if runtime is None:
+            if (
+                self.checkpoint_verification_candidate is not None
+                and self._last_files is not None
+                and build.proof_id == proof.id
+                and canonical_files_digest(self._last_files) == build_digest
+            ):
+                await self.checkpoint_verification_candidate(self._last_files, identity.proof_key)
             runtime = await self._run_runtime(
                 proof,
                 identity,
@@ -2428,15 +2480,19 @@ class MaxFinalizationCoordinator:
         dimension: ProofDimension,
         role: ProjectCellCommandRole,
         phase: GenerationPhase,
+        retry_after: UUID | None = None,
     ) -> ProjectCellProofResult:
+        kwargs = {"operation_id": uuid5(retry_after, "retry-fast-check")} if retry_after else {}
         observation = await self._execute_role(
             identity=identity,
             dimension=dimension,
             role=role,
             phase=phase,
+            **kwargs,
         )
         result, _identity, _proof = await self._record_role_observation(
             proof=proof, identity=identity, dimension=dimension, observation=observation,
+            refresh_fast_check=retry_after is not None,
         )
         return result
 
@@ -2455,7 +2511,7 @@ class MaxFinalizationCoordinator:
     async def _record_role_observation(
         self, *, proof: ProjectCellProof, identity: ProofIdentity, dimension: ProofDimension,
         observation: ProjectCellCommandObservation, allow_full_build_startup: bool = False,
-        retained_compiler: bool = False,
+        retained_compiler: bool = False, refresh_fast_check: bool = False,
     ) -> tuple[ProjectCellProofResult, ProofIdentity, ProjectCellProof]:
         transition = getattr(observation, "full_build_startup_transition", None)
         authorized_restart = bool(
@@ -2478,6 +2534,8 @@ class MaxFinalizationCoordinator:
                 ProofOutcome.GREEN
                 if observation.ok and not observation.timed_out else ProofOutcome.RED
             )
+            if dimension is ProofDimension.FAST_CHECK and observation.timed_out:
+                detail = _FAST_CHECK_DEPENDENCY + "\n" + (detail or "command timed out")
         if authorized_restart:
             identity = observation.after
             proof = await self._proof(identity)
@@ -2505,7 +2563,8 @@ class MaxFinalizationCoordinator:
                 proof=proof, dimension=dimension, outcome=outcome,
                 operation_id=observation.operation_id, artifact_ref=artifact_ref, detail=detail,
                 refresh_incompatible=(
-                    dimension is ProofDimension.FULL_BUILD and not authorized_restart
+                    (dimension is ProofDimension.FULL_BUILD and not authorized_restart)
+                    or (dimension is ProofDimension.FAST_CHECK and refresh_fast_check)
                 ),
                 require_match=retained_compiler,
             )
@@ -2537,7 +2596,11 @@ class MaxFinalizationCoordinator:
              GenerationPhase.FAST_CHECK),
         ):
             result = await self._find(proof, dimension)
-            if result is None:
+            if dimension is ProofDimension.FAST_CHECK and (
+                result is None or self._fast_check_unavailable(result)
+            ):
+                result = await self._run_fast_check(proof, identity, result)
+            elif result is None:
                 result = await self._run_role_result(
                     proof=proof, identity=identity, dimension=dimension, role=role, phase=phase,
                 )
@@ -2593,8 +2656,9 @@ class MaxFinalizationCoordinator:
         dimension: ProofDimension,
         role: ProjectCellCommandRole,
         phase: GenerationPhase,
+        operation_id: UUID | None = None,
     ) -> ProjectCellCommandObservation:
-        operation_id = self._role_operation_id(identity, role)
+        operation_id = operation_id or self._role_operation_id(identity, role)
         async def invoke() -> ProjectCellCommandObservation:
             return await self._execute_role_activity(
                 identity=identity, dimension=dimension, role=role, phase=phase,
@@ -2687,16 +2751,7 @@ class MaxFinalizationCoordinator:
         *,
         refresh_incompatible: bool = False,
     ) -> ProjectCellProofResult:
-        dimension_key = identity.dimension_key(
-            ProofDimension.RUNTIME,
-            artifact_digest=build_digest,
-        )
-        operation_id = uuid5(
-            self.generation_run_id,
-            f"runtime:{MAX_FULL_BUILD_CONTRACT_VERSION}:{dimension_key}",
-        )
         phase = GenerationPhase.RUNTIME_PROBE
-        await self._phase_started(phase, self._checkpoint(identity, phase, operation_id))
         runtime_probe = self.executor.runtime_probe
         assert runtime_probe is not None
 
@@ -2710,30 +2765,59 @@ class MaxFinalizationCoordinator:
                 heartbeat_at=datetime.now(UTC),
             )
 
-        probe = await run_with_activity_lease(
-            session_factory=self.session_factory,
-            lease=ActivityStart(
-                operation_id=operation_id,
-                workspace_id=identity.workspace_id,
-                generation_run_id=identity.generation_run_id,
-                kind=ActivityKind.TOOL,
-                fencing_epoch=identity.fencing_epoch,
-                proof_key=identity.proof_key,
-                phase=phase.value,
-                deadline_at=datetime.now(UTC)
-                + timedelta(seconds=get_settings().max_generation_deadline_seconds),
-            ),
-            work=run_probe,
-            controller_owned=False,
-            poll_status=local_status,
-            emit=self.emit,
-            heartbeat_seconds=get_settings().project_cell_heartbeat_seconds,
-            terminal_state=lambda result: (
-                ActivityState.COMPLETED if result.ok else ActivityState.FAILED
-            ),
-        )
+        async def require_same_candidate() -> None:
+            for delay in _VERIFICATION_RETRY_DELAYS:
+                if delay:
+                    await asyncio.sleep(delay)
+                try:
+                    current = await self._identity()
+                except OrchestratorUnavailable:
+                    continue
+                if current != identity:
+                    raise MaxFinalizationConflict("candidate changed during runtime verification")
+                return
+            raise MaxVerificationUnavailable(phase, "workspace identity temporarily unavailable")
+
+        for delay in _VERIFICATION_RETRY_DELAYS:
+            if delay:
+                await asyncio.sleep(delay)
+            await require_same_candidate()
+            # A fresh read-only activity can recover an absent proof after a
+            # worker stops between finishing the previous lease and saving it.
+            operation_id = uuid4()
+            await self._phase_started(phase, self._checkpoint(identity, phase, operation_id))
+            probe = await run_with_activity_lease(
+                session_factory=self.session_factory,
+                lease=ActivityStart(
+                    operation_id=operation_id,
+                    workspace_id=identity.workspace_id,
+                    generation_run_id=identity.generation_run_id,
+                    kind=ActivityKind.TOOL,
+                    fencing_epoch=identity.fencing_epoch,
+                    proof_key=identity.proof_key,
+                    phase=phase.value,
+                    deadline_at=datetime.now(UTC)
+                    + timedelta(seconds=get_settings().max_generation_deadline_seconds),
+                ),
+                work=run_probe,
+                controller_owned=False,
+                poll_status=local_status,
+                emit=self.emit,
+                heartbeat_seconds=get_settings().project_cell_heartbeat_seconds,
+                terminal_state=lambda result: (
+                    ActivityState.COMPLETED if result.ok else ActivityState.FAILED
+                ),
+            )
+            if probe.failure_kind != "dependency":
+                break
+        else:
+            raise MaxVerificationUnavailable(phase, probe.detail)
+        await require_same_candidate()
         ok = bool(probe.ok)
-        detail = str(probe.detail)
+        detail = (
+            _RUNTIME_SOURCE_FAILURE + probe.detail if probe.failure_kind == "source"
+            else probe.detail
+        )
         await self._counter("runtime_probe")
         await self._phase_finished(phase)
         verification_digest = _content_digest(
@@ -2760,13 +2844,21 @@ class MaxFinalizationCoordinator:
     ) -> ProjectCellProofResult:
         from yleum_api.services.release_proof import run_release_proof
 
-        verdict = await run_release_proof(
-            self.project_id,
-            self.project_slug,
-            proof=bundle,
-            require_max_data=True,
-            project_cell_handle=self.executor,
-        )
+        for delay in _VERIFICATION_RETRY_DELAYS:
+            if delay:
+                await asyncio.sleep(delay)
+            verdict = await run_release_proof(
+                self.project_id,
+                self.project_slug,
+                proof=bundle,
+                require_max_data=True,
+                project_cell_handle=self.executor,
+            )
+            failed_checks = {check.name for check in verdict.checks if not check.ok}
+            if not failed_checks or not failed_checks.issubset(_RELEASE_DEPENDENCY_CHECKS):
+                break
+        else:
+            raise MaxVerificationUnavailable(GenerationPhase.RUNTIME_PROBE, verdict.summary)
         dimension_key = bundle.identity.proof_key + build_digest
         operation_id = uuid5(self.generation_run_id, f"release:{dimension_key}")
         detail = bounded_redacted_diagnostic(verdict.summary, max_bytes=_MAX_DETAIL_BYTES)
@@ -3174,6 +3266,11 @@ class MaxFinalizationCoordinator:
         build_source_error = phase is GenerationPhase.FINAL_BUILD and detail.startswith(
             _FULL_BUILD_DETAIL_PREFIX + "\n[source-repair:confirmed]\n"
         )
+        runtime_source_error = (
+            phase is GenerationPhase.RUNTIME_PROBE
+            and result.dimension == ProofDimension.RUNTIME.value
+            and detail.startswith(_RUNTIME_SOURCE_FAILURE)
+        )
         if missing_build:
             detail = (
                 "Repair the test/manifest that removed the production build. "
@@ -3183,7 +3280,7 @@ class MaxFinalizationCoordinator:
             )
         outcome = await self._outcome(
             MaxFinalizationStatus.NEEDS_EDIT
-            if missing_build or migration_source_error or build_source_error
+            if missing_build or migration_source_error or build_source_error or runtime_source_error
             else MaxFinalizationStatus.FAILED,
             self._checkpoint(identity, phase, result.operation_id),
             bundle or ProofBundle(identity=proof),

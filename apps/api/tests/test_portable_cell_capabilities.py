@@ -84,6 +84,35 @@ def test_main_stack_guide_keeps_next_max_tools_and_preserves_legacy_selection():
         assert requirement in delivered
 
 
+@pytest.mark.parametrize("protocol", ["text build", "text edit", "native"])
+def test_coordinator_source_prompt_does_not_require_agent_runtime_proof(protocol):
+    from yleum_api.services import agent_builder, agent_native
+    from yleum_api.services.portable_cell_contract import machine_stack_guide
+
+    guide = machine_stack_guide(
+        "legacy", {"portable_machine": True}, {".omnia/cell.json": "{}"},
+        coordinator_handoff=True,
+    )
+    skills = agent_builder.load_stack_skills("max-miniapp-nextjs")
+    if protocol == "text edit":
+        prompt = agent_builder.build_edit_system_prompt(guide, coordinator_handoff=True)
+    else:
+        compose = (
+            agent_native.native_system_prompt
+            if protocol == "native" else agent_builder.build_system_prompt
+        )
+        prompt = compose(guide, skills, coordinator_handoff=True)
+    normalized = " ".join(prompt.split())
+    assert "FAST_CHECK" in normalized
+    assert "call done" in normalized
+    assert "signed runtime proof" in normalized
+    assert "Run build and runtime_check" not in normalized
+    assert "Call runtime_check before" not in normalized
+    assert "run runtime_check after the final" not in normalized
+    assert "runtime_check главные роуты" not in normalized
+    assert "pnpm typecheck` and `pnpm build" not in normalized
+
+
 @pytest.mark.parametrize("capabilities,files,portable", [
     ({"portable_machine": True}, {".omnia/cell.json": "{}"}, True),
     ({"portable_machine": True}, {}, False),

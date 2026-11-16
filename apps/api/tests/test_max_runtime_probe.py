@@ -17,6 +17,19 @@ BOOTSTRAP = (
 )
 
 
+def test_business_readiness_uses_only_the_reserved_product_read_route():
+    from yleum_api.services import max_runtime_routes
+
+    route_file = "src/app/api/yleum-readiness/route.ts"
+    resolve = max_runtime_routes.resolve_max_business_probe_path
+    assert resolve({route_file: "export async function GET() { return readProductData(); }"}) == (
+        "/api/yleum-readiness"
+    )
+    assert resolve({route_file: "export async function POST() { await updateRecords(); }"}) is None
+    assert resolve({"src/app/api/payments/route.ts": "export const GET = createPayment;"}) is None
+    assert resolve({}) is None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("unauthenticated_status", [401, 200, 502])
 async def test_portable_runtime_requires_negative_auth_and_trusted_identity(
@@ -164,11 +177,74 @@ def _install_transport(
     def client(**kwargs: Any) -> httpx.AsyncClient:
         return real_client(
             transport=transport,
+            base_url=kwargs.get("base_url", ""),
             timeout=kwargs.get("timeout"),
             follow_redirects=kwargs.get("follow_redirects", False),
         )
 
     monkeypatch.setattr(max_runtime_probe.httpx, "AsyncClient", client)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "kind"), [
+    (502, "dependency"), (503, "dependency"), (504, "dependency"),
+    (None, "dependency"), (500, "source"), (404, "source"),
+    (401, None), (403, None),
+])
+async def test_runtime_route_failure_identifies_failing_phase(monkeypatch, status, kind):
+    def handler(request):
+        if request.url.path == "/api/omnia/preview-session":
+            return httpx.Response(200)
+        assert request.url.path == "/catalog"
+        if status is None:
+            raise httpx.ReadTimeout("private URL data", request=request)
+        return httpx.Response(status, text="private row from traceback")
+
+    _install_transport(monkeypatch, handler)
+    result = await max_runtime_probe._probe_signed_runtime(BOOTSTRAP, path="/catalog")
+    assert result.ok is False
+    assert result.failure_kind == kind
+    assert "private" not in result.detail
+    if kind == "source":
+        assert f"GET /catalog (HTTP {status})" in result.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "body", "ok"), [
+    (200, {"ok": True, "rows": ["a private value"]}, True),
+    (200, {"ok": False}, False),
+    (200, "<html>wrong response</html>", False),
+    (500, {"rows": ["a private value"]}, False),
+])
+async def test_business_probe_keeps_signed_session_and_redacts_body(monkeypatch, status, body, ok):
+    def handler(request):
+        if request.url.path == "/api/omnia/preview-session":
+            return httpx.Response(200, headers={
+                "Set-Cookie": "__Host-max_session=valid; Path=/; Secure",
+            })
+        if request.url.path == "/":
+            return httpx.Response(200)
+        assert request.headers.get("cookie") == "__Host-max_session=valid"
+        if request.url.path == "/api/omnia/actions":
+            return httpx.Response(200, json={"actions": []})
+        assert request.url.path == "/api/yleum-readiness"
+        return httpx.Response(status, text=body) if isinstance(body, str) else httpx.Response(
+            status, json=body,
+        )
+
+    _install_transport(monkeypatch, handler)
+    origin = f"https://cell-{PROJECT_ID.hex[:12]}-dev.preview.lead-generator.ru"
+    preview = max_runtime_probe.orchestrator_client.ProjectCellPreviewSession(
+        PROJECT_ID, origin, BOOTSTRAP.replace(ORIGIN, origin), "2030-01-01T00:00:00Z",
+    )
+    result = await max_runtime_probe.probe_max_cell_runtime(
+        preview, business_path="/api/yleum-readiness",
+    )
+    assert result.ok is ok
+    assert "a private value" not in result.detail
+    if not ok:
+        assert result.failure_kind == "source"
+        assert f"GET /api/yleum-readiness (HTTP {status})" in result.detail
 
 
 @pytest.mark.asyncio

@@ -580,11 +580,15 @@ async def execute_agent_turn(
             _native_execute = checkpoint_source_actions(
                 execute=_native_execute, snapshot=snapshot_reader, checkpoint=source_checkpoint,
             )
+        portable_cell = runtime.handle is not None and runtime.handle.is_portable()
+        coordinator_handoff = runtime.coordinator is not None and portable_cell
         try:
             _agent_res = await agent_native.run_native_build(
                 model=plan.model,
                 reference_images=reference_images,
-                system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
+                system=agent_native.native_system_prompt(
+                    plan.stack_guide or "", plan.skills, coordinator_handoff=coordinator_handoff,
+                ),
                 task=resume_instruction + plan.user + (
                     _native_edit_entry_context(current_source)
                     if edit_source_changed is not None or workspace_context_files is not None
@@ -604,7 +608,8 @@ async def execute_agent_turn(
                 allow_max_bash=_max_shell_enabled,
                 bounded_repair=bounded_repair,
                 directed_path=directed_path,
-                portable_cell=bool(runtime.handle is not None and runtime.handle.is_portable()),
+                portable_cell=portable_cell,
+                coordinator_handoff=coordinator_handoff,
                 initial_files=(
                     current_source
                     if (

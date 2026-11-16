@@ -12,6 +12,8 @@ def test_agent_edit_prompt_includes_max_template_contract() -> None:
     assert "STACK-SPECIFIC CONTRACT" in system
     assert "Use `window.WebApp` only" in system
     assert "Do not add Telegram WebApp" in system
+    assert "entities/<Name>.json" not in system
+    assert "<CrudResource" not in system
 
 
 def test_generic_agent_edit_prompt_is_unchanged_without_stack_guide() -> None:
@@ -19,3 +21,4 @@ def test_generic_agent_edit_prompt_is_unchanged_without_stack_guide() -> None:
         agent_builder.build_edit_system_prompt(None)
         == agent_builder.EDIT_SYSTEM_PROMPT
     )
+    assert "entities/<Name>.json" in agent_builder.EDIT_SYSTEM_PROMPT

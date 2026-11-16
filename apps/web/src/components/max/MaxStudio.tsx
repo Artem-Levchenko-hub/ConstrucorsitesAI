@@ -14,7 +14,7 @@ import { describeApiError } from "@/lib/api/errors";
 import { saveLandingPrompt, takeLandingPrompt } from "@/lib/landing-prompt";
 import { createProject, listProjects } from "@/lib/api/projects";
 import type { ManagementModule, MaxContentItem } from "@/lib/api/types";
-import { MAX_DEFAULT_SUMMARY, buildMaxProjectPrompt, defaultManagementModules, newProjectManagementModules, selectedMaxAppTypes, serializeMaxProjectFeatures, type MaxAppTypeId, type MaxFeature, type MaxProjectBrief, type MaxStyleId } from "@/lib/max-brief";
+import { MAX_DEFAULT_SUMMARY, briefManagementModuleOptOuts, buildMaxProjectPrompt, defaultManagementModules, newProjectManagementModules, selectedMaxAppTypes, serializeMaxProjectFeatures, type MaxAppTypeId, type MaxFeature, type MaxProjectBrief, type MaxStyleId } from "@/lib/max-brief";
 import { containsChatSecret, resolveChatCredential } from "@/lib/max-chat-credentials";
 import { extractInitialCatalog } from "@/lib/max-catalog-brief";
 import { newMaxContentItem } from "@/lib/max-catalog";
@@ -54,6 +54,9 @@ export function MaxStudio({ email }: { email: string }) {
   const [managementModules, setManagementModules] = useState<ManagementModule[]>(() => defaultManagementModules("loyalty"));
   const [managementModuleOptOuts, setManagementModuleOptOuts] = useState<ManagementModule[]>([]);
   const safeCatalogIdea = useMemo(() => publicMaxBriefText(idea), [idea]);
+  const moduleOptOuts = [...new Set([...managementModuleOptOuts, ...briefManagementModuleOptOuts(safeCatalogIdea)])];
+  const modules = newProjectManagementModules(appType, managementModules, appTypes, moduleOptOuts);
+  const hasCatalog = modules.includes("catalog");
   const proposedCatalog = useMemo(() => {
     const result = extractInitialCatalog(safeCatalogIdea);
     return { ...result, items: result.items.map(item => ({ ...newMaxContentItem(), ...item })) };
@@ -61,7 +64,7 @@ export function MaxStudio({ email }: { email: string }) {
   const [catalogDraft, setCatalogDraft] = useState<{ source: string; items: MaxContentItem[]; tooManyItems: boolean } | null>(null);
   const initialContent = catalogDraft?.items ?? proposedCatalog.items;
   const tooManyItems = catalogDraft?.tooManyItems ?? proposedCatalog.tooManyItems;
-  const catalogError = initialCatalogError(publicInitialCatalog(initialContent), tooManyItems);
+  const catalogError = hasCatalog ? initialCatalogError(publicInitialCatalog(initialContent), tooManyItems) : null;
 
   const projects = useQuery({ queryKey: learning ? ["projects", learning.userKey] : ["projects"], queryFn: listProjects });
   const allMaxProjects = useMemo(() => (projects.data ?? []).filter(project => project.template === "max_miniapp"), [projects.data]);
@@ -88,10 +91,8 @@ export function MaxStudio({ email }: { email: string }) {
   const create = useMutation({
     mutationFn: async () => {
       if (quota.initialExhausted) throw new Error(FREE_CHAT_UPGRADE_MESSAGE);
-      const content = publicInitialCatalog(initialContent);
-      const contentError = initialCatalogError(content, tooManyItems);
-      if (contentError) throw new Error(contentError);
-      const modules = newProjectManagementModules(appType, managementModules, appTypes);
+      const content = hasCatalog ? publicInitialCatalog(initialContent) : [];
+      if (catalogError) throw new Error(catalogError);
       const rawPrompt = buildMaxProjectPrompt({
         name,
         idea,
@@ -103,6 +104,7 @@ export function MaxStudio({ email }: { email: string }) {
         style,
         brandColors,
         managementModules: modules,
+        managementModuleOptOuts: moduleOptOuts,
         catalogItemCount: content.length,
       });
       const hasCredential = containsChatSecret(rawPrompt);
@@ -122,12 +124,14 @@ export function MaxStudio({ email }: { email: string }) {
         style,
         brandColors: safeBrandColors,
         managementModules: modules,
+        managementModuleOptOuts: moduleOptOuts,
         catalogItemCount: content.length,
       });
       const project = await createProject({
         name: safeName, template: "max_miniapp",
+        ...(moduleOptOuts.length > 0 ? { management_module_opt_outs: moduleOptOuts } : {}),
         // The owner can start the order queue and choose its payment mode in Team.
-        staff_settings: { leads_enabled: true, orders_mode: null, prep_minutes: 7 },
+        staff_settings: { leads_enabled: modules.includes("leads"), orders_mode: null, prep_minutes: 7 },
         max_config: {
           app_name: safeName,
           app_type: appType,
@@ -231,19 +235,11 @@ export function MaxStudio({ email }: { email: string }) {
     if (patch.features !== undefined) setFeatures(patch.features);
     if (patch.style !== undefined) setStyle(patch.style);
     if (patch.brandColors !== undefined) setBrandColors(patch.brandColors);
-    if (patch.managementModules !== undefined) {
-      const modules = newProjectManagementModules(nextTypes[0], patch.managementModules, nextTypes);
-      if (changingTypes) {
-        setManagementModules(modules.filter(module => !managementModuleOptOuts.includes(module)));
-      } else {
-        // Type defaults must not re-enable a module the owner explicitly disabled.
-        setManagementModuleOptOuts(previous => [...new Set([
-          ...previous.filter(module => !modules.includes(module)),
-          ...managementModules.filter(module => !modules.includes(module)),
-        ])]);
-        setManagementModules(modules);
-      }
+    if (patch.managementModuleOptOuts !== undefined) {
+      setManagementModuleOptOuts([...patch.managementModuleOptOuts]);
     }
+    if (patch.managementModules !== undefined) setManagementModules(patch.managementModules);
+    else if (changingTypes) setManagementModules(defaultManagementModules(nextTypes[0], nextTypes));
   }
 
   return (
@@ -319,7 +315,7 @@ export function MaxStudio({ email }: { email: string }) {
         pending={create.isPending}
         submitDisabled={quota.initialExhausted || Boolean(catalogError)}
         quotaNotice={<OwnerChatQuotaNotice {...quota} initialOnly />}
-        initialCatalog={<MaxInitialCatalog
+        initialCatalog={hasCatalog && <MaxInitialCatalog
           items={initialContent}
           pending={create.isPending}
           tooManyItems={tooManyItems}
@@ -328,7 +324,7 @@ export function MaxStudio({ email }: { email: string }) {
           onChange={(items) => setCatalogDraft({ source: safeCatalogIdea, items, tooManyItems: tooManyItems && items.length > 0 })}
           onReset={() => setCatalogDraft(null)}
         />}
-        values={{ name, idea, appType, appTypes, audience, primaryAction, features, style, brandColors, managementModules }}
+        values={{ name, idea, appType, appTypes, audience, primaryAction, features, style, brandColors, managementModules, managementModuleOptOuts }}
         onChange={updateBrief}
         onSubmit={() => create.mutateAsync()}
       />

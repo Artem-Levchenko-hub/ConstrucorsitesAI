@@ -246,6 +246,46 @@ def test_native_source_repair_preserves_output_budget(client, monkeypatch, max_t
     assert billing.charge.await_count == 1
 
 
+@pytest.mark.parametrize("fallback_enabled", [True, False])
+def test_primary_source_repair_can_receive_json_after_four_minutes(client, monkeypatch, fallback_enabled):
+    if not fallback_enabled:
+        monkeypatch.setenv("AITUNNEL_TEXT_FALLBACK_ENABLED", "false")
+    monkeypatch.setattr(text_failover, "select_scope", AsyncMock(return_value="llmgw"))
+    requests = []
+
+    async def reply(request):
+        requests.append(request)
+        read_timeout = request.extensions["timeout"]["read"]
+        if read_timeout is not None and read_timeout < 300:
+            raise httpx.ReadTimeout("synthetic first answer at 300 seconds", request=request)
+        return httpx.Response(200, json={
+            "id": "repair-receipt", "model": "anthropic/claude-sonnet-5.5",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2, "cost_rub": 0.2},
+            "choices": [{"finish_reason": "stop", "message": {"content": "repair result"}}],
+        })
+
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(reply))
+
+    def sync_reply(request):
+        requests.append(request)
+        raise httpx.ReadTimeout("synthetic first answer at 300 seconds", request=request)
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda **_: httpx.MockTransport(sync_reply))
+    response = client.post("/v1/messages", headers={"x-yleum-provider-timeout-seconds": "600"}, json={
+        "model": "claude-sonnet-5.5", "user": str(uuid4()), "max_tokens": 8192,
+        "messages": [{"role": "user", "content": "synthetic"}],
+        "metadata": {"stage": "source_repair"},
+    })
+
+    assert response.status_code == 200, response.text
+    assert len(requests) == 1
+    assert requests[0].url.host == "api.llmgw.ru" and json.loads(requests[0].content)["stream"] is False
+    assert 0 < requests[0].extensions["timeout"]["connect"] <= 30
+    assert response.json()["content"][0]["text"] == "repair result"
+    provider_calls.finish_call.assert_awaited_once()
+    billing.charge.assert_awaited_once()
+
+
 @pytest.mark.parametrize(("outcome", "cap_header", "expected_cap"), [
     ("settled_length", "1042", 1042),
     ("settled_length", "128000", None),
@@ -427,7 +467,7 @@ def test_durable_native_refusal_wire_matches_api_strict_contract(client, monkeyp
 
 @pytest.mark.parametrize(("status", "chain"), [
     (None, "closed"), (None, "incomplete"), (None, "settlement_failed"), (None, "body_lost"),
-    (402, "closed"), (402, "incomplete"), (402, "settlement_failed"), (429, "closed"),
+    (None, "cooldown"), (402, "closed"), (402, "incomplete"), (402, "settlement_failed"), (429, "closed"),
 ])
 async def test_native_exhaustion_uses_only_the_last_confirmed_refusal(monkeypatch, status, chain):
     monkeypatch.setenv("AITUNNEL_TEXT_FALLBACK_ENABLED", "true")
@@ -442,6 +482,14 @@ async def test_native_exhaustion_uses_only_the_last_confirmed_refusal(monkeypatc
     monkeypatch.setattr(capture, "confirm_response_accounting", accounting)
     scope = "aitunnel" if status is None else "llmgw"
     monkeypatch.setattr(text_failover, "select_scope", AsyncMock(return_value=scope))
+
+    async def previous_rate_refusal(cooldown_identity, backup_call):
+        assert cooldown_identity == identity and backup_call == call_id
+        finish.assert_awaited_once()
+        assert finish.await_args.kwargs["reason"] == "preconnect"
+        return 30 if chain == "cooldown" else None
+
+    monkeypatch.setattr(text_failover, "primary_retry_after_backup", previous_rate_refusal)
 
     async def confirmed(*_args, **_kwargs):
         finish.assert_awaited_once()
@@ -491,6 +539,10 @@ async def test_native_exhaustion_uses_only_the_last_confirmed_refusal(monkeypatc
         assert response.status_code == (status or 502) and error["details"]["retry_safe"] is True
         if status == 402:
             assert error["details"]["retry_after_seconds"] == 120
+    elif chain == "cooldown":
+        assert response.status_code == 429 and error["details"]["retry_safe"] is True
+        assert error["details"]["retry_after_seconds"] == 30
+        assert response.headers["retry-after"] == "30"
     else:
         assert response.status_code == 503 and error["type"] == "billing_unavailable"
         assert error["details"]["provider_charge_ambiguous"] is True
@@ -498,6 +550,9 @@ async def test_native_exhaustion_uses_only_the_last_confirmed_refusal(monkeypatc
         exhausted.assert_awaited_once_with(
             identity, call_id, route="/v1/messages", user_id=identity.user_id,
         )
+        accounting.assert_called_once()
+    elif chain == "cooldown":
+        exhausted.assert_not_awaited()
         accounting.assert_called_once()
     else:
         exhausted.assert_not_awaited()

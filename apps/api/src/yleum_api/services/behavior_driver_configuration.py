@@ -100,17 +100,40 @@ def _adapter(raw: Any) -> PlatformBrowserAdapter:
             COFFEE_SELECTORS,
             COFFEE_THEME_UI_PRESET,
             COFFEE_UI_PRESET,
+            DENSITY_BOARD_VIEW,
+            DENSITY_FILTER_VALUE,
+            DENSITY_LIST_VIEW,
+            DENSITY_SELECTORS,
+            DENSITY_STORAGE_KEY,
             THEME_SELECTORS,
             THEME_STORAGE_KEY,
             THEME_UI_PRESET,
         )
 
-        theme = {"theme": {**THEME_SELECTORS, "storage_key": THEME_STORAGE_KEY}}
-        coffee = {"coffee_summary": dict(COFFEE_SELECTORS)}
+        theme = {
+            "theme": {
+                **THEME_SELECTORS,
+                "storage_key": THEME_STORAGE_KEY,
+                "light_name": None,
+                "dark_name": None,
+            },
+        }
+        coffee = {"coffee_summary": {**COFFEE_SELECTORS, "button_name": None}}
+        density = {
+            "density": {
+                **DENSITY_SELECTORS,
+                "storage_key": DENSITY_STORAGE_KEY,
+                "filter_value": DENSITY_FILTER_VALUE,
+                "list_view": dict(DENSITY_LIST_VIEW),
+                "board_view": dict(DENSITY_BOARD_VIEW),
+                "normal_name": None,
+                "compact_name": None,
+            },
+        }
         presets = {
             COFFEE_UI_PRESET: coffee,
             THEME_UI_PRESET: theme,
-            COFFEE_THEME_UI_PRESET: {**coffee, **theme},
+            COFFEE_THEME_UI_PRESET: {**coffee, **theme, **density},
         }
         if (
             set(raw) - {"preset", "read_paths"}
@@ -140,7 +163,13 @@ def _adapter(raw: Any) -> PlatformBrowserAdapter:
             if key in {"list_view", "board_view"}:
                 if not all(type(v) is str and 0 < len(v) <= 256 for v in vars_for_view(item)):
                     raise ValueError
-            elif item is not None and (type(item) is not str or not 0 < len(item) <= 256):
+            elif item is None:
+                if key not in {
+                    "normal_name", "compact_name", "light_name", "dark_name",
+                    "button_name", "view_control",
+                }:
+                    raise ValueError
+            elif type(item) is not str or not 0 < len(item) <= 256:
                 raise ValueError
         parsed[name] = cls(**value)
     reads = parsed.get("read_paths", [])

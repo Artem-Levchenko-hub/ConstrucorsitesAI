@@ -12,6 +12,7 @@ import pytest
 from yleum_api.services import agent_builder, agent_native, llm_client
 from yleum_api.services.generation import provider_attempts
 
+from .test_inflight_budget_retry import identity, install, payload
 from .test_legacy_provider_error_policy import install_transport
 
 
@@ -44,6 +45,18 @@ def test_absent_retry_after_uses_existing_backoff():
     details.pop("retry_after_seconds")
     failure = classic_failure(details)
     assert failure.retry_safe is True and failure.retry_after_seconds == 0
+
+
+async def test_chat_429_waits_for_retry_after_before_requesting_a_durable_child(monkeypatch):
+    sent, parents, sleeps, _ = install(
+        monkeypatch, refusals=1, details=evidence(retry_after_seconds=30),
+    )
+
+    result = await llm_client._chat_post(payload(), "https://gateway.test/v1/chat/completions", 180)
+
+    assert result.status_code == 200 and len(sent) == 2
+    assert parents == [None, identity()] and sleeps == [30]
+    assert sent[0]["messages"] == sent[1]["messages"]
 
 
 @pytest.mark.parametrize("status,code", [

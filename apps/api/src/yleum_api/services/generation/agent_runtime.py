@@ -44,6 +44,7 @@ async def require_named_behavior_readiness(
     """Reject unprovable named requests before paid work; this is not a receipt."""
     from yleum_api.services.behavior_driver_configuration import meal_canary_request
     from yleum_api.services.max_behavior_proof import (
+        PROBE_VERSION,
         STATE_KEY,
         BehaviorProofError,
         contract_from_json,
@@ -81,6 +82,7 @@ async def require_named_behavior_readiness(
     if contract is None:
         return
     try:
+        need(contract.probe_version == PROBE_VERSION, "BEHAVIOR_PROBE_UPGRADE_REQUIRED")
         need(driver is not None, "BEHAVIOR_DRIVER_UNAVAILABLE")
         need(
             type(driver) is ControllerBehaviorDriver
@@ -90,7 +92,11 @@ async def require_named_behavior_readiness(
             "BEHAVIOR_ADAPTER_UNSUPPORTED",
         )
     except BehaviorProofError as error:
-        if error.code not in {"BEHAVIOR_DRIVER_UNAVAILABLE", "BEHAVIOR_ADAPTER_UNSUPPORTED"}:
+        if error.code not in {
+            "BEHAVIOR_DRIVER_UNAVAILABLE",
+            "BEHAVIOR_ADAPTER_UNSUPPORTED",
+            "BEHAVIOR_PROBE_UPGRADE_REQUIRED",
+        }:
             raise
         # A resumed run may already have paid usage. Report this attempt's
         # readiness failure without asserting that the whole run was free.

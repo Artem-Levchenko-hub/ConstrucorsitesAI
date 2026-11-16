@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -19,6 +20,7 @@ from yleum_api.services.generation.contracts import (
     ProjectGenerationFacts,
     StackPrompt,
 )
+from yleum_api.services.portable_cell_contract import MAX_COORDINATOR_HANDOFF
 
 _log = logging.getLogger("yleum_api.routers.messages")
 
@@ -45,18 +47,19 @@ async def prepare_agent_prompt(
             _seed_block, await runtime.handle.snapshot_files(),
         )
     _build_plan = None
+    coordinator_handoff = MAX_COORDINATOR_HANDOFF in stack.system
     if _is_continue:
-        # Resume: finish the partial app the agent left in the live
-        # container (the prior turn committed + hot-reloaded what it had).
-        # Full build prompt + the build step budget; the agent re-orients
-        # from the current files (seed block) and carries on to `done`.
+        continuation_context = (
+            "Продолжи MAX Mini App с сохранённых исходников. Найди фактическую точку "
+            "входа и маршруты в текущем дереве. Дополни отсутствующее по запросу, "
+            "сохрани работающие сценарии и данные, затем выполни проверки текущего режима."
+            if project_info.template == "max_miniapp"
+            else "Приложение частично собрано. Посмотри текущие файлы, допиши недостающие "
+            "entities/<Name>.json и страницы, включая обязательный dashboard/page.tsx "
+            "индекс. Почини ошибки сборки и закончи работу."
+        )
         _agent_user = (
-            "Приложение в проекте уже ЧАСТИЧНО собрано (часть файлов на месте). "
-            "Доведи сборку ДО КОНЦА: запусти build, посмотри текущие файлы "
-            "(раскладка ниже), допиши недостающие entities/<Name>.json и страницы "
-            "(включая обязательный dashboard/page.tsx индекс), почини ошибки до "
-            "чистоты, затем done. НЕ начинай с нуля и НЕ переписывай работающее."
-            f"\n\nДоп. пожелание пользователя: {prompt_text}{_seed_block}"
+            f"{continuation_context}\n\nДоп. пожелание пользователя: {prompt_text}{_seed_block}"
         )
         _agent_system = stack.system
         # A manual resume is a full completion pass, not a short edit.
@@ -74,9 +77,9 @@ async def prepare_agent_prompt(
             f"Запрос владельца:\n\n{prompt_text}\n{_seed_block}\n\n"
             "Ниже уже собраны: исторические файлы, отчёт совместимости и план работ "
             "(конфликты, маршруты, файлы). Начни с плана, а не с повторного обхода "
-            "проекта. Проверь текущую схему прежде чем полагаться на план, вноси "
-            "только additive-изменения схемы, сохраняй существующие строки, скрытые "
-            "поля и границы владельцев.\n\n"
+            "проекта. Проверь текущую физическую схему. Адаптируй код и его запросы "
+            "к существующей схеме без SQL-миграций, изменений схемы или данных. "
+            "Сохраняй строки, скрытые поля и границы владельцев.\n\n"
             # Живой случай 23.09: вместе со старой версией вернулись её тесты,
             # а они утверждали про базу то, чего там уже нет («заметка обязательна»).
             # Правило «только additive» вернуть такое ограничение не даёт, и
@@ -86,32 +89,32 @@ async def prepare_agent_prompt(
             "приложение (проверка при записи) и убери из теста утверждение про схему. "
             "Требование при этом НЕ выбрасывай и схему под него НЕ переделывай: ослабить "
             "проверку вместо переноса — это потеря смысла старой версии. "
-            "Затем build, проверка и done."
+            "Затем выполни проверки завершения текущего режима."
         )
         _agent_system = stack.system
-        _agent_steps = _agent_step_budget(
-            project_info.template,
-            configured_steps=min(40, max(1, int(get_settings().agent_builder_max_steps))),
-        )
+        _agent_steps = min(40, get_settings().agent_builder_max_steps)
     elif _is_edit:
-        _sel_block = ""
-        try:
-            if selected_elements:
-                _sel_block = (
-                    "\n\nПользователь выделил элемент(ы) в превью: " + str(selected_elements)[:800]
-                )
-        except Exception:
-            _sel_block = ""
+        targets = [
+            {**element, "html": str(element.get("html") or "")[:360]}
+            for element in selected_elements or []
+        ]
+        _sel_block = (
+            "\n\nПользователь выделил элементы в превью. Меняй только эти цели: "
+            + json.dumps(targets, ensure_ascii=False)
+            if targets else ""
+        )
         _agent_user = (
             f"Внеси ТОЧЕЧНОЕ изменение в существующее приложение по "
             f"запросу:\n\n{prompt_text}\n{_sel_block}{_seed_block}\n\n"
             f"Найди нужный файл (grep/read), внеси МИНИМАЛЬНУЮ правку "
-            f"(edit_file/write_file), запусти build, затем done. НЕ зацикливайся "
+            f"(edit_file/write_file) и выполни проверки текущего режима. НЕ зацикливайся "
             f"на чтении — как только нашёл причину, СРАЗУ пиши правку (а не ещё "
             f"один read). Если ошибка указывает на бандл (src_*.js) — найди "
             f"реальный исходник в src/ по симптому. Не пересобирай работающее."
         )
-        _agent_system = agent_builder.build_edit_system_prompt(stack.guide)
+        _agent_system = agent_builder.build_edit_system_prompt(
+            stack.guide, coordinator_handoff=coordinator_handoff,
+        )
         # Budget above the no-write/stall thresholds so the loop's
         # escalate-to-stronger-model actually fires before max_steps when a
         # cheap model explores without writing (the "Починить" did nothing bug).
@@ -126,7 +129,10 @@ async def prepare_agent_prompt(
             # in the same pass. Keep a floor without opening extra segments.
             _agent_steps = min(40, max(30, int(get_settings().agent_builder_max_steps)))
     else:
-        from yleum_api.services.max_generation_contract import build_max_product_contract
+        from yleum_api.services.max_generation_contract import (
+            build_max_product_contract,
+            is_api_only_request,
+        )
 
         _portable_capable = (
             runtime.handle is not None
@@ -134,7 +140,7 @@ async def prepare_agent_prompt(
             and runtime.handle.is_portable()
         )
         _max_product_contract = build_max_product_contract(
-            prompt_text, portable=_portable_capable
+            prompt_text, portable=_portable_capable, coordinator_handoff=coordinator_handoff,
         )
         _agent_user = (
             "Построй полноценный MAX Mini App под ПОЛНЫЙ запрос "
@@ -147,7 +153,12 @@ async def prepare_agent_prompt(
             "управляемые Studio-файлы. Не зашивай секреты пользователя в код.\n\n"
             f"{_max_product_contract}"
         )
-        if _portable_capable:
+        if is_api_only_request(prompt_text):
+            _agent_user = (
+                f"Implement the API requested by the owner:\n\n{prompt_text}\n\n"
+                f"{_seed_block}\n\n{_max_product_contract}"
+            )
+        elif _portable_capable:
             _agent_user = (
                 "Build the complete MAX product requested by the user:\n\n"
                 f"{prompt_text}\n\n{_seed_block}\n\n"
@@ -157,11 +168,8 @@ async def prepare_agent_prompt(
                 "only for necessary helpers. The trusted MAX boundary remains "
                 "platform-owned; no product UI is supplied.\n\n" + _max_product_contract
             )
-        # The final envelope below restores the proven 40-turn MAX
-        # single pass after this branch assembles the product prompt.
-        _agent_steps = 30
         _agent_system = stack.system
-        _agent_steps = min(30, max(1, int(get_settings().agent_builder_max_steps)))
+        _agent_steps = min(30, get_settings().agent_builder_max_steps)
     if project_info.template == "max_miniapp":
         _agent_user += (
             "\n\n<product_delivery>\n"
@@ -186,10 +194,9 @@ async def prepare_agent_prompt(
             "bundled local fonts by default. When typography.json exists, preserve its "
             "versioned decision, pinned dependencies and typography.css on ordinary edits "
             "and restoration; an explicit owner redesign may change them together. "
-            "A custom font request is allowed, but do not claim unavailable assets are installed. "
-            "Do not introduce network font imports or font "
-            "CDN dependencies unless the owner explicitly requests them, and retain a local "
-            "fallback in that case. Preserve required MAX SDK loading. On edits preserve the "
+            "Use an available local or owner-supplied asset for a custom font request and retain "
+            "a system fallback when the asset is unavailable. Keep fonts local. Preserve "
+            "required MAX SDK loading. On edits preserve the "
             "existing style, working features and existing business records unless the "
             "owner requests changes. Set explicit foreground/background pairs for "
             "product surfaces using consistent --app-* tokens. Check primary/secondary "
@@ -246,7 +253,7 @@ async def prepare_agent_prompt(
         "bypass managed-file protections or perform external business writes "
         "as a verification shortcut."
     )
-    if not _is_edit:
+    if not _is_edit or project_info.restoration_context:
         _agent_steps = _agent_step_budget(
             project_info.template,
             configured_steps=_agent_steps,

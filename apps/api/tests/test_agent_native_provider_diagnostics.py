@@ -322,3 +322,36 @@ async def test_native_terminal_server_error_keeps_primary_and_emits_safe_trace(
     assert diagnostics[0]["will_retry"] is False
     assert diagnostics[0]["provider_charge_ambiguous"] is True
     agent_native.get_settings.cache_clear()
+
+
+async def test_native_local_dispatch_deadline_skips_billing_reconciliation(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
+    monkeypatch.setenv("JWT_SECRET", "test-only-native-secret")
+    agent_native.get_settings.cache_clear()
+    posts, events = [], []
+
+    async def reply(_transport, request):
+        posts.append(request)
+        return httpx.Response(504, json={"type": "error", "error": {
+            "type": "deadline_before_dispatch", "message": "private gateway detail",
+            "details": {"provider_failure_kind": "deadline_before_dispatch",
+                        "provider_charge_ambiguous": False, "retry_safe": False},
+        }})
+
+    async def emit(kind, data):
+        events.append((kind, data))
+
+    async def execute(action):
+        pytest.fail("a local dispatch deadline must not execute tools")
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", reply)
+    result = await agent_native.run_native_build(system="s", task="t", execute=execute, emit=emit)
+
+    diagnostic = next(data for kind, data in events if kind == "agent.provider_error")
+    assert len(posts) == 1 and result.stop_reason == "provider_error"
+    assert result.summary.startswith("generation deadline exceeded before provider dispatch:")
+    assert failure_for_error(result.summary).code == "deadline"
+    assert diagnostic["error_origin"] == "gateway" and diagnostic["http_status"] == 504
+    assert diagnostic["provider_charge_ambiguous"] is diagnostic["will_retry"] is False
+    assert "private" not in result.summary
+    agent_native.get_settings.cache_clear()

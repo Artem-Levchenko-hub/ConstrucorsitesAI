@@ -81,8 +81,8 @@ def freeze_requirements(
         except (ValueError, TypeError, KeyError):
             raise RecoveryContractError("invalid semantic request binding") from None
     if named is not None:
-        _need(named == behavior.required_contract(
-            semantic, template=named.template, request_sha256=origin),
+        _need(behavior.frozen_contract_matches_request(
+            named, semantic, template=named.template, request_sha256=origin),
               "frozen named contract differs from original request")
     canonical = (
         prompt in _CANONICAL and named is not None and named.capabilities == (prompt,)

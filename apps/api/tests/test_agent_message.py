@@ -133,6 +133,11 @@ def test_max_build_restores_proven_single_pass_budget() -> None:
     assert _agent_step_budget("max_miniapp", configured_steps=48) == 48
 
 
+def test_other_stacks_keep_configured_segment_budget() -> None:
+    assert _agent_step_budget("nextjs_realtime", configured_steps=14) == 14
+    assert _agent_step_budget("blank", configured_steps=0) == 1
+
+
 def test_done_uses_model_summary() -> None:
     m = _agent_result_message(
         _res(done=True, summary="Собрал аптеку: каталог, кабинет, поиск.", stop_reason="done"),
@@ -221,6 +226,11 @@ def test_continue_not_detected_for_edits_or_features() -> None:
         "поменяй цвет кнопки на синий",
         "добавь раздел отзывов",
         "сделай заголовок крупнее",
+        "Доработай подпись на кнопке",
+        "Не продолжай старую сборку. Поменяй только подпись",
+        "Don’t continue building. Change the button label.",
+        "Продолжи. Поменяй только подпись",
+        "Продолжи исследование каталога",
         "",
     ):
         assert _is_continue_request(p) is False, p

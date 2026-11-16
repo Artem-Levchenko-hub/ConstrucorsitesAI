@@ -79,6 +79,8 @@ def requested_font_names(prompt: str) -> list[tuple[str, str]]:
 def apply_owner_fonts(
     files: dict[str, str],
     fonts: list[tuple[dict[str, Any], dict[str, Any]]],
+    *,
+    scoped: bool = False,
 ) -> dict[str, str]:
     if not fonts:
         return files
@@ -97,6 +99,7 @@ def apply_owner_fonts(
     if not isinstance(manifest, dict):
         raise ApiError("validation_failed", "Повреждён manifest типографики", 422)
     roles = dict(manifest.get("owner_roles", {}))
+    scoped_roles: dict[str, dict[str, str]] = {}
     assets = dict(manifest.get("owner_assets", {}))
     imports: set[str] = set()
     group_digests: dict[tuple[str, str], str] = {}
@@ -116,10 +119,14 @@ def apply_owner_fonts(
         alias = "yleum-owner-" + group_digests[(family.casefold(), binding["role"])]
         digest = binding["sha256"]
         role = binding["role"]
-        selected_roles = ("heading", "body", "ui") if role == "all" else (role,)
-        for selected in selected_roles:
-            roles[selected] = {"family": family, "alias": alias}
-            manifest[selected] = family
+        font = {"family": family, "alias": alias}
+        if scoped:
+            scoped_roles[role] = font
+        else:
+            selected_roles = ("heading", "body", "ui") if role == "all" else (role,)
+            for selected in selected_roles:
+                roles[selected] = font
+                manifest[selected] = family
         for face in bundle["faces"]:
             # Opaque source files are independently addressable text snapshots.
             payload = face["data"]
@@ -181,27 +188,32 @@ def apply_owner_fonts(
     if not re.search(r'@import\s+[\'"]\./typography\.css[\'"]', out[entry]):
         out[entry] = '@import "./typography.css";\n' + out[entry]
     manifest.update(version=2, owner_roles=roles, owner_assets=assets)
-    manifest.update(style="owner-font", custom_request=None)
-    out["typography.json"] = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
-    design = out.get("DESIGN.md", "")
-    design = re.sub(
-        r"\n\n## Typography decision\n.*?<!-- typography-decision-v1\n.*?\n-->\n?",
-        "",
-        design,
-        flags=re.S,
-    )
-    owner_memory = (
-        "<!-- yleum-owner-typography:start -->\n## Owner typography\n\n"
-        "Явный выбор владельца уже подключён в src/app/typography.css. "
-        "Сохранять при обычных правках; файлы fonts/*.css — opaque assets.\n\n"
-        + json.dumps(roles, ensure_ascii=False, indent=2)
-        + "\n<!-- yleum-owner-typography:end -->"
-    )
-    pattern = r"<!-- yleum-owner-typography:start -->.*?<!-- yleum-owner-typography:end -->"
-    if re.search(pattern, design, re.S):
-        out["DESIGN.md"] = re.sub(pattern, lambda _: owner_memory, design, flags=re.S)
+    if scoped:
+        manifest["scoped_owner_roles"] = scoped_roles
     else:
-        out["DESIGN.md"] = design.rstrip() + "\n\n" + owner_memory + "\n"
+        manifest.update(style="owner-font", custom_request=None)
+        manifest.pop("scoped_owner_roles", None)
+    out["typography.json"] = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+    if not scoped:
+        design = out.get("DESIGN.md", "")
+        design = re.sub(
+            r"\n\n## Typography decision\n.*?<!-- typography-decision-v1\n.*?\n-->\n?",
+            "",
+            design,
+            flags=re.S,
+        )
+        owner_memory = (
+            "<!-- yleum-owner-typography:start -->\n## Owner typography\n\n"
+            "Явный выбор владельца уже подключён в src/app/typography.css. "
+            "Сохранять при обычных правках; файлы fonts/*.css — opaque assets.\n\n"
+            + json.dumps(roles, ensure_ascii=False, indent=2)
+            + "\n<!-- yleum-owner-typography:end -->"
+        )
+        pattern = r"<!-- yleum-owner-typography:start -->.*?<!-- yleum-owner-typography:end -->"
+        if re.search(pattern, design, re.S):
+            out["DESIGN.md"] = re.sub(pattern, lambda _: owner_memory, design, flags=re.S)
+        else:
+            out["DESIGN.md"] = design.rstrip() + "\n\n" + owner_memory + "\n"
     if sum(len(value.encode()) for value in out.values()) > 60 * 1024 * 1024:
         raise ApiError(
             "validation_failed", "Недостаточно места в исходниках приложения для шрифтов", 422

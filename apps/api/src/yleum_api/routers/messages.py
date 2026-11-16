@@ -222,8 +222,9 @@ async def cancel_active_generation(
     project_id: UUID,
     session: SessionDep,
     current_user: CurrentUserDep,
+    run_id: UUID | None = None,
 ) -> GenerationRunPublic:
-    """Request cancellation of the project's one durable active run."""
+    """Cancel the acknowledged run, or the current run for an older client."""
 
     await _ensure_owner(session, project_id, current_user.id)
     await session.execute(
@@ -243,7 +244,7 @@ async def cancel_active_generation(
             .with_for_update()
         )
     ).scalar_one_or_none()
-    if run is None:
+    if run is None or (run_id is not None and run.id != run_id):
         raise ApiError(
             "conflict",
             "no active generation",

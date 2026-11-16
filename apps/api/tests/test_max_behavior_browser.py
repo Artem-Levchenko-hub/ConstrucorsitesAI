@@ -5,12 +5,16 @@ import hashlib
 import http.server
 import threading
 from dataclasses import replace
+from time import monotonic
 from types import SimpleNamespace as NS
 
 import pytest
+from playwright.sync_api import sync_playwright
 
 from yleum_api.services import max_behavior_browser as browser
+from yleum_api.services import max_behavior_browser_core as browser_core
 from yleum_api.services import max_behavior_proof as b
+from yleum_api.services.behavior_driver_configuration import _adapter
 
 from .behavior_browser_fixture import installed_chromium
 from .test_max_behavior_proof import REQUEST, THEME, binding, coordinator_harness
@@ -118,8 +122,31 @@ def fixture_files(mutation):
     return {"/": html, "/_next/static/css/a.css": css, "/_next/static/chunks/a.js": js}
 
 
-def registered(server, mutation="", *, invalid_asset=False, unsupported=False):
+def named_density_fixture_files(mutation):
+    files = fixture_files(mutation)
+    html_path, script_path = "/", "/_next/static/chunks/a.js"
+    html = files[html_path].replace(b"<main>", b"<main data-omnia-density-ui>")
+    for name, selector in (
+        (b"normal", b"density-normal"), (b"compact", b"density-compact"),
+        (b"filter", b"density-filter"), (b"list", b"density-list"),
+        (b"board", b"density-board"), (b"list-view", b"density-list-items"),
+        (b"board-view", b"density-board-items"),
+    ):
+        html = html.replace(
+            b'id="' + name + b'"',
+            b'id="' + name + b'" data-omnia-behavior="' + selector + b'"',
+        )
+    files[html_path] = html.replace(b'value="high"', b'value="open"')
+    files[script_path] = files[script_path].replace(b"'density'", b"'omnia:task-density:v1'")
+    return files
+
+
+def registered(server, mutation="", *, invalid_asset=False, unsupported=False, named_density=False):
     server.files = fixture_files(mutation)
+    selected_adapter = adapter()
+    if named_density:
+        server.files = named_density_fixture_files(mutation)
+        selected_adapter = _adapter({"preset": "coffee-summary-header-theme-ui-v1"})
 
     async def resolver(request):
         assets = tuple(
@@ -136,7 +163,7 @@ def registered(server, mutation="", *, invalid_asset=False, unsupported=False):
 
     return browser.make_private_browser_driver(
         executable_path=installed_chromium(),
-        adapter=browser.PlatformBrowserAdapter() if unsupported else adapter(),
+        adapter=browser.PlatformBrowserAdapter() if unsupported else selected_adapter,
         resolve_candidate_compilation=resolver,
         launch_args=("--no-sandbox",),
     )
@@ -144,6 +171,28 @@ def registered(server, mutation="", *, invalid_asset=False, unsupported=False):
 
 def test_executed_browser_sources_exactly_match_frozen_probe_version():
     assert browser.executed_probe_digest() == b.PROBE_SHA256
+
+
+def test_scoped_accessible_control_allows_localized_and_duplicate_elsewhere():
+    with sync_playwright() as playwright:
+        chromium = playwright.chromium.launch(
+            executable_path=installed_chromium(), args=["--no-sandbox"],
+        )
+        try:
+            page = chromium.new_page()
+            page._behavior_deadline = monotonic() + 10
+            page.set_content(
+                '<button id="owned">Светлая тема</button>'
+                '<button>Светлая тема</button><button id="empty"></button>'
+            )
+            browser_core.named_button(page, "#owned", None)
+            browser_core.named_button(page, "#owned", "Светлая тема")
+            with pytest.raises(browser_core.Failure, match="required_control_name_missing"):
+                browser_core.named_button(page, "#empty", None)
+            with pytest.raises(browser_core.Failure, match="required_control_name_missing"):
+                browser_core.named_button(page, "#owned", "Light")
+        finally:
+            chromium.close()
 
 
 def test_actual_browser_wired_controller_green_with_synthetic_candidate(local_fixture, monkeypatch):
@@ -165,6 +214,31 @@ def test_actual_browser_wired_controller_green_with_synthetic_candidate(local_fi
     assert receipt["capabilities"] == ["task_density_v1", "header_theme_v1"]
     assert "Synthetic" not in str(receipt) and "PRIVATE_NEVER_EXPORT" not in str(receipt)
     assert local_fixture.reads > 0 and local_fixture.mutations == 0
+
+
+@pytest.mark.parametrize("mutation", ["", "density-style", "density-storage"])
+def test_operator_density_preset_proves_real_layout_and_persistence(
+    local_fixture, monkeypatch, mutation,
+):
+    contract = b.required_contract(REQUEST, template="max_miniapp")
+    coordinator, identity, candidate, run, events, permit = coordinator_harness(
+        monkeypatch, registered=registered(local_fixture, mutation, named_density=True),
+        frozen=contract,
+    )
+    promote = coordinator._prepare_and_promote(
+        identity, NS(artifact_ref=permit.build_ref), NS(artifact_ref=permit.verification_ref),
+        permit,
+    )
+    if mutation:
+        with pytest.raises(b.BehaviorProofError):
+            asyncio.run(promote)
+        assert candidate.status == "prepared" and "promote" not in events
+        assert run.agent_state[b.RECEIPT_KEY]["status"] == "NEEDS_CHANGES"
+    else:
+        asyncio.run(promote)
+        assert candidate.status == "accepted" and "promote" in events
+        assert run.agent_state[b.RECEIPT_KEY]["status"] == "PASS_OBSERVED"
+    assert local_fixture.mutations == 0
 
 
 @pytest.mark.parametrize(

@@ -382,12 +382,14 @@ async def get_workspace_resources(
     "/workspaces/{workspace_id}/agent/snapshot",
     response_model=WorkspaceAgentBootstrapResponse,
     response_model_exclude_defaults=True,
+    response_model_exclude_none=True,
 )
 async def snapshot_workspace_agent(
     workspace_id: UUID,
     generation_run_id: UUID,
     fencing_epoch: Annotated[int, Query(gt=0)],
     x_internal_token: Annotated[str | None, Header()] = None,
+    include_applied_migrations: bool = False,
 ) -> WorkspaceAgentBootstrapResponse:
     """Inspect source under its current lease without reseeding an empty tree."""
     verify_internal_token(x_internal_token)
@@ -405,6 +407,14 @@ async def snapshot_workspace_agent(
         capabilities = (
             manager.machine_runtime.capabilities() if manager.machine_runtime else {}
         )
+        applied_migrations: list[str] | None = None
+        if include_applied_migrations:
+            applied_migrations = []
+            if _portable_active(manager, workspace_id):
+                runtime = _require_portable_runtime(manager)
+                applied_migrations = sorted(await runtime.protect_migration_sources(
+                    state, files, resume=False,
+                ))
     return WorkspaceAgentBootstrapResponse(
         files=files,
         seeded_from_project=False,
@@ -412,6 +422,7 @@ async def snapshot_workspace_agent(
         fencing_epoch=fencing_epoch,
         workspace_revision=workspace_revision,
         capabilities=capabilities,
+        applied_migrations=applied_migrations,
     )
 
 
@@ -419,6 +430,7 @@ async def snapshot_workspace_agent(
     "/workspaces/{workspace_id}/agent/bootstrap",
     response_model=WorkspaceAgentBootstrapResponse,
     response_model_exclude_defaults=True,
+    response_model_exclude_none=True,
 )
 async def bootstrap_workspace_agent(
     workspace_id: UUID,

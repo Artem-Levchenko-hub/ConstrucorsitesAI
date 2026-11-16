@@ -25,6 +25,7 @@ from yleum_api.services.generation.contracts import (
 from yleum_api.services.generation.recovery_contract import RecoveryStateV3
 from yleum_api.services.generation.recovery_trace import bounded_recovery_diagnostic
 from yleum_api.services.generation.runtime import (
+    _applied_migration_paths,
     _apply_project_cell_preview_files,
     _require_project_cell,
 )
@@ -522,10 +523,12 @@ async def _restore_touched_tree(
 ) -> dict[str, Any]:
     """Stage the complete restored tree before compiling any of its dependencies."""
     _baseline_files = await asyncio.to_thread(repo_svc.read_files, project_id, baseline_sha)
+    applied = await _applied_migration_paths(handle)
+    touched = touched_files.keys() - applied
     _restore_files = {
-        path: _baseline_files[path] for path in touched_files if path in _baseline_files
+        path: _baseline_files[path] for path in touched if path in _baseline_files
     }
-    _new_paths = [path for path in touched_files if path not in _baseline_files]
+    _new_paths = sorted(touched - _baseline_files.keys())
     if _restore_files or _new_paths:
         await _apply_project_cell_preview_files(
             files={**_restore_files, **dict.fromkeys(_new_paths, "")},
@@ -550,8 +553,10 @@ async def _restore_max_core(
     # The starter renderer omits the machine manifest. Reuse the pre-agent
     # seed/accepted source so rollback cannot keep the rejected draft's commands.
     core_files = include_portable_manifest(await render_core(), trusted_files)
+    applied = await _applied_migration_paths(handle)
+    core_files = {path: source for path, source in core_files.items() if path not in applied}
     removed_paths = sorted(
-        (touched_files.keys() - core_files.keys()) | {"src/app/page.tsx"}
+        ((touched_files.keys() - core_files.keys()) | {"src/app/page.tsx"}) - applied
     )
     await _apply_project_cell_preview_files(
         files={**core_files, **dict.fromkeys(removed_paths, "")},

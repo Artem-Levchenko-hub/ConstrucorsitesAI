@@ -209,9 +209,13 @@ async def check_backend_and_normalize_css(
             _migration_candidate,
             preserve_current_database=await _preserves_adaptation_database(runtime, ids),
         )
-        # The full coordinator checks the exact source for a verification-only
-        # handoff. The legacy rollback writes are outside the durable journal.
-        if _migration_errors and not verification_only:
+        # The coordinator checks the frozen candidate before FAST_CHECK and
+        # FULL_BUILD. It can return a precise migration gap to source repair.
+        coordinator_owns_candidate = (
+            bool(files) and getattr(runtime, "coordinator", None) is not None
+            and getattr(runtime.handle, "prove_restoration_adaptation", None) is None
+        )
+        if _migration_errors and not verification_only and not coordinator_owns_candidate:
             await _abort_unsafe_max_backend(
                 project_id=ids.project_id,
                 project_slug=project_info.slug,
@@ -475,7 +479,9 @@ async def repair_legacy_edit(
                 _rep = await agent_builder.run_agent_build(
                     response_recovery=getattr(operations, "response_recovery", None),
                     take_verified_progress=getattr(operations, "take_verified_progress", None),
-                    system_prompt=agent_builder.build_edit_system_prompt(plan.stack_guide),
+                    system_prompt=agent_builder.build_edit_system_prompt(
+                        plan.stack_guide, coordinator_handoff=coordinator_handoff,
+                    ),
                     user_prompt=_repair_user,
                     model=plan.escalate_model or plan.model,
                     escalate_model=plan.escalate_model,

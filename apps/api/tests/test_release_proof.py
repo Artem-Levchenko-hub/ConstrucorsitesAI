@@ -167,7 +167,8 @@ async def test_release_proof_preserves_cell_runtime_failure_detail(monkeypatch) 
     )
 
 
-async def test_max_proof_bundle_still_executes_exact_candidate_behavior(monkeypatch) -> None:
+@pytest.mark.parametrize("runtime_ok", [True, False])
+async def test_release_reuses_candidate_runtime_and_still_checks_security(monkeypatch, runtime_ok):
     proof_key = "a" * 64
     green = SimpleNamespace(outcome="green", redacted_detail="green")
     workspace_id = uuid4()
@@ -184,7 +185,9 @@ async def test_max_proof_bundle_still_executes_exact_candidate_behavior(monkeypa
     bundle = ProofBundle(
         identity=SimpleNamespace(proof_key=proof_key, fencing_epoch=7),
         full_build=green,
-        runtime=green,
+        runtime=green if runtime_ok else SimpleNamespace(
+            outcome="red", redacted_detail="candidate runtime failed",
+        ),
         release=green,
     )
     calls: list[str] = []
@@ -196,22 +199,9 @@ async def test_max_proof_bundle_still_executes_exact_candidate_behavior(monkeypa
     async def snapshot_files():
         return {"src/app/page.tsx": "export default function Page() { return null }"}
 
-    async def runtime_probe(
-        received_preview,
-        *,
-        path,
-        fallback_paths,
-        portable_project_id,
-        expected_epoch,
-        proof_key: str,
-    ) -> MaxRuntimeProbe:
-        assert received_preview is preview
-        assert path == "/" and fallback_paths == ()
-        assert portable_project_id == project_id
-        assert expected_epoch == 7
-        assert proof_key == "a" * 64
-        calls.append("exact_max_behavior")
-        return MaxRuntimeProbe(False, "candidate behavior receipt is red")
+    async def runtime_probe(*_args, **_kwargs) -> MaxRuntimeProbe:
+        calls.append("duplicated_runtime")
+        return MaxRuntimeProbe(False, "runtime must only run in the coordinator")
 
     async def security(
         base_url,
@@ -249,9 +239,10 @@ async def test_max_proof_bundle_still_executes_exact_candidate_behavior(monkeypa
         ),
     )
 
-    assert calls == ["preview_session", "exact_max_behavior", "same_session_security"]
-    assert verdict.passed is False
-    assert Check("max_data_plane", False, "candidate behavior receipt is red") in verdict.checks
+    assert calls == ["preview_session", "same_session_security"]
+    assert verdict.passed is runtime_ok
+    if not runtime_ok:
+        assert Check("runtime", False, "candidate runtime failed") in verdict.checks
 
 
 def test_legacy_release_receipt_cannot_mint_current_permit() -> None:

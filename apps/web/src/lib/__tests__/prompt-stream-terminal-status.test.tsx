@@ -59,6 +59,7 @@ beforeEach(async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.useFakeTimers();
   vi.stubGlobal("WebSocket", TestSocket);
+  vi.resetAllMocks();
   TestSocket.instances = [];
   vi.mocked(getLatestGeneration).mockResolvedValue(run("running"));
   vi.mocked(cancelGeneration).mockResolvedValue(run("cancelled"));
@@ -158,6 +159,40 @@ describe("prompt stream terminal reconciliation", () => {
     expect(isChatMessageStreaming(message())).toBe(false);
   });
 
+  it("waits for an in-flight submit receipt and stops only the admitted run", async () => {
+    vi.mocked(getLatestGeneration).mockResolvedValue(run("completed"));
+    await act(async () => TestSocket.instances.at(-1)!.emit({
+      type: "llm.done", data: { message_id: "message-1", tokens_in: 2, tokens_out: 4, cost_rub: 0 },
+    }));
+    let accept!: (value: Awaited<ReturnType<typeof sendPrompt>>) => void;
+    vi.mocked(sendPrompt).mockReturnValueOnce(new Promise(resolve => { accept = resolve; }));
+    const next = { ...run("cancel_requested"), id: "run-2", assistant_message_id: "message-2" };
+    vi.mocked(cancelGeneration).mockResolvedValueOnce(next);
+    let submitted!: Promise<boolean>;
+    let stopping!: Promise<void>;
+    await act(async () => { submitted = stream.submit("Следующая сборка", "model"); });
+    await act(async () => { stopping = stream.cancel(); });
+    expect(cancelGeneration).not.toHaveBeenCalled();
+    await act(async () => {
+      accept({ run_id: next.id, message_id: next.assistant_message_id, snapshot_id: null });
+      expect(await submitted).toBe(true);
+      await stopping;
+    });
+    expect(cancelGeneration).toHaveBeenCalledExactlyOnceWith("project-1", "run-2");
+    expect(client.getQueryData(["generation", "project-1"])).toEqual(next);
+  });
+
+  it("drains a follow-up after the watchdog observes terminal status without a WebSocket event", async () => {
+    vi.mocked(sendPrompt).mockResolvedValueOnce({ run_id: "run-2", message_id: "message-2", snapshot_id: null });
+    await act(async () => { expect(await stream.submit("Follow up", "model")).toBe(true); });
+    expect(sendPrompt).not.toHaveBeenCalled();
+    vi.mocked(getLatestGeneration).mockResolvedValue(run("completed"));
+    await act(async () => vi.advanceTimersByTimeAsync(180_001));
+    expect(sendPrompt).toHaveBeenCalledOnce();
+    expect(client.getQueryData<Message[]>(["messages", "project-1"])?.at(-1)?.id).toBe("message-2");
+    expect(stream.pendingPrompt).toBeNull();
+  });
+
   it("preserves completion when completion wins the stop race", async () => {
     vi.mocked(cancelGeneration).mockRejectedValue(new ApiError(409, {
       code: "conflict", message: "already finished",
@@ -225,6 +260,7 @@ describe("message cache update contracts", () => {
     await act(async () => { await stream.submit("Follow up", "model"); });
     expect(stream.pendingPrompt).toBe("Follow up");
     expect(sendPrompt).not.toHaveBeenCalled();
+    vi.mocked(getLatestGeneration).mockResolvedValue(run(type === "llm.done" ? "completed" : "failed"));
     await act(async () => TestSocket.instances.at(-1)!.emit(type === "llm.done"
       ? { type, data: { message_id: "message-1", tokens_in: 2, tokens_out: 4, cost_rub: 0 } }
       : { type, data: { message_id: "message-1", error: "failed" } }));
@@ -239,6 +275,7 @@ describe("message cache update contracts", () => {
   it("marks rejected POST placeholder without inventing a generation status", async () => {
     vi.mocked(sendPrompt).mockRejectedValue(new Error("fixture rejected SECRET_VALUE"));
     await act(async () => { await stream.submit("Follow up", "model"); });
+    vi.mocked(getLatestGeneration).mockResolvedValue(run("completed"));
     await act(async () => TestSocket.instances.at(-1)!.emit({ type: "llm.done", data: { message_id: "message-1", tokens_in: 1, tokens_out: 2, cost_rub: 0 } }));
     await act(async () => vi.advanceTimersByTime(0));
     const last = client.getQueryData<Message[]>(["messages", "project-1"])!.at(-1)!;
@@ -257,6 +294,7 @@ describe("message cache update contracts", () => {
       method: "POST", json: { prompt: "Follow up" },
     }));
     await act(async () => { await stream.submit("Follow up", "model"); });
+    vi.mocked(getLatestGeneration).mockResolvedValue(run("completed"));
     await act(async () => TestSocket.instances.at(-1)!.emit({ type: "llm.done", data: {
       message_id: "message-1", tokens_in: 1, tokens_out: 2, cost_rub: 0,
     } }));
@@ -284,6 +322,7 @@ describe("message cache update contracts", () => {
       code, message: "SECRET_VALUE provider detail",
     }));
     await act(async () => { await stream.submit("Follow up", "model"); });
+    vi.mocked(getLatestGeneration).mockResolvedValue(run("completed"));
     await act(async () => TestSocket.instances.at(-1)!.emit({ type: "llm.done", data: {
       message_id: "message-1", tokens_in: 1, tokens_out: 2, cost_rub: 0,
     } }));

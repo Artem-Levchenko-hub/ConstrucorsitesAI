@@ -88,7 +88,7 @@ def test_provider_docs_rejects_platform_names_in_tool_contract() -> None:
 def test_max_native_prompt_disables_incompatible_generic_proof_tools() -> None:
     prompt = agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT\nBuild the app")
 
-    assert "takes precedence" in prompt
+    assert "runtime_check главные роуты" not in prompt
     assert "Do NOT call or retry probe/verify_isolation" in prompt
     assert "run runtime_check after the final write" in prompt
     assert "signed MAX preview session" in prompt
@@ -1678,7 +1678,7 @@ async def test_contextual_edit_bounds_discovery_before_unchanged_full_export(
     monkeypatch.setattr(agent_native, "get_settings", lambda: settings)
     if coordinated:
         monkeypatch.setattr(agent_native, "native_system_prompt",
-                            lambda *a: "MAX VERIFICATION OVERRIDE")
+                            lambda *a, **kw: "MAX VERIFICATION OVERRIDE")
     monkeypatch.setattr(max_generation_contract, "max_completion_gap", lambda *a, **kw: None)
     initial = {
         "src/app/page.tsx": "Catalog; My leads; History", "src/lib/auth.ts": "auth",
@@ -2883,9 +2883,12 @@ async def test_classified_protected_environment_failure_stops_before_another_too
     assert calls == ["model", "read_file"]
 
 
+@pytest.mark.parametrize("verification", [False, True])
 async def test_native_terminal_source_read_outage_keeps_private_cause_without_paid_replay(
-    monkeypatch,
+    monkeypatch, verification,
 ):
+    from yleum_api.services.generation_metrics import GenerationPhase
+    from yleum_api.services.max_finalization import MaxVerificationUnavailable
     from yleum_api.services.orchestrator_client import OrchestratorUnavailable
     from yleum_api.services.project_cell_errors import (
         PROTECTED_SOURCE_VERIFICATION_UNAVAILABLE,
@@ -2901,6 +2904,10 @@ async def test_native_terminal_source_read_outage_keeps_private_cause_without_pa
 
     async def execute(action):
         calls.append(action.name)
+        if verification:
+            raise MaxVerificationUnavailable(
+                GenerationPhase.FAST_CHECK, "check timed out",
+            ) from cause
         raise ProjectCellInfrastructureError(PROTECTED_SOURCE_VERIFICATION_UNAVAILABLE) from cause
 
     monkeypatch.setattr(agent_native, "_call_messages", provider)

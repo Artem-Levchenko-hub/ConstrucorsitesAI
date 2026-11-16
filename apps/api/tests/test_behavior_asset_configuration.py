@@ -34,7 +34,7 @@ def _asset(url):
 def test_registry_accepts_only_operator_pinned_fixed_assets(monkeypatch, urls):
     driver = _configure(monkeypatch, [_asset(url) for url in urls])
     assert driver.supported_capabilities == frozenset({
-        "header_theme_v1", "coffee_local_summary_v1",
+        "header_theme_v1", "coffee_local_summary_v1", "task_density_v1",
     })
 
 

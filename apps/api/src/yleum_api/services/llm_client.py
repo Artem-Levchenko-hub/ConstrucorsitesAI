@@ -231,6 +231,7 @@ class LLMError(Exception):
         completion_tokens: object = None,
         provider_scope: object = None, transport_stage: object = None,
         provider_call_id: object = None,
+        provider_stream_context: dict[str, str | int] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -248,6 +249,7 @@ class LLMError(Exception):
         self.provider_scope = context.get("provider_scope")
         self.transport_stage = context.get("transport_stage")
         self.provider_call_id = context.get("provider_call_id")
+        self.provider_stream_context = provider_stream_context or {}
         self.finish_reason = (
             finish_reason if isinstance(finish_reason, str) and finish_reason in {
                 "stop", "tool_calls", "length", "content_filter", "refusal", "pause_turn",
@@ -383,6 +385,10 @@ def inflight_budget_delay(failure: LLMError) -> int | None:
     """Only a fully validated Gateway contract may enter a budget wait."""
     if failure.retry_policy != _INFLIGHT_POLICY:
         return None
+    return _provider_refusal_delay(failure)
+
+
+def _provider_refusal_delay(failure: LLMError) -> int | None:
     return rate_limit_retry_delay({
         "retry_policy": failure.retry_policy,
         "upstream_http_status": failure.upstream_http_status,
@@ -394,24 +400,33 @@ def inflight_budget_delay(failure: LLMError) -> int | None:
     })
 
 
-async def _wait_for_inflight_budget(failure: LLMError, deadline: float) -> None:
+async def _wait_for_provider_refusal(failure: LLMError, deadline: float) -> None:
     """Wait before a verified child, never shorten Retry-After or renew a clock."""
-    delay = inflight_budget_delay(failure)
+    from yleum_api.services.generation.recovery_reconciliation import provider_dispatch_remaining
+
+    delay = _provider_refusal_delay(failure)
     loop = asyncio.get_running_loop()
+    remaining = provider_dispatch_remaining()
+    if remaining is not None:
+        deadline = min(deadline, loop.time() + remaining)
     if delay is None or delay >= deadline - loop.time():
         failure.retry_safe = False
         raise failure
     observer = _provider_wait_observer.get()
     if observer is not None:
+        budget = failure.retry_policy == _INFLIGHT_POLICY
+        human = "Жду освобождения бюджета модели" if budget else "Жду снятия ограничения частоты"
         await observer("agent.wait", {
-            "human": "Жду освобождения бюджета модели",
+            "human": human,
             "tool": "provider_request",
             "detail": (
                 f"Провайдер временно зарезервировал бюджет. Жду {delay} с "
                 "и продолжаю тот же шаг; выполненные команды не повторяются."
+                if budget else f"Провайдер ограничил частоту запросов. Продолжаю через {delay} с."
             ),
         })
-    await asyncio.sleep(delay)
+    if delay:
+        await asyncio.sleep(delay)
     if loop.time() >= deadline:
         failure.retry_safe = False
         raise failure
@@ -490,6 +505,54 @@ def _response_overload_refused(response: httpx.Response) -> bool:
     return _overload_refusal_details(body.get("error"))
 
 
+def _dispatch_deadline_failure(error: object) -> LLMError | None:
+    """Validate the closed no-dispatch marker shared by text and native routes."""
+    code = "deadline_before_dispatch"
+    if (
+        not isinstance(error, dict) or set(error) - {"type", "code", "message", "details"}
+        or not {"type", "code"} & error.keys()
+        or any(error[key] != code for key in ("type", "code") if key in error)
+    ):
+        return None
+    details = error.get("details")
+    if not isinstance(details, dict):
+        return None
+    context_fields = {"provider_scope", "transport_stage", "provider_call_id"}
+    context = {key: details[key] for key in context_fields & details.keys()}
+    required = {"provider_failure_kind", "provider_charge_ambiguous", "retry_safe"}
+    if (
+        set(details) - context_fields != required or provider_error_context(context) != context
+        or details["provider_failure_kind"] != code
+        or details["provider_charge_ambiguous"] is not False
+        or details["retry_safe"] is not False
+    ):
+        return None
+    return LLMError(
+        "Время запроса истекло до отправки провайдеру; новый запрос не отправлен.",
+        code=code, http_status=504, provider_charge_ambiguous=False, retry_safe=False,
+        **context,
+    )
+
+
+def unconfirmed_stream_diagnostics(details: dict[str, Any]) -> dict[str, str | int]:
+    outcome = details.get("provider_stream_outcome")
+    if (
+        details.get("provider_scope") != "aitunnel"
+        or details.get("provider_charge_ambiguous") is not True
+        or details.get("retry_safe") is not False or outcome not in ("output_limit", "error")
+    ):
+        return {}
+    cap = details.get("provider_output_cap_tokens")
+    if "provider_output_cap_tokens" in details and (
+        type(cap) is not int or not 1 <= cap <= 2_000_000
+    ):
+        return {}
+    context = {"provider_stream_outcome": outcome}
+    if cap is not None:
+        context["provider_output_cap_tokens"] = cap
+    return context
+
+
 def _gateway_failure(response: httpx.Response) -> LLMError:
     if _response_overload_refused(response):
         body = response.json()
@@ -501,6 +564,19 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
     # Never forward provider messages, raw bodies, headers or URLs to the agent.
     error: dict[str, Any] = {}
     body = _refusal_document(response.content)
+    if (
+        response.status_code == 504 and len(response.content) <= 16_384 and not response.history
+        and isinstance(body, dict)
+    ):
+        detail = body.get("detail")
+        if set(body) == {"detail"} and isinstance(detail, dict) and set(detail) == {"error"}:
+            dispatch_error = detail["error"]
+        elif set(body) == {"type", "error"} and body["type"] == "error":
+            dispatch_error = body["error"]
+        else:
+            dispatch_error = None
+        if (deadline_failure := _dispatch_deadline_failure(dispatch_error)) is not None:
+            return deadline_failure
     if (
         response.status_code == 503 and len(response.content) <= 16_384 and not response.history
         and isinstance(body, dict) and set(body) == {"type", "error"} and body["type"] == "error"
@@ -560,26 +636,6 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
             transport_stage=context.get("transport_stage"),
             provider_call_id=context.get("provider_call_id"),
         )
-    if (
-        response.status_code == 504 and len(response.content) <= 16_384
-        and raw_code == "deadline_before_dispatch"
-        and set(error) <= {"code", "message", "details"}
-        and set(details) - {"provider_scope", "transport_stage", "provider_call_id"}
-        == {"provider_failure_kind", "provider_charge_ambiguous", "retry_safe"}
-        and {key: details[key] for key in ("provider_scope", "transport_stage", "provider_call_id")
-             if key in details} == provider_error_context(details)
-        and details.get("provider_failure_kind") == "deadline_before_dispatch"
-        and details.get("provider_charge_ambiguous") is False
-        and details.get("retry_safe") is False
-    ):
-        return LLMError(
-            "Время запроса истекло до отправки провайдеру; новый запрос не отправлен.",
-            code="deadline_before_dispatch", http_status=504,
-            provider_charge_ambiguous=False, retry_safe=False,
-            provider_scope=context.get("provider_scope"),
-            transport_stage=context.get("transport_stage"),
-            provider_call_id=context.get("provider_call_id"),
-        )
     raw_status = details.get("upstream_http_status")
     upstream = raw_status if type(raw_status) is int and 400 <= raw_status <= 599 else None
     raw_ambiguity = details.get("provider_charge_ambiguous")
@@ -613,7 +669,21 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
         and error.get("type", "model_unavailable") == "model_unavailable" else None
     )
     retry_safe = retry_safe or rate_delay is not None
-    if rate_delay is not None and upstream == 402:
+    stream_context = (
+        unconfirmed_stream_diagnostics(details)
+        if response.status_code == 502 and code == "model_unavailable"
+        and len(response.content) <= 16_384 and not response.history
+        and details.get("provider_receipt_failure") in (
+            "receipt_incomplete", "receipt_upstream_error",
+        )
+        else {}
+    )
+    output_limit = stream_context.get("provider_stream_outcome") == "output_limit"
+    if output_limit:
+        cap = stream_context.get("provider_output_cap_tokens")
+        limit = f" ({cap} токенов)" if cap is not None else ""
+        message = f"LLM-провайдер достиг предела вывода{limit}. Учёт запроса требует сверки."
+    elif rate_delay is not None and upstream == 402:
         message = "Временно занят резерв бюджета LLM-провайдера."
     elif category == "funds":
         message = "Недостаточно средств у LLM-провайдера."
@@ -654,6 +724,8 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
         provider_scope=context.get("provider_scope"),
         transport_stage=context.get("transport_stage"),
         provider_call_id=context.get("provider_call_id"),
+        finish_reason="length" if output_limit else None,
+        provider_stream_context=stream_context,
     )
 
 
@@ -765,14 +837,14 @@ async def _chat_stream_data(
         try:
             retained = await require_recovered_response(identity)
         except LLMError as failure:
-            budget_delay = inflight_budget_delay(failure)
+            refusal_delay = _provider_refusal_delay(failure)
             resumed = await resume_generation_wire(identity, allow_provider_refusal=(
                 (failure.code == "model_unavailable" and failure.retry_safe is True
                 and failure.provider_charge_ambiguous is False
                 and failure.upstream_http_status is None)
                 or (failure.code == "upstream_refused" and failure.retry_safe is True
                 and failure.provider_charge_ambiguous is False)
-                or budget_delay is not None
+                or refusal_delay is not None
             ))
             if resumed is None:
                 raise
@@ -782,7 +854,7 @@ async def _chat_stream_data(
                 retry_parent and start_attempt == 1
                 and failure.retry_policy in _FAILOVER_PRECONNECT_POLICIES
             )
-            if (failure.code != "upstream_refused" and budget_delay is None
+            if (failure.code != "upstream_refused" and refusal_delay is None
                     and start_attempt >= _chat_attempt_allowance(payload)
                     and not failover_preconnect):
                 raise
@@ -790,8 +862,8 @@ async def _chat_stream_data(
             if remaining is None or remaining <= 0.5:
                 raise
             deadline = asyncio.get_running_loop().time() + remaining
-            if budget_delay is not None:
-                await _wait_for_inflight_budget(failure, deadline)
+            if refusal_delay is not None:
+                await _wait_for_provider_refusal(failure, deadline)
             else:
                 await asyncio.sleep(0.5)
             if retry_parent:
@@ -832,7 +904,7 @@ async def _chat_stream_data(
                 remaining = min(remaining, durable_remaining)
             attach_identity(payload, identity)
             retry_parent = False
-            budget_failure: LLMError | None = None
+            refusal_failure: LLMError | None = None
             try:
                 timeout = httpx.Timeout(remaining, connect=min(5.0, remaining), read=remaining)
                 async with httpx.AsyncClient(timeout=timeout) as client:
@@ -850,12 +922,12 @@ async def _chat_stream_data(
                         if response.status_code >= 400:
                             await response.aread()
                             http_failure = _gateway_failure(response)
-                            if (inflight_budget_delay(http_failure) is not None
+                            if (_provider_refusal_delay(http_failure) is not None
                                     and identity is not None):
                                 if attempt + 1 >= allowance:
                                     http_failure.retry_safe = False
                                     raise http_failure
-                                budget_failure = http_failure
+                                refusal_failure = http_failure
                                 retry_parent = True
                             elif (
                                 identity is not None
@@ -921,8 +993,8 @@ async def _chat_stream_data(
                 await confirm_generation_preconnect(wire, identity)
                 if attempt + 1 >= legacy_allowance:
                     raise
-            if budget_failure is not None:
-                await _wait_for_inflight_budget(budget_failure, deadline)
+            if refusal_failure is not None:
+                await _wait_for_provider_refusal(refusal_failure, deadline)
             else:
                 await asyncio.sleep(0.5)
             if retry_parent:
@@ -1078,14 +1150,14 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
         try:
             retained = await require_recovered_response(identity)
         except LLMError as failure:
-            budget_delay = inflight_budget_delay(failure)
+            refusal_delay = _provider_refusal_delay(failure)
             resumed = await resume_generation_wire(identity, allow_provider_refusal=(
                 (failure.code == "model_unavailable" and failure.retry_safe is True
                 and failure.provider_charge_ambiguous is False
                 and failure.upstream_http_status is None)
                 or (failure.code == "upstream_refused" and failure.retry_safe is True
                 and failure.provider_charge_ambiguous is False)
-                or budget_delay is not None
+                or refusal_delay is not None
             ))
             if resumed is None:
                 raise
@@ -1095,7 +1167,7 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
                 retry_parent and start_attempt == 1
                 and failure.retry_policy in _FAILOVER_PRECONNECT_POLICIES
             )
-            if (failure.code != "upstream_refused" and budget_delay is None
+            if (failure.code != "upstream_refused" and refusal_delay is None
                     and start_attempt >= _chat_attempt_allowance(payload)
                     and not failover_preconnect):
                 raise
@@ -1103,8 +1175,8 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
             if remaining is None or remaining <= 0.5:
                 raise
             deadline = loop.time() + remaining
-            if budget_delay is not None:
-                await _wait_for_inflight_budget(failure, deadline)
+            if refusal_delay is not None:
+                await _wait_for_provider_refusal(failure, deadline)
             else:
                 await asyncio.sleep(0.5)
             if retry_parent:
@@ -1169,11 +1241,11 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
                 if response.status_code < 400:
                     return response
                 http_failure = _gateway_failure(response)
-                if inflight_budget_delay(http_failure) is not None and identity is not None:
+                if _provider_refusal_delay(http_failure) is not None and identity is not None:
                     if attempt + 1 >= allowance:
                         http_failure.retry_safe = False
                         raise http_failure
-                    await _wait_for_inflight_budget(http_failure, deadline)
+                    await _wait_for_provider_refusal(http_failure, deadline)
                     # Only SQL can grant this child after the refused receipt
                     # commits. Keep the same payload, run, model and agent step.
                     identity = await prepare_generation_attempt(

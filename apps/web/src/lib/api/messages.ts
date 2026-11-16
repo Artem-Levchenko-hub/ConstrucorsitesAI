@@ -118,9 +118,10 @@ export async function getLatestGeneration(
 
 export async function cancelGeneration(
   projectId: string,
+  runId?: string,
 ): Promise<GenerationRun> {
   return apiFetch<GenerationRun>(
-    `/api/projects/${projectId}/generation/cancel`,
+    `/api/projects/${projectId}/generation/cancel${runId ? `?run_id=${encodeURIComponent(runId)}` : ""}`,
     {
       method: "POST",
       timeoutMs: 10_000,

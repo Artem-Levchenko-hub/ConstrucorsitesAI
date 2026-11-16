@@ -51,6 +51,7 @@ from yleum_gateway.providers.native_stream import (
     open_aitunnel_response,
     open_timed_response,
     provider_request_deadline,
+    stream_outcome_diagnostics,
     transport_diagnostics,
 )
 from yleum_gateway.providers.rate_limit import bounded_error_body, refusal_retry_candidate
@@ -125,6 +126,7 @@ def _request_error_type(response: httpx.Response) -> str | None:
 
 def _err(
     status: int, err_type: str, message: str, *, details: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> Response:
     error: dict[str, Any] = {"type": err_type, "message": message}
     if details is not None:
@@ -133,6 +135,7 @@ def _err(
         content=json.dumps({"type": "error", "error": error}),
         status_code=status,
         media_type="application/json",
+        headers=headers,
     )
 
 
@@ -174,13 +177,9 @@ def _unconfirmed_provider_outcome(
         details["provider_call_id"] = str(provider_call_id)
     if transport_stage in {"connect", "sending", "awaiting_headers", "headers", "body", "complete"}:
         details["transport_stage"] = transport_stage
-    if provider_scope == "aitunnel" and transport_evidence is not None:
-        outcome = transport_evidence.get("provider_stream_outcome")
-        if outcome in ("output_limit", "error"):
-            details.update(provider_stream_outcome=outcome, retry_safe=False)
-            cap = transport_evidence.get("provider_output_cap_tokens")
-            if type(cap) is int:
-                details["provider_output_cap_tokens"] = cap
+    stream_outcome = stream_outcome_diagnostics(transport_evidence or {}, provider_scope=provider_scope)
+    if stream_outcome:
+        details.update(stream_outcome, retry_safe=False)
     if details:
         details["provider_charge_ambiguous"] = True
         if "upstream_http_status" in details:
@@ -760,18 +759,25 @@ async def _dispatch_native_provider(
     kimi: KimiNativeSession | None = None,
 ) -> tuple[UUID, httpx.Response, str] | Response:
     """Commit each upstream attempt independently before its network dispatch."""
+    from yleum_gateway.services.generation_response_capture import confirm_response_accounting
+
     run_id, project_id = dispatch_options["run_id"], dispatch_options["project_id"]
     route = dispatch_options.get("route")
-    provider_scope = kimi.provider_scope if kimi else await text_failover.select_scope(
-        identity, model, run_id=run_id, project_id=project_id, user_id=dispatch_options.get("user_id"),
-        cell_route=route if route == "/v1/project-cell/messages" else None,
-    )
+    try:
+        provider_scope = kimi.provider_scope if kimi else await text_failover.select_scope(
+            identity, model, run_id=run_id, project_id=project_id, user_id=dispatch_options.get("user_id"),
+            cell_route=route if route == "/v1/project-cell/messages" else None, deadline=provider_deadline,
+        )
+    except DispatchDeadlineError as exc:
+        return _err(exc.http_status, exc.code, exc.message, details=exc.details)
     backup_enabled = text_failover.enabled(model)
     generation_retries = backup_enabled and run_id is not None and project_id is not None
-    timed_generation = kimi is not None or generation_retries or (timed_primary and backup_enabled)
     stage = dispatch_options["stage"]
+    sonnet_repair = stage == "source_repair" and model == text_failover.MODEL
+    timed_generation = sonnet_repair or kimi is not None or generation_retries or (timed_primary and backup_enabled)
     loop = asyncio.get_running_loop()
     attempts: dict[str, int] = {}
+    primary_retry_at: float | None = None
 
     async def exhausted_after_refusal(call_id: UUID) -> bool:
         return (
@@ -835,7 +841,7 @@ async def _dispatch_native_provider(
             else:
                 async with open_timed_response(
                     url, payload, headers, deadline=timed_deadline, evidence=transport_evidence,
-                    provider_scope=provider_scope,
+                    provider_scope=provider_scope, **({"read_until_deadline": True} if sonnet_repair else {}),
                 ) as upstream:
                     await upstream.aread()
         except (httpx.HTTPError, TimeoutError, DispatchDeadlineError, StreamReceiptError) as exc:
@@ -883,6 +889,13 @@ async def _dispatch_native_provider(
             if safe_to_retry and recorded:
                 # These failures occur before the request reaches the provider.
                 # Publish permission only after the failed attempt receipt commits.
+                if provider_scope == "aitunnel" and backup_enabled:
+                    delay = await text_failover.retry_after_backup_preconnect(identity, provider_call_id, primary_retry_at)
+                    if delay is not None:
+                        confirm_response_accounting()
+                        refusal = text_failover.primary_rate_limit_error(delay)
+                        return _err(429, "api_error", refusal.message, details=refusal.details,
+                                    headers={"retry-after": str(delay)})
                 if identity is None and backup_enabled:
                     next_scope = text_failover.next_retry_scope(
                         model, provider_scope, "preconnect", attempts, generation_retries=generation_retries,
@@ -891,10 +904,6 @@ async def _dispatch_native_provider(
                         return _exhausted_provider_response()
                     provider_scope = next_scope
                     continue
-
-                from yleum_gateway.services.generation_response_capture import (
-                    confirm_response_accounting,
-                )
 
                 confirm_response_accounting()
                 if await exhausted_after_refusal(provider_call_id):
@@ -921,6 +930,9 @@ async def _dispatch_native_provider(
         known_evidence = _known_response_evidence(upstream, provider_scope)
         if upstream.status_code >= 400:
             inflight = inflight_budget.retry_candidate(upstream, provider_scope=provider_scope)
+            rate_limit = refusal_retry_candidate(upstream) if provider_scope == "llmgw" else None
+            retry_after = text_failover.primary_retry_after(rate_limit)
+            cooldown = {"retry_after_seconds": retry_after} if retry_after is not None else {}
             category = "rate_limit" if inflight is not None else llmgw._refusal_category(upstream)
             overload = (
                 text_failover.primary_refusal_candidate(upstream, model)
@@ -933,7 +945,7 @@ async def _dispatch_native_provider(
                 )
                 recorded = await _finish_provider_call(
                     provider_call_id, identity=identity, status="failed", reason="upstream_refused",
-                    error_type=failure_type, **known_evidence,
+                    error_type=failure_type, **known_evidence, **cooldown,
                 )
                 if not recorded:
                     return _unconfirmed_provider_outcome(
@@ -941,6 +953,8 @@ async def _dispatch_native_provider(
                         provider_call_id=provider_call_id, transport_stage="complete",
                     )
                 if identity is None and backup_enabled:
+                    if retry_after is not None:
+                        primary_retry_at = loop.time() + retry_after
                     next_scope = text_failover.next_retry_scope(
                         model, provider_scope, "upstream_refused", attempts,
                         generation_retries=generation_retries,
@@ -954,10 +968,6 @@ async def _dispatch_native_provider(
                         return _exhausted_provider_response()
                     provider_scope = next_scope
                     continue
-                from yleum_gateway.services.generation_response_capture import (
-                    confirm_response_accounting,
-                )
-
                 confirm_response_accounting()
                 if await exhausted_after_refusal(provider_call_id):
                     return _exhausted_provider_response()
@@ -966,8 +976,8 @@ async def _dispatch_native_provider(
                         "type": "api_error", "code": "api_error",
                         "message": "Primary provider refused the request", "details": overload,
                     },
-                }))
-            retry_candidate = inflight or refusal_retry_candidate(upstream)
+                }), headers={"retry-after": str(retry_after)} if retry_after is not None else None)
+            retry_candidate = inflight or rate_limit
             ambiguous = (
                 upstream.status_code >= 500 or (upstream.status_code == 429 and retry_candidate is None)
                 or (provider_scope == "aitunnel" and upstream.status_code == 408)
@@ -975,7 +985,7 @@ async def _dispatch_native_provider(
             recorded = await _finish_provider_call(
                 provider_call_id, identity=identity, status="ambiguous" if ambiguous else "failed",
                 reason="rate_limit_refused" if retry_candidate is not None else None,
-                error_type="HTTPStatusError", **known_evidence,
+                error_type="HTTPStatusError", **known_evidence, **cooldown,
             )
             if upstream.status_code >= 500 or not recorded or (
                 provider_scope == "aitunnel" and upstream.status_code == 408
@@ -989,10 +999,6 @@ async def _dispatch_native_provider(
             if identity is None and len(attempts) == 2 and retry_candidate is not None and not ambiguous:
                 return _exhausted_provider_response()
             if not ambiguous and retry_candidate is not None:
-                from yleum_gateway.services.generation_response_capture import (
-                    confirm_response_accounting,
-                )
-
                 confirm_response_accounting()
                 if await exhausted_after_refusal(provider_call_id):
                     return _exhausted_provider_response()
@@ -1016,7 +1022,8 @@ async def _dispatch_native_provider(
                 if request_error is not None:
                     err_type = request_error
                     message = _REQUEST_ERROR_MESSAGES[request_error]
-            return _err(upstream.status_code, err_type, message, details=details)
+            return _err(upstream.status_code, err_type, message, details=details,
+                        headers={"retry-after": str(retry_after)} if retry_after is not None else None)
         return provider_call_id, upstream, provider_scope
 
 

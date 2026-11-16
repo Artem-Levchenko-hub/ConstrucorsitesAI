@@ -15,7 +15,7 @@ from yleum_api.services.promotion_permit import workspace_revision_digest
 @dataclass(frozen=True, slots=True)
 class SourceFailure:
     kind: Literal[
-        "relative_import", "workspace_alias", "type_error", "infrastructure",
+        "relative_import", "workspace_alias", "type_error", "react_effect", "infrastructure",
         "external_package", "unknown",
     ] = "unknown"
     importer: str | None = None
@@ -49,7 +49,10 @@ _INFRA = re.compile(
 
 
 def source_diagnostic_has_infrastructure_error(detail: str) -> bool:
-    return _INFRA.search(detail) is not None
+    # Error messages can quote a source-level string such as "connection refused".
+    # Only mask literals inside compiler diagnostics; an independent worker error wins.
+    text = _TYPE.sub(lambda match: _QUOTED_LITERAL.sub("", match[0]), detail)
+    return _INFRA.search(text) is not None
 
 
 _IMPORT = re.compile(
@@ -58,8 +61,10 @@ _IMPORT = re.compile(
 )
 _TYPE = re.compile(
     r"(?m)^(?P<file>[^\r\n]+?)(?:\(\d+,\d+\): error (?P<code>TS\d{4}):|"
-    r"(?::\d+(?::\d+)?)?\r?\n(?:Type error|Syntax error):)"
+    r"(?::\d+(?::\d+)?)?\r?\n(?:Type error|Syntax error):)(?P<reason>[^\r\n]*)"
 )
+_QUOTED_LITERAL = re.compile(r'''"[^"\r\n]*"|'[^'\r\n]*'|`[^`\r\n]*`''')
+_REACT_EFFECT = re.compile(r"(?m)^(?P<file>[^:\r\n]+):\d+: self-cancelling React effect:")
 _TS_MISSING = re.compile(
     r"(?m)^(?P<file>[^\r\n]+?)\(\d+,\d+\): error TS2307: Cannot find module "
     r"(?P<quote>['\"])(?P<target>[^'\"\r\n]+)(?P=quote)"
@@ -187,10 +192,13 @@ def classify_source_failure(
             if importer:
                 return _missing_failure(importer, match["target"], files)
     for match in _TYPE.finditer(detail):
-        reason = detail[match.end():].splitlines()[0] if detail[match.end():] else ""
-        if match["code"] in _MODULE_ERRORS or _MODULE_REASON.search(reason):
+        if match["code"] in _MODULE_ERRORS or _MODULE_REASON.search(match["reason"]):
             return SourceFailure()
         importer = _importer(match["file"], files)
         if importer:
             return SourceFailure("type_error", importer, (importer,))
+    for match in _REACT_EFFECT.finditer(detail):
+        importer = _importer(match["file"], files)
+        if importer:
+            return SourceFailure("react_effect", importer, (importer,))
     return SourceFailure()

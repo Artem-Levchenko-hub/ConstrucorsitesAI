@@ -288,8 +288,8 @@ class DensityAdapter:
     controls: str
     list_view: DensityView
     board_view: DensityView
-    normal_name: str = "Normal"
-    compact_name: str = "Compact"
+    normal_name: str | None = "Normal"
+    compact_name: str | None = "Compact"
 
     def config(self) -> dict[str, Any]:
         from dataclasses import asdict
@@ -312,8 +312,8 @@ class ThemeAdapter:
     text: str
     storage_key: str
     view_control: str | None = None
-    light_name: str = "Light"
-    dark_name: str = "Dark"
+    light_name: str | None = "Light"
+    dark_name: str | None = "Dark"
 
     def config(self) -> dict[str, Any]:
         from dataclasses import asdict
@@ -329,6 +329,7 @@ class CoffeeSummaryAdapter:
     form: str
     text_input: str
     summary: str
+    button_name: str | None = "Проверить заявку"
 
 
 @dataclass(frozen=True, slots=True)

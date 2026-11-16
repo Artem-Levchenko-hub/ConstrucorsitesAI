@@ -398,15 +398,11 @@ async def test_coordinator_protocol_hands_off_without_asking_model_for_deferred_
         nonlocal calls
         calls += 1
         system = messages[0]["content"]
-        assert "in MAX FINALIZATION HANDOFF after fresh clean FAST_CHECK" in system
-        assert "server coordinator MUST still run full build, runtime" in system
-        assert "done hands off a candidate, not an accepted product" in system
-        if mode == "build":
-            assert "Outside MAX FINALIZATION HANDOFF, for an INTERACTIVE feature" in system
-            assert "mandatory full build, signed runtime and release checks" in system
-            assert "applicable isolated local tests" in system
-            assert "A/B owner isolation remains unverified" in system
-        assert "runtime, isolation and release" not in system
+        assert "FAST_CHECK" in system
+        assert "Outside MAX FINALIZATION HANDOFF" not in system
+        assert 'runtime_check {"path":' not in system
+        assert "signed runtime proof" in system
+        assert "server coordinator" in system
         return action("build") if calls == 1 else action("done")
 
     async def execute(tool):
@@ -414,8 +410,12 @@ async def test_coordinator_protocol_hands_off_without_asking_model_for_deferred_
         return {"ok": True}
 
     result = await ab.run_agent_build(
-        system_prompt=(ab.build_system_prompt("preserve platform") if mode == "build"
-                       else ab.build_edit_system_prompt("preserve platform")), user_prompt="edit",
+        system_prompt=(
+            ab.build_system_prompt("preserve platform", coordinator_handoff=True)
+            if mode == "build"
+            else ab.build_edit_system_prompt("preserve platform", coordinator_handoff=True)
+        ),
+        user_prompt="edit",
         model="test", complete=complete, execute=execute, max_steps=3,
         coordinator_handoff=True, require_green_before_done=True, ship_green_on_abort=False,
     )

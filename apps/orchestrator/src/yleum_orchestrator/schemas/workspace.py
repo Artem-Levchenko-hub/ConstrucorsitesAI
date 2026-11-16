@@ -122,6 +122,7 @@ class WorkspaceAgentBootstrapResponse(BaseModel):
     fencing_epoch: int
     workspace_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
     capabilities: dict[str, object] = Field(default_factory=dict)
+    applied_migrations: list[str] | None = None
 
 
 class WorkspaceAgentBootstrapRequest(BaseModel):

@@ -1,7 +1,7 @@
 import { apiFetch, apiUrl } from "./client";
 import { mockApi, USE_MOCKS } from "./mocks";
 import type { TeamSettings } from "./max-staff";
-import type { Project, ProjectTemplate, MaxProjectConfigPayload } from "./types";
+import type { ManagementModule, Project, ProjectTemplate, MaxProjectConfigPayload } from "./types";
 
 export async function listProjects(): Promise<Project[]> {
   if (USE_MOCKS) return mockApi.listProjects();
@@ -17,6 +17,7 @@ export async function createProject(input: {
   name: string;
   template: ProjectTemplate;
   max_config?: MaxProjectConfigPayload;
+  management_module_opt_outs?: ManagementModule[];
   staff_settings?: TeamSettings;
 }): Promise<Project> {
   if (USE_MOCKS) return mockApi.createProject(input.name, input.template);

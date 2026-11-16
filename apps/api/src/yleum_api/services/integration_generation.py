@@ -11,17 +11,23 @@ from yleum_api.models.max_staff import MaxStaffSettings
 from yleum_api.models.project import Project
 
 MANAGED_PRODUCT_GUIDE = """MANAGED BUSINESS CONFIGURATION AND PRODUCT STATE
-Read the owner's saved brief in src/lib/omnia/max-config.ts. In product screens
-use getYleumAppConfig() from @/lib/omnia/integration-client on mount and focus for
-editable names, descriptions, actions and catalogs. Render active content with
+Read the owner's saved brief in src/lib/omnia/max-config.ts. Render managed
+public profile fields with useYleumAppProfile() from @/lib/omnia/app-profile-client
+and owner-edited catalog entries with useYleumCatalog() from @/lib/omnia/catalog-client.
+Use getYleumAppConfig() from @/lib/omnia/integration-client for other public config
+fields in legacy screens without a dedicated hook. Render active content with
 stable ids, category, image_url, price, availability and options honestly; never
 invent content or copy mutable configuration into constants. Handle loading,
 empty and failed reads. Implement configured features and personal-data consent
 when required; saved policy settings do not prove consent was collected.
-Use createMaxAction/getMaxActions for managed user actions. Never fabricate user
-history or provider statuses. A connected service's history/status contract below
-supersedes a local action cache for that service. Product-owned storage remains
-available under the selected provider's isolation and authenticated identity rules.
+Use createMaxAction/getMaxActions for generic persisted user activity. Use the
+selected Yleum business SDK for its managed orders, leads and bookings. For a
+provider-owned flow, use its connected method and read its receipts/status from
+that service. Submit a business intent once. Forward it to a connected service
+only through the documented integration flow. Keep telemetry separate from
+business persistence. Never fabricate user history or provider status.
+Product-owned storage remains available under the selected provider's isolation
+and authenticated identity rules.
 Keep MAX Bridge/session initialization and platform-owned /api/max/*, /api/omnia/*
 and managed config/clients intact. Use exact SDK exports; credentials belong in
 the Integration Hub, never in product code, chat instructions or .env files.

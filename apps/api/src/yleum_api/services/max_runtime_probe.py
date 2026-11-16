@@ -8,13 +8,14 @@ import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qsl, urljoin, urlsplit
 from uuid import UUID
 
 import httpx
 
 from yleum_api.services import orchestrator_client
+from yleum_api.services.max_runtime_routes import MAX_PRODUCT_READINESS_PATH
 
 _BOOTSTRAP_PATH = "/api/omnia/preview-session"
 _SIGNATURE_RE = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
@@ -23,6 +24,7 @@ _TIMEOUT = httpx.Timeout(20.0, connect=5.0)
 # isolated Next.js cold start exceeded 20s; retain a finite startup budget.
 _CELL_STARTUP_TIMEOUT = httpx.Timeout(120.0, connect=5.0)
 _CONNECT_ATTEMPTS = 3
+_DEPENDENCY_STATUSES = {408, 429, 502, 503, 504}
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,15 @@ class MaxRuntimeProbe:
     detail: str
     artifact_digest: str | None = None
     artifact_ref: str | None = None
+    failure_kind: Literal["dependency", "source"] | None = None
+
+
+def _http_failure(detail: str, status: int, *, product: bool = False) -> MaxRuntimeProbe:
+    if status in _DEPENDENCY_STATUSES or (status == 500 and not product):
+        return MaxRuntimeProbe(False, detail, failure_kind="dependency")
+    # An auth refusal does not establish a defect in application source.
+    source_failure = product and status in {400, 404, 405, 500}
+    return MaxRuntimeProbe(False, detail, failure_kind="source" if source_failure else None)
 
 
 def _valid_bootstrap_url(
@@ -157,12 +168,17 @@ async def probe_signed_business_endpoint(
     shape_digest: str | None = None
     if reason == "ok":
         try:
-            shape = _shape_of(response.json())
+            body = response.json()
         except ValueError:
-            shape = "non-json"
-        shape_digest = hashlib.sha256(
-            json.dumps(shape, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
+            body = "non-json"
+        if path == MAX_PRODUCT_READINESS_PATH and (
+            not isinstance(body, dict) or body.get("ok") is not True
+        ):
+            reason = "signed_business_route_readiness_invalid"
+        else:
+            shape_digest = hashlib.sha256(
+                json.dumps(_shape_of(body), sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
     return {
         "ok": reason == "ok",
         "status": status,
@@ -211,24 +227,11 @@ async def probe_max_cell_runtime(
         request_timeout=_CELL_STARTUP_TIMEOUT,
         portable_project_id=portable_project_id,
         expected_epoch=expected_epoch,
+        business_path=business_path,
         management_resources=management_resources,
     )
     if not result.ok:
         return result
-    if business_path is not None:
-        parsed = urlsplit(preview.bootstrap_url)
-        origin = f"{parsed.scheme}://{parsed.netloc}"
-        async with httpx.AsyncClient(
-            base_url=origin, timeout=_TIMEOUT, follow_redirects=False
-        ) as business_client:
-            business = await probe_signed_business_endpoint(business_client, business_path)
-        if not business["ok"]:
-            return MaxRuntimeProbe(
-                False,
-                f"{business['reason']} (HTTP {business['status']})"
-                if business["status"] is not None
-                else str(business["reason"]),
-            )
     if proof_key is None:
         return result
     if not re.fullmatch(r"[0-9a-f]{64}", proof_key):
@@ -263,6 +266,7 @@ async def _probe_signed_runtime(
     request_timeout: httpx.Timeout = _TIMEOUT,
     portable_project_id: UUID | None = None,
     expected_epoch: int | None = None,
+    business_path: str | None = None,
     management_resources: Sequence[str] = (),
 ) -> MaxRuntimeProbe:
     parsed = urlsplit(bootstrap_url)
@@ -295,7 +299,9 @@ async def _probe_signed_runtime(
         raise AssertionError("unreachable")
 
     try:
-        async with httpx.AsyncClient(timeout=request_timeout, follow_redirects=False) as client:
+        async with httpx.AsyncClient(
+            base_url=origin, timeout=request_timeout, follow_redirects=False,
+        ) as client:
             if portable_project_id is not None:
                 for headers in ({}, {"Cookie": "__Host-max_session=invalid.invalid"}):
                     rejected = await get(
@@ -305,18 +311,18 @@ async def _probe_signed_runtime(
                         headers=headers,
                     )
                     if rejected.status_code != 401:
-                        return MaxRuntimeProbe(
-                            False,
+                        return _http_failure(
                             "portable boundary accepts unauthenticated identity"
                             if 200 <= rejected.status_code < 300
                             else "portable boundary rejection check failed "
                             f"(HTTP {rejected.status_code}; expected 401)",
+                            rejected.status_code,
                         )
             bootstrap = await get(client, bootstrap_url, stage="bootstrap")
             if bootstrap.status_code not in {200, 301, 302, 303, 307, 308}:
-                return MaxRuntimeProbe(
-                    False,
+                return _http_failure(
                     f"signed preview bootstrap failed (HTTP {bootstrap.status_code})",
+                    bootstrap.status_code,
                 )
             if 300 <= bootstrap.status_code < 400:
                 location = bootstrap.headers.get("location")
@@ -336,7 +342,7 @@ async def _probe_signed_runtime(
             )
             if not paths:
                 paths = ["/"]
-            failures: list[str] = []
+            failures: list[tuple[str, int]] = []
             success_path: str | None = None
             for product_path in paths:
                 route = await get(client, f"{origin}{product_path}", stage="product")
@@ -349,26 +355,22 @@ async def _probe_signed_runtime(
                 if valid_status:
                     success_path = product_path
                     break
-                failures.append(f"{product_path} -> HTTP {route.status_code}")
+                failures.append((urlsplit(product_path).path, route.status_code))
             if success_path is None:
-                if len(paths) == 1:
-                    return MaxRuntimeProbe(
-                        False,
-                        f"runtime route failed (HTTP {failures[0].rsplit(' ', 1)[-1]})",
-                    )
-                return MaxRuntimeProbe(
-                    False,
-                    "runtime routes failed: " + "; ".join(failures),
+                detail = "; ".join(f"GET {route} (HTTP {code})" for route, code in failures)
+                status = next(
+                    (code for _, code in failures if code in _DEPENDENCY_STATUSES), failures[0][1],
                 )
+                return _http_failure("runtime route failed: " + detail, status, product=True)
             if success_path != paths[0]:
                 product_detail = f" via {success_path}"
             protected = await get(
                 client, f"{origin}/api/omnia/actions?limit=1", stage="actions"
             )
             if protected.status_code != 200:
-                return MaxRuntimeProbe(
-                    False,
+                return _http_failure(
                     f"protected MAX data read failed (HTTP {protected.status_code})",
+                    protected.status_code,
                 )
             try:
                 body: Any = protected.json()
@@ -392,7 +394,9 @@ async def _probe_signed_runtime(
                     or type(identity_body.get("epoch")) is not int
                     or identity_body["epoch"] != expected_epoch
                 ):
-                    return MaxRuntimeProbe(False, "portable boundary identity proof failed")
+                    return _http_failure(
+                        "portable boundary identity proof failed", identity.status_code,
+                    )
             # These reads exercise the actual registered product DB modules with
             # the signed preview actor; platform health and unused SDK imports
             # cannot satisfy this proof. Never create or mutate customer records.
@@ -406,8 +410,9 @@ async def _probe_signed_runtime(
                     stage="managed_business",
                 )
                 if module.status_code != 200:
-                    return MaxRuntimeProbe(
-                        False, f"managed {resource} read failed (HTTP {module.status_code})",
+                    return _http_failure(
+                        f"managed {resource} read failed (HTTP {module.status_code})",
+                        module.status_code,
                     )
                 try:
                     value = module.json()
@@ -421,11 +426,32 @@ async def _probe_signed_runtime(
                 product_detail += (
                     "; managed business reads passed: " + ", ".join(management_resources)
                 )
+            if business_path is not None:
+                business = await probe_signed_business_endpoint(
+                    client, business_path, expected_origin=origin,
+                )
+                if not business["ok"]:
+                    status = business["status"]
+                    reason = str(business["reason"])
+                    if isinstance(status, int):
+                        detail = f"{reason}: GET {business_path} (HTTP {status})"
+                        if reason == "signed_business_route_readiness_invalid":
+                            return MaxRuntimeProbe(False, detail, failure_kind="source")
+                        return _http_failure(
+                            detail, status, product=True,
+                        )
+                    return MaxRuntimeProbe(
+                        False, reason, failure_kind=(
+                            "dependency" if reason == "signed_business_route_unreachable" else None
+                        ),
+                    )
+                product_detail += f"; product data read {business_path}: {business['shape_digest']}"
     except httpx.HTTPError as exc:
         return MaxRuntimeProbe(
             False,
             "MAX data-plane request failed: "
             f"{type(exc).__name__} (stage={request_stage}; attempts={request_attempts})",
+            failure_kind="dependency" if isinstance(exc, httpx.TransportError) else None,
         )
 
     return MaxRuntimeProbe(

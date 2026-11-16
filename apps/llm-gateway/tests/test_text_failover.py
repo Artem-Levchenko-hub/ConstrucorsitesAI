@@ -55,6 +55,65 @@ async def test_durable_retry_cannot_revisit_provider_after_confirmed_alternate(
         assert await text_failover.select_scope(identity, text_failover.MODEL) == expected
 
 
+async def test_durable_backup_preconnect_can_return_to_primary_after_committed_rate_limit(enabled, monkeypatch):
+    backup_call = uuid4()
+    identity = GenerationProviderIdentity(uuid4(), uuid4(), uuid4(), uuid4(), "a" * 64, "b" * 64)
+    lookup_parameters = []
+    sleeps = []
+
+    async def lookup(_query, *parameters):
+        lookup_parameters.append(parameters)
+        return 30 if backup_call in parameters else None
+
+    async def sleep(delay):
+        sleeps.append(delay)
+
+    @asynccontextmanager
+    async def acquire():
+        yield SimpleNamespace(
+            fetchval=lookup,
+            fetchrow=AsyncMock(return_value={
+                "phase": "closed", "status": "failed", "receipt_hash": "verified",
+                "terminal_reason": "preconnect", "provider_scope": "aitunnel",
+                "tried_scopes": ["llmgw", "aitunnel"], "chain_complete": True,
+                "provider_call_id": backup_call,
+            }),
+        )
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    monkeypatch.setattr(text_failover, "get_pool", lambda: SimpleNamespace(acquire=acquire))
+
+    assert await text_failover.select_scope(identity, text_failover.MODEL) == "llmgw"
+    assert sleeps == [30] and any(backup_call in params for params in lookup_parameters)
+
+
+async def test_following_generation_step_waits_for_scoped_primary_rate_limit(enabled, monkeypatch):
+    user, run, project = uuid4(), uuid4(), uuid4()
+    sleeps = []
+
+    async def lookup(query, *parameters):
+        if "retry_after_seconds" in query:
+            assert parameters[:3] == (run, project, user)
+            return 12
+        return False
+
+    async def sleep(delay):
+        sleeps.append(delay)
+
+    @asynccontextmanager
+    async def acquire():
+        yield SimpleNamespace(fetchval=lookup)
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    monkeypatch.setattr(text_failover, "get_pool", lambda: SimpleNamespace(acquire=acquire))
+
+    scope = await text_failover.select_scope(
+        None, text_failover.MODEL, run_id=run, project_id=project, user_id=user,
+    )
+
+    assert scope == "llmgw" and sleeps == [12]
+
+
 @pytest.mark.parametrize("status", [500,502,503,504])
 def test_explicit_primary_refusal_is_bounded_and_provider_specific(enabled, status):
     candidate = text_failover.primary_refusal_candidate(refusal(status,json={"error": "Bad gateway"}), "claude-sonnet-5.5")

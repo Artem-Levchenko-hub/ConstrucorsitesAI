@@ -170,6 +170,23 @@ _SERVER_RESPONSE = re.compile(
     r"\bсерверн(?:ый|ого|ому|ым|ом|ые|ых|ыми)\s+ответ(?:а|у|ом|е|ы|ов|ам|ами|ах)?\b"
 )
 
+# A protected infrastructure object is context for the edit. Match just the
+# prohibition or preservation phrase so a separate affirmative request survives.
+_RU_INFRASTRUCTURE = (
+    r"(?:баз(?:а|у|ы|ой)\s+данных|бэкенд\w*|"
+    r"серверн\w*\s+(?:част\w*|логик\w*|архитектур\w*|инфраструктур\w*|обработк\w*))"
+)
+_RU_INFRASTRUCTURE_TARGET = rf"(?:(?:существующ|текущ)\w*\s+)?{_RU_INFRASTRUCTURE}\b"
+_RU_PRESERVE_VERB = r"(?:трогай|меняй|изменяй|переписывай|заменяй|удаляй)(?:те)?"
+_EN_INFRASTRUCTURE_TARGET = r"(?:(?:the|existing|current)\s+)*(?:backend|database)\b"
+_INFRASTRUCTURE_PRESERVATION = re.compile(
+    rf"\bне\s+{_RU_PRESERVE_VERB}\s+{_RU_INFRASTRUCTURE_TARGET}"
+    rf"|\b{_RU_INFRASTRUCTURE_TARGET}\s+не\s+{_RU_PRESERVE_VERB}\b"
+    rf"|\b(?:оставь|сохрани)\s+{_RU_INFRASTRUCTURE_TARGET}\s+без\s+изменений\b"
+    r"|\b(?:do\s+not|don['’]t|never)\s+(?:touch|change|modify|rewrite|replace|remove)\s+"
+    rf"{_EN_INFRASTRUCTURE_TARGET}(?:\s+(?:and|or)\s+{_EN_INFRASTRUCTURE_TARGET})*"
+)
+
 
 def _has_any(text: str, keywords: frozenset[str]) -> bool:
     return any(k in text for k in keywords)
@@ -227,7 +244,8 @@ def decide_intent(
     rebuild_text = _NEGATED_REBUILD.sub(" ", text)
     if _has_any(rebuild_text, _REBUILD_KEYWORDS) or _REBUILD_VERB.search(rebuild_text):
         return ORCHESTRATE
-    if _has_any(_SERVER_RESPONSE.sub(" ", text), _STRUCTURAL_KEYWORDS):
+    structural_text = _INFRASTRUCTURE_PRESERVATION.sub(" ", _SERVER_RESPONSE.sub(" ", text))
+    if _has_any(structural_text, _STRUCTURAL_KEYWORDS):
         return ORCHESTRATE
 
     # App-ification follow-up (P-H1): "переделай это в полноценное приложение: вход,
@@ -240,7 +258,7 @@ def decide_intent(
     if appify_enabled:
         from yleum_api.services.discovery import detect_appification
 
-        if detect_appification(text):
+        if detect_appification(structural_text):
             return ORCHESTRATE
 
     # Existing project, no rebuild/structural signal → it's an edit. Cheap,

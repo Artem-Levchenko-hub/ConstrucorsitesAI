@@ -37,6 +37,21 @@ def test_explicit_profile_survives_wizard_infrastructure() -> None:
     assert [key for key, _, _ in requested_max_capabilities(brief)] == ["profile"]
 
 
+def test_wizard_management_metadata_is_not_a_visitor_ui_requirement() -> None:
+    brief = (
+        "Что должно делать приложение: справка о рабочем времени.\n"
+        "Управление в Yleum: Каталог, Заявки. Подключи штатные бизнес-модули "
+        "из .omnia/management.json; данные меняются обычными формами без генерации. "
+        "Профиль, настройки и статистика доступны каждому приложению. "
+        "Личные данные пользователей не превращай в общий реестр владельца."
+    )
+    assert requested_max_capabilities(brief) == []
+    actual_requirements = "Нужные возможности: Каталог и профиль пользователя.\n" + brief
+    assert {key for key, _, _ in requested_max_capabilities(actual_requirements)} == {
+        "catalog", "profile",
+    }
+
+
 def _crm_product_files() -> dict[str, str]:
     return {
         "src/app/page.tsx": (
@@ -92,6 +107,24 @@ def test_portable_next_draft_with_helpers_but_no_root_screen_is_incomplete() -> 
     assert gap is not None and "src/app/page.tsx" in gap
     files["src/app/(product)/page.tsx"] = page
     assert max_source_completion_gap("Покажи историю заявок.", files, portable=True) is None
+
+
+@pytest.mark.parametrize("portable", [False, True])
+def test_api_only_source_requires_actual_endpoint_and_accepts_technical_root(portable):
+    files = {
+        ".omnia/cell.json": _portable_crm_files()[".omnia/cell.json"],
+        "src/app/layout.tsx": "export default function Layout({children}) { return children; }",
+        "src/app/page.tsx": "export default function Page(){ return 'Service'; }",
+        "src/app/api/yleum-readiness/route.ts": "export const GET = () => new Response('ok')",
+    }
+    request = "API-only: provide an authenticated read-only statistics endpoint."
+    assert "API route" in str(max_source_completion_gap(request, files, portable=portable))
+    files["src/app/api/stats/route.ts"] = (
+        "import { getMaxUser } from '@/lib/max/session';\n"
+        "export async function GET(){ const actor = await getMaxUser();"
+        "return actor ? Response.json({ total: 0 }) : new Response(null, {status: 401}); }"
+    )
+    assert max_source_completion_gap(request, files, portable=portable) is None
 
 
 def _portable_coffee_files() -> dict[str, str]:

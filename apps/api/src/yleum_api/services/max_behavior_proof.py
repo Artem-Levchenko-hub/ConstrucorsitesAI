@@ -17,10 +17,15 @@ from typing import Any, Protocol, SupportsIndex, cast
 from uuid import UUID
 
 from yleum_api.services.behavior_platform_assets import PLATFORM_ASSET_LOCATIONS
+from yleum_api.services.max_generation_contract import is_api_only_request, positive_request_scope
 
 CONTRACT_VERSION = "max-named-behavior-v2"
-PROBE_VERSION = "ac-coffee-process-browser-v4"
-PROBE_SHA256 = "248ddebd7d8624c63501d5b61bd574edbc003947d55de3ea09f81cf6d2cebc24"
+PROBE_VERSION = "ac-coffee-process-browser-v5"
+PROBE_SHA256 = "8b3a22e93c71ba32d8a81999298ada689ef3cea5e57abcd30d0a611413fae504"
+_PREVIOUS_PROBE = (
+    "ac-coffee-process-browser-v4",
+    "248ddebd7d8624c63501d5b61bd574edbc003947d55de3ea09f81cf6d2cebc24",
+)
 STATE_KEY = "max_named_behavior_contract"
 RECEIPT_KEY = "max_named_behavior_receipt"
 _HEX = re.compile("[0-9a-f]{64}")
@@ -40,6 +45,7 @@ _SAFE_CODES = frozenset(
         "BEHAVIOR_BROWSER_CANCELLED",
         "BEHAVIOR_BROWSER_CLEANUP_FAILED",
         "BEHAVIOR_ADAPTER_UNSUPPORTED",
+        "BEHAVIOR_PROBE_UPGRADE_REQUIRED",
         "BEHAVIOR_PREVIEW_UNAVAILABLE",
         "BEHAVIOR_MEASUREMENTS_INVALID",
         "BEHAVIOR_MEASUREMENTS_PARTIAL",
@@ -112,28 +118,22 @@ def required_contract(
     """
     if template not in _SUPPORTED_TEMPLATES:
         return None
-    text = prompt.casefold()
-    if "api-only" in text or "api only" in text or "только api" in text:
+    if is_api_only_request(prompt):
         return None
-    if re.match(r"\s*(explain|inspect|review|investigate|объясни|исследуй|проанализируй)\b", text):
+    original = prompt.casefold()
+    if re.match(
+        r"\s*(explain|inspect|review|investigate|объясни|исследуй|проанализируй)\b", original,
+    ):
         return None
+    text = positive_request_scope(prompt).casefold()
     coffee_requested = (
-        "проверить заявку" in text
-        and "резюме" in text
-        and "без отправ" in text
-        and not re.search(r"не (добав\w*|нуж\w*).*проверить заявку", text)
-        and not re.search(r"\b(?:don't|do not|avoid|without)\b[^;\n.!?]*проверить заявку", text)
+        ("проверить заявку" in text or "кофе" in text or "coffee" in text)
+        and ("резюме" in text or "summary" in text)
+        and re.search(
+            r"\b(?:без отправ|without send|without submit|no submission)", original,
+        )
     )
     caps = []
-    # This selects requirements only; semantic acceptance remains browser-owned.
-    # Conservatively exclude explicit negative clauses rather than invent gates.
-    clauses = re.split(r"[;\n.]", text)
-    positive = " ".join(
-        clause
-        for clause in clauses
-        if not re.search(r"\b(don't|do not|avoid|without|не добав\w*|не нуж\w*|без)\b", clause)
-    )
-    text = positive
     density = ("normal" in text and "compact" in text) or ("обычн" in text and "компактн" in text)
     if "task_density_v1" in text or (
         density
@@ -180,8 +180,8 @@ def contract_from_json(raw: object) -> NamedBehaviorContract:
             result.version == CONTRACT_VERSION
             and result.template in _SUPPORTED_TEMPLATES
             and result.scope == "ui"
-            and result.probe_version == PROBE_VERSION
-            and result.probe_sha256 == PROBE_SHA256
+            and (result.probe_version, result.probe_sha256)
+            in {(PROBE_VERSION, PROBE_SHA256), _PREVIOUS_PROBE}
             and _HEX.fullmatch(result.request_sha256)
             and bool(result.capabilities)
             and set(result.capabilities) <= _CAPABILITIES
@@ -758,6 +758,18 @@ async def original_request(
     return request.text
 
 
+def frozen_contract_matches_request(
+    contract: NamedBehaviorContract, prompt: str, *, template: str, request_sha256: str,
+) -> bool:
+    if contract.template != template or contract.request_sha256 != request_sha256:
+        return False
+    if (contract.probe_version, contract.probe_sha256) == _PREVIOUS_PROBE:
+        # The stored manifest was frozen under the previous reviewed selector.
+        # Verify its digest-bound shape and keep its exact scope for saved receipts.
+        return contract_from_json(contract.to_json()) == contract
+    return contract == required_contract(prompt, template=template, request_sha256=request_sha256)
+
+
 async def freeze_for_turn(
     coordinator: Any, prompt: str, *, template: str
 ) -> NamedBehaviorContract | None:
@@ -768,19 +780,20 @@ async def freeze_for_turn(
             session, run, prompt, project_id=coordinator.project_id,
             run_id=coordinator.generation_run_id,
         )
-        selected = required_contract(original, template=template, request_sha256=run.prompt_hash)
         root = dict(run.agent_state)
         saved = root.get(STATE_KEY)
-        if selected is None and saved is None:
-            return None
         if saved is not None:
             existing = contract_from_json(saved)
             need(
-                existing == selected and existing.request_sha256 == run.prompt_hash,
+                frozen_contract_matches_request(
+                    existing, original, template=template, request_sha256=run.prompt_hash,
+                ),
                 "BEHAVIOR_REQUEST_BINDING_INVALID",
             )
             return existing
-        assert selected is not None
+        selected = required_contract(original, template=template, request_sha256=run.prompt_hash)
+        if selected is None:
+            return None
         root[STATE_KEY] = selected.to_json()
         run.agent_state = root
         await session.commit()

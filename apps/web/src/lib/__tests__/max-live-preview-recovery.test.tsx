@@ -800,6 +800,21 @@ describe("MAX live preview recovery", () => {
     expect(startRuntime).not.toHaveBeenCalled();
   });
 
+  it("does not treat a chat-only turn on the starter snapshot as a saved app after a failed first build", async () => {
+    const clarification = { ...buildVersion("unchanged"), is_current: true };
+    const failure = { ...buildVersion("failed"), id: "failed-build", number: 2 };
+    const messages = [buildMessage("failed")];
+    queryClient.setQueryData(["messages", PROJECT.id], messages);
+    listMessages.mockResolvedValue(messages);
+    getRuntime.mockResolvedValue(runtime("provisioning"));
+    renderPreview("seed-snapshot", { versions: [failure, clarification] });
+    await flushPromises();
+    expect(container.textContent).toContain("Первая сборка не завершена");
+    expect(container.textContent).not.toContain("Показана последняя сохранённая версия");
+    expect(getRuntime).not.toHaveBeenCalled();
+    expect(createMaxPreviewSession).not.toHaveBeenCalled();
+  });
+
   it.each(["history", "messages", "generation"] as const)(
     "does not prepare a failed first build while initial %s metadata is unresolved",
     async (lastPending) => {

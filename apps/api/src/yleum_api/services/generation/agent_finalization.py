@@ -40,7 +40,7 @@ from yleum_api.services.generation.source_repair_context import (
     directed_repair_target,
     with_managed_source_context,
 )
-from yleum_api.services.max_finalization import ProofBundle
+from yleum_api.services.max_finalization import MaxVerificationUnavailable, ProofBundle
 from yleum_api.services.max_project_kit import max_sast_source_view
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 
@@ -434,7 +434,9 @@ async def run_native_source_repair(
             take_verified_progress=getattr(operations, "take_verified_progress", None),
             pure_check=getattr(operations, "pure_check", None),
             model=plan.model,
-            system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
+            system=agent_native.native_system_prompt(
+                plan.stack_guide or "", plan.skills, coordinator_handoff=True,
+            ),
             task=task, execute=repair_execute,
             user_id=str(ids.user_id), project_id=str(ids.project_id), run_id=str(ids.run_id),
             message_id=str(ids.assistant_message_id), free=is_free,
@@ -450,7 +452,8 @@ async def run_native_source_repair(
             snapshot_files=snapshot if callable(snapshot) else None,
             source_repair=True,
             directed_path=directed_path,
-            allow_max_bash=shell_enabled, portable_cell=True, initial_files=model_baseline,
+            allow_max_bash=shell_enabled, portable_cell=True, coordinator_handoff=True,
+            initial_files=model_baseline,
             edit_deadline=edit_deadline, completion_check=repair_completion,
         )
     except SourceCheckpointError as exc:
@@ -683,7 +686,10 @@ async def finalize_max_candidate(
                 options["max_source_repairs"] = int(
                     not getattr(runtime, "source_repair_started", False)
                 )
-            if source_handoff or autonomous_repair:
+            if (
+                runtime.handle.prove_restoration_adaptation is None
+                or source_handoff or autonomous_repair
+            ):
                 from yleum_api.services.generation.agent_runtime import migration_feedback
 
                 async def source_preflight() -> str | None:
@@ -714,6 +720,13 @@ async def finalize_max_candidate(
                     "MAX_FINALIZATION_FAILED: " + cause + _finalization.redacted_detail
                 )
         except AdaptationActivationPending:
+            raise
+        except MaxVerificationUnavailable:
+            # A missing verdict is not a rejected candidate. Leave the working
+            # tree and its DB bound to the run, and checkpoint it for recovery.
+            await checkpoint_before_rollback(operations)
+            if continuation is not None:
+                await continuation.wait()
             raise
         except _NativeSourceRepairSettlementPending:
             assert continuation is not None

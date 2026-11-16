@@ -1,6 +1,7 @@
 """Named behavior readiness fails before the generation reaches any provider."""
 
 import hashlib
+import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock
@@ -14,16 +15,18 @@ from yleum_api.services import max_behavior_proof as proof
 from yleum_api.services.generation import agent_pipeline
 from yleum_api.services.generation.contracts import GenerationIds, GenerationRuntime, SourceBaseline
 
+from .test_max_behavior_proof import previous_probe_contract
+
 REQUEST = "Add a visible header Light/Dark theme control and local persistence."
 
 
 @pytest.fixture
 def before_provider(monkeypatch):
     async def run(request=REQUEST, *, driver=None, coordinator_enabled=True, saved=False,
-                  authoritative=None, corrupt_binding=False):
+                  authoritative=None, corrupt_binding=False, saved_contract=None):
         ids = GenerationIds(*(uuid4() for _ in range(5)))
         original = authoritative or request
-        contract = proof.required_contract(original, template="max_miniapp")
+        contract = saved_contract or proof.required_contract(original, template="max_miniapp")
         record = NS(id=ids.run_id, status="running",
                     prompt_hash=hashlib.sha256(original.encode()).hexdigest(),
                     user_message_id=ids.user_message_id, agent_state={},
@@ -41,7 +44,7 @@ def before_provider(monkeypatch):
         session = NS(commit=AsyncMock(), get=AsyncMock(side_effect=lambda model, *_a, **_k:
             record if model is GenerationRun else NS(owner_id=ids.user_id, discovery_spec=None)
             if model is Project else NS(
-                project_id=project_id, role="user", content=original,
+                project_id=project_id, role="user", content=original, selected_elements=None,
             )))
 
         @asynccontextmanager
@@ -133,6 +136,18 @@ async def test_frozen_repeat_rechecks_driver_from_original_request(before_provid
     result.session.commit.assert_not_awaited()
 
 
+async def test_previous_unobserved_probe_stops_before_provider(before_provider):
+    legacy = previous_probe_contract(REQUEST)
+    driver = proof.ControllerBehaviorDriver(
+        AsyncMock(), AsyncMock(), frozenset(legacy.capabilities),
+    )
+    result = await before_provider(driver=driver, saved=True, saved_contract=legacy)
+    assert str(result.error) == "BEHAVIOR_READINESS_UNAVAILABLE: BEHAVIOR_PROBE_UPGRADE_REQUIRED"
+    result.provider.assert_not_awaited()
+    result.session.commit.assert_not_awaited()
+    assert result.record.agent_state[proof.STATE_KEY] == legacy.to_json()
+
+
 async def test_disabled_coordinator_preserves_saved_requirement_on_retry(before_provider):
     result = await before_provider(
         "Synthesized retry context", authoritative=REQUEST, saved=True, coordinator_enabled=False,
@@ -175,6 +190,41 @@ async def test_supported_driver_admits_without_fabricating_browser_proof(before_
     driver.collect_compiled.assert_not_awaited()
     driver.observe_browser.assert_not_awaited()
     assert proof.RECEIPT_KEY not in result.record.agent_state
+
+
+async def test_operator_combined_browser_preset_admits_task_density(before_provider, monkeypatch):
+    from yleum_api.services import behavior_driver_configuration as config
+    from yleum_api.services.max_behavior_ui_contract import named_ui_guidance
+
+    # Installation/pinning are exercised separately; use the real registry and driver factory.
+    monkeypatch.setattr(config, "_pin", lambda *_args: None)
+    driver = config.configured_behavior_driver(NS(), NS(
+        max_behavior_browser_executable="/test-only-browser", env="test",
+        max_behavior_browser_sha256="a" * 64,
+        max_behavior_adapter_registry=json.dumps({
+            "max-miniapp-nextjs": {"preset": "coffee-summary-header-theme-ui-v1"},
+        }),
+        max_behavior_vendor_asset_registry="",
+    ))
+    result = await before_provider(
+        "Добавь обычную и компактную плотность для списка и доски задач", driver=driver,
+    )
+    assert result.admitted, str(result.error)
+    assert proof.RECEIPT_KEY not in result.record.agent_state
+    result.provider.assert_not_awaited()
+    contract = proof.contract_from_json(result.record.agent_state[proof.STATE_KEY])
+    assert contract.capabilities == ("task_density_v1",)
+    adapter = config._adapter({"preset": "coffee-summary-header-theme-ui-v1"}).density
+    assert adapter is not None
+    guidance = named_ui_guidance(contract)
+    for value in (
+        adapter.normal, adapter.compact, adapter.filter, adapter.filter_value, adapter.storage_key,
+        adapter.controls, adapter.list_view.control, adapter.list_view.container,
+        adapter.list_view.cards, adapter.board_view.control, adapter.board_view.container,
+        adapter.board_view.cards,
+    ):
+        assert value in guidance
+    assert "UNSUPPORTED" not in guidance
 
 
 async def test_resumed_failure_message_does_not_claim_previous_calls_were_free(before_provider):

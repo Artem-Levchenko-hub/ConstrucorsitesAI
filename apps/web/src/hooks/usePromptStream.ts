@@ -10,6 +10,7 @@ import type {
   GenerationRun,
   Message,
   PassProgress,
+  PromptResponse,
   SelectedElement,
   ReferenceImage,
   MessageFontSelection,
@@ -31,12 +32,14 @@ import { describeApiError } from "@/lib/api/errors";
 import { isFreeChatRefusal, OWNER_PROFILE_QUERY_KEY, refreshOwnerAfterAcceptedPrompt, refreshOwnerAllowances } from "@/lib/owner-chat-quota";
 import {
   isActiveGenerationForMessage,
+  isGenerationActive,
   streamEventMessageId,
 } from "@/lib/generation-lifecycle";
 import { USE_MOCKS } from "@/lib/api/mocks";
 import { buildJoyTrigger } from "@/lib/joy-moment";
 import { openRealStream } from "@/lib/prompt-stream-transport";
 import type { RestorationAdaptationReference } from "@/lib/api/messages";
+import { readQueuedPrompt, studioPromptQueueKey, writeQueuedPrompt, type QueuedPrompt } from "@/lib/studio-prompt-queue";
 
 /** What the user is told when a prompt is refused for a reason other than a running build. */
 const PROMPT_REFUSALS: Record<string, string> = {
@@ -67,7 +70,7 @@ export type PromptSubmitOptions = {
   onReferenceImagesExpired?: () => void;
 };
 
-export function usePromptStream(projectId: string, projectSlug: string) {
+export function usePromptStream(projectId: string, projectSlug: string, ownerId?: string) {
   const qc = useQueryClient();
   const cancelRef = useRef<(() => void) | null>(null);
   const streamingRef = useRef(false);
@@ -75,6 +78,9 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   // blocks one browser event from bubbling twice; this second guard prevents
   // the same payload from being mistaken for an intentional queued follow-up.
   const activeSubmitSignatureRef = useRef<string | null>(null);
+  const lifetimeRef = useRef<AbortController | null>(null);
+  const admissionRef = useRef<Promise<PromptResponse> | null>(null);
+  const stoppingRef = useRef(false);
   const generationErrorToastsRef = useRef(new Map<string, string>());
   // Resumable-stream bookkeeping. `sendRef` lets `apply` ask the server to
   // replay the buffer (resync) when it spots a seq-gap. `streamMetaRef` holds
@@ -85,7 +91,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   const reconnectAttemptsRef = useRef(0);
   const reconnectProbeRef = useRef(false);
   const terminalGenerationMessagesRef = useRef<Set<string>>(new Set());
-  const terminalHistoryPollsRef = useRef(new Map<string, { cancelled: boolean; timer?: number }>());
+  const terminalHistoryPollsRef = useRef(new Map<string, { cancelled: boolean; timer?: number; drainQueue: boolean }>());
   useEffect(() => {
     const polls = terminalHistoryPollsRef.current;
     return () => {
@@ -95,29 +101,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       }
       polls.clear();
     };
-  }, [projectId]);
-  const refreshTerminalHistory = useCallback((messageId: string) => {
-    if (terminalHistoryPollsRef.current.has(messageId)) return;
-    const entry: { cancelled: boolean; timer?: number } = { cancelled: false };
-    terminalHistoryPollsRef.current.set(messageId, entry);
-    let attempt = 0;
-    const poll = async () => {
-      try {
-        const generation = await getLatestGeneration(projectId);
-        if (entry.cancelled) return;
-        if (!isActiveGenerationForMessage(generation, messageId)) {
-          await qc.invalidateQueries({ queryKey: ["messages", projectId] });
-          refreshOwnerAllowances(qc);
-          terminalHistoryPollsRef.current.delete(messageId);
-          return;
-        }
-      } catch { /* A lost status response does not mean that cleanup finished. */ }
-      if (!entry.cancelled) {
-        entry.timer = window.setTimeout(() => { void poll(); }, Math.min(15_000, 1000 * 2 ** attempt++));
-      }
-    };
-    void poll();
-  }, [projectId, qc]);
+  }, [projectId, ownerId]);
   const connectRef = useRef<() => void>(() => {});
   const streamMetaRef = useRef<
     Record<string, { lastSeq: number; resyncing: boolean }>
@@ -131,17 +115,9 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   const watchdogHeartbeatRef = useRef<Record<string, () => void>>({});
   const watchdogCleanupRef = useRef<Record<string, () => void>>({});
   const silenceNoticeRef = useRef<Set<string>>(new Set());
-  // Очередь — один слот. Если юзер кидает второй промпт, пока стримит первый,
-  // он сюда попадает и автоматом стартует на llm.done/llm.error. Если новый
-  // промпт прилетает поверх — заменяет предыдущий (предсказуемее, чем стек).
-  const pendingRef = useRef<{
-    text: string;
-    modelId: string;
-    selections?: SelectedElement[];
-    opts?: PromptSubmitOptions;
-    resolve?: (accepted: boolean) => void;
-  } | null>(null);
-  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
+  const queueKey = ownerId ? studioPromptQueueKey(ownerId, projectId) : null;
+  const pendingRef = useRef<QueuedPrompt | null>(null);
+  const [pending, setPending] = useState<QueuedPrompt | null>(null);
   // submitRef нужен, потому что fireQueued вызывается из apply (стабильный
   // useCallback), а submit пересоздаётся при каждом рендере с свежим apply —
   // прямая ссылка на submit замкнётся на устаревшую версию.
@@ -155,6 +131,39 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     | null
   >(null);
 
+  useEffect(() => {
+    const lifetime = new AbortController();
+    lifetimeRef.current = lifetime;
+    const watchdogs = watchdogCleanupRef.current;
+    return () => {
+      lifetime.abort();
+      for (const cleanup of Object.values(watchdogs)) cleanup();
+      streamingRef.current = false;
+      admissionRef.current = null;
+      stoppingRef.current = false;
+      activeSubmitSignatureRef.current = null;
+      activeGenerationRunRef.current = null;
+      activeGenerationMessageRef.current = null;
+      cancelRef.current?.();
+      cancelRef.current = null;
+      sendRef.current = null;
+      pendingRef.current?.resolve?.(false);
+      pendingRef.current = null;
+    };
+  }, [projectId, ownerId]);
+
+  const updatePending = useCallback((value: QueuedPrompt | null, requireStorage = false) => {
+    if (queueKey && !writeQueuedPrompt(queueKey, value) && requireStorage) return false;
+    pendingRef.current = value;
+    setPending(value);
+    return true;
+  }, [queueKey]);
+
+  const cancelPending = useCallback(() => {
+    pendingRef.current?.resolve?.(false);
+    updatePending(null);
+  }, [updatePending]);
+
   const updateMessage = useCallback(
     (id: string | null, transform: (message: Message) => Message) => {
       qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
@@ -164,18 +173,84 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     [qc, projectId],
   );
 
-  const fireQueued = useCallback(() => {
+  const fireQueued = useCallback((retry = false) => {
     const p = pendingRef.current;
-    if (!p) return;
-    pendingRef.current = null;
-    setPendingPrompt(null);
-    // setTimeout, чтобы не вызвать submit изнутри обработчика событий react-query
-    // и дать React закоммитить текущий рендер.
-    setTimeout(
-      () => { void submitRef.current?.(p.text, p.modelId, p.selections, p.opts).then((accepted) => p.resolve?.(accepted), () => p.resolve?.(false)); },
-      0,
-    );
-  }, []);
+    if (!p || p.phase !== (retry ? "retry" : "waiting") || stoppingRef.current) return;
+    if (streamingRef.current) {
+      if (retry) updatePending({ ...p, phase: "waiting" });
+      return;
+    }
+    const sending = { ...p, phase: "sending" as const };
+    updatePending(sending);
+    // Leave the WebSocket/query-cache handler before starting another POST.
+    window.setTimeout(async () => {
+      if (pendingRef.current !== sending) return;
+      if (streamingRef.current || stoppingRef.current) {
+        updatePending({ ...p, phase: "waiting" });
+        return;
+      }
+      let accepted = false;
+      let imagesExpired = false;
+      try {
+        accepted = await submitRef.current?.(p.text, p.modelId, p.selections, {
+          ...p.opts,
+          onReferenceImagesExpired: () => {
+            imagesExpired = true;
+            p.opts.onReferenceImagesExpired?.();
+          },
+        }) ?? false;
+      } catch { /* Preserve the draft and its identity for an explicit retry. */ }
+      if (pendingRef.current !== sending) return;
+      if (accepted || (imagesExpired && p.opts.onReferenceImagesExpired)) {
+        updatePending(null);
+        p.resolve?.(accepted);
+      } else {
+        updatePending({ ...p, phase: imagesExpired ? "images_expired" : "retry" });
+      }
+    }, 0);
+  }, [updatePending]);
+
+  const retryPending = useCallback(() => fireQueued(true), [fireQueued]);
+  const restoreExpiredPending = useCallback(() => {
+    const p = pendingRef.current;
+    if (p?.phase !== "images_expired") return null;
+    cancelPending();
+    return { text: p.text, selections: p.selections ?? [], fontSelections: p.opts.fontSelections ?? [] };
+  }, [cancelPending]);
+
+  const finishWaitingQueue = useCallback((generation: GenerationRun | null, messageId: string) => {
+    if (isGenerationActive(generation)) return;
+    if (generation?.status === "cancelled" && generation.assistant_message_id === messageId) cancelPending();
+    else fireQueued();
+  }, [cancelPending, fireQueued]);
+
+  const refreshTerminalHistory = useCallback((messageId: string, drainQueue = false) => {
+    const existing = terminalHistoryPollsRef.current.get(messageId);
+    if (existing) {
+      existing.drainQueue ||= drainQueue;
+      return;
+    }
+    const entry: { cancelled: boolean; timer?: number; drainQueue: boolean } = { cancelled: false, drainQueue };
+    terminalHistoryPollsRef.current.set(messageId, entry);
+    let attempt = 0;
+    const poll = async () => {
+      try {
+        const generation = await getLatestGeneration(projectId);
+        if (entry.cancelled) return;
+        if (!isActiveGenerationForMessage(generation, messageId)) {
+          if (entry.drainQueue) finishWaitingQueue(generation, messageId);
+          void qc.invalidateQueries({ queryKey: ["messages", projectId] });
+          refreshOwnerAllowances(qc);
+          terminalHistoryPollsRef.current.delete(messageId);
+          return;
+        }
+      } catch { /* A lost status response does not mean that cleanup finished. */ }
+      if (!entry.cancelled) {
+        entry.timer = window.setTimeout(() => { void poll(); }, Math.min(15_000, 1000 * 2 ** attempt++));
+      }
+    };
+    void poll();
+  }, [projectId, qc, finishWaitingQueue]);
 
   const apply = useCallback(
     (event: WsEvent) => {
@@ -331,12 +406,11 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           qc.invalidateQueries({ queryKey: ["project", projectId] });
           qc.invalidateQueries({ queryKey: ["generation", projectId] });
         }
-        refreshTerminalHistory(event.data.message_id);
+        refreshTerminalHistory(event.data.message_id, true);
         delete streamMetaRef.current[event.data.message_id];
         silenceNoticeRef.current.delete(event.data.message_id);
         streamingRef.current = false;
         activeSubmitSignatureRef.current = null;
-        fireQueued();
         return;
       }
 
@@ -562,9 +636,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         silenceNoticeRef.current.delete(event.data.message_id);
         streamingRef.current = false;
         activeSubmitSignatureRef.current = null;
-        pendingRef.current?.resolve?.(false);
-        pendingRef.current = null;
-        setPendingPrompt(null);
+        cancelPending();
         cancelRef.current?.();
         cancelRef.current = null;
         return;
@@ -617,11 +689,10 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         qc.invalidateQueries({ queryKey: ["generation", projectId] });
         // The error event may precede cleanup/terminal commit. Read durable
         // history after that commit so the failure card also appears live.
-        refreshTerminalHistory(event.data.message_id);
-        fireQueued();
+        refreshTerminalHistory(event.data.message_id, true);
       }
     },
-    [qc, projectId, fireQueued, updateMessage, refreshTerminalHistory],
+    [qc, projectId, updateMessage, refreshTerminalHistory, cancelPending],
   );
 
   // Silence watchdog: fires `onSilence` if the message gets no update for
@@ -643,7 +714,8 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       const stillStreaming = () => {
         const data = qc.getQueryData<Message[]>(["messages", projectId]);
         const m = data?.find((x) => x.id === messageId);
-        return !!m && m.tokens_out === null;
+        return m ? m.tokens_out === null : streamingRef.current &&
+          activeGenerationMessageRef.current?.messageId === messageId;
       };
       const cleanup = () => {
         window.clearTimeout(timer);
@@ -696,6 +768,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           if (m && m.tokens_out !== null && m.tokens_out !== undefined) {
             streamingRef.current = false;
             cleanup();
+            if (pendingRef.current?.phase === "waiting") refreshTerminalHistory(messageId, true);
           } else if (m) {
             arm();
           }
@@ -703,7 +776,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       });
       return cleanup;
     },
-    [qc, projectId],
+    [qc, projectId, refreshTerminalHistory],
   );
 
   // Opens the real WS and wires bounded auto-reconnect: an unexpected drop
@@ -711,6 +784,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   // the server replays the buffer via stream.sync on each (re)connect. Used by
   // submit (new prompt) and the reconnect effect (page refresh mid-build).
   const connect = useCallback(() => {
+    const signal = lifetimeRef.current?.signal;
     const ctl = openRealStream(projectId, apply, {
       runId: activeGenerationRunRef.current,
       afterSeq: activeGenerationRunRef.current
@@ -727,7 +801,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         reconnectAttemptsRef.current += 1;
         window.setTimeout(
           () => {
-            if (streamingRef.current) connectRef.current();
+            if (!signal?.aborted && streamingRef.current) connectRef.current();
           },
           Math.min(1000 * reconnectAttemptsRef.current, 5000),
         );
@@ -747,8 +821,11 @@ export function usePromptStream(projectId: string, projectSlug: string) {
 
   const recoverSilentStream = useCallback(
     async (messageId: string): Promise<boolean> => {
+      const signal = lifetimeRef.current?.signal;
+      const stillCurrent = () => !signal?.aborted && activeGenerationMessageRef.current?.messageId === messageId;
       try {
         const generation = await getLatestGeneration(projectId);
+        if (!stillCurrent()) return false;
         qc.invalidateQueries({ queryKey: ["generation", projectId] });
         qc.invalidateQueries({ queryKey: ["messages", projectId] });
 
@@ -785,8 +862,10 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         cancelRef.current = null;
         sendRef.current = null;
         qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
+        finishWaitingQueue(generation, messageId);
         return false;
       } catch {
+        if (!stillCurrent()) return false;
         // If even the status endpoint is temporarily unreachable, reconnect the
         // WebSocket and keep watching. Absence of a probe response is never proof
         // that the generation failed.
@@ -798,7 +877,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         return true;
       }
     },
-    [connect, projectId, qc],
+    [connect, projectId, qc, finishWaitingQueue],
   );
 
   const submit = useCallback(
@@ -808,6 +887,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       selections?: SelectedElement[],
       opts?: PromptSubmitOptions,
     ) => {
+      const signal = lifetimeRef.current?.signal;
       const submitSignature = JSON.stringify({
         promptText,
         modelId,
@@ -819,8 +899,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       // Выделения переносим вместе с текстом, чтобы отложенный промпт сохранил контекст.
       if (streamingRef.current) {
         if (activeSubmitSignatureRef.current === submitSignature) {
-          // For adaptation only the accepted POST may clear its attachment.
-          return !opts?.restorationAdaptation && !hasAttachments;
+          return false;
         }
         if (opts?.restorationAdaptation) {
           // Its historical source is bound to the reviewed HEAD. A volatile
@@ -828,17 +907,26 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           toast.info("Дождитесь текущей генерации и снова отправьте запрос на адаптацию.");
           return false;
         }
-        pendingRef.current?.resolve?.(false);
-        if (hasAttachments) {
-          setPendingPrompt(promptText);
-          return new Promise<boolean>((resolve) => { pendingRef.current = { text: promptText, modelId, selections, opts, resolve }; });
-        }
-        pendingRef.current = { text: promptText, modelId, selections, opts };
-        setPendingPrompt(promptText);
-        return true;
+        const previous = pendingRef.current;
+        const queued: QueuedPrompt = { text: promptText, modelId, selections, phase: "waiting",
+          opts: { ...opts, idempotencyKey: opts?.idempotencyKey ?? crypto.randomUUID() } };
+        const enqueue = (resolve?: QueuedPrompt["resolve"]) => {
+          if (!updatePending({ ...queued, resolve }, true)) {
+            toast.error("Не удалось сохранить запрос в очереди", {
+              description: "Дождитесь завершения текущей генерации и отправьте черновик ещё раз.",
+            });
+            return false;
+          }
+          previous?.resolve?.(false);
+          return true;
+        };
+        if (hasAttachments) return new Promise<boolean>((resolve) => { if (!enqueue(resolve)) resolve(false); });
+        return enqueue();
       }
       streamingRef.current = true;
       activeSubmitSignatureRef.current = submitSignature;
+      activeGenerationRunRef.current = null;
+      activeGenerationMessageRef.current = null;
 
       // OPTIMISTIC INSERT — show user's prompt and an empty assistant placeholder
       // in the chat INSTANTLY, before the HTTP POST round-trip completes. Without
@@ -890,7 +978,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       // no acceptance receipt arrived; it does not decide the state of an
       // earlier request. Stream silence is reconciled against durable generation
       // state below and must never manufacture a terminal error.
-      const _failPrompt = (reason: string, drainQueued = true) => {
+      const failPrompt = (reason: string) => {
         updateMessage(tempAssistantId, (m) => ({
           ...m,
           content: `[Ошибка: ${reason}]`,
@@ -911,18 +999,23 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           description: reason,
           duration: 10_000,
         });
-        if (drainQueued) fireQueued();
+        const p = pendingRef.current;
+        if (p?.phase === "waiting") updatePending({ ...p, phase: "retry" });
       };
 
       let message_id: string;
+      let admission: Promise<PromptResponse> | undefined;
       try {
-        const resp = await sendPrompt(
+        admission = sendPrompt(
           projectId,
           promptText,
           modelId,
           selections,
           opts,
         );
+        admissionRef.current = admission;
+        const resp = await admission;
+        if (signal?.aborted) return false;
         refreshOwnerAfterAcceptedPrompt(qc);
         // Only an accepted replacement supersedes generation notices. A rejected
         // POST or a replay of the same failed message must retain its notice.
@@ -964,6 +1057,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
               ? "Показываю уже готовую сборку"
               : "Предыдущая сборка уже завершена",
           );
+          fireQueued();
           return true;
         }
         // Record how the server will handle this turn ("edit" = surgical, keep
@@ -1000,23 +1094,23 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           qc.setQueryData(["onboarding-survey", projectId], resp.survey);
         }
       } catch (e) {
+        if (signal?.aborted) return false;
         if (e instanceof ApiError && e.status === 404 && e.code === "reference_images_expired" && opts?.referenceImages?.length) {
-          _failPrompt("Срок хранения неотправленных изображений истёк. Загрузите их повторно и отправьте запрос ещё раз.", false);
+          failPrompt("Срок хранения неотправленных изображений истёк. Загрузите их повторно и отправьте запрос ещё раз.");
           opts.onReferenceImagesExpired?.();
           return false;
         }
         if (isFreeChatRefusal(e)) {
           void qc.invalidateQueries({ queryKey: OWNER_PROFILE_QUERY_KEY });
-          _failPrompt(describeApiError(e), false);
+          failPrompt(describeApiError(e));
           return false;
         }
         if (e instanceof ApiError && e.status === 401) {
           // This POST was not accepted. Keep the caller's draft (false below)
           // and the visible queued text; login/manual retry must precede any
           // further submit. Status takes precedence over an arbitrary error code.
-          _failPrompt(
+          failPrompt(
             "Сессия завершилась. Войдите в аккаунт снова и отправьте запрос ещё раз.",
-            false,
           );
           return false;
         }
@@ -1050,7 +1144,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           // reaches the socket before the run row flips): a terminal event, or a
           // queued submit it released, already owns the state — leave it alone.
           if (
-            !streamingRef.current ||
+            signal?.aborted || !streamingRef.current ||
             activeSubmitSignatureRef.current !== submitSignature
           ) {
             return false;
@@ -1065,13 +1159,17 @@ export function usePromptStream(projectId: string, projectSlug: string) {
             const refusedFor = e.details?.active_message_id;
             const watched =
               canonicalMessageId ?? (typeof refusedFor === "string" ? refusedFor : null);
+            const runId = generation?.id ?? e.details?.active_run_id;
+            if (typeof runId === "string") activeGenerationRunRef.current = runId;
+            if (generation) qc.setQueryData(["generation", projectId], generation);
             if (watched) {
               watchMessage(watched, () => recoverSilentStream(watched));
             }
             toast.info("Генерация уже запущена", {
               description: "Показываю текущую сборку — повтор не отправлен.",
             });
-            return !hasAttachments;
+            activeSubmitSignatureRef.current = null;
+            return false;
           }
           // The run ended between the refusal and the probe: nothing streams, so
           // the composer must not stay in streaming mode.
@@ -1082,23 +1180,22 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           toast.info("Предыдущая сборка только что завершилась", {
             description: "Отправьте запрос ещё раз.",
           });
-          fireQueued();
+          const p = pendingRef.current;
+          if (p?.phase === "waiting") updatePending({ ...p, phase: "retry" });
           return false;
         }
-        // sendPrompt failed BEFORE the backend even spawned _process_prompt
-        // — network error, 4xx (wallet_empty, not_found), 5xx, timeout.
-        // Surface to user; placeholder turns into an explicit error row.
+        // A lost response leaves acceptance unresolved. Preserve the caller's
+        // identity and pause any other queued prompt for explicit retry.
         const errMsg =
           e instanceof ApiError && e.code === "conflict" && opts?.restorationAdaptation
             ? "Не удалось начать адаптацию версии. Откройте историю версий и заново выберите проверенную версию."
             : e instanceof ApiError && Object.hasOwn(PROMPT_REFUSALS, e.code)
             ? PROMPT_REFUSALS[e.code]
             : "Не удалось отправить запрос. Проверьте соединение и попробуйте ещё раз.";
-        // This refusal does not identify a run to follow. Keep queued text for an
-        // explicit user action rather than submitting another request into the
-        // same contention. Caller-supplied idempotency keys remain unchanged.
-        _failPrompt(errMsg, !(e instanceof ApiError && e.code === "project_busy"));
+        failPrompt(errMsg);
         return false;
+      } finally {
+        if (admissionRef.current === admission) admissionRef.current = null;
       }
 
       // Swap the optimistic assistant row for the real id (so incoming
@@ -1139,6 +1236,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       watchMessage,
       recoverSilentStream,
       fireQueued,
+      updatePending,
       updateMessage,
     ],
   );
@@ -1149,6 +1247,40 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     submitRef.current = submit;
   }, [submit]);
 
+  useEffect(() => {
+    if (!queueKey) return;
+    let current = true;
+    const restore = async () => {
+      const saved = readQueuedPrompt(queueKey);
+      if (!current || pendingRef.current) return;
+      pendingRef.current = saved;
+      setPending(saved);
+      if (saved?.phase !== "waiting") return;
+      try {
+        const generation = await getLatestGeneration(projectId);
+        if (!current || pendingRef.current !== saved || streamingRef.current) return;
+        if (generation && generation.project_id !== projectId) return;
+        if (!isGenerationActive(generation)) {
+          if (generation?.status === "cancelled") cancelPending();
+          else fireQueued();
+          return;
+        }
+        if (!generation?.assistant_message_id) {
+          updatePending({ ...saved, phase: "retry" });
+          return;
+        }
+        streamingRef.current = true;
+        activeGenerationRunRef.current = generation.id;
+        watchMessage(generation.assistant_message_id, () => recoverSilentStream(generation.assistant_message_id!));
+        connect();
+      } catch {
+        if (current && pendingRef.current === saved && !streamingRef.current) updatePending({ ...saved, phase: "retry" });
+      }
+    };
+    void Promise.resolve().then(restore);
+    return () => { current = false; };
+  }, [queueKey, projectId, connect, recoverSilentStream, watchMessage, cancelPending, fireQueued, updatePending]);
+
   // Reconnect to an in-flight generation we did NOT start in this mount — i.e.
   // the page was refreshed mid-build. THE fix for "F5 → realtime freezes": the
   // old code only opened the WS inside submit(), so after reload nobody listened
@@ -1157,6 +1289,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   // buffer via stream.sync. Guarded so it never double-connects.
   useEffect(() => {
     if (USE_MOCKS) return;
+    let current = true;
     const maybeReconnect = () => {
       if (cancelRef.current) return; // already have a socket
       if (streamingRef.current) return; // submit owns the active stream
@@ -1173,6 +1306,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         reconnectProbeRef.current = true;
         void getLatestGeneration(projectId)
           .then((generation) => {
+            if (!current || streamingRef.current) return;
             if (!isActiveGenerationForMessage(generation, last.id)) {
               refreshOwnerAllowances(qc);
               terminalGenerationMessagesRef.current.add(last.id);
@@ -1189,6 +1323,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
             watchMessage(last.id, () => recoverSilentStream(last.id));
           })
           .catch(() => {
+            if (!current || streamingRef.current) return;
             // The status probe may be the broken transport. Reattaching the
             // project socket is safe and cannot create a generation.
             streamingRef.current = true;
@@ -1197,7 +1332,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
             watchMessage(last.id, () => recoverSilentStream(last.id));
           })
           .finally(() => {
-            reconnectProbeRef.current = false;
+            if (current) reconnectProbeRef.current = false;
           });
       }
     };
@@ -1211,16 +1346,17 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         maybeReconnect();
       }
     });
-    return unsub;
+    return () => { current = false; reconnectProbeRef.current = false; unsub(); };
   }, [projectId, qc, connect, watchMessage, recoverSilentStream]);
 
-  const cancel = useCallback(async () => {
+  const stopAcceptedGeneration = useCallback(async (runId: string, signal?: AbortSignal) => {
     // 1) Сначала просим backend остановить durable run. WS закрываем только
     // после подтверждения, иначе старая кнопка «Стоп» снова станет визуальной.
     let generation: GenerationRun | null;
     try {
-      generation = await cancelGeneration(projectId);
+      generation = await cancelGeneration(projectId, runId);
     } catch (e) {
+      if (signal?.aborted) return;
       // A terminal run can win the race between the click and the endpoint.
       // In that case there is nothing left to cancel and local cleanup is safe.
       if (!(e instanceof ApiError && e.code === "conflict")) {
@@ -1238,14 +1374,13 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       }
     }
 
-    pendingRef.current?.resolve?.(false);
-    pendingRef.current = null;
-    setPendingPrompt(null);
-    if (!generation) {
+    if (signal?.aborted) return;
+    if (!generation || generation.project_id !== projectId || generation.id !== runId || activeGenerationRunRef.current !== runId) {
       void qc.invalidateQueries({ queryKey: ["messages", projectId] });
       void qc.invalidateQueries({ queryKey: ["generation", projectId] });
       return;
     }
+    cancelPending();
     const messageId = generation.assistant_message_id;
     const observedStatus = qc.getQueryData<Message[]>(["messages", projectId])
       ?.find((m) => m.id === messageId)?.generation_status;
@@ -1302,13 +1437,40 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       });
     }
 
-  }, [qc, projectId, updateMessage, refreshTerminalHistory]);
+  }, [qc, projectId, updateMessage, refreshTerminalHistory, cancelPending]);
 
-  const cancelPending = useCallback(() => {
-    pendingRef.current?.resolve?.(false);
-    pendingRef.current = null;
-    setPendingPrompt(null);
-  }, []);
+  const cancel = useCallback(async () => {
+    if (stoppingRef.current) return;
+    const signal = lifetimeRef.current?.signal;
+    stoppingRef.current = true;
+    try {
+      // Stop may be clicked while the optimistic reply is visible. A project-
+      // wide cancel at that point can miss this POST or stop a different run.
+      const admission = admissionRef.current;
+      let runId = activeGenerationRunRef.current;
+      if (admission) {
+        try {
+          const receipt = await admission;
+          runId = receipt.run_id;
+          if (receipt.run_status && ["completed", "failed", "cancelled"].includes(receipt.run_status)) return;
+        } catch {
+          if (!signal?.aborted) toast.info("Не удалось подтвердить запуск для остановки", {
+            description: "Дождитесь обновления статуса генерации и попробуйте остановить её снова.",
+          });
+          return;
+        }
+      }
+      if (!runId || signal?.aborted || activeGenerationRunRef.current !== runId) return;
+      await stopAcceptedGeneration(runId, signal);
+    } finally {
+      if (!signal?.aborted) {
+        stoppingRef.current = false;
+        if (!streamingRef.current) fireQueued();
+      }
+    }
+  }, [fireQueued, stopAcceptedGeneration]);
 
-  return { submit, cancel, cancelPending, pendingPrompt };
+  return { submit, cancel, cancelPending, retryPending, restoreExpiredPending,
+    pendingPrompt: pending?.phase === "sending" ? null : pending?.text ?? null,
+    pendingPhase: pending?.phase };
 }

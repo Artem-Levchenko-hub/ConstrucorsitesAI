@@ -118,7 +118,68 @@ async def _await_owned_dispatch(
                 await monitor
 
 
-async def _fail_orphan(run_id: UUID, message: str) -> None:
+async def _verification_interrupted(session: AsyncSession, run: GenerationRun) -> bool:
+    """Use the archived, built draft to identify an unfinished verification."""
+    from yleum_api.models.project_cell import (
+        ProjectCellActivityLease,
+        ProjectCellProof,
+        ProjectCellProofResult,
+    )
+    from yleum_api.services.generation_metrics import GenerationPhase
+
+    state = run.agent_state if isinstance(run.agent_state, dict) else {}
+    finalization = state.get("max_finalization")
+    draft = state.get("source_checkpoint")
+    if not isinstance(finalization, dict) or not isinstance(draft, dict):
+        return False
+    checkpoint = finalization.get("checkpoint")
+    phase = GenerationPhase.RUNTIME_PROBE.value
+    if (
+        not isinstance(checkpoint, dict)
+        or checkpoint.get("generation_run_id") != str(run.id)
+        or checkpoint.get("phase") != phase or finalization.get("current_phase") != phase
+        or not isinstance(checkpoint.get("proof_key"), str)
+        or checkpoint["proof_key"] != draft.get("verification_proof_key")
+    ):
+        return False
+    try:
+        workspace_id = UUID(checkpoint["workspace_id"])
+        operation_id = UUID(checkpoint["operation_id"])
+    except (KeyError, ValueError, TypeError, AttributeError):
+        return False
+    proof = ProjectCellProof
+    workspace = ProjectCellWorkspace
+    activity = ProjectCellActivityLease
+    rejected = exists().where(
+        ProjectCellProofResult.proof_id == proof.id,
+        ProjectCellProofResult.dimension.in_(("runtime", "release")),
+        ProjectCellProofResult.outcome == "red",
+    )
+    # This only classifies the failure. Releasing or retrying a live lease
+    # needs its own controller evidence.
+    return bool(await session.scalar(
+        select(proof.id)
+        .join(workspace, workspace.id == proof.workspace_id)
+        .outerjoin(activity, activity.operation_id == operation_id)
+        .where(
+            proof.workspace_id == workspace_id, proof.generation_run_id == run.id,
+            proof.proof_key == checkpoint["proof_key"],
+            workspace.project_id == run.project_id, workspace.owner_id == run.user_id,
+            workspace.generation_run_id == run.id, workspace.deleted_at.is_(None),
+            workspace.fencing_epoch == proof.fencing_epoch,
+            or_(activity.operation_id.is_(None), and_(
+                activity.workspace_id == proof.workspace_id, activity.generation_run_id == run.id,
+                activity.fencing_epoch == proof.fencing_epoch,
+                activity.proof_key == proof.proof_key,
+                activity.kind == "tool", activity.phase == phase,
+            )),
+            ~rejected,
+        )
+        .limit(1)
+    ))
+
+
+async def _fail_orphan(run_id: UUID, message: str, *, interrupted_dispatch: bool = False) -> None:
     from yleum_api.services.generation.recovery_execution import has_recovery_state
     from yleum_api.services.generation.supervisor import _emergency_error
 
@@ -137,6 +198,13 @@ async def _fail_orphan(run_id: UUID, message: str) -> None:
         if cancelled:
             await apply_cancelled_generation_locked(session, run)
         else:
+            if interrupted_dispatch and await _verification_interrupted(session, run):
+                from yleum_api.services.generation_metrics import GenerationPhase
+                from yleum_api.services.max_finalization import MaxVerificationUnavailable
+
+                message = str(MaxVerificationUnavailable(
+                    GenerationPhase.RUNTIME_PROBE, "worker stopped during pending verification",
+                ))
             await terminalize_generation_run_locked(
                 session,
                 run,
@@ -295,6 +363,7 @@ async def execute_dispatch(run_id: UUID) -> bool:
                         run_id,
                         "Generation executor stopped before completion; "
                         "unknown effects were not replayed",
+                        interrupted_dispatch=True,
                     )
                     return False
             assert dispatch is not None

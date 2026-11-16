@@ -319,7 +319,7 @@ def _http_failure_details(
     if category is not None:
         details["provider_refusal_category"] = category
     inflight = inflight_budget.retry_candidate(response, provider_scope=provider_scope)
-    candidate = inflight or refusal_retry_candidate(response)
+    candidate = inflight or (refusal_retry_candidate(response) if provider_scope == "llmgw" else None)
     if candidate is not None:
         details["provider_charge_ambiguous"] = False
         details["_rate_limit_retry_candidate"] = candidate
@@ -820,12 +820,15 @@ async def acompletion(
             upstream_http_status=evidence.get("upstream_http_status"),
         )) from exc
     except native_stream.StreamReceiptError as exc:
+        details = failure_details(
+            evidence, receipt_failure=exc.reason, transport_stage=evidence.get("transport_stage"),
+            upstream_http_status=evidence.get("upstream_http_status"),
+        )
+        stream_outcome = native_stream.stream_outcome_diagnostics(evidence, provider_scope=provider_scope)
+        if stream_outcome:
+            details.update(stream_outcome, retry_safe=False)
         raise UpstreamProviderError(
-            "llmgw response receipt incomplete",
-            details=failure_details(evidence,
-                receipt_failure=exc.reason,
-                transport_stage=evidence.get("transport_stage"),
-                upstream_http_status=evidence.get("upstream_http_status")),
+            "llmgw response receipt incomplete", details=details,
         ) from exc
 
     if provider_scope == "aitunnel" and isinstance(data.get("usage"), dict):

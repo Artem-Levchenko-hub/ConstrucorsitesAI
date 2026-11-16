@@ -666,8 +666,10 @@ class PromptAcceptance:
             appify_enabled=self.settings.use_followup_appification,
         )
         self.orchestrate = (
-            (intent == ORCHESTRATE or bool(self.font_selections or self.resolved_fonts))
-            and not self.credential_redirect and not self.explain_failed_build
+            not self.selected_dump
+            and not self.credential_redirect
+            and not self.explain_failed_build
+            and (intent == ORCHESTRATE or bool(self.font_selections or self.resolved_fonts))
         )
 
         # Kimi must come from the persisted pilot admission. A generic admin

@@ -70,6 +70,13 @@ it("keeps scenario defaults while respecting an explicit opt-out of orders or bo
   expect(newProjectManagementModules("catalog", ["catalog", "leads"])).toEqual(["catalog", "leads"]);
   expect(newProjectManagementModules("booking", ["catalog", "leads"])).toEqual(["catalog", "leads"]);
 });
+
+it("lets a new informational application explicitly opt out of catalog and requests", () => {
+  expect(newProjectManagementModules("custom", [], undefined, ["catalog", "leads"])).toEqual([]);
+  expect(newProjectManagementModules("booking", [], undefined, ["catalog"])).toEqual(["leads"]);
+  expect(maxBrief.briefManagementModuleOptOuts("Справочная страница без заявок и каталога.")).toEqual(["catalog", "leads"]);
+  expect(maxBrief.briefManagementModuleOptOuts("Покажи заявки и каталог.")).toEqual([]);
+});
 it("rejects an oversized brief instead of sending a partial request", () => {
   expect(() => buildMaxProjectPrompt({ ...longBrief, idea: "я".repeat(20_001) })).toThrow();
 });

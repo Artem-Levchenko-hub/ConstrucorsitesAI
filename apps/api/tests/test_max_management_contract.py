@@ -109,6 +109,13 @@ def test_modules_are_normalized_without_mutating_caller_and_empty_is_valid():
     assert service().build_management_contract(["catalog"]).resources == []
 
 
+def test_new_project_module_defaults_yield_to_explicit_opt_outs():
+    configure = service().new_project_management_modules
+    assert configure("catalog", []) == ["catalog", "orders", "leads"]
+    assert configure("catalog", [], excluded=["leads"]) == ["catalog", "orders"]
+    assert configure("booking", [], excluded=["catalog", "leads"]) == []
+
+
 @pytest.mark.parametrize("mutation", [
     "hash", "extra", "protocol_bool", "protocol_float", "resource", "field", "field_order",
     "modules", "action", "transition",

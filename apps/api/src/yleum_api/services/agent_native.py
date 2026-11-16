@@ -91,14 +91,17 @@ from yleum_api.services.llm_client import (
     NativeTranscriptRefusal,
     ProviderChainExhausted,
     SettledKimiOutputInvalid,
+    _dispatch_deadline_failure,
     _native_preconnect_details,
     _overload_refusal_details,
     is_durable_native_transcript_refusal,
     is_kimi_unusable_output,
     is_provider_chain_exhausted,
     rate_limit_retry_delay,
+    unconfirmed_stream_diagnostics,
 )
 from yleum_api.services.max_management_generation import ManagedSourceGap
+from yleum_api.services.portable_cell_contract import MAX_COORDINATOR_HANDOFF, is_max_stack_guide
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 from yleum_api.services.secret_safety import max_model_write_rejection
 
@@ -324,14 +327,8 @@ def _gateway_ambiguous_billing_details(
     if provider_error_context(context) != context:
         return None
     status = details.get("upstream_http_status")
-    stream = details.get("provider_stream_outcome")
-    cap = details.get("provider_output_cap_tokens")
-    if stream_fields & set(details) and (
-        context.get("provider_scope") != "aitunnel"
-        or stream not in ("error", "output_limit") or details.get("retry_safe") is not False
-        or ("provider_output_cap_tokens" in details
-            and (type(cap) is not int or not 1 <= cap <= _MAX_OBSERVED_OUTPUT_CAP))
-    ):
+    stream_context = unconfirmed_stream_diagnostics(details)
+    if stream_fields & set(details) and not stream_context:
         return None
     if "upstream_http_status" in details:
         valid_evidence = (
@@ -339,7 +336,7 @@ def _gateway_ambiguous_billing_details(
         )
     else:
         valid_evidence = (
-            stream is not None or {"provider_scope", "provider_call_id"} <= context.keys()
+            bool(stream_context) or {"provider_scope", "provider_call_id"} <= context.keys()
         )
     return details if (
         valid_evidence
@@ -397,10 +394,7 @@ class _NativeProviderBillingError(_NativeProviderServerError):
     def __init__(self, http_status: int, details: dict[str, Any]) -> None:
         super().__init__(http_status, context=details)
         self.observed_status = details.get("upstream_http_status")
-        self.stream_context = {
-            key: details[key] for key in ("provider_stream_outcome", "provider_output_cap_tokens")
-            if key in details
-        }
+        self.stream_context = unconfirmed_stream_diagnostics(details)
         self.args = (_BILLING_UNAVAILABLE_MESSAGE,)
 
     def diagnostics(self) -> dict[str, Any]:
@@ -1140,16 +1134,16 @@ def _step_detail(name: str, action: Action, obs: dict[str, Any]) -> str:
     return _cap(obs.get("detail") or obs.get("content") or "")
 
 
-_NATIVE_COMMON_PREAMBLE = (
+_NATIVE_ROLE_PREAMBLE = (
     "Ты — автономный инженер: строишь РАБОЧЕЕ приложение в этом проекте, как Claude "
     "Code. Инструменты вызывай напрямую: read_file/list_dir/grep — понять код, "
-    "write_file/edit_file — писать, build — компиляция, bash/read_logs — рантайм, "
-    "runtime_check — открыть роут в ЖИВОМ приложении, probe — реальный запрос ОТ "
-    "ИМЕНИ залогиненного юзера, verify_isolation — доказать отсутствие утечки данных "
-    "между юзерами, docs — свежая дока библиотек, provider_docs — актуальная "
-    "официальная дока подключённого провайдера. Думай сколько нужно. Цикл: пиши "
-    "код → build → чини РЕАЛЬНЫЕ ошибки до чистоты → ДОКАЖИ что работает → done. Пиши "
-    "полноценно, без заглушек и TODO.\n\n"
+    "write_file/edit_file — писать, build — проверка исходников, bash — команды "
+    "проекта, read_logs — диагностика, docs — свежая дока библиотек, "
+    "provider_docs — актуальная официальная дока подключённого провайдера. "
+    "Пиши полноценно, без заглушек и TODO.\n\n"
+)
+
+_NATIVE_DIRECT_PROOF_PREAMBLE = (
     "ДОКАЖИ перед done — чистый build это НЕ доказательство работы: "
     "(1) runtime_check главные роуты (чистый typecheck всё равно может 5xx на рендере); "
     "(2) для интерактива (создать/сохранить/отправить/удалить) — probe РЕАЛЬНЫМ запросом "
@@ -1157,6 +1151,9 @@ _NATIVE_COMMON_PREAMBLE = (
     "что POST/DELETE юзера не отдаёт 4xx); (3) для данных юзера — verify_isolation на "
     "КАЖДОМ владеемом ресурсе (green build не доказывает изоляцию). Чини до зелёного — "
     "потом done.\n\n"
+)
+
+_NATIVE_SOURCE_PREAMBLE = (
     "ВАЖНО: если build пишет `Cannot find module '@/...'` — этого пути НЕТ в проекте. "
     "НЕ создавай модуль под импорт и НЕ выдумывай SDK/engine/repository-обёртку; удали "
     "фантомный импорт и используй реальный примитив стека (см. гайд) напрямую. "
@@ -1250,8 +1247,8 @@ _NATIVE_EXECUTION_PREAMBLE = (
     "МЕНЬШЕ БАГОВ, БЫСТРЕЕ: перед нетривиальным фиксом ДУМАЙ root-cause (не патч "
     "наугад — это плодит новые баги). Не изобретай API/SDK — `docs` (Context7) даёт "
     "РЕАЛЬНУЮ текущую сигнатуру (галлюцинация API = главный источник цикла build↔fix). "
-    "Пойми минимально (read/grep) → пиши ПОЛНЫМИ файлами → build → чини реальные "
-    "ошибки → ДОКАЖИ (runtime_check/probe/verify) → done. Не крути "
+    "Пойми минимально (read/grep), затем пиши полными файлами и исправляй "
+    "конкретные ошибки по результатам проверок текущего режима. Не крути "
     "лишние read, когда контекста хватает.\n\n"
 )
 
@@ -1270,7 +1267,9 @@ _NATIVE_DONE_SUMMARY_PREAMBLE = (
 )
 
 _NATIVE_PREAMBLE = (
-    _NATIVE_COMMON_PREAMBLE
+    _NATIVE_ROLE_PREAMBLE
+    + _NATIVE_DIRECT_PROOF_PREAMBLE
+    + _NATIVE_SOURCE_PREAMBLE
     + _NATIVE_WEB_DESIGN_PREAMBLE
     + _NATIVE_WEB_MEDIA_PREAMBLE
     + _NATIVE_EXECUTION_PREAMBLE
@@ -1278,7 +1277,8 @@ _NATIVE_PREAMBLE = (
 )
 
 _MAX_NATIVE_PREAMBLE = (
-    _NATIVE_COMMON_PREAMBLE
+    _NATIVE_ROLE_PREAMBLE
+    + _NATIVE_SOURCE_PREAMBLE
     + _MAX_NATIVE_DESIGN_PREAMBLE
     + _NATIVE_EXECUTION_PREAMBLE
     + _NATIVE_DONE_SUMMARY_PREAMBLE
@@ -1304,7 +1304,7 @@ _MAX_DONE_WHEN_GREEN_NUDGE = (
 )
 
 _MAX_NATIVE_VERIFICATION_OVERRIDE = (
-    "MAX VERIFICATION OVERRIDE (takes precedence over the generic web-app rules above): "
+    "MAX VERIFICATION OVERRIDE: "
     "MAX uses signed initData and an authenticated preview session. The generic probe and "
     "verify_isolation tools currently authenticate as a normal web user and cannot "
     "prove this runtime. Do NOT call or retry probe/verify_isolation in a MAX build. Finish "
@@ -1312,27 +1312,20 @@ _MAX_NATIVE_VERIFICATION_OVERRIDE = (
     "write; the executor supplies a signed MAX preview session. Fix concrete runtime "
     "failures, rerun build/runtime_check after a source change, then call done."
 )
-_MAX_COORDINATOR_HANDOFF = (
-    "COORDINATOR HANDOFF (overrides all earlier build/runtime instructions): "
-    "Implement the full requested source, data schema and tests. The build tool runs "
-    "bootstrap and fast checks only. Fix its errors, then call done when the source "
-    "is complete. Do not call runtime_check or wait for a running preview: production "
-    "build, signed runtime proof and release happen only after your handoff. "
-    "Do not claim the product is released; the coordinator decides final success."
-)
 
 
-def native_system_prompt(stack_guide: str, skills: str | None = None) -> str:
+def native_system_prompt(
+    stack_guide: str, skills: str | None = None, *, coordinator_handoff: bool = False,
+) -> str:
     """Native-tools system prompt: a short tool-loop preamble + the stack guide (+
     skills). Deliberately DROPS the text-``<omnia:action>`` LOOP_PROTOCOL — the tool
     schemas ARE the protocol now, so keeping it would only confuse a native model."""
     guide = (stack_guide or "").strip()
-    is_max_prompt = "MAX PLATFORM CORE CONTRACT" in guide
+    is_max_prompt = coordinator_handoff or is_max_stack_guide(guide)
     parts = [_MAX_NATIVE_PREAMBLE if is_max_prompt else _NATIVE_PREAMBLE, guide]
     if skills and skills.strip():
         parts.append(skills.strip())
     if is_max_prompt:
-        parts.append(_MAX_NATIVE_VERIFICATION_OVERRIDE)
         parts.append(
             "MAX UI 0.2.0: Typography is a namespace, not a JSX component. "
             "Never render <Typography>. Inspect the installed public exports/types "
@@ -1342,6 +1335,9 @@ def native_system_prompt(stack_guide: str, skills: str | None = None) -> str:
             "Before a database command, check package.json and available binaries; "
             "do not assume psql or the pg package is installed. Reuse the installed "
             "database driver and the project's documented migration command."
+        )
+        parts.append(
+            MAX_COORDINATOR_HANDOFF if coordinator_handoff else _MAX_NATIVE_VERIFICATION_OVERRIDE
         )
     return "\n\n".join(p for p in parts if p)
 
@@ -1611,6 +1607,10 @@ async def _call_messages(
                                 f"{code.upper()}: "
                                 "ответ модели не принят; автоматический повтор остановлен."
                             )
+            if r.status_code == 504:
+                deadline_failure = _dispatch_deadline_failure(_gateway_native_error(r, url))
+                if deadline_failure is not None:
+                    raise deadline_failure
             upstream_server_status = _gateway_ambiguous_server_status(r, url)
             if upstream_server_status is not None:
                 server_error = _gateway_native_error(r, url)
@@ -1756,6 +1756,9 @@ async def _call_messages(
         wait_budget = retry_window - (loop.time() - started_at)
         if edit_deadline is not None:
             wait_budget = min(wait_budget, (edit_deadline - datetime.now(UTC)).total_seconds())
+        durable_remaining = provider_dispatch_remaining()
+        if durable_remaining is not None:
+            wait_budget = min(wait_budget, durable_remaining)
         if delay >= wait_budget:
             break
         await asyncio.sleep(delay)
@@ -1784,6 +1787,7 @@ async def _run_native_segment(
     max_steps: int = 24,
     allow_max_bash: bool = False,
     portable_cell: bool = False,
+    coordinator_handoff: bool | None = None,
     messages_url: str | None = None,
     messages_headers: Mapping[str, str] | None = None,
     messages_auth_factory: NativeMessagesAuthFactory | None = None,
@@ -1858,10 +1862,15 @@ async def _run_native_segment(
     transcript_recovery_used = False
 
     effective_max_steps = min(_HARD_MAX_STEPS, max(1, int(max_steps)))
-    max_runtime = "MAX VERIFICATION OVERRIDE" in system
-    coordinated_max = max_runtime and portable_cell and settings.use_max_finalization_coordinator
-    if coordinated_max:
-        system += "\n\n" + _MAX_COORDINATOR_HANDOFF
+    max_runtime = (
+        MAX_COORDINATOR_HANDOFF in system or "MAX VERIFICATION OVERRIDE" in system
+    )
+    coordinated_max = max_runtime and portable_cell and (
+        settings.use_max_finalization_coordinator
+        if coordinator_handoff is None else coordinator_handoff
+    )
+    if coordinated_max and MAX_COORDINATOR_HANDOFF not in system:
+        system += "\n\n" + MAX_COORDINATOR_HANDOFF
     managed_build_gap: ManagedSourceGap | None = None
     reported_managed_rejection = prior_managed_rejection
 
@@ -2639,6 +2648,21 @@ async def _run_native_segment(
                 if marker is not None:
                     safe_reason = f"{marker.group(1)}: {failure_for_error(exc).message}"
                 reason_code = safe_reason.partition(":")[0].lower()
+                if isinstance(exc, _NativeProviderServerError):
+                    diagnostic = exc.diagnostics()
+                elif isinstance(exc, LLMError) and exc.code == "deadline_before_dispatch":
+                    reason_code = exc.code
+                    safe_reason = f"generation deadline exceeded before provider dispatch: {exc}"
+                    diagnostic = {
+                        "tool": "provider_request", "kind": "provider_error",
+                        "http_status": exc.http_status,
+                        "error_origin": "gateway", "error_code": exc.code,
+                        "provider_charge_ambiguous": False, "retry_safe": False,
+                        "will_retry": False, "retry_decision": "stop",
+                        **provider_error_context(exc),
+                    }
+                else:
+                    diagnostic = None
                 if str(exc).startswith("PROVIDER_TIMEOUT:"):
                     reason_code = "provider_timeout"
                     safe_reason = (
@@ -2653,9 +2677,9 @@ async def _run_native_segment(
                     message_id=str(message_id) if message_id else None,
                     stage=call_stage,
                 )
-                if emit and isinstance(exc, _NativeProviderServerError):
+                if emit and diagnostic is not None:
                     try:
-                        await emit("agent.provider_error", exc.diagnostics())
+                        await emit("agent.provider_error", diagnostic)
                     except Exception as diagnostic_error:
                         # A secondary trace failure must not replace the actual
                         # provider outcome or cause another model/tool request.
@@ -2940,7 +2964,7 @@ async def _run_native_segment(
                 elif narrow_turn and name not in recovery_tools:
                     obs = {"ok": False, "error": "Select one of the offered recovery operations."}
                 elif coordinated_max and name == "runtime_check":
-                    obs = {"ok": False, "error": _MAX_COORDINATOR_HANDOFF}
+                    obs = {"ok": False, "error": MAX_COORDINATOR_HANDOFF}
                 elif _max_entry_required and not (
                     name in {"write_file", "edit_file"}
                     and _normalize_agent_path(action.path) == _MAX_PRODUCT_ENTRY_PATH
@@ -3245,7 +3269,7 @@ async def _run_native_segment(
                                 _MAX_PREWRITE_LOCK_RESULT
                                 if max_entry_write_required
                                 else (
-                                    _MAX_COORDINATOR_HANDOFF
+                                    MAX_COORDINATOR_HANDOFF
                                     if coordinated_max
                                     else _MAX_DONE_WHEN_GREEN_NUDGE
                                     if max_runtime
@@ -3580,6 +3604,7 @@ async def run_native_build(
     max_segments: int | None = 1,
     allow_max_bash: bool = False,
     portable_cell: bool = False,
+    coordinator_handoff: bool | None = None,
     messages_url: str | None = None,
     messages_headers: Mapping[str, str] | None = None,
     messages_auth_factory: NativeMessagesAuthFactory | None = None,
@@ -3630,6 +3655,7 @@ async def run_native_build(
             max_steps=max_steps,
             allow_max_bash=allow_max_bash,
             portable_cell=portable_cell,
+            coordinator_handoff=coordinator_handoff,
             messages_url=messages_url,
             messages_headers=messages_headers,
             messages_auth_factory=messages_auth_factory,

@@ -13,7 +13,8 @@ import { useReferenceImages } from "@/hooks/useReferenceImages";
 import { useFontAttachments } from "@/hooks/useFontAttachments";
 import { FONT_LIMITS, isFontFile } from "@/lib/api/font-assets";
 import { REFERENCE_IMAGE_ACCEPT, REFERENCE_IMAGE_LIMITS } from "@/lib/api/reference-images";
-import { useInspectorStore } from "@/store/inspector";
+import { useInspectorStore, type PickedElement } from "@/store/inspector";
+import type { QueuedPromptDraft, QueuedPromptPhase } from "@/lib/studio-prompt-queue";
 import { SelectedChips } from "./SelectedChips";
 import { FontAttachmentChips, FontAttachmentPanel } from "./FontAttachments";
 
@@ -30,8 +31,11 @@ function ProjectPromptInput({
   onSubmit,
   onCancel,
   onCancelPending,
+  onRetryPending,
+  onRestoreExpiredPending,
   isStreaming,
   pendingPrompt,
+  pendingPhase,
   className,
   textareaRef,
   placeholder,
@@ -47,12 +51,16 @@ function ProjectPromptInput({
   onSubmit: (
     text: string,
     selections: SelectedElement[],
-    references?: PromptReferenceSubmit,
+    submission: PromptReferenceSubmit,
+    replay: boolean,
   ) => PromptInputSubmitResult | Promise<PromptInputSubmitResult>;
   onCancel: () => void;
   onCancelPending: () => void;
+  onRetryPending?: () => void;
+  onRestoreExpiredPending?: () => QueuedPromptDraft | null;
   isStreaming: boolean;
   pendingPrompt: string | null;
+  pendingPhase?: QueuedPromptPhase;
   className?: string;
   placeholder?: string;
   ariaLabel?: string;
@@ -82,7 +90,7 @@ function ProjectPromptInput({
   const [fontPanelOpen, setFontPanelOpen] = useState(false);
   const fontPanelId = useId();
   const submissionEpoch = useRef(0);
-  const retryIdentity = useRef<{ signature: string; key: string } | null>(null);
+  const [retryIdentity, setRetryIdentity] = useState<{ signature: string; key: string } | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const attachmentsBlocked = references.busy || fonts.busy
     || references.items.some(item => !item.image) || fonts.items.some(item => !item.asset);
@@ -132,11 +140,8 @@ function ProjectPromptInput({
     el.style.height = `${Math.min(el.scrollHeight, compact ? 144 : 200)}px`;
   }, [value, ref, compact]);
 
-  const send = useCallback(async () => {
-    if (sendLockRef.current || sendDisabled || attachmentsBlocked) return;
+  const prepareDraft = useCallback((picks: PickedElement[]) => {
     const text = value.trim();
-    // Fresh from the store — the global Ctrl+Enter handler can be a stale closure.
-    const picks = useInspectorStore.getState().selections;
     const wire: SelectedElement[] = picks.map(({ id: _id, ...rest }) => rest);
     // Allow sending with only picks: the per-element comments carry the intent,
     // so synthesize a prompt (backend requires non-empty text + reads naturally).
@@ -147,37 +152,61 @@ function ProjectPromptInput({
         : fonts.items.length
           ? references.items.length ? "Примени приложенные шрифты и используй изображения как визуальный референс приложения." : "Примени приложенные шрифты к приложению."
           : references.items.length ? "Используй прикреплённые изображения как визуальный референс для приложения." : "");
-    if (!finalText) return;
+    const images = references.items.flatMap((item) => item.image ? [item.image] : []);
+    const fontSelections = fonts.items.flatMap(item => item.asset ? [{ ...item.asset, role: item.role }] : []);
+    const signature = JSON.stringify([finalText, wire, images.map((image) => image.id), fontSelections.map(font => [font.id, font.role])]);
+    return { text: finalText, wire, images, fontSelections, signature };
+  }, [value, references.items, fonts.items]);
+
+  const currentDraft = prepareDraft(selections);
+  const restoreExpired = () => {
+    if (currentDraft.text || sendLockRef.current) return;
+    const draft = onRestoreExpiredPending?.();
+    if (!draft) return;
+    setValue(draft.text);
+    setRetryIdentity(null);
+    fonts.restore(draft.fontSelections);
+    for (const selection of draft.selections) {
+      useInspectorStore.getState().addSelection({ ...selection, id: crypto.randomUUID() });
+    }
+    setSubmitError("Срок хранения изображений истёк. Прикрепите их снова перед отправкой.");
+    ref.current?.focus();
+  };
+  const quotaBlocksDraft = sendDisabled && retryIdentity?.signature !== currentDraft.signature;
+  const send = useCallback(async () => {
+    if (sendLockRef.current || attachmentsBlocked) return;
+    // Read fresh picks for the global shortcut as well as the send button.
+    const draft = prepareDraft(useInspectorStore.getState().selections);
+    const replay = retryIdentity?.signature === draft.signature;
+    if (!draft.text || (sendDisabled && !replay)) return;
+    const key = replay ? retryIdentity.key : crypto.randomUUID();
+    setRetryIdentity({ signature: draft.signature, key });
     sendLockRef.current = true;
     setIsSubmitting(true);
     setSubmitError(null);
     const epoch = submissionEpoch.current;
-    const images = references.items.flatMap((item) => item.image ? [item.image] : []);
-    const fontSelections = fonts.items.flatMap(item => item.asset ? [{ ...item.asset, role: item.role }] : []);
-    const signature = JSON.stringify([finalText, wire, images.map((image) => image.id), fontSelections.map(font => [font.id, font.role])]);
-    if (retryIdentity.current?.signature !== signature) retryIdentity.current = { signature, key: crypto.randomUUID() };
     try {
-      const submitted = await onSubmit(finalText, wire, images.length || fontSelections.length ? {
-        referenceImages: images,
-        ...(fontSelections.length ? { fontSelections } : {}),
-        idempotencyKey: retryIdentity.current.key,
-      } : undefined);
+      const submitted = await onSubmit(draft.text, draft.wire, {
+        referenceImages: draft.images,
+        ...(draft.fontSelections.length ? { fontSelections: draft.fontSelections } : {}),
+        idempotencyKey: key,
+      }, replay);
       if (submissionEpoch.current !== epoch) return;
       if (submitted === true) {
         setValue("");
         clearSelections();
         references.clear();
         fonts.clear();
-        retryIdentity.current = null;
+        setRetryIdentity(null);
       } else if (submitted && submitted.reason === "reference_images_expired") {
         // Never renew IDs for timeouts/network failures: the old request may
         // already exist. This typed refusal alone permits a new identity.
-        retryIdentity.current = null;
+        setRetryIdentity(null);
         await references.reuploadExpired();
         setSubmitError("Срок хранения вложений истёк. Проверьте повторную загрузку и отправьте запрос ещё раз.");
       }
     } catch {
-      if (submissionEpoch.current === epoch) setSubmitError("Не удалось подтвердить отправку. Повторите попытку — вложения сохранены.");
+      if (submissionEpoch.current === epoch) setSubmitError("Не удалось подтвердить отправку. Черновик сохранён, повторите попытку.");
     } finally {
       if (submissionEpoch.current === epoch) setIsSubmitting(false);
       // Keep the latch through the current browser event turn. A legitimate
@@ -186,7 +215,7 @@ function ProjectPromptInput({
         if (submissionEpoch.current === epoch) sendLockRef.current = false;
       });
     }
-  }, [attachmentsBlocked, clearSelections, onSubmit, sendDisabled, value, references, fonts]);
+  }, [attachmentsBlocked, clearSelections, onSubmit, sendDisabled, prepareDraft, retryIdentity, references, fonts]);
 
   // Cmd/Ctrl+Enter from anywhere submits — даже во время стрима (отправка
   // в этом случае ставится в очередь хуком).
@@ -262,10 +291,17 @@ function ProjectPromptInput({
           >
             <div className="flex items-center gap-2 rounded-md border border-border-subtle bg-surface-raised px-2.5 py-1.5 text-xs">
               <Clock className="h-3.5 w-3.5 text-fg-tertiary shrink-0" />
-              <span className="text-fg-secondary shrink-0">В очереди:</span>
-              <span className="text-fg-primary truncate flex-1 min-w-0">
+              <span className="text-fg-secondary shrink-0">{pendingPhase === "retry" ? "Сохранён запрос:" : pendingPhase === "images_expired" ? "Изображения истекли:" : "В очереди:"}</span>
+              <span className="text-fg-primary truncate flex-1 min-w-0" title={pendingPrompt}>
                 {pendingPrompt}
               </span>
+              {pendingPhase === "retry" && onRetryPending && (
+                <button type="button" onClick={onRetryPending} className="min-h-8 underline shrink-0">Повторить отправку</button>
+              )}
+              {pendingPhase === "images_expired" && onRestoreExpiredPending && (
+                <button type="button" disabled={isSubmitting || Boolean(currentDraft.text)} onClick={restoreExpired}
+                  className="min-h-8 underline shrink-0 disabled:opacity-50">Вернуть в поле</button>
+              )}
               <button
                 type="button"
                 onClick={onCancelPending}
@@ -402,7 +438,7 @@ function ProjectPromptInput({
                 void send();
               }}
               disabled={
-                sendDisabled || isSubmitting || attachmentsBlocked || (!value.trim() && selections.length === 0 && !hasAttachments)
+                quotaBlocksDraft || isSubmitting || attachmentsBlocked || !currentDraft.text
               }
               className="h-11 gap-1.5 rounded-full px-3.5 sm:h-8"
               title={

@@ -100,13 +100,13 @@ def history():
         )
 
     def add(text, *, status="failed", mode="build", project=None, user=None, at=None,
-            references=None, fonts=None):
+            references=None, fonts=None, selected_elements=None):
         nonlocal moment
         moment += timedelta(seconds=1)
         message = Message(
             id=uuid4(), project_id=project or project_id, role="user", content=text,
             created_at=at or moment,
-            reference_images=references, font_selections=fonts,
+            reference_images=references, font_selections=fonts, selected_elements=selected_elements,
         )
         assistant = Message(
             id=uuid4(), project_id=message.project_id, role="assistant", content="",
@@ -157,7 +157,7 @@ def history():
             prompt_text=result.prompt,
             runtime=GenerationRuntime(),
             orchestrate=False,
-            selected_elements=None,
+            selected_elements=message.selected_elements,
             _is_edit=result.is_edit,
             _is_continue=result.is_continue,
             force_model="fixture-model",
@@ -258,6 +258,64 @@ async def test_retry_without_history_is_left_unchanged(history):
     current = history.add("попробуй ещё раз", status="running")
     result, _, _ = await history.classify(current)
     assert result.prompt == "попробуй ещё раз"
+
+
+@pytest.mark.parametrize(("status", "continues"), [("completed", False), ("failed", True)])
+async def test_explicit_continue_needs_an_unfinished_previous_run(history, status, continues):
+    history.add("Добавь журнал расчётов", status=status)
+    current = history.add("Продолжи", status="running", mode="edit")
+
+    result, _, _ = await history.classify(current)
+
+    assert result.is_continue is continues
+    assert result.is_edit is (not continues)
+
+
+async def test_continue_accepts_legacy_partial_run_with_persisted_card(history):
+    from yleum_api.services.app_errors import render_block
+
+    previous = history.add("Добавь журнал расчётов", status="completed")
+    assistant = history.session.get(Message, previous.assistant_message_id)
+    assistant.content = "Часть уже на месте." + render_block(
+        category="incomplete", title="Сборка не завершена",
+        detail=(
+            "Агент исчерпал лимит шагов, не закончив. Часть уже сохранена "
+            "— нажми «Продолжить», доделаю с того же места, не начиная заново."
+        ),
+        file=None, fixable=True,
+    )
+    history.session.commit()
+    current = history.add("Продолжи", status="running", mode="edit")
+
+    result, _, _ = await history.classify(current)
+
+    assert result.is_continue and not result.is_edit
+
+
+async def test_selected_element_preserves_edit_even_after_previous_failure(history):
+    history.add("Добавь журнал расчётов")
+    current = history.add(
+        "Продолжи", status="running", mode="edit", selected_elements=[{"selector": "#save"}],
+    )
+
+    result, _, _ = await history.classify(current)
+
+    assert result.is_edit and not result.is_continue
+
+
+async def test_each_selected_element_reaches_the_edit_prompt(history):
+    current = history.add(
+        "Примени шрифт к выбранным кнопкам", status="running", mode="edit",
+        selected_elements=[
+            {"selector": "#first", "html": "X" * 1900},
+            {"selector": "#second", "comment": "Only change this button's font"},
+        ],
+    )
+
+    _, model_prompt, _ = await history.classify(current)
+
+    assert "#first" in model_prompt and "#second" in model_prompt
+    assert "Only change this button's font" in model_prompt
 
 
 async def test_retry_chain_is_bounded(history):

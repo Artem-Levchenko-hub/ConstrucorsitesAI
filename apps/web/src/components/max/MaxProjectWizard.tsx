@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { MAX_APP_TYPES, MAX_BRIEF_LENGTH, MAX_FEATURES, MAX_FEATURE_INFO, MAX_MANAGEMENT_MODULES, MAX_STYLES, REQUIRED_MANAGEMENT_MODULES, defaultManagementModules, newProjectManagementModules, selectedMaxAppTypes, type MaxAppTypeId, type MaxFeature, type MaxProjectBrief } from "@/lib/max-brief";
+import { MAX_APP_TYPES, MAX_BRIEF_LENGTH, MAX_FEATURES, MAX_FEATURE_INFO, MAX_MANAGEMENT_MODULES, MAX_STYLES, briefManagementModuleOptOuts, defaultManagementModules, newProjectManagementModules, selectedMaxAppTypes, type MaxAppTypeId, type MaxFeature, type MaxProjectBrief } from "@/lib/max-brief";
 import { MaxFeaturePreview } from "./MaxFeaturePreview";
 import { MaxProjectReview } from "./MaxProjectReview";
 import "./max-studio.css";
@@ -42,7 +42,11 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
   const multipleTypes = values.appTypes !== undefined;
   const customSelected = appTypes.includes("custom");
   const showDetails = customSelected || detailsRevealed || values.idea.length > 0;
-  const managementModules = newProjectManagementModules(values.appType, values.managementModules, values.appTypes);
+  const briefOptOuts = briefManagementModuleOptOuts(values.idea);
+  const moduleOptOuts = values.managementModuleOptOuts ?? [];
+  const managementModules = newProjectManagementModules(
+    values.appType, values.managementModules, values.appTypes, [...moduleOptOuts, ...briefOptOuts],
+  );
   const length = Array.from(values.idea.trim()).length;
   const ideaTooShort = customSelected && length < 10;
   const ideaTooLong = length > MAX_BRIEF_LENGTH;
@@ -65,7 +69,9 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
     onChange({
       appType: next[0],
       appTypes: next,
-      managementModules: newProjectManagementModules(next[0], [...managementModules, ...defaults], next),
+      managementModules: newProjectManagementModules(
+        next[0], [...managementModules, ...defaults], next, moduleOptOuts,
+      ),
     });
   }
 
@@ -170,14 +176,26 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
             {step === 2 && <>
               <fieldset>
                 <legend className="text-sm font-medium">Управление в Yleum</legend>
-                <p className="max-wizard-note">Каталог и заявки включены всегда. Профиль, настройки и статистика доступны каждому приложению. Заказы и запись можно выбрать дополнительно.</p>
+                <p className="max-wizard-note">Выберите нужные модули. Для заказов и записи нужен каталог.</p>
+                {briefOptOuts.length > 0 && <p className="max-wizard-note">Исключения из описания учтены в выборе модулей.</p>}
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {MAX_MANAGEMENT_MODULES.map(module => <label key={module.id} className="max-wizard-option flex items-start gap-3">
-                    <input type="checkbox" className="mt-1 size-4" checked={managementModules.includes(module.id)} disabled={REQUIRED_MANAGEMENT_MODULES.includes(module.id)}
+                    <input type="checkbox" className="mt-1 size-4" checked={managementModules.includes(module.id)}
+                      disabled={briefOptOuts.includes(module.id) || (
+                        (module.id === "orders" || module.id === "bookings") &&
+                        !managementModules.includes("catalog")
+                      )}
                       onChange={event => {
                         const selected = new Set(managementModules);
-                        if (event.target.checked) selected.add(module.id); else selected.delete(module.id);
-                        onChange({ managementModules: newProjectManagementModules(values.appType, [...selected], values.appTypes) });
+                        const excluded = new Set(moduleOptOuts);
+                        if (event.target.checked) {
+                          selected.add(module.id);
+                          excluded.delete(module.id);
+                        } else {
+                          selected.delete(module.id);
+                          excluded.add(module.id);
+                        }
+                        onChange({ managementModules: [...selected], managementModuleOptOuts: [...excluded] });
                       }} />
                     <span><span className="block text-sm font-medium">{module.label}</span><span className="mt-1 block text-xs leading-5 text-fg-secondary">{module.description}</span></span>
                   </label>)}

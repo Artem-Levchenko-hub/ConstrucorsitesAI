@@ -36,6 +36,18 @@ def test_only_known_named_supported_contracts_are_required():
     )
 
 
+@pytest.mark.parametrize("prompt, expected", [
+    ("Не трогай светлую и тёмную тему в шапке. Измени только текст акции", ()),
+    ("Добавь светлую и тёмную тему в шапке без анимации", ("header_theme_v1",)),
+    ("Keep the header Light/Dark theme unchanged. Change only the title.", ()),
+    ("Replace the title without animations, and add a header Light/Dark theme.",
+     ("header_theme_v1",)),
+])
+def test_named_behavior_negation_only_excludes_its_own_scope(prompt, expected):
+    contract = b.required_contract(prompt, template="max_miniapp")
+    assert (contract.capabilities if contract is not None else ()) == expected
+
+
 def test_contract_exact_request_and_requirements_versions_are_bound():
     contract = b.required_contract(REQUEST, template="max_miniapp")
     assert contract.request_sha256 == hashlib.sha256(REQUEST.encode()).hexdigest()
@@ -57,6 +69,18 @@ def test_private_capability_never_serializes_even_in_dataclass_copy():
 
 def contract():
     return b.required_contract(REQUEST, template="max_miniapp")
+
+
+def previous_probe_contract(prompt=REQUEST):
+    current = b.required_contract(prompt, template="max_miniapp")
+    legacy = replace(
+        current,
+        probe_version="ac-coffee-process-browser-v4",
+        probe_sha256="248ddebd7d8624c63501d5b61bd574edbc003947d55de3ea09f81cf6d2cebc24",
+    )
+    fields = asdict(legacy)
+    fields.pop("contract_digest")
+    return replace(legacy, contract_digest=b.digest(fields))
 
 
 def binding(c=None):
@@ -353,6 +377,27 @@ def test_complete_controller_observation_binds_actual_candidate_assets_and_probe
     changed["status"] = "PARTIAL"
     with pytest.raises(b.BehaviorProofError):
         b.validate_saved_receipt(changed, bound, contract())
+
+
+async def test_saved_v4_probe_receipt_remains_valid_for_its_original_candidate():
+    legacy = previous_probe_contract()
+    bound = binding(legacy)
+    registered, _ = driver(bound)
+
+    async def observe_with_old_probe(request, witness):
+        observed = await registered.observe_browser(request, witness)
+        return replace(
+            observed, probe_version=legacy.probe_version, probe_sha256=legacy.probe_sha256,
+        )
+
+    receipt = await b.observe_candidate(
+        bound, legacy, replace(registered, observe_browser=observe_with_old_probe),
+        b.PrivatePreviewCapability(NS()),
+    )
+    restored = b.contract_from_json(legacy.to_json())
+    b.validate_saved_receipt(receipt, bound, restored)
+    with pytest.raises(b.BehaviorProofError):
+        b.validate_saved_receipt(receipt, binding(), contract())
 
 
 def test_measurements_not_driver_status_alone_determine_pass():

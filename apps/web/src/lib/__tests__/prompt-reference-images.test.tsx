@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PromptInput } from "@/components/workspace/PromptInput";
 import { ReferenceImageThumbnail } from "@/components/workspace/ReferenceImageThumbnail";
 import { sendPrompt } from "@/lib/api/messages";
+import { useInspectorStore } from "@/store/inspector";
 
 vi.mock("@/hooks/useVoiceInput", () => ({ useVoiceInput: () => ({ supported: false, state: "idle" }) }));
 vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));
@@ -17,7 +18,7 @@ beforeEach(() => {
   vi.stubGlobal("createImageBitmap", vi.fn().mockResolvedValue({ width: 100, height: 100, close() {} }));
   URL.createObjectURL = vi.fn(() => "blob:reference"); URL.revokeObjectURL = vi.fn();
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
+afterEach(async () => { await act(async () => root.unmount()); useInspectorStore.getState().clear(); host.remove(); vi.unstubAllGlobals(); });
 async function mount(onSubmit = vi.fn().mockResolvedValue(false)) {
   await act(async () => root.render(<PromptInput projectId="p" onSubmit={onSubmit} onCancel={() => {}} onCancelPending={() => {}} isStreaming={false} pendingPrompt={null} />));
   return onSubmit;
@@ -33,6 +34,42 @@ async function add(kind: "picker" | "paste" | "drop", file = new File(["png!"], 
     await act(async () => host.querySelector("textarea")!.dispatchEvent(event));
   }
 }
+it.each(["text", "selection"])("replays a lost %s acceptance and gives a deliberate repeat a new key", async (kind) => {
+  const receipts = new Map<string, string>();
+  const keys: string[] = [];
+  vi.mocked(fetch).mockImplementation(async (_url, init) => {
+    const { idempotency_key } = JSON.parse(init?.body as string);
+    keys.push(idempotency_key);
+    if (!receipts.has(idempotency_key)) receipts.set(idempotency_key, `run-${receipts.size + 1}`);
+    if (keys.length === 1) throw new Error("202 response lost");
+    return new Response(JSON.stringify({ run_id: receipts.get(idempotency_key), message_id: "m", snapshot_id: null }), {
+      status: 202, headers: { "content-type": "application/json" },
+    });
+  });
+  await mount(vi.fn(async (text, selected, options) => {
+    try { await sendPrompt("p", text, "model", selected, options); return true; }
+    catch { return false; }
+  }));
+  const fill = async () => act(async () => {
+    if (kind === "selection") {
+      useInspectorStore.getState().addSelection({ id: "pick", selector: "#title", comment: "Уменьши заголовок" });
+    } else {
+      const input = host.querySelector("textarea")!;
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "Уменьши заголовок");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  });
+  const send = () => act(async () => [...host.querySelectorAll("button")].find((button) => button.textContent === "Отправить")!.click());
+  await fill();
+  await send();
+  await send();
+  expect(keys[1]).toBe(keys[0]);
+  expect(receipts.size).toBe(1);
+  await fill();
+  await send();
+  expect(keys[2]).not.toBe(keys[0]);
+  expect(receipts.size).toBe(2);
+});
 for (const kind of ["picker", "paste", "drop"] as const) {
   it(`${kind} uploads an image-only draft and retains stable image/key after refusal`, async () => {
     const submit = await mount(); await add(kind);

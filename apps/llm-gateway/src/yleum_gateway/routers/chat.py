@@ -101,7 +101,9 @@ class ChatCompletionRequest(BaseModel):
     metadata: ChatMetadata | None = None
 
 
-def _gateway_error_to_http(exc: GatewayError) -> HTTPException:
+def _gateway_error_to_http(exc: GatewayError, *, retry_after: int | None = None) -> HTTPException:
+    if retry_after is None:
+        retry_after = text_failover.primary_retry_after(exc.details)
     return HTTPException(
         status_code=exc.http_status,
         detail={
@@ -111,6 +113,7 @@ def _gateway_error_to_http(exc: GatewayError) -> HTTPException:
                 "details": exc.details,
             }
         },
+        headers={"retry-after": str(retry_after)} if retry_after is not None else None,
     )
 
 
@@ -176,16 +179,23 @@ async def _dispatch_chat_provider(
     req: ChatCompletionRequest, request: Request, *, identity: Any,
     filtered_messages: list[dict[str, Any]], received_at: float,
 ) -> tuple[dict[str, Any], UUID, str]:
+    from yleum_gateway.services.generation_response_capture import confirm_response_accounting
+
     meta = req.metadata or ChatMetadata()
-    provider_scope = await text_failover.select_scope(
-        identity, req.model, run_id=meta.run_id, project_id=meta.project_id, user_id=req.user,
-    )
     loop = asyncio.get_running_loop()
     shared_deadline = provider_request_deadline(
         request.headers.get("x-yleum-provider-timeout-seconds"), received_at,
         reserve=RECEIPT_RESERVE_SECONDS,
     )
+    try:
+        provider_scope = await text_failover.select_scope(
+            identity, req.model, run_id=meta.run_id, project_id=meta.project_id, user_id=req.user,
+            deadline=shared_deadline,
+        )
+    except GatewayError as exc:
+        raise _gateway_error_to_http(exc) from exc
     attempts: dict[str, int] = {}
+    primary_retry_at: float | None = None
     backup_enabled = text_failover.enabled(req.model)
     generation_retries = backup_enabled and meta.run_id is not None and meta.project_id is not None
     timed_generation = backup_enabled and (
@@ -241,6 +251,7 @@ async def _dispatch_chat_provider(
         except BaseException as exc:
             details = exc.details if isinstance(exc, GatewayError) else {}
             retry_candidate = details.pop("_rate_limit_retry_candidate", None)
+            retry_after = text_failover.primary_retry_after(retry_candidate)
             overload = details.pop("_overload_retry_candidate", None) if provider_scope == "llmgw" else None
             balance_refused = details.pop("_primary_balance_refused", False)
             retry_deferred = details.pop("_primary_retry_deferred", False)
@@ -263,7 +274,13 @@ async def _dispatch_chat_provider(
             # One owner survives level cancellation and repeated Task.cancel().
             await await_provider_receipt(_finish_failed_provider(
                 identity, call_id, reason=reason, status=status, error_type=failure_type, **failed_receipt,
+                **({"retry_after_seconds": retry_after} if retry_after is not None else {}),
             ))
+            if provider_scope == "aitunnel" and reason == "preconnect" and backup_enabled:
+                delay = await text_failover.retry_after_backup_preconnect(identity, call_id, primary_retry_at)
+                if delay is not None:
+                    confirm_response_accounting()
+                    raise _gateway_error_to_http(text_failover.primary_rate_limit_error(delay)) from exc
             if identity is None and status == "failed":
                 alternate = text_failover.next_retry_scope(
                     req.model, provider_scope, reason, attempts,
@@ -272,6 +289,8 @@ async def _dispatch_chat_provider(
                     defer_primary=balance_refused or retry_deferred,
                 )
                 if alternate is not None:
+                    if retry_after is not None:
+                        primary_retry_at = loop.time() + retry_after
                     provider_scope = alternate
                     continue
                 if len(attempts) == 2 and reason is not None:
@@ -279,23 +298,15 @@ async def _dispatch_chat_provider(
                     exhausted.details.update(context)
                     raise _gateway_error_to_http(exhausted) from exc
             if isinstance(overload, dict) and status == "failed":
-                from yleum_gateway.services.generation_response_capture import (
-                    confirm_response_accounting,
-                )
-
                 confirm_response_accounting()
                 refusal = text_failover.ProviderRefusedError("Primary provider refused the request", details=overload)
-                raise _gateway_error_to_http(refusal) from exc
+                raise _gateway_error_to_http(refusal, retry_after=retry_after) from exc
             if isinstance(exc, GatewayError):
                 if status == "failed" and (
                     isinstance(retry_candidate, dict)
                     or details.get("provider_failure_kind") == "preconnect"
                     or isinstance(exc, DispatchDeadlineError)
                 ):
-                    from yleum_gateway.services.generation_response_capture import (
-                        confirm_response_accounting,
-                    )
-
                     confirm_response_accounting()
                 if status == "failed" and isinstance(retry_candidate, dict):
                     exc.details.update(retry_candidate)
@@ -373,15 +384,17 @@ async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -
         try:
             if not llmgw.is_llmgw_model(req.model):
                 raise ModelNotFoundError(f"Unknown model: {req.model}")
+            shared_deadline = provider_request_deadline(
+                request.headers.get("x-yleum-provider-timeout-seconds"), received_at,
+                reserve=RECEIPT_RESERVE_SECONDS,
+            )
             provider_scope = await text_failover.select_scope(
                 identity, req.model, run_id=meta.run_id, project_id=meta.project_id, user_id=req.user,
+                deadline=shared_deadline,
             )
             provider_deadline = None
             if text_failover.enabled(req.model):
-                provider_deadline = provider_request_deadline(
-                    request.headers.get("x-yleum-provider-timeout-seconds"), received_at,
-                    reserve=RECEIPT_RESERVE_SECONDS,
-                )
+                provider_deadline = shared_deadline
             elif identity is not None:
                 provider_deadline = received_at + min(
                     240.0, _remaining_provider_budget(request, received_at, reserve=0),

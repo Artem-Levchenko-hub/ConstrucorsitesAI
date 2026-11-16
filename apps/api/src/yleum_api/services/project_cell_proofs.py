@@ -19,6 +19,7 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_DETAIL_BYTES = 4096
 _MAX_ARTIFACT_REF_BYTES = 512
 MAX_BOOTSTRAP_CONTRACT_VERSION = "max-platform-bootstrap-v2"
+MAX_RUNTIME_CONTRACT_VERSION = "max-signed-runtime-v2"
 
 
 class ProjectCellProofConflict(RuntimeError):
@@ -217,6 +218,7 @@ class ProofIdentity:
                 raise ValueError(f"artifact_digest is required for {dimension.value}")
             payload = {
                 **common,
+                "contract": MAX_RUNTIME_CONTRACT_VERSION,
                 "workspace_revision": self.workspace_revision,
                 "schema_data_digest": self.schema_data_digest,
                 "build_config_digest": self.build_config_digest,

@@ -10,6 +10,15 @@ from yleum_api.services.portable_cell_contract import (
     machine_stack_guide_from_executor,
 )
 
+MAX_RESTORATION_DATA_POLICY = """\
+MAX RESTORATION DATA POLICY — adapt source to the current physical database.
+Use the actual supplied catalog and historical source to adapt queries, types,
+mappers and workflows. Preserve existing rows, ownership and unknown fields.
+Do not add, edit or replay migrations. Leave the physical schema, migration
+journal, existing rows, roles and policies intact. The controller verifies
+the original records and schema using an isolated copy.
+"""
+
 MAX_DATA_EVOLUTION_POLICY = """\
 MAX DATA EVOLUTION POLICY v1 — preserve current business data across code versions.
 These engineering instructions do not change the requested UI/response language.
@@ -391,15 +400,21 @@ async def build_max_agent_guide(
     executor: PortableGuideExecutor | None = None,
     *,
     integration_guide: str = "",
+    coordinator_handoff: bool = False,
+    preserve_current_database: bool = False,
 ) -> str:
     """Apply policy after provider selection, which may replace the entire guide."""
     guide = (
-        await machine_stack_guide_from_executor(legacy, executor)
+        await machine_stack_guide_from_executor(
+            legacy, executor, coordinator_handoff=coordinator_handoff,
+            preserve_current_database=preserve_current_database,
+        )
         if executor is not None
         else legacy
     )
     from yleum_api.services.max_project_kit import MAX_MANAGED_SDK_GUIDANCE, MAX_UI_GUIDANCE
 
+    policy = MAX_RESTORATION_DATA_POLICY if preserve_current_database else MAX_DATA_EVOLUTION_POLICY
     # Provider selection may replace the legacy stack entirely. Project
     # capabilities must be appended AFTER that replacement, never lost in it.
     return "\n\n".join(
@@ -408,7 +423,7 @@ async def build_max_agent_guide(
             guide,
             MAX_UI_GUIDANCE if MAX_UI_GUIDANCE not in guide else "",
             MAX_MANAGED_SDK_GUIDANCE if MAX_MANAGED_SDK_GUIDANCE not in guide else "",
-            MAX_DATA_EVOLUTION_POLICY,
+            policy,
             integration_guide,
         )
         if part

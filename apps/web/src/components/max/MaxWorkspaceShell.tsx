@@ -248,10 +248,11 @@ export function MaxWorkspaceShell({
       </div>}
       <div className="min-h-0 flex-1">
       <ChatPanel
-        key={project.id}
+        key={`${project.owner_id}:${project.id}`}
         adaptationRef={MAX_CUSTOMER_VERSIONING ? adaptationRef : undefined}
         projectId={project.id}
         projectSlug={project.slug}
+        ownerId={project.owner_id}
         currentSnapshotId={currentSnapshotId}
         basePath={`/max/${project.id}`}
       />

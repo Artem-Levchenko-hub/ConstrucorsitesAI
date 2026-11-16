@@ -22,9 +22,9 @@ Use public exports that exist in the pinned package:
 `CellSimple`, `Counter`, `IconButton`, `Input`, `MaxUI`, `Spinner`, `Textarea`,
 `Typography` and the package's exported icons/hooks.
 
-This contract is the dependency inspection result. Do not browse `node_modules`,
-re-read package declarations or probe exports before writing the requested main
-screen; that duplicates verified work and consumes the pre-write budget.
+Use these verified exports and props. Before using a `Typography` component or
+an unlisted prop, inspect its installed declaration for the exact signature.
+Read the relevant declaration and continue with the requested main screen.
 
 - `Button`: sizes `xsmall | small | medium | large`; variants
   `primary | secondary | ghost | primary-contrast | secondary-contrast |
@@ -59,4 +59,4 @@ usage of deprecated `Switch` and `ToolButton`.
   safe areas and the keyboard do not cover the active control or CTA.
 - Use one consistent `lucide-react` stroke style for icons. Never use emoji as
   interface icons or hand-drawn SVG replacements.
-- Run `pnpm typecheck` and `pnpm build`; repair only concrete errors, then stop.
+- Use the active generation mode's completion checks and repair concrete errors.

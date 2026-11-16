@@ -23,6 +23,43 @@ class PortableGuideExecutor(Protocol):
     @property
     def snapshot_files(self) -> Callable[[], Awaitable[Mapping[str, str]]]: ...
 
+
+MAX_COORDINATOR_HANDOFF = (
+    "COORDINATOR HANDOFF: Finish the requested source changes and applicable local tests. "
+    "Use build to run FAST_CHECK after the last source change and fix concrete errors. "
+    "With complete source and a fresh green FAST_CHECK, call done to hand off the candidate. "
+    "The server coordinator launches the candidate and owns full build, signed runtime proof "
+    "and release checks. Leave those steps to the coordinator. Report the source changes "
+    "and checks actually performed."
+)
+
+
+def is_max_stack_guide(guide: str) -> bool:
+    return (
+        "MAX PLATFORM CORE CONTRACT" in guide
+        or guide.startswith("# MAX Mini App generation contract")
+    )
+
+
+_PORTABLE_DIRECT_RUNTIME = """
+Run build and runtime_check after the final source write. The controller applies
+the checked manifest and migrations before testing the running application.
+Run runtime_check before testing migrated data in the signed preview.
+runtime_check independently verifies the product HTTP route, signed MAX session,
+protected data read, rejected anonymous/bad-cookie access and trusted project
+identity. Exercise the requested behavior in the declared product tests.
+""".strip()
+
+_PORTABLE_DATA_EVOLUTION = """
+Manage your own schema, migrations, roles, settings and bundled extensions in the
+dedicated project database. Follow the MAX DATA EVOLUTION POLICY. Project
+drizzle/*.sql files are applied transactionally by the controller before
+full_build tasks. Add new files and keep applied migrations immutable. Leave
+application of these files to the controller. Declare product tests that exercise
+the migrated schema. Keep the migration journal and the existing data intact.
+An untracked existing database requires explicit migration reconciliation.
+""".strip()
+
 PORTABLE_CELL_GUIDE = """
 MAX PLATFORM CORE CONTRACT — EXTENSIBLE MAIN STACK
 PROJECT CELL: MAX Next.js / React / TypeScript, Node.js 22 and pnpm 9.15.0.
@@ -31,7 +68,9 @@ public package installation and persistent Linux userland. package.json and lock
 files are project-controlled: add compatible libraries as needed. Use auxiliary
 tools/processes only when the task needs them; do not replace the whole UI stack.
 New pristine projects have .omnia/cell.json with bootstrap/fast/full/start defaults.
-Create src/app/page.tsx and the complete product, plus meaningful tests/*.test.mjs.
+For UI work, create src/app/page.tsx and the requested product screens.
+For an explicit API-only build, keep the root route technical and implement the
+requested API. Declare meaningful tests for the scope requested.
 If an older untouched seed lacks the manifest, use the Next commands below first.
 Existing projects without this manifest keep their legacy Next.js behavior until
 you intentionally migrate them. Do not run legacy pnpm/typecheck assumptions for
@@ -65,7 +104,7 @@ never change existing or unrelated data and never truncate the database.
 Do not weaken or skip actual persistence/isolation checks.
 bash executes in this same machine. Never use a fake
 test exit or claim build success without exercising product behavior. Services
-are controller-supervised after runtime_check applies the checked manifest;
+are controller-supervised after the checked manifest is applied;
 bind HTTP services to 0.0.0.0, not only localhost. Do not daemonize a service argv.
 Public HTTP(S)/CONNECT package traffic must honor HTTP_PROXY/HTTPS_PROXY. Raw
 outbound sockets, private/metadata/host/platform/cross-cell destinations and Docker
@@ -79,10 +118,9 @@ aggregate; defaults per service: .25 CPU,128 MiB RAM,1 GiB disk admission,64 pid
 RAM/CPU/pids are enforced; disk is admission/snapshot bounded, not a hard quota.
 A dedicated project PostgreSQL is reachable at 127.0.0.1 via DATABASE_URL with
 development admin access. It is isolated from the managed MAX core PostgreSQL and from
-other projects. Manage your own schema, migrations, roles, settings and bundled
-extensions there. The platform snapshots and restore-smokes its disk. Database
+other projects. The platform snapshots and restore-smokes its disk. Database
 superuser access does not grant container, host or managed-platform privileges.
-The product database starts empty. Legacy drizzle/0000_max_core.sql and
+A new product database starts empty. Legacy drizzle/0000_max_core.sql and
 drizzle/0001_business_core.sql describe the separate trusted core and are skipped
 by the product migration controller. Existing schema.ts core exports are compile-time
 compatibility definitions, NOT evidence of physical product tables. For own records,
@@ -102,16 +140,12 @@ DELETE(request: Request, context: { params: Promise<{ id: string }> }); obtain i
 with const { id } = await context.params. Do not use synchronous params signatures.
 The fast check uses the live product catalog to report simple missing FK prerequisites
 without applying SQL. The final PostgreSQL transaction remains authoritative.
-Persistent data still needs backward-compatible migrations. Follow the appended
-MAX DATA EVOLUTION POLICY; admin access is not permission to discard existing data.
-Project drizzle/*.sql files are applied transactionally by the controller before
-full_build tasks, including runtime_check. Add new files; never edit an applied
-migration or also apply these files manually. Call runtime_check before
-testing their persisted data. Direct SQL on your own database remains available.
-Do not forge migration journal entries or clear existing data to pass a check:
-an untracked existing database requires explicit migration reconciliation.
-Restoration adaptation only verifies the copied database; never replay historical
-migrations or change its schema.
+Preserve existing data. Restoration adaptation only verifies the copied database
+against its current physical schema.
+For custom project database features, provide GET /api/yleum-readiness in
+src/app/api/yleum-readiness/route.ts. Read actual data through the product's data
+layer and return {"ok": true} with HTTP 200. Keep this health read free of writes,
+paid calls and other side-effect integrations.
 
 MAX AUTH AND MANAGED INTEGRATIONS ARE A SEPARATE TRUSTED BOUNDARY.
 PostgreSQL-backed managed APIs remain in the trusted core. /api/max/* and /api/omnia/* stay
@@ -124,7 +158,7 @@ not a signing key or managed PostgreSQL password. For Next.js product routes,
 getMaxUser from @/lib/max/session is preconfigured to read this trusted identity;
 use it rather than implementing cookie validation in the product. Never trust a user id in a
 request body. Product-owned storage must scope records by the trusted user id.
-Managed actions use GET/POST /api/omnia/actions and GET/PATCH/DELETE
+Generic persisted user actions use GET/POST /api/omnia/actions and GET/PATCH/DELETE
 /api/omnia/actions/:id. Prefer createMaxAction/getMaxActions/getMaxAction/updateMaxAction
 from the managed SDK. Create requires a stable operationKey retained across unknown
 outcomes and renewed for a separate deliberate intent; equal payload alone is not
@@ -173,10 +207,6 @@ data and behavior outside the requested change. A manifest, starter server,
 decorative tabs or bundled core is not the product. The final test must exercise
 the actual route/component wiring and requested behavior; testing only an unused
 helper or searching source text for feature names is insufficient.
-Run build and runtime_check after the final source write. runtime_check
-independently verifies the product HTTP route, signed MAX session, protected data
-read, rejected anonymous/bad-cookie access and trusted project identity; it does
-not prove that the requested UI features are connected or work. No see tool exists.
 Do not claim deployment, payment or business integrations untested.
 Proof invalidation follows observed before/after source, dependency, schema,
 manifest and environment digests. Clean commands keep their proof. No
@@ -190,18 +220,29 @@ def machine_stack_guide(
     files: Mapping[str, str],
     *,
     new_product: bool = False,
+    coordinator_handoff: bool = False,
+    preserve_current_database: bool = False,
 ) -> str:
     if capabilities.get("portable_machine") is True and ".omnia/cell.json" in files:
-        return PORTABLE_CELL_GUIDE
+        parts = [PORTABLE_CELL_GUIDE]
+        if not preserve_current_database:
+            parts.append(_PORTABLE_DATA_EVOLUTION)
+        if not coordinator_handoff:
+            parts.append(_PORTABLE_DIRECT_RUNTIME)
+        return "\n\n".join(parts)
     return legacy
 
 
 async def machine_stack_guide_from_executor(
-    legacy: str, executor: PortableGuideExecutor, *, new_product: bool = False
+    legacy: str, executor: PortableGuideExecutor, *, new_product: bool = False,
+    coordinator_handoff: bool = False, preserve_current_database: bool = False,
 ) -> str:
     # History is not selection: customized legacy source may have no snapshots.
     files = await executor.snapshot_files()
-    return machine_stack_guide(legacy, executor.capabilities, files)
+    return machine_stack_guide(
+        legacy, executor.capabilities, files, coordinator_handoff=coordinator_handoff,
+        preserve_current_database=preserve_current_database,
+    )
 
 
 def portable_source_gap(

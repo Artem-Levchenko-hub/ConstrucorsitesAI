@@ -57,6 +57,17 @@ def aitunnel_output_cap(
     return cap
 
 
+def stream_outcome_diagnostics(evidence: dict[str, Any], *, provider_scope: str | None) -> dict[str, Any]:
+    outcome = evidence.get("provider_stream_outcome")
+    if provider_scope != "aitunnel" or outcome not in ("output_limit", "error"):
+        return {}
+    details = {"provider_stream_outcome": outcome}
+    cap = evidence.get("provider_output_cap_tokens")
+    if type(cap) is int and 1 <= cap <= 2_000_000:
+        details["provider_output_cap_tokens"] = cap
+    return details
+
+
 def provider_request_deadline(value: str | None, started_at: float, *, reserve: float) -> float:
     """Share one request window across primary and reserve dispatches."""
     try:
@@ -68,12 +79,12 @@ def provider_request_deadline(value: str | None, started_at: float, *, reserve: 
     return started_at + min(seconds, 1500.0) - reserve
 
 
-def _transport_timeout(io_timeout: float, *, provider_scope: str) -> httpx.Timeout:
-    # The request deadline bounds AITunnel's header wait and response body.
+def _transport_timeout(io_timeout: float, *, read_until_deadline: bool) -> httpx.Timeout:
+    # The absolute request deadline also bounds reads without an idle limit.
     return httpx.Timeout(
         io_timeout,
         connect=min(CONNECT_TIMEOUT_SECONDS, io_timeout),
-        read=None if provider_scope == "aitunnel" else io_timeout,
+        read=None if read_until_deadline else io_timeout,
     )
 
 
@@ -147,7 +158,7 @@ def open_aitunnel_response(
 @asynccontextmanager
 async def open_timed_response(
     url: str, payload: dict[str, Any], headers: dict[str, str], *,
-    deadline: float, evidence: dict[str, Any], provider_scope: str,
+    deadline: float, evidence: dict[str, Any], provider_scope: str, read_until_deadline: bool = False,
 ) -> AsyncIterator[httpx.Response]:
     """Keep the socket within the original request's absolute window."""
     from yleum_gateway.services.generation_response_capture import verify_dispatch_capacity
@@ -156,7 +167,9 @@ async def open_timed_response(
     remaining = deadline - loop.time()
     if remaining <= 0:
         raise DispatchDeadlineError()
-    timeout = _transport_timeout(min(IDLE_TIMEOUT_SECONDS, remaining), provider_scope=provider_scope)
+    timeout = _transport_timeout(
+        min(IDLE_TIMEOUT_SECONDS, remaining), read_until_deadline=read_until_deadline or provider_scope == "aitunnel",
+    )
     progress = _ResponseProgress(
         evidence, payload, mode="sse" if payload.get("stream") is True else "json",
         budget_seconds=remaining, timeout=timeout,
@@ -398,7 +411,7 @@ async def collect_response(
     if remaining <= 0:
         raise DispatchDeadlineError()
     io_timeout = min(IDLE_TIMEOUT_SECONDS, remaining) if provider_scope == "aitunnel" else IDLE_TIMEOUT_SECONDS
-    timeout = _transport_timeout(io_timeout, provider_scope=provider_scope)
+    timeout = _transport_timeout(io_timeout, read_until_deadline=provider_scope == "aitunnel")
     progress = _ResponseProgress(
         evidence, payload, mode="sse", budget_seconds=remaining, timeout=timeout,
     )

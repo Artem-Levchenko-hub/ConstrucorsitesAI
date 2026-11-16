@@ -11,7 +11,7 @@ from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.schemas.project import orchestrator_template
-from yleum_api.services import agent_builder
+from yleum_api.services import agent_builder, app_errors
 from yleum_api.services.generation.agent_messages import (
     _is_continue_request,
     _is_retry_request,
@@ -27,8 +27,49 @@ from yleum_api.services.generation.contracts import (
 )
 from yleum_api.services.generation.retry_request import resolve_request_source
 from yleum_api.services.generation.runtime import _build_agent_seed_parts
+from yleum_api.services.generation.source_checkpoint import (
+    _adjacent_run,
+    _admitted_checkpoint_baseline,
+    _ambiguous_run_order,
+    _owned_failed_source,
+)
 
 _log = logging.getLogger("yleum_api.routers.messages")
+
+
+async def _can_continue_generation(
+    session: AsyncSession,
+    run: GenerationRun | None,
+    ids: GenerationIds,
+    baseline: SourceBaseline,
+) -> bool:
+    if (
+        run is None or run.project_id != ids.project_id or run.user_id != ids.user_id
+        or run.user_message_id != ids.user_message_id
+    ):
+        return False
+    previous = await _adjacent_run(session, run)
+    if (
+        previous is None or previous.created_at >= run.created_at
+        or previous.user_id != ids.user_id or previous.response_mode not in {"build", "edit"}
+        or previous.user_message_id is None or await _ambiguous_run_order(session, previous)
+    ):
+        return False
+    failed = _owned_failed_source(previous, ids)
+    same_base = _admitted_checkpoint_baseline(previous, baseline)
+    if failed and same_base:
+        return True
+    if previous.assistant_message_id is None:
+        return False
+    assistant = await session.get(Message, previous.assistant_message_id)
+    if assistant is None or assistant.project_id != ids.project_id or assistant.role != "assistant":
+        return False
+    legacy_partial = (
+        previous.status == "completed" and app_errors.has_continue_card(assistant.content)
+    )
+    return (failed or legacy_partial) and (
+        same_base or assistant.snapshot_id == baseline.snapshot_id
+    )
 
 
 async def classify_agent_turn(
@@ -40,22 +81,28 @@ async def classify_agent_turn(
     project_info: ProjectGenerationFacts,
     prompt_text: str,
 ) -> AgentTurnClassification:
-    _has_prior_build = baseline.snapshot_id is not None
-    _is_continue = _has_prior_build and _is_continue_request(prompt_text)
-    _is_edit = (not orchestrate) and not _is_continue
-    _max_has_generated_snapshot = False
+    _is_continue = False
     async with factory() as _max_history_session:
+        request = await _max_history_session.get(Message, ids.user_message_id)
+        request_prompt = (
+            request.content if request is not None and isinstance(request.content, str) else ""
+        )
+        wants_continue = (
+            baseline.snapshot_id is not None and _is_continue_request(prompt_text)
+            and request is not None and not request.selected_elements
+            and _is_continue_request(request_prompt)
+        )
         recover_retry = _is_retry_request(prompt_text)
-        if not recover_retry:
-            request = await _max_history_session.get(Message, ids.user_message_id)
-            if (
-                request is not None and isinstance(request.content, str)
-                and _is_retry_request(request.content)
-            ):
-                run = await _max_history_session.get(GenerationRun, ids.run_id)
-                # A checkpoint may already have supplied its full saved brief.
-                # Only unmarked manual retries replace expanded admission text.
-                recover_retry = (
+        retry_message = _is_retry_request(request_prompt)
+        if wants_continue or retry_message:
+            run = await _max_history_session.get(GenerationRun, ids.run_id)
+            _is_continue = wants_continue and await _can_continue_generation(
+                _max_history_session, run, ids, baseline,
+            )
+            # A checkpoint may already have supplied its full saved brief.
+            # Only unmarked manual retries replace expanded admission text.
+            if retry_message:
+                recover_retry = recover_retry or (
                     run is not None and isinstance(run.agent_state, dict)
                     and "source_checkpoint_resume" not in run.agent_state
                 )
@@ -72,6 +119,7 @@ async def classify_agent_turn(
                 )
             )
         )
+        _is_edit = not orchestrate and not _is_continue
         if _is_continue and not _max_has_generated_snapshot:
             _prior_max_prompts = list(
                 (
@@ -242,10 +290,13 @@ async def prepare_stack_prompt(
         _integration_guide = await generation_context(_integration_session, ids.project_id)
     from yleum_api.services.max_data_evolution import build_max_agent_guide
 
+    coordinator_handoff = runtime.legacy_coordinator_handoff()
     _stack_guide = await build_max_agent_guide(
         _stack_guide,
         runtime.handle,
         integration_guide=_integration_guide,
+        coordinator_handoff=coordinator_handoff,
+        preserve_current_database=bool(project_info.restoration_context),
     )
     if _orch_name == "max-miniapp-nextjs":
         from yleum_api.services.generation.meal_acceptance import MEAL_AGENT_GUIDE, mode_for_prompt
@@ -258,7 +309,9 @@ async def prepare_stack_prompt(
         agent_builder.load_stack_skills(_orch_name) if get_settings().use_skill_injection else None
     )
     _stack_system = (
-        agent_builder.build_system_prompt(_stack_guide, skills=_skills)
+        agent_builder.build_system_prompt(
+            _stack_guide, skills=_skills, coordinator_handoff=coordinator_handoff,
+        )
         if _stack_guide
         else agent_builder.SYSTEM_PROMPT
     )

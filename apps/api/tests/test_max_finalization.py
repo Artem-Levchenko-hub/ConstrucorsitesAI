@@ -7,6 +7,8 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
@@ -99,6 +101,128 @@ def _files() -> dict[str, str]:
             "export async function DELETE() { return Response.json({deleted: true}) }\n"
         ),
     }
+
+
+@pytest.mark.parametrize("mode", ["recovered", "unavailable", "source"])
+async def test_runtime_finalization_distinguishes_retry_from_repair(monkeypatch, mode):
+    from yleum_api.services import max_finalization as finalization
+    from yleum_api.services.generation_metrics import GenerationPhase
+
+    identity = ProofIdentity(
+        workspace_id=uuid.uuid4(), generation_run_id=uuid.uuid4(), fencing_epoch=3,
+        workspace_revision="1" * 64, dependency_digest="2" * 64, schema_data_digest="3" * 64,
+        cell_manifest_digest="4" * 64, base_image_digest="5" * 64, toolchain_digest="6" * 64,
+        resource_profile_version="v2", build_config_digest="7" * 64,
+    )
+    probe_results = {
+        "recovered": [MaxRuntimeProbe(False, "502", failure_kind="dependency"),
+                      MaxRuntimeProbe(True, "verified")],
+        "unavailable": [MaxRuntimeProbe(False, "502", failure_kind="dependency")] * 3,
+        "source": [MaxRuntimeProbe(False, "runtime route failed: GET / (HTTP 500)",
+                                   failure_kind="source")],
+    }[mode]
+    probe = AsyncMock(side_effect=probe_results)
+    coordinator = object.__new__(MaxFinalizationCoordinator)
+    coordinator.generation_run_id = identity.generation_run_id
+    coordinator.continuation = None
+    coordinator.executor = SimpleNamespace(runtime_probe=probe)
+    coordinator._identity = AsyncMock(return_value=identity)
+    coordinator.session_factory = None
+    coordinator.emit = AsyncMock()
+    coordinator._phase_started = AsyncMock()
+    coordinator._phase_finished = AsyncMock()
+    coordinator._counter = AsyncMock()
+    coordinator._log_terminal = AsyncMock()
+    coordinator._outcome = AsyncMock(side_effect=lambda status, _, __, detail: SimpleNamespace(
+        status=status, redacted_detail=detail,
+    ))
+
+    async def record(**kwargs):
+        return SimpleNamespace(
+            outcome=kwargs["outcome"].value, dimension=kwargs["dimension"].value,
+            operation_id=kwargs["operation_id"], redacted_detail=kwargs["detail"],
+        )
+
+    coordinator._record = AsyncMock(side_effect=record)
+    calls = []
+
+    async def run_lease(*, lease, work, **_):
+        calls.append(lease.operation_id)
+        return await work()
+
+    monkeypatch.setattr(finalization, "run_with_activity_lease", run_lease)
+    monkeypatch.setattr(finalization.asyncio, "sleep", AsyncMock())
+    proof = coordinator._transient_proof(identity)
+    if mode == "unavailable":
+        with pytest.raises(RuntimeError, match="MAX_VERIFICATION_UNAVAILABLE"):
+            await coordinator._run_runtime(proof, identity, "a" * 64)
+        coordinator._record.assert_not_awaited()
+    else:
+        receipt = await coordinator._run_runtime(proof, identity, "a" * 64)
+        coordinator._record.assert_awaited_once()
+        if mode == "source":
+            outcome = await coordinator._failed(
+                identity, proof, GenerationPhase.RUNTIME_PROBE, receipt, receipt.redacted_detail,
+            )
+            assert outcome.status is MaxFinalizationStatus.NEEDS_EDIT
+            assert "GET / (HTTP 500)" in outcome.redacted_detail
+        else:
+            assert receipt.outcome == ProofOutcome.GREEN.value
+    assert probe.await_count == len(probe_results)
+    assert all(call.args == (identity.proof_key,) for call in probe.await_args_list)
+    assert len(calls) == len(set(calls)) == len(probe_results)
+
+
+async def test_timeout_receipt_retries_fast_check_of_same_source(monkeypatch):
+    from yleum_api.services import max_finalization as finalization
+
+    coordinator = object.__new__(MaxFinalizationCoordinator)
+    identity = SimpleNamespace()
+    proof = SimpleNamespace()
+    failed = SimpleNamespace(
+        outcome=ProofOutcome.RED.value,
+        redacted_detail="[fast-check-dependency]\ncommand timed out",
+        operation_id=uuid.uuid4(),
+    )
+    green = SimpleNamespace(outcome=ProofOutcome.GREEN.value)
+    coordinator.executor = SimpleNamespace(prove_restoration_adaptation=None)
+    coordinator._reconcile_tool_commands = AsyncMock()
+    coordinator._raise_persisted_infrastructure_failure = AsyncMock()
+    coordinator._normal_bootstrap = AsyncMock(return_value=(green, identity, proof))
+    coordinator._find = AsyncMock(return_value=failed)
+    coordinator._counter = AsyncMock()
+    coordinator._run_role_result = AsyncMock(return_value=green)
+    monkeypatch.setattr(finalization.asyncio, "sleep", AsyncMock())
+
+    assert await coordinator.fast_check() is green
+    args = coordinator._run_role_result.await_args.kwargs
+    assert args["identity"] is identity and args["proof"] is proof
+    assert args["retry_after"] == failed.operation_id
+
+
+async def test_release_retries_temporary_transport_failure_on_same_bundle(monkeypatch):
+    from yleum_api.services import max_finalization as finalization
+    from yleum_api.services.functional_gate import Check, summarize
+
+    coordinator = object.__new__(MaxFinalizationCoordinator)
+    coordinator.generation_run_id = uuid.uuid4()
+    coordinator.project_id = uuid.uuid4()
+    coordinator.project_slug = "sample"
+    coordinator.executor = SimpleNamespace()
+    coordinator._record = AsyncMock()
+    bundle = ProofBundle(identity=SimpleNamespace(proof_key="a" * 64))
+    check = AsyncMock(side_effect=[
+        summarize([Check("security gate executed", False, "TimeoutError")]),
+        summarize([Check("embedded security", True, "verified")]),
+    ])
+    monkeypatch.setattr("yleum_api.services.release_proof.run_release_proof", check)
+    monkeypatch.setattr(finalization.asyncio, "sleep", AsyncMock())
+
+    await coordinator._record_release(bundle, "b" * 64)
+
+    assert check.await_count == 2
+    assert all(call.kwargs["proof"] is bundle for call in check.await_args_list)
+    assert coordinator._record.await_args.kwargs["outcome"] is ProofOutcome.GREEN
 
 
 def _install_exact_release_probe(monkeypatch: pytest.MonkeyPatch) -> Callable[[], None]:
@@ -751,19 +875,22 @@ async def test_stale_identity_blocks_candidate_prepare(
     harness = await _new_harness(db_session, test_engine)
     original = await harness.coordinator.executor.current_identity()
     stale = replace(original, workspace_revision="9" * 64)
-    calls = 0
+    accepting = False
+    prepare_and_promote = harness.coordinator._prepare_and_promote
 
     async def identity_changes_before_promotion() -> ProofIdentity:
-        nonlocal calls
-        calls += 1
-        # Initial, post-build and post-release file reads stay on one fence.
-        # The first promotion read observes the stale revision.
-        return original if calls <= 3 else stale
+        return stale if accepting else original
+
+    async def promote_after_identity_changes(*args, **kwargs):
+        nonlocal accepting
+        accepting = True
+        return await prepare_and_promote(*args, **kwargs)
 
     harness.coordinator.executor = replace(
         harness.coordinator.executor,
         current_identity=identity_changes_before_promotion,
     )
+    harness.coordinator._prepare_and_promote = promote_after_identity_changes
 
     with pytest.raises(PromotionPermitError) as raised:
         await harness.coordinator.finalize(files=_files(), prompt="Build tracker")

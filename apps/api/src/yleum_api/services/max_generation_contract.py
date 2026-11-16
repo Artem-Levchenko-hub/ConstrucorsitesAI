@@ -25,6 +25,10 @@ _WIZARD_INFRASTRUCTURE = (
     "MAX-профиль пользователя и webhook бота из шаблона. "
     "Не добавляй отдельную регистрацию или вход по email."
 )
+_WIZARD_OWNER_MANAGEMENT_RE = re.compile(
+    r"^Управление в Yleum: [^\r\n]*?\.omnia/management\.json[^\r\n]*\r?$",
+    re.MULTILINE,
+)
 _JS_NON_CODE_RE = re.compile(
     r'//[^\r\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|'
     r"'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|"
@@ -350,9 +354,34 @@ def _fake_user_data_paths(files: Mapping[str, str]) -> list[str]:
 
 _EXCLUSION_PREFIX = (
     r"\b(?:без|without|no|никак\w*|не\s+(?!только\b)(?:нуж\w*|добав\w*|дела\w*|"
-    r"показыв\w*|требу\w*|превращ\w*|реализ\w*|созда\w*|выдум\w*|придум\w*)|"
-    r"do\s+not\s+(?:add|include|fabricate|invent))\b"
+    r"показыв\w*|требу\w*|превращ\w*|реализ\w*|созда\w*|выдум\w*|придум\w*|"
+    r"трог\w*|меня\w*|включ\w*|сохран\w*|запис\w*|хран\w*|отправ\w*)|"
+    r"do\s+not|don['’]t|avoid)\b"
 )
+_REQUEST_CLAUSE_SEPARATOR = re.compile(
+    r"[.!?;\n]|\b(?:but|но|зато)\b|,\s*(?:(?:and|и)\s+)?"
+    r"(?=(?:add|include|enable|create|добавь|добавьте|включи|сделай|реализуй)\b)",
+    re.IGNORECASE,
+)
+_KEEP_UNCHANGED = re.compile(
+    r"^\s*(?:keep|leave)\b.*\bunchanged\b|^\s*остав\w*\b.*\bбез\s+изменений\b",
+    re.IGNORECASE,
+)
+
+
+def _product_request_text(prompt: str) -> str:
+    return _WIZARD_OWNER_MANAGEMENT_RE.sub("", prompt.replace(_WIZARD_INFRASTRUCTURE, ""))
+
+
+def positive_request_scope(prompt: str) -> str:
+    """Keep requested clauses and trim explicit exclusions at their lexical boundary."""
+    text = _without_excluded_lists(_product_request_text(prompt))
+    clauses = _REQUEST_CLAUSE_SEPARATOR.split(text)
+    return " ".join(
+        re.split(_EXCLUSION_PREFIX, clause, maxsplit=1, flags=re.IGNORECASE)[0]
+        for clause in clauses
+        if not _KEEP_UNCHANGED.search(clause)
+    )
 
 
 def _without_excluded_lists(prompt: str) -> str:
@@ -403,7 +432,7 @@ def requested_max_capabilities(prompt: str) -> list[tuple[str, str, tuple[str, .
 
     # The wizard asks every app to preserve MAX identity infrastructure. That
     # platform instruction must not invent a visible product profile screen.
-    prompt = _without_excluded_lists(prompt.replace(_WIZARD_INFRASTRUCTURE, ""))
+    prompt = _without_excluded_lists(_product_request_text(prompt))
     found: list[tuple[str, str, tuple[str, ...]]] = []
     for key, label, prompt_patterns, source_needles in _CAPABILITIES:
         if any(_explicit_capability_mentions(prompt, pattern) for pattern in prompt_patterns):
@@ -411,14 +440,37 @@ def requested_max_capabilities(prompt: str) -> list[tuple[str, str, tuple[str, .
     return found
 
 
-def build_max_product_contract(prompt: str, *, portable: bool = False) -> str:
+_API_ONLY_RE = re.compile(
+    r"\b(?:api[- ]only|backend[- ]only|only\s+api|api\s+only|только\s+api)\b",
+    re.IGNORECASE,
+)
+_NEXT_API_ROUTE_RE = re.compile(
+    r"(?:src/)?(?:app/api/(?!yleum-readiness/).+/route|pages/api/.+)\.(?:tsx|ts|jsx|js)"
+)
+
+
+def is_api_only_request(prompt: str) -> bool:
+    return _API_ONLY_RE.search(positive_request_scope(prompt)) is not None
+
+
+def build_max_product_contract(
+    prompt: str, *, portable: bool = False, coordinator_handoff: bool = False,
+) -> str:
     """Human/model-readable checklist appended to a full MAX build task."""
 
+    if is_api_only_request(prompt):
+        return (
+            "MAX API-ONLY PRODUCT ACCEPTANCE: implement the requested product API routes and "
+            "exercise their actual request/response and authorization contracts. Keep a technical "
+            "root route for service readiness. Use the existing MAX authorization boundary and "
+            "leave product UI outside this scope. Follow the current mode's completion checks."
+        )
     capabilities = requested_max_capabilities(prompt)
     if portable:
+        completion = "" if coordinator_handoff else " Pass build and signed runtime_check."
         return (
             "PORTABLE MAX PRODUCT ACCEPTANCE: implement the complete requested product, "
-            "declare real build/test/service commands, then pass build and signed runtime_check. "
+            f"and declare real build/test/service commands.{completion} "
             "Do not fabricate user data or integration success. Explicit brief coverage: "
             + ", ".join(label for _key, label, _needles in capabilities)
         )
@@ -448,10 +500,13 @@ def build_max_product_contract(prompt: str, *, portable: bool = False) -> str:
         "@/lib/omnia/integration-client. It reaches the managed Google model server-side; "
         "the exact shape is `const { answer } = await requestYleumAI({ message, "
         "instructions, context })`. setTimeout/random/static text is not AI.",
-        "- After implementation: run a clean build, runtime_check the finished home screen "
-        "through the signed MAX preview and fix real runtime failures. "
-        "Do not retry incompatible generic probe/verify_isolation.",
     ]
+    if not coordinator_handoff:
+        lines.append(
+            "- After implementation: run a clean build, runtime_check the finished home screen "
+            "through the signed MAX preview and fix real runtime failures. "
+            "Do not retry incompatible generic probe/verify_isolation."
+        )
     if capabilities:
         lines.append("- Explicit brief coverage (each needs visible UI and behaviour):")
         lines.extend(f"  - {label}" for _key, label, _needles in capabilities)
@@ -548,7 +603,8 @@ def max_source_completion_gap(
     not a source gap and therefore never authorises another paid segment.
     """
 
-    prompt = prompt.replace(_WIZARD_INFRASTRUCTURE, "")
+    prompt = _product_request_text(prompt)
+    api_only = is_api_only_request(prompt)
     from yleum_api.services.max_management_generation import (
         management_implemented_capabilities,
         management_source_gap,
@@ -571,11 +627,11 @@ def max_source_completion_gap(
     if stylesheet_gap:
         return stylesheet_gap
 
-    capabilities = requested_max_capabilities(prompt)
+    capabilities = [] if api_only else requested_max_capabilities(prompt)
     collection_operations = frozenset(
         operation for operation, requested in (
             ("filter", any(key == "filters" for key, _, _ in capabilities)),
-            ("sort", _explicit_capability_mentions(
+            ("sort", not api_only and _explicit_capability_mentions(
                 _without_excluded_lists(prompt), r"сортиров|sort",
             )),
         ) if requested
@@ -588,6 +644,14 @@ def max_source_completion_gap(
         )
         if visible_filter_gap:
             return visible_filter_gap
+
+    if api_only and (
+        not portable or any(path.startswith(("src/app/", "app/", "src/pages/")) for path in files)
+    ) and not any(
+        _NEXT_API_ROUTE_RE.fullmatch(path) and _is_product_source(path) and content.strip()
+        for path, content in files.items()
+    ):
+        return "Implement the requested product API route before done."
 
     if portable:
         from yleum_api.services.portable_cell_contract import portable_source_gap
@@ -641,6 +705,8 @@ def max_source_completion_gap(
             "state. Immutable reference catalogs are allowed only when clearly separate "
             "from the user's activity."
         )
+    if api_only:
+        return None
     missing = [
         label
         for key, label, needles in capabilities
@@ -671,7 +737,8 @@ def max_source_completion_gap(
             "do not ship a cosmetic single-page patch."
         )
 
-    if _AI_PROMPT_RE.search(prompt):
+    positive_scope = positive_request_scope(prompt)
+    if _AI_PROMPT_RE.search(positive_scope):
         # Принимаем оба имени: приложения, собранные до переименования, вызывают
         # requestOmniaAI — он остался синонимом и работает.
         if "requestyleumai" not in corpus and "requestomniaai" not in corpus:
@@ -682,7 +749,7 @@ def max_source_completion_gap(
         if re.search(r"settimeout\s*\([^)]*(?:analy|анализ|coach|тренер)", corpus, re.DOTALL):
             return "A timer is still simulating AI work. Replace it with requestYleumAI."
 
-    if _PERSISTENCE_PROMPT_RE.search(prompt):
+    if _PERSISTENCE_PROMPT_RE.search(positive_scope):
         managed_read = bool(re.search(r"\bgetmaxactions\s*\(", corpus)) or (
             "getYleumLeads" in lead_calls
         )
@@ -692,7 +759,7 @@ def max_source_completion_gap(
         missing_persistence: list[str] = []
         if not managed_read:
             missing_persistence.append("authenticated read")
-        if _MUTATION_PROMPT_RE.search(prompt) and not managed_write:
+        if _MUTATION_PROMPT_RE.search(positive_scope) and not managed_write:
             missing_persistence.append("authenticated write")
         if missing_persistence:
             return (

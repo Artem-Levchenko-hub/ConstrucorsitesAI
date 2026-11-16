@@ -329,6 +329,13 @@ async def run_security_gate(
     if not isinstance(document_headers, dict):
         return summarize([SecCheck("capture final document headers", False, "none")], [])
     document_status = document.get("status")
+    dependency_statuses = (408, 429, 502, 503, 504)
+    if status in dependency_statuses or document_status in dependency_statuses:
+        return summarize(
+            [SecCheck("signed preview transport unavailable", False,
+                      f"protected={status}, document={document_status}")],
+            [],
+        )
     document_url = document.get("url")
     try:
         base = urlsplit(base_url)

@@ -304,8 +304,9 @@ def test_max_migration_contract_rejects_alias_collision_and_traversal(after):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("coordinated", [False, True])
 async def test_agent_verification_aborts_schema_only_max_candidate_before_backend_guard(
-    monkeypatch,
+    monkeypatch, coordinated,
 ):
     baseline_files = {
         "scripts/apply-migrations.mjs": "// platform-owned",
@@ -327,8 +328,7 @@ async def test_agent_verification_aborts_schema_only_max_candidate_before_backen
     rollback = AsyncMock()
     monkeypatch.setattr(generation_runtime, "_apply_project_cell_preview_files", rollback)
 
-    with pytest.raises(ApiError, match="migration contract") as raised:
-        await agent_verification.check_backend_and_normalize_css(
+    check = agent_verification.check_backend_and_normalize_css(
             _active_max_locked_files=frozenset(),
             _agent_res=SimpleNamespace(steps=1),
             _is_edit=True,
@@ -337,11 +337,22 @@ async def test_agent_verification_aborts_schema_only_max_candidate_before_backen
             files=files,
             ids=SimpleNamespace(project_id=uuid4()),
             project_info=SimpleNamespace(template="max_miniapp", slug="fixture"),
-            runtime=SimpleNamespace(handle=SimpleNamespace()),
+            runtime=SimpleNamespace(
+                handle=SimpleNamespace(is_portable=lambda: True),
+                coordinator=object() if coordinated else None,
+            ),
             plan=SimpleNamespace(),
             operations=SimpleNamespace(),
-        )
+    )
 
+    if coordinated:
+        await check
+        assert files == {"src/lib/db/schema.ts": "export const tasks = newTasks;"}
+        rollback.assert_not_awaited()
+        return
+
+    with pytest.raises(ApiError, match="migration contract") as raised:
+        await check
     assert raised.value.code == "unsafe_generated_backend"
     assert files == {"src/lib/db/schema.ts": baseline_files["src/lib/db/schema.ts"]}
     rollback.assert_awaited_once()
@@ -444,6 +455,22 @@ def test_shared_evolution_guidance_has_no_protected_controller_command():
     assert "omnia-db" not in MAX_DATA_EVOLUTION_POLICY
     assert "protected database" not in MAX_DATA_EVOLUTION_POLICY
     assert "service startup" in MAX_DATA_EVOLUTION_POLICY
+
+
+async def test_restoration_guide_targets_existing_physical_schema():
+    from yleum_api.services.max_data_evolution import build_max_agent_guide
+    from yleum_api.services.max_project_kit import MAX_MODEL_DIRECTIVE
+
+    handle = SimpleNamespace(
+        capabilities={"portable_machine": True},
+        snapshot_files=AsyncMock(return_value={".omnia/cell.json": "{}"}),
+    )
+    guide = await build_max_agent_guide(
+        MAX_MODEL_DIRECTIVE, handle, coordinator_handoff=True, preserve_current_database=True,
+    )
+    assert "RESTORATION DATA POLICY" in guide
+    assert "Use forward, additive migrations" not in guide
+    assert "Do not add, edit or replay migrations" in guide
 
 
 @pytest.mark.parametrize("mode", ["build", "edit", "native"])

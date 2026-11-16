@@ -71,6 +71,7 @@ class Connection:
                 "error_type",
                 "usage_id",
                 "receipt_hash",
+                "retry_after_seconds",
             )
             self.rows[args[0]].update(dict(zip(keys, args, strict=True)))
         elif sql.startswith("UPDATE provider_calls SET usage_id"):
@@ -120,6 +121,34 @@ async def finish(call_id, **kwargs):
     }
     values.update(kwargs)
     await provider_calls.finish_call(call_id, **values)
+
+
+async def test_committed_primary_cooldown_is_immutable_and_legacy_rows_still_replay(connection):
+    call_id = await start()
+    fields = {"status": "failed", "error_type": "HTTPStatusError", "retry_after_seconds": 30}
+    await provider_calls.finish_call(call_id, **fields)
+    await provider_calls.finish_call(call_id, **fields)
+    assert connection.rows[call_id]["retry_after_seconds"] == 30
+    assert connection.rows[call_id]["provider_cost_rub"] is None
+    with pytest.raises(BillingReconciliationRequiredError):
+        await provider_calls.finish_call(call_id, **{**fields, "retry_after_seconds": 1})
+    assert connection.rows[call_id]["retry_after_seconds"] == 30
+
+    historical_id = await start()
+    await provider_calls.finish_call(historical_id, status="failed", error_type="HTTPStatusError")
+    connection.rows[historical_id].pop("retry_after_seconds")
+    await provider_calls.finish_call(historical_id, status="failed", error_type="HTTPStatusError")
+
+
+@pytest.mark.parametrize("fields", [
+    {"retry_after_seconds": True}, {"retry_after_seconds": -1}, {"retry_after_seconds": 86_401},
+    {"status": "ambiguous"}, {"provider_cost_rub": Decimal(0)}, {"tokens_out": 0},
+])
+async def test_unproven_or_cost_bearing_journal_row_cannot_store_cooldown(connection, fields):
+    call_id = await start()
+    with pytest.raises(BillingReconciliationRequiredError):
+        await provider_calls.finish_call(call_id, **{"status": "failed", "retry_after_seconds": 30, **fields})
+    assert connection.rows[call_id]["status"] == "started"
 
 
 async def test_same_server_id_in_distinct_providers_is_not_duplicate(connection, monkeypatch):

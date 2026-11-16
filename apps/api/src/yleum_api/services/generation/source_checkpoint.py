@@ -25,7 +25,7 @@ from yleum_api.models.project import Project
 from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.schemas.message import PromptResponse
-from yleum_api.services.generation.agent_messages import _is_retry_request
+from yleum_api.services.generation.agent_messages import _is_continue_request, _is_retry_request
 from yleum_api.services.generation.contracts import GenerationIds, SourceBaseline
 from yleum_api.services.generation.request_binding import bound_message_request
 from yleum_api.services.generation_runs import (
@@ -70,14 +70,7 @@ async def checkpoint_before_rollback(operations: Any) -> None:
 
 def checkpoint_resume_request(prompt: str) -> bool:
     """An amended request is a new instruction, never replaced by an old brief."""
-    text = " ".join(prompt.casefold().split()).rstrip(".!?")
-    return _is_retry_request(prompt) or re.fullmatch(
-        r"(?:(?:продолжи|продолжай|продолжить|доделай|доделать|доведи|довести|"
-        r"дособери|дособерите|дострой|достроить|доработай|допиши)"
-        r"(?:\s+(?:приложение|генерацию|сборку|проект))?|"
-        r"(?:заверши|закончи)\s+сборку|finish the build|continue building|keep building)",
-        text,
-    ) is not None
+    return _is_retry_request(prompt) or _is_continue_request(prompt)
 
 
 def _validate_path(path: str) -> None:
@@ -217,7 +210,12 @@ async def persist_checkpoint(
     *, factory: async_sessionmaker[AsyncSession], ids: GenerationIds,
     baseline: SourceBaseline, files: dict[str, str],
     original_prompt: str = "",
+    verification_proof_key: str | None = None,
 ) -> None:
+    if verification_proof_key is not None and not re.fullmatch(
+        r"[0-9a-f]{64}", verification_proof_key,
+    ):
+        raise ValueError("invalid checkpoint proof identity")
     source = checkpoint_sources(files)
     original = checkpoint_sources(baseline.files)
     data = encode_checkpoint(
@@ -233,13 +231,13 @@ async def persist_checkpoint(
             or run.status != "running"
         ):
             raise ValueError("checkpoint generation identity is not active")
-        run.agent_state = {
-            **(run.agent_state or {}),
-            "source_checkpoint": {
-                "digest": digest, "baseline_sha": baseline.sha,
-                "original_prompt": original_prompt,
-            },
+        checkpoint = {
+            "digest": digest, "baseline_sha": baseline.sha,
+            "original_prompt": original_prompt,
         }
+        if verification_proof_key is not None:
+            checkpoint["verification_proof_key"] = verification_proof_key
+        run.agent_state = {**(run.agent_state or {}), "source_checkpoint": checkpoint}
         await session.commit()
 
 
@@ -264,6 +262,7 @@ async def adjacent_checkpoint(
         request = await session.get(Message, current.user_message_id)
         if (
             request is None or request.project_id != ids.project_id or request.role != "user"
+            or getattr(request, "selected_elements", None)
             or not checkpoint_resume_request(request.content)
         ):
             return None

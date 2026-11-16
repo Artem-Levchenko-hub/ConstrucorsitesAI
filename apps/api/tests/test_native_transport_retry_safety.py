@@ -56,7 +56,7 @@ async def call(monkeypatch, first, *, url=URL, raw_response=False):
             result = await agent_native._call_messages(
                 RawClient() if raw_response else client, url, [], "s",
             )
-        except RuntimeError as exc:
+        except (RuntimeError, LLMError) as exc:
             result = exc
     return result, calls, sleeps
 
@@ -71,6 +71,43 @@ async def test_unknown_http_outcome_is_terminal_after_one_post(monkeypatch, stat
     assert str(result).startswith("provider_request_failed:")
     assert "private" not in str(result)
     assert len(calls) == 1 and sleeps == []
+
+
+@pytest.mark.parametrize("url", [URL, "https://gateway.test/v1/project-cell/messages"])
+async def test_native_gateway_deadline_before_dispatch_stays_nonambiguous(monkeypatch, url):
+    first = httpx.Response(504, json={"type": "error", "error": {
+        "type": "deadline_before_dispatch", "message": "private provider diagnostic",
+        "details": {"provider_failure_kind": "deadline_before_dispatch",
+                    "provider_charge_ambiguous": False, "retry_safe": False},
+    }})
+
+    failure, calls, sleeps = await call(monkeypatch, first, url=url)
+
+    assert isinstance(failure, LLMError) and failure.code == "deadline_before_dispatch"
+    assert failure.http_status == 504 and failure.upstream_http_status is None
+    assert failure.provider_charge_ambiguous is False and failure.retry_safe is False
+    assert "private" not in str(failure) and len(calls) == 1 and not sleeps
+    retained = _gateway_failure(first)
+    assert retained.code == failure.code and retained.provider_charge_ambiguous is False
+
+
+@pytest.mark.parametrize("details", [
+    {"provider_charge_ambiguous": True}, {"retry_safe": True},
+    {"upstream_http_status": 504}, {"provider_failure_kind": "response_deadline"},
+])
+async def test_native_gateway_deadline_cannot_hide_an_ambiguous_response(monkeypatch, details):
+    first = httpx.Response(504, json={"type": "error", "error": {
+        "type": "deadline_before_dispatch", "details": {
+            "provider_failure_kind": "deadline_before_dispatch",
+            "provider_charge_ambiguous": False, "retry_safe": False, **details,
+        },
+    }})
+
+    failure, calls, sleeps = await call(monkeypatch, first)
+
+    assert isinstance(failure, agent_native._NativeProviderServerError)
+    assert failure.diagnostics()["provider_charge_ambiguous"] is True
+    assert len(calls) == 1 and not sleeps
 
 
 @pytest.mark.parametrize("kind", [httpx.WriteTimeout, httpx.RemoteProtocolError, httpx.ReadError])

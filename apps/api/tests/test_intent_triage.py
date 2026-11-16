@@ -99,6 +99,37 @@ def test_selected_elements_are_cheap_even_in_a_batch() -> None:
     assert decide_intent("поправь это", is_first_prompt=False, selected_count=3) == CHEAP
 
 
+@pytest.mark.parametrize("binding", ["font_selections", "resolved_fonts"])
+async def test_acceptance_keeps_font_change_scoped_to_selected_element(binding) -> None:
+    from uuid import uuid4
+
+    from yleum_api.models.project import Project
+    from yleum_api.models.user import User
+    from yleum_api.schemas.message import PromptRequest, SelectedElement
+    from yleum_api.services.generation.acceptance import PromptAcceptance
+
+    project_id = uuid4()
+    payload = PromptRequest(
+        prompt="Примени шрифт к выбранной кнопке",
+        selected_elements=[SelectedElement(selector="#checkout")],
+    )
+    acceptance = PromptAcceptance(
+        project_id=project_id, payload=payload, session=None,
+        current_user=User(), project=Project(id=project_id),
+    )
+    acceptance.is_first_build = True
+    acceptance.effective_prompt = payload.prompt
+    acceptance.credential_redirect = acceptance.explain_failed_build = False
+    acceptance.font_selections = acceptance.resolved_fonts = []
+    setattr(acceptance, binding, [{"id": str(uuid4()), "role": "all"}])
+
+    await acceptance.route_existing_project()
+    await acceptance.select_intent_and_model()
+
+    assert acceptance.selected_dump[0]["selector"] == "#checkout"
+    assert not acceptance.orchestrate
+
+
 def test_long_detailed_edit_stays_cheap() -> None:
     """A long, detailed edit on an existing project is a multi-<edit> tweak, not
     a rebuild — it must NOT be dragged into the premium pipeline by length."""
@@ -178,6 +209,27 @@ def test_structural_fullstack_addition_orchestrates() -> None:
     assert decide_intent("добавь бэкенд на FastAPI", is_first_prompt=False) == ORCHESTRATE
     assert decide_intent("сделай многостраничным", is_first_prompt=False) == ORCHESTRATE
     assert decide_intent("прикрути базу данных", is_first_prompt=False) == ORCHESTRATE
+
+
+@pytest.mark.parametrize("prompt", [
+    "Измени подпись кнопки. Базу данных не трогай.",
+    "Поменяй кнопку, не изменяй базу данных.",
+    "Поменяй подпись и оставь существующую базу данных без изменений.",
+    "Change the button label. Do not change the backend or database.",
+    "Don't touch the database. Change the button label.",
+])
+def test_protecting_existing_infrastructure_does_not_request_a_build(prompt):
+    assert decide_intent(prompt, is_first_prompt=False) == CHEAP
+
+
+@pytest.mark.parametrize("prompt", [
+    "Базу данных не трогай, но добавь серверную логику.",
+    "Не трогай базу данных и добавь серверную логику.",
+    "Don't touch the database but add a backend.",
+    "Don't change the database or backend; rebuild the app from scratch.",
+])
+def test_protected_infrastructure_does_not_hide_affirmative_build_request(prompt):
+    assert decide_intent(prompt, is_first_prompt=False) == ORCHESTRATE
 
 
 _COFFEE_REPAIR_PROMPT = (

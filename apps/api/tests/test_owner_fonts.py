@@ -80,6 +80,24 @@ def test_new_version_of_same_family_cannot_select_old_face_by_import_order():
     assert len(active) == 1 and "BBBB" in active[0]
 
 
+def test_fonts_for_selection_are_embedded_without_changing_project_roles():
+    face = {"data": "AAAA", "weight": 400, "style": "normal", "unicode_range": "U+0041"}
+    global_font = ({"family": "Global", "role": "body", "sha256": "a" * 64}, {"faces": [face]})
+    new_font = ({"family": "Selected", "role": "all", "sha256": "b" * 64}, {"faces": [face]})
+    before = apply_owner_fonts({"src/app/globals.css": ""}, [global_font])
+    out = apply_owner_fonts(before, [new_font], scoped=True)
+    manifest = json.loads(out["typography.json"])
+    old_manifest = json.loads(before["typography.json"])
+    assert manifest["owner_roles"] == old_manifest["owner_roles"]
+    assert manifest["body"] == "Global" and "heading" not in manifest
+    alias = manifest["scoped_owner_roles"]["all"]["alias"]
+    assert manifest["scoped_owner_roles"]["all"]["family"] == "Selected"
+    assert alias not in out["src/app/typography.css"]
+    assert any(alias in css for path, css in out.items() if path.startswith("src/app/fonts/"))
+    assert out["DESIGN.md"] == before["DESIGN.md"]
+    assert apply_owner_fonts(out, [new_font], scoped=True) == out
+
+
 def test_same_family_different_role_can_use_different_uploaded_versions():
     face = {"data": "AAAA", "weight": 400, "style": "normal", "unicode_range": "U+0041"}
     fonts = [

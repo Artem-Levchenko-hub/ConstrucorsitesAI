@@ -676,6 +676,7 @@ class ProjectCellExecutorHandle:
     create_preview_session: Callable[[], Awaitable[ProjectCellPreviewSession]]
     release: Callable[[], Awaitable[None]]
     refresh_snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None
+    applied_migration_paths: Callable[[], Awaitable[frozenset[str]]] | None = None
     current_identity: Callable[[], Awaitable[ProofIdentity]] | None = None
     prepare_environment: Callable[[str, str], Awaitable[ProofIdentity]] | None = None
     run_role: (
@@ -2075,19 +2076,27 @@ async def maybe_create_project_cell_executor(
 
     async def _runtime_probe(proof_key: str) -> Any:
         from yleum_api.services.max_management_generation import management_probe_resources
-        from yleum_api.services.max_runtime_probe import probe_max_cell_runtime
+        from yleum_api.services.max_runtime_probe import MaxRuntimeProbe, probe_max_cell_runtime
+        from yleum_api.services.max_runtime_routes import resolve_max_business_probe_path
 
-        preview = await project_cell_create_preview_session(
-            agent_workspace_id,
-            generation_run_id=leased_run_id,
-            fencing_epoch=fencing_epoch,
-        )
+        try:
+            preview = await project_cell_create_preview_session(
+                agent_workspace_id,
+                generation_run_id=leased_run_id,
+                fencing_epoch=fencing_epoch,
+            )
+        except OrchestratorUnavailable:
+            return MaxRuntimeProbe(
+                False, "signed preview session unavailable", failure_kind="dependency",
+            )
+        files = await _snapshot_files()
         return await probe_max_cell_runtime(
             preview,
             portable_project_id=project_id,
             expected_epoch=fencing_epoch,
             proof_key=proof_key,
-            management_resources=management_probe_resources(await _snapshot_files()),
+            business_path=resolve_max_business_probe_path(files),
+            management_resources=management_probe_resources(files),
         )
 
     from yleum_api.services.generation import recovery_tool_receipts as tool_receipts
@@ -2295,6 +2304,21 @@ async def maybe_create_project_cell_executor(
 
     async def _export_files() -> dict[str, str]:
         return _diff_files(baseline_files, workspace_files)
+
+    async def _applied_migration_paths() -> frozenset[str]:
+        if not _is_portable():
+            return frozenset()
+        snapshot = await project_cell_agent_snapshot(
+            agent_workspace_id,
+            generation_run_id=leased_run_id,
+            fencing_epoch=fencing_epoch,
+            include_applied_migrations=True,
+        )
+        if snapshot.workspace_revision != workspace_revision or snapshot.applied_migrations is None:
+            raise ProjectCellExecutorUnavailable(
+                "rollback migration inventory does not own the current source",
+            )
+        return frozenset(snapshot.applied_migrations)
 
     async def _snapshot_files() -> dict[str, str]:
         return dict(workspace_files)
@@ -2769,6 +2793,7 @@ async def maybe_create_project_cell_executor(
         sync_preview=_sync_preview,
         snapshot_files=_snapshot_files,
         refresh_snapshot_files=_refresh_snapshot_files,
+        applied_migration_paths=_applied_migration_paths,
         stage_patch=_stage_patch,
         stage_files=_stage_files,
         apply_external_files=_apply_external_files,

@@ -174,19 +174,21 @@ async def test_the_cell_probe_refuses_a_green_page_with_a_broken_data_route(
 
     from yleum_api.services import max_runtime_probe as probe_module
 
-    async def signed_runtime(*args: object, **kwargs: object) -> probe_module.MaxRuntimeProbe:
-        return probe_module.MaxRuntimeProbe(True, "product page served")
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/api/omnia/preview-session" or path == "/":
+            return httpx.Response(200)
+        if path == "/api/omnia/actions":
+            return httpx.Response(200, json={"actions": []})
+        assert path == "/api/qa-clients"
+        return httpx.Response(500)
 
-    async def business(client: object, path: str, *a: object, **k: object) -> dict[str, object]:
-        return {
-            "ok": False,
-            "status": 500,
-            "reason": "signed_business_route_failed",
-            "shape_digest": None,
-        }
+    real_client = httpx.AsyncClient
 
-    monkeypatch.setattr(probe_module, "_probe_signed_runtime", signed_runtime)
-    monkeypatch.setattr(probe_module, "probe_signed_business_endpoint", business)
+    def client(**kwargs):
+        return real_client(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(probe_module.httpx, "AsyncClient", client)
     preview = SimpleNamespace(bootstrap_url=f"{_ORIGIN}/api/omnia/preview-session?s=x")
 
     result = await probe_module.probe_max_cell_runtime(

@@ -756,15 +756,10 @@ class Settings(BaseSettings):
     # text pipeline left with the site builder — so OFF does not fall back to
     # anything: generation is refused with a clear message (users listed in
     # `agentic_builder_canary_users` still build). Env: USE_AGENTIC_BUILDER.
-    # `agent_builder_max_steps` bounds the loop.
     use_agentic_builder: bool = Field(default=True)
-    # Step budget for the loop. Explore-then-build on the entity template needs
-    # headroom: the agent reads a couple of examples, declares N entities, writes
-    # the screens, then build+fix. 14 was too tight (all spent exploring); 40
-    # gives room to actually write + repair. Env: AGENT_BUILDER_MAX_STEPS.
-    # Preferred model-turn budget. The execution path additionally clamps legacy
-    # production overrides to 30, so an old AGENT_BUILDER_MAX_STEPS=120 cannot
-    # silently reopen the runaway loop.
+    # Preferred model-turn budget per segment, with mode-specific bounds in
+    # agent_prompt.py. Ordinary MAX builds and manual resumes use the proven
+    # 40-turn floor. Env: AGENT_BUILDER_MAX_STEPS.
     agent_builder_max_steps: int = Field(default=24)
     # Green-gate (Phase 2): when ON, the agent loop refuses a `done` until the
     # last build was clean AND the running app was re-checked after the last
@@ -906,10 +901,8 @@ class Settings(BaseSettings):
             if item.strip()
         )
 
-    # Auto-continue: a single run is capped at agent_builder_max_steps, but a full
-    # first build often needs more than one segment. Rather than stop at that cap and
-    # make the user keep clicking «Продолжить» against an arbitrary low limit, the
-    # build handler runs up to this many SEGMENTS back-to-back (each re-reads the live
+    # Auto-continue: a full first build can need more than one provider segment.
+    # The build handler runs up to this many segments back-to-back (each re-reads the live
     # container it's been writing to) until the agent calls done OR a whole segment
     # makes NO new file progress (genuinely stuck). This is the real stop condition;
     # the segment count is just a runaway backstop (a truly unbounded loop is unsafe —

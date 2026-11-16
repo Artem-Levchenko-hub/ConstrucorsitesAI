@@ -64,12 +64,12 @@ afterEach(async () => {
   vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals();
 });
 
-it("follows the running build when the server confirms one", async () => {
+it("follows the confirmed running build without acknowledging the refused draft", async () => {
   vi.mocked(sendPrompt).mockRejectedValueOnce(
     refusal("generation_active", "generation already in progress", { active_run_id: "run" }));
   vi.mocked(getLatestGeneration).mockResolvedValue(running as never);
   await mount();
-  await act(async () => { expect(await stream.submit("Добавь поле", "model")).toBe(true); });
+  await act(async () => { expect(await stream.submit("Добавь поле", "model")).toBe(false); });
   expect(toast.info).toHaveBeenCalledWith("Генерация уже запущена", expect.anything());
   expect(toast.error).not.toHaveBeenCalled();
   expect(optimisticRows()).toEqual([]);
@@ -146,12 +146,12 @@ it("keeps a busy project's queued text and explicit request identity without an 
   expect(sendPrompt).toHaveBeenLastCalledWith("p", "Дособери приложение", "model", [], opts);
 });
 
-it("trusts the server when the confirming probe itself fails", async () => {
+it("follows the server's active report when the probe fails without acknowledging the draft", async () => {
   vi.mocked(sendPrompt).mockRejectedValueOnce(
     refusal("generation_active", "generation already in progress", { active_run_id: "run" }));
   vi.mocked(getLatestGeneration).mockRejectedValue(new Error("network"));
   await mount();
-  await act(async () => { expect(await stream.submit("Добавь поле", "model")).toBe(true); });
+  await act(async () => { expect(await stream.submit("Добавь поле", "model")).toBe(false); });
   expect(toast.info).toHaveBeenCalledWith("Генерация уже запущена", expect.anything());
   expect(toast.error).not.toHaveBeenCalled();
 });

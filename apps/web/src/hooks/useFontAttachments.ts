@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FONT_LIMITS, fontErrorMessage, resolveFontAsset, uploadFontAsset, validateFontFile } from "@/lib/api/font-assets";
-import type { FontAssetPublic, FontRole } from "@/lib/api/types";
+import type { FontAssetPublic, FontRole, MessageFontSelection } from "@/lib/api/types";
 
 export type DraftFontAttachment = {
   key: string;
@@ -77,6 +77,9 @@ export function useFontAttachments(projectId?: string) {
     if (!stateRef.current.busy) update({ ...stateRef.current, items: stateRef.current.items.filter(item => item.key !== key), error: null });
   }, [update]);
   const clear = useCallback(() => update({ ...stateRef.current, items: [], error: null }), [update]);
+  const restore = useCallback((selections: MessageFontSelection[]) => {
+    update({ ...stateRef.current, items: selections.map(({ role, ...asset }) => ({ key: crypto.randomUUID(), role, asset })), error: null });
+  }, [update]);
   const current = state.projectId === projectId ? state : { items: [], busy: false, error: null };
-  return { ...current, addFiles, addName, retry, remove, clear };
+  return { ...current, addFiles, addName, retry, remove, clear, restore };
 }

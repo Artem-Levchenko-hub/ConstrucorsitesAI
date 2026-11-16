@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.core.errors import ApiError
+from yleum_api.models.message import Message
 from yleum_api.services import agent_builder
 from yleum_api.services.generation.contracts import (
     AgentRuntimeBindings,
@@ -73,13 +74,15 @@ async def stage_owner_fonts(*, factory: async_sessionmaker[AsyncSession], ids: G
         bundles = await message_font_bundles(
             session, ids.project_id, ids.user_id, source.message_id,
         )
-    if not bundles:
-        return {}
+        if not bundles:
+            return {}
+        message = await session.get(Message, source.message_id)
+        scoped = bool(message is not None and message.selected_elements)
     if runtime.handle is None:
         raise ApiError('font_target_unavailable',
                        'Для выбранных шрифтов требуется рабочее приложение', 422)
     before = await runtime.handle.snapshot_files()
-    after = apply_owner_fonts(before, bundles)
+    after = apply_owner_fonts(before, bundles, scoped=scoped)
     changed = {path: content for path, content in after.items() if before.get(path) != content}
     if changed:
         await runtime.handle.stage_patch(changed, ())

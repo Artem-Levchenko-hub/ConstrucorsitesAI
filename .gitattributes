@@ -1,5 +1,7 @@
 # Template bytes must match Linux production and the frozen materialization fixtures.
 apps/api/src/yleum_api/templates/** text eol=lf
+# The named browser probe hashes its executed sources byte-for-byte.
+apps/api/src/yleum_api/services/max_behavior_browser*.py text eol=lf
 # Generated reports must retain exact PDF bytes and use binary diffs.
 reports/**/*.pdf binary
 # These scripts are streamed from the checkout directly into Bash on a Linux host.

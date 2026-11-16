@@ -261,6 +261,13 @@ def failure_for_error(raw_error: object, *, restoration: bool = False) -> Genera
                 "Требуется дождаться восстановления доступности модели."
             ),
         }[category]
+    elif re.match(r"\Amax_verification_unavailable(?:$|[\s:(])", error):
+        code = "runtime_unavailable"
+        retryable = False
+        message = (
+            "Проверка приложения временно недоступна. "
+            "Сбой проверки не откатывает рабочий черновик."
+        )
     elif re.match(r"\Aprotected_source_verification_unavailable(?:$|[\s:(])", error):
         code = "runtime_unavailable"
         retryable = False

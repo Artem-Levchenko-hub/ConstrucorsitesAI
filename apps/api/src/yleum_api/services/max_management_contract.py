@@ -23,14 +23,21 @@ def validate_management_modules(
 
 def new_project_management_modules(
     app_type: str, selected: Sequence[str | ManagementModule] | None,
+    *, excluded: Sequence[str | ManagementModule] = (),
 ) -> list[ManagementModule]:
-    """Every new app has daily management; saved legacy configs stay unchanged."""
+    """Apply new-project defaults unless the owner explicitly opts out."""
     defaults = (
         ["orders"] if app_type in {"catalog", "loyalty"}
         else ["bookings"] if app_type == "booking"
         else []
     )
-    modules = list(dict.fromkeys(["catalog", "leads", *(selected or defaults)]))
+    opt_outs = {ManagementModule(module) for module in excluded}
+    if ManagementModule.catalog in opt_outs:
+        opt_outs.update((ManagementModule.orders, ManagementModule.bookings))
+    modules = [
+        module for module in dict.fromkeys(["catalog", "leads", *(selected or defaults)])
+        if module not in opt_outs
+    ]
     return validate_management_modules(modules)
 
 

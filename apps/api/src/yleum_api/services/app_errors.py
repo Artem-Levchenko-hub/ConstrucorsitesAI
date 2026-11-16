@@ -41,6 +41,12 @@ _DEFAULT_TITLE: dict[str, str] = {
     "incomplete": "Сборка не завершена",
 }
 
+CONTINUE_CARD_TITLE = _DEFAULT_TITLE["incomplete"]
+CONTINUE_CARD_DETAIL = (
+    "Агент исчерпал лимит шагов, не закончив. Часть уже сохранена "
+    "— нажми «Продолжить», доделаю с того же места, не начиная заново."
+)
+
 
 def render_block(
     *,
@@ -169,6 +175,14 @@ def has_client_card(content: str, title: str, file: str | None) -> bool:
     if file is not None and _attr(file) not in content:
         return False
     return True
+
+
+def has_continue_card(content: str) -> bool:
+    """Recognize the persisted step-budget card on historical partial runs."""
+    return render_block(
+        category="incomplete", title=CONTINUE_CARD_TITLE, detail=CONTINUE_CARD_DETAIL,
+        file=None, fixable=True,
+    ) in content
 
 
 def _attr(value: str) -> str:

@@ -143,7 +143,7 @@ async def finish_call(
     cache_write_tokens: int | None = None, calculated_cost_rub: Decimal | None = None,
     provider_cost_rub: Decimal | None = None, provider_cost_usd: Decimal | None = None,
     cost_provenance: dict[str, Any] | None = None, error_type: str | None = None,
-    usage_id: UUID | None = None,
+    usage_id: UUID | None = None, retry_after_seconds: int | None = None,
 ) -> None:
     """Persist a closed receipt before billing; replay conflicts never overwrite it.
 
@@ -172,6 +172,12 @@ async def finish_call(
             raise ValueError
         if usage_id is not None and (not isinstance(usage_id, UUID) or status != "completed"):
             raise ValueError
+        if retry_after_seconds is not None and (
+            type(retry_after_seconds) is not int or not 0 <= retry_after_seconds <= 86_400
+            or status != "failed" or cost_provenance is not None
+            or any(value is not None for value in (*counters, *amounts))
+        ):
+            raise ValueError
         provenance = validate_cost_provenance(cost_provenance) if cost_provenance is not None else None
         evidence_json = json.dumps(provenance, sort_keys=True, separators=(",", ":")) if provenance else None
         safe_error = error_type if error_type in _ERRORS else "unknown" if error_type is not None else None
@@ -190,6 +196,8 @@ async def finish_call(
             scope = row["provider_scope"]
             if scope not in {"llmgw", "aitunnel"}:
                 raise _error(call_id)
+            if retry_after_seconds is not None and scope != "llmgw":
+                raise _error(call_id)
             if safe_error == LLMGW_BALANCE_REFUSED and (
                 scope != "llmgw" or status != "failed" or provenance is not None
                 or any(value is not None for value in (*counters, *amounts))
@@ -198,7 +206,7 @@ async def finish_call(
             if provenance is not None and provenance.get("provider_scope", "llmgw") != scope:
                 raise _error(call_id)
             if row["status"] != "started":
-                if row["receipt_hash"] != receipt_hash:
+                if row["receipt_hash"] != receipt_hash or row.get("retry_after_seconds") != retry_after_seconds:
                     raise _error(call_id)
                 if usage_id is not None:
                     if row["usage_id"] not in {None, usage_id}:
@@ -227,9 +235,9 @@ async def finish_call(
                     "tokens_in=$5,tokens_out=$6,cache_read_tokens=$7,cache_write_tokens=$8,"
                     "calculated_cost_rub=$9,provider_cost_rub=$10,provider_cost_usd=$11,"
                     "cost_provenance=$12::jsonb,error_type=$13,usage_id=$14,receipt_hash=$15,"
-                    "finished_at=now() WHERE id=$1",
+                    "retry_after_seconds=$16,finished_at=now() WHERE id=$1",
                     call_id, status, actual_model, provider_request_id, *counters, *amounts,
-                    evidence_json, safe_error, usage_id, receipt_hash,
+                    evidence_json, safe_error, usage_id, receipt_hash, retry_after_seconds,
                 )
     except BillingReconciliationRequiredError:
         raise

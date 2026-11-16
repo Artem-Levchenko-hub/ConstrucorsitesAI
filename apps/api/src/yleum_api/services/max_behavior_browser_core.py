@@ -107,11 +107,13 @@ def click(page: Any, selector: str) -> None:
     locator.click(timeout=2000)
 
 
-def named_button(page: Any, selector: str, name: str) -> None:
+def named_button(page: Any, selector: str, name: str | None) -> None:
     locator = visible(page, selector)
-    named = page.get_by_role("button", name=name, exact=True)
+    accessible_name = name if name is not None else re.compile(r"\S")
+    named = locator.and_(
+        page.get_by_role("button", name=accessible_name, exact=name is not None)
+    )
     need(named.count() == 1 and named.is_visible(), "required_control_name_missing")
-    need(locator.evaluate("(e,n)=>e===n", named.element_handle()), "required_control_name_missing")
 
 
 def storage(page: Any, key: str, expected: str) -> None:
@@ -284,9 +286,9 @@ def check_theme(page: Any, cfg: dict[str, Any]) -> dict[str, dict[str, str]]:
     return {"light": light, "dark": dark, "reload": reloaded}
 
 
-def check_coffee_summary(page: Any, cfg: dict[str, str]) -> list[dict[str, Any]]:
+def check_coffee_summary(page: Any, cfg: dict[str, Any]) -> list[dict[str, Any]]:
     """Exact authorized button action; no assumptions about summary field labels/order."""
-    named_button(page, cfg["button"], "Проверить заявку")
+    named_button(page, cfg["button"], cfg.get("button_name", "Проверить заявку"))
     form = page.locator(cfg["form"])
     field = visible(page, cfg["text_input"])
     summary = page.locator(cfg["summary"])

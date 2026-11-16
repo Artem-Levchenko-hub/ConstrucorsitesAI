@@ -435,6 +435,7 @@ class ProjectCellAgentWorkspaceSnapshot:
     fencing_epoch: int
     workspace_revision: str
     capabilities: dict[str, object] = field(default_factory=dict)
+    applied_migrations: tuple[str, ...] | None = None
 
     @classmethod
     def from_json(cls, payload: dict[str, object]) -> ProjectCellAgentWorkspaceSnapshot:
@@ -445,6 +446,7 @@ class ProjectCellAgentWorkspaceSnapshot:
             "fencing_epoch",
             "workspace_revision",
             "capabilities",
+            "applied_migrations",
         }
         unexpected = set(payload) - expected
         if unexpected:
@@ -457,6 +459,7 @@ class ProjectCellAgentWorkspaceSnapshot:
         fencing_epoch = payload.get("fencing_epoch")
         workspace_revision = payload.get("workspace_revision")
         capabilities = payload.get("capabilities", {})
+        applied = payload.get("applied_migrations")
         if (
             type(raw_files) is not dict
             or type(seeded_from_project) is not bool
@@ -479,6 +482,12 @@ class ProjectCellAgentWorkspaceSnapshot:
                     "Orchestrator returned an invalid Project Cell workspace snapshot"
                 )
             files[raw_path] = raw_content
+        if applied is not None and (
+            type(applied) is not list
+            or any(type(path) is not str or path not in files for path in applied)
+            or len(set(applied)) != len(applied)
+        ):
+            raise OrchestratorUnavailable("Orchestrator returned an invalid migration inventory")
         try:
             _validate_fencing_epoch(fencing_epoch)
             _validate_workspace_revision(workspace_revision)
@@ -491,6 +500,7 @@ class ProjectCellAgentWorkspaceSnapshot:
                 fencing_epoch=fencing_epoch,
                 workspace_revision=workspace_revision,
                 capabilities=dict(capabilities),
+                applied_migrations=tuple(applied) if applied is not None else None,
             )
         except ValueError as exc:
             raise OrchestratorUnavailable(
@@ -2102,17 +2112,24 @@ async def project_cell_agent_bootstrap(
 
 async def project_cell_agent_snapshot(
     workspace_id: UUID, *, generation_run_id: UUID, fencing_epoch: int,
+    include_applied_migrations: bool = False,
 ) -> ProjectCellAgentWorkspaceSnapshot:
     """Read physical source under its current lease; never seed an empty tree."""
     _validate_fencing_epoch(fencing_epoch)
+    params: dict[str, str | int] = {
+        "generation_run_id": str(generation_run_id), "fencing_epoch": fencing_epoch,
+    }
+    if include_applied_migrations:
+        params["include_applied_migrations"] = "true"
     payload = await _request(
         "GET", f"/internal/workspaces/{workspace_id}/agent/snapshot",
-        params={"generation_run_id": str(generation_run_id), "fencing_epoch": fencing_epoch},
+        params=params,
     )
     snapshot = ProjectCellAgentWorkspaceSnapshot.from_json(payload)
     if (
         snapshot.generation_run_id != generation_run_id
         or snapshot.fencing_epoch != fencing_epoch or snapshot.seeded_from_project
+        or (include_applied_migrations and snapshot.applied_migrations is None)
     ):
         raise OrchestratorUnavailable("Orchestrator returned a mismatched source snapshot")
     return snapshot

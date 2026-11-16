@@ -17,22 +17,60 @@ SELECTORS = {
 }
 
 
-async def prompt(monkeypatch, mode, request=REQUEST, coordinator=None):
+async def prompt(monkeypatch, mode, request=REQUEST, coordinator=None, *, coordinated_stack=False):
     monkeypatch.setattr(agent_prompt, "model_for_role", lambda *a, **k: "no-model-call")
     monkeypatch.setattr(agent_prompt, "get_settings", lambda: NS(agent_builder_max_steps=40))
+    from yleum_api.services import agent_builder
+    from yleum_api.services.portable_cell_contract import machine_stack_guide
+
+    if coordinated_stack:
+        handle = NS(capabilities={"portable_machine": True}, is_portable=lambda: True)
+        guide = machine_stack_guide(
+            "", handle.capabilities, {".omnia/cell.json": "{}"}, coordinator_handoff=True,
+        )
+        system = agent_builder.build_system_prompt(guide, coordinator_handoff=True)
+    else:
+        handle, guide, system = None, "", "SYSTEM"
     return await agent_prompt.prepare_agent_prompt(
-        stack=NS(seed_context="", system="SYSTEM", guide="", skills=None, bare_stack=False),
+        stack=NS(seed_context="", system=system, guide=guide, skills=None, bare_stack=False),
         factory=None,
         ids=None,
         project_info=NS(template="max_miniapp", restoration_context=mode == "adaptation"),
         prompt_text=request,
-        runtime=NS(handle=None, coordinator=coordinator),
+        runtime=NS(handle=handle, coordinator=coordinator),
         orchestrate=False,
         selected_elements=None,
         _is_edit=mode in {"edit", "adaptation"},
         _is_continue=mode == "continue",
         force_model=None,
     )
+
+
+async def test_coordinator_build_task_leaves_runtime_proof_to_coordinator(monkeypatch):
+    plan, _ = await prompt(monkeypatch, "build", coordinated_stack=True)
+    assert "FAST_CHECK" in plan.system
+    assert "signed runtime_check" not in plan.user
+    assert "runtime_check the finished home screen" not in plan.user
+
+
+async def test_max_manual_continuation_follows_the_actual_product_entrypoint(monkeypatch):
+    plan, _ = await prompt(monkeypatch, "continue", "Продолжи.")
+    assert "фактическ" in plan.user
+    assert "dashboard/page.tsx" not in plan.user
+    assert "entities/" not in plan.user
+
+
+@pytest.mark.parametrize("coordinated_stack", [True, False])
+async def test_full_api_only_task_does_not_require_a_visitor_screen(monkeypatch, coordinated_stack):
+    plan, _ = await prompt(
+        monkeypatch, "build", "API-only: implement the authenticated service endpoint.",
+        coordinated_stack=coordinated_stack,
+    )
+    assert "technical root" in plan.user
+    assert "Create src/app/page.tsx and real product tests" not in plan.user
+    assert "src/app/page.tsx, product styling, screens and navigation" not in plan.user
+    assert "Every button must execute" not in plan.user
+    assert "создай src/app/page.tsx, стили" not in plan.user
 
 
 @pytest.mark.parametrize("mode", ["build", "edit", "continue", "adaptation"])
@@ -98,6 +136,7 @@ def test_operator_preset_supports_only_shared_coffee_interface():
     assert adapter.coffee_summary is not None
     for field, selector in SELECTORS.items():
         assert getattr(adapter.coffee_summary, field) == selector
+    assert adapter.coffee_summary.button_name is None
 
 
 @pytest.mark.parametrize(

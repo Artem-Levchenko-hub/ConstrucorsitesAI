@@ -139,7 +139,9 @@ async def create_project(
     # Initialize even when an older client only submits a project name. Doing
     # this at creation avoids silently enabling privileges in existing apps.
     config = payload.max_config or MaxProjectConfigPayload.default_for(payload.name)
-    modules = new_project_management_modules(config.app_type, config.management_modules)
+    modules = new_project_management_modules(
+        config.app_type, config.management_modules, excluded=payload.management_module_opt_outs,
+    )
     config = config.model_copy(update={"management_modules": modules})
     validate_delivery_size(config, 1)
     if payload.staff_settings is not None:
@@ -148,7 +150,10 @@ async def create_project(
             and ManagementModule.orders not in modules
         ):
             raise ApiError("invalid_request", "Включите заказы в настройках приложения", 422)
-        session.add(initial_team_settings(project, payload.staff_settings))
+        staff = payload.staff_settings
+        if ManagementModule.leads not in modules and staff.leads_enabled:
+            staff = staff.model_copy(update={"leads_enabled": False})
+        session.add(initial_team_settings(project, staff))
     session.add(MaxProjectConfig(
         project_id=project.id, owner_id=owner.id,
         config=config.model_dump(mode="json"), config_version=1,

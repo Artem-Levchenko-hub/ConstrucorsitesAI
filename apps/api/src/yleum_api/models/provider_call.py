@@ -11,6 +11,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Index,
+    Integer,
     Numeric,
     Text,
     func,
@@ -52,6 +53,7 @@ class ProviderCall(Base):
     cost_provenance: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     error_type: Mapped[str | None] = mapped_column(Text)
     receipt_hash: Mapped[str | None] = mapped_column(Text)
+    retry_after_seconds: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -72,6 +74,15 @@ class ProviderCall(Base):
             "(status='started' AND finished_at IS NULL) OR "
             "(status<>'started' AND finished_at IS NOT NULL)",
             name="ck_provider_calls_finished",
+        ),
+        CheckConstraint(
+            "retry_after_seconds IS NULL OR (retry_after_seconds BETWEEN 0 AND 86400 "
+            "AND provider_scope='llmgw' AND status='failed' AND receipt_hash IS NOT NULL "
+            "AND usage_id IS NULL AND tokens_in IS NULL AND tokens_out IS NULL "
+            "AND cache_read_tokens IS NULL AND cache_write_tokens IS NULL "
+            "AND calculated_cost_rub IS NULL AND provider_cost_rub IS NULL "
+            "AND provider_cost_usd IS NULL AND cost_provenance IS NULL)",
+            name="retry_after",
         ),
         *[
             CheckConstraint(f"{name} IS NULL OR {name} >= 0", name=f"ck_provider_calls_{name}")

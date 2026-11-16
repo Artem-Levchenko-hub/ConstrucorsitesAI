@@ -95,6 +95,7 @@ from yleum_api.services.generation_runs import (
     capacity_admitted_dispatch_token,
     record_generation_product_failure,
 )
+from yleum_api.services.max_finalization import MaxVerificationUnavailable
 from yleum_api.services.project_cell_errors import ProjectCellInfrastructureError
 
 if TYPE_CHECKING:
@@ -465,13 +466,7 @@ async def run_agent_generation(
     # fix), not blind SEARCH/REPLACE — fixes the "точечные правки" pain.
     # First-build/rebuild = full build prompt; a surgical follow-up = a
     # minimal edit prompt with a smaller step budget.
-    # CONTINUE («продолжи») on a non-first-build re-enters the BUILD loop to
-    # finish a partial app (the agent reads the live container state), so it
-    # is neither a from-scratch build nor a 12-step minimal edit.
-    # «продолжи» only makes sense when there is a prior build to finish.
-    # NB: `is_first_build` lives in the POST handler (post_prompt), NOT in
-    # this worker fn — use the in-scope `current_snapshot_id` (None on a
-    # brand-new project's first build) so this never NameErrors.
+    # A manual continuation must match an unfinished turn or a validated draft.
     # A fresh legacy entry also needs its runtime before recording adjacent
     # source provenance. A cold durable entry still uses its saved context.
     if fresh_max and _resume_state is None and prepared_runtime is None:
@@ -797,14 +792,26 @@ async def run_agent_generation(
             _max_seed_files = {**_max_seed_files, **owner_font_files}
             runtime.migration_baseline = {**baseline.files, **_max_seed_files}
             metadata = json.loads(owner_font_files['typography.json'])
-            font_context = ('\n\nЯвный выбор шрифтов владельца УЖЕ применён и имеет приоритет: '
-                            + json.dumps(metadata.get('owner_roles', {}), ensure_ascii=False)
-                            + '. Сохрани typography.json, src/app/typography.css и opaque '
-                            'src/app/fonts/*.css. Не читай/переписывай base64. '
-                            'Не заменяй выбранные шрифты style utility/inline font-family. '
-                            'Новый акцент применяется через .font-accent '
-                            'или data-font-role=accent; '
-                            'прочий текст остаётся читаемым.')
+            scoped_fonts = metadata.get('scoped_owner_roles')
+            if scoped_fonts:
+                font_context = (
+                    '\n\nШрифты уже загружены. Примени `alias` только к выделенным элементам '
+                    'в указанном выше списке, сохрани остальную типографику. '
+                    'Укажи точный alias в font-family локального класса элемента. '
+                    'Сопоставь роли с выделенными элементами по запросу. '
+                    + json.dumps(scoped_fonts, ensure_ascii=False)
+                )
+            else:
+                font_context = (
+                    '\n\nЯвный выбор шрифтов владельца УЖЕ применён и имеет приоритет: '
+                    + json.dumps(metadata.get('owner_roles', {}), ensure_ascii=False)
+                    + '. Не заменяй выбранные шрифты style utility/inline font-family. '
+                    'Используй .font-accent или data-font-role=accent для акцента.'
+                )
+            font_context += (
+                ' Сохрани typography.json, src/app/typography.css и src/app/fonts/*.css. '
+                'Не читай и не переписывай base64.'
+            )
             _prompt_plan = replace(_prompt_plan, user=_prompt_plan.user + font_context)
     edit_deadline = (
         prepared_entry.edit_deadline if prepared_entry is not None else
@@ -867,28 +874,31 @@ async def run_agent_generation(
     if completed_turn is not None:
         _agent_res, _provider_failure = completed_turn.result, completed_turn.provider_failure
     else:
-        (
-            _agent_res,
-            _provider_failure,
-        ) = await execute_agent_turn(
-            _agent_res=_agent_res,
-            _is_edit=_is_edit,
-            _max_has_generated_snapshot=_max_has_generated_snapshot,
-            _max_seed_files=_max_seed_files,
-            _max_shell_enabled=bindings.shell_enabled,
-            baseline=baseline,
-            ids=ids,
-            is_free=is_free,
-            project_info=project_info,
-            prompt_text=prompt_text,
-            runtime=runtime,
-            plan=_prompt_plan,
-            reference_images=await _load_turn_reference_images(factory, ids, baseline),
-            operations=_operations,
-            source_checkpoint=save_source_checkpoint,
-            workspace_context_files=workspace_context_files,
-            allow_autonomous_source_repair=autonomous_max_repair,
-        )
+        try:
+            _agent_res, _provider_failure = await execute_agent_turn(
+                _agent_res=_agent_res,
+                _is_edit=_is_edit,
+                _max_has_generated_snapshot=_max_has_generated_snapshot,
+                _max_seed_files=_max_seed_files,
+                _max_shell_enabled=bindings.shell_enabled,
+                baseline=baseline,
+                ids=ids,
+                is_free=is_free,
+                project_info=project_info,
+                prompt_text=prompt_text,
+                runtime=runtime,
+                plan=_prompt_plan,
+                reference_images=await _load_turn_reference_images(factory, ids, baseline),
+                operations=_operations,
+                source_checkpoint=save_source_checkpoint,
+                workspace_context_files=workspace_context_files,
+                allow_autonomous_source_repair=autonomous_max_repair,
+            )
+        except MaxVerificationUnavailable:
+            await checkpoint_before_rollback(_operations)
+            if continuation is not None:
+                await continuation.wait()
+            raise
         if continuation is not None:
             await complete_agent_turn(
                 continuation, _agent_res, _provider_failure, runtime.response_recovery.budget,
@@ -1140,6 +1150,18 @@ async def run_agent_generation(
     _catalog_runtime = _stack.orchestrator_template == "max-miniapp-nextjs"
     _source_handoff = _agent_res.stop_reason in agent_builder.SOURCE_HANDOFF_REASONS
     _restore_core_on_rejection = _source_handoff or single_max_repair or autonomous_max_repair
+    if single_max_repair and runtime.coordinator is not None:
+        async def checkpoint_verification_candidate(files: dict[str, str], proof_key: str) -> None:
+            try:
+                await persist_checkpoint(
+                    factory=factory, ids=ids, baseline=baseline, files=files,
+                    original_prompt=prompt_text, verification_proof_key=proof_key,
+                )
+            except Exception:
+                # An object-store outage should not stop verification of the live draft.
+                logging.getLogger(__name__).warning("MAX verification draft checkpoint unavailable")
+
+        runtime.coordinator.checkpoint_verification_candidate = checkpoint_verification_candidate
     try:
         _max_finalization_proof, files, accumulated = await finalize_max_candidate(
             _is_edit=_is_edit,
@@ -1295,11 +1317,8 @@ async def run_agent_generation(
             ids.project_id,
             ids.assistant_message_id,
             category="incomplete",
-            title="Сборка не завершена",
-            detail=(
-                "Агент исчерпал лимит шагов, не закончив. Часть уже сохранена "
-                "— нажми «Продолжить», доделаю с того же места, не начиная заново."
-            ),
+            title=app_errors.CONTINUE_CARD_TITLE,
+            detail=app_errors.CONTINUE_CARD_DETAIL,
             fixable=True,
         )
 

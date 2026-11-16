@@ -1,8 +1,9 @@
 # MAX Mini App generation contract
 
 - The platform core deliberately has no product home page or visual template.
-  On a full build create `src/app/page.tsx`, product styling, navigation, screens
-  and workflows from scratch. A clean core build is never product completion.
+  For a full UI build create `src/app/page.tsx` and the requested screens and
+  workflows. For an API-only brief implement the requested service and keep a
+  technical root route for readiness.
 
 - Keep React at 18.3.1 because the official MAX UI peer contract requires it.
 - Use `window.WebApp` only through `src/lib/max/bridge.ts`.
@@ -40,11 +41,11 @@
   `@/lib/omnia/client` (for example `item_view`, `cart_add`,
   `checkout_start`). Use only supported finite event names and field shapes;
   never emit fabricated history or include contact details in telemetry.
-- Every primary CTA must perform a real persisted operation through
-  `/api/omnia/actions`; never ship decorative buttons or fake success states.
-  Product code calls `createMaxAction(actionType, payload)` and reads the scoped
-  history with `getMaxActions()` or `getMaxActions({ limit, cursor })` from
-  `@/lib/omnia/integration-client`.
+- Wire each control to the requested navigation, local state change or persistent
+  action. Use `createMaxAction` and `getMaxActions({ limit, cursor })` from
+  `@/lib/omnia/integration-client` for generic user activity. For managed
+  orders, leads and bookings use the selected business SDK. Provider-owned flows
+  use their connected method and receipts. Submit each business intent once.
 - Never fabricate the current user's history, profile, progress, workouts, meals
   or metrics with demo/mock/test constants. Load user-owned state with
   `getMaxActions()` and show an honest empty/onboarding state when no records

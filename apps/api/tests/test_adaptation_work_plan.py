@@ -222,6 +222,8 @@ async def test_an_adaptation_does_not_get_the_point_edit_prompt(
     assert "Верни экраны и функции выбранной исторической версии" in plan.user
     assert "Верни версию" in plan.user
     assert plan.system == "SYSTEM"
+    assert "additive-изменения" not in plan.user
+    assert "без SQL-миграций" in plan.user
     # 18 steps is the point-edit budget; a restoration rebuilds whole screens.
     assert plan.steps == 40
 

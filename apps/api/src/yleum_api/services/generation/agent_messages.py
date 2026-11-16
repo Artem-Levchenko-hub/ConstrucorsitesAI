@@ -262,40 +262,28 @@ def _agent_step_budget(project_template: str, *, configured_steps: int) -> int:
     working product. Other stacks retain their configured budget and one segment.
     """
 
-    return max(max(1, int(configured_steps)), _MAX_STABLE_SINGLE_PASS_STEPS)
+    configured_steps = max(1, int(configured_steps))
+    if project_template == "max_miniapp":
+        return max(configured_steps, _MAX_STABLE_SINGLE_PASS_STEPS)
+    return configured_steps
 
 
-_CONTINUE_KEYWORDS: frozenset[str] = frozenset(
-    {
-        "продолж",  # продолжи / продолжай / продолжить
-        "доделай",
-        "доделать",
-        "доведи",
-        "довести",
-        "дособери",
-        "дособерите",
-        "достро",  # дострой/достроить
-        "доработай",
-        "допиши",
-        "заверши сбор",
-        "закончи сбор",
-        "не доделал",
-        "не докончил",
-        "до конца",
-        "finish the build",
-        "continue building",
-        "keep building",
-    }
+_CONTINUE_REQUEST = re.compile(
+    r"(?:(?:пожалуйста|please),?\s+)?"
+    r"(?:(?:достройка|сборка|генерация)\s+не\s+(?:закончилась|завершилась),\s+)?"
+    r"(?:(?:продолжи|продолжай|продолжить|доделай|доделать|доведи|довести|"
+    r"дособери(?:те)?|дострой|достроить|доработай|допиши)"
+    r"(?:\s+(?:приложение|генерацию|сборку|проект))?(?:\s+до\s+конца)?|"
+    r"(?:заверши|закончи)\s+сборку|"
+    r"finish the build|continue(?: building| the build)?|keep building)"
+    r"(?:,?\s+(?:пожалуйста|please))?"
 )
 
 
 def _is_continue_request(prompt: str) -> bool:
-    """True when a follow-up asks to FINISH the partial agentic build (see above).
-
-    Caller gates this on a non-first-build CONTAINER project so it only fires when
-    there is actually a partial app to continue."""
-    t = (prompt or "").strip().lower()
-    return any(k in t for k in _CONTINUE_KEYWORDS)
+    """Recognize a standalone, affirmative request to resume unfinished work."""
+    text = " ".join((prompt or "").casefold().split()).rstrip(".!?")
+    return _CONTINUE_REQUEST.fullmatch(text) is not None
 
 
 def _is_retry_request(prompt: str) -> bool:

@@ -12,7 +12,7 @@ from yleum_gateway.core.config import reset_settings_cache
 from yleum_gateway.core.errors import BillingReconciliationRequiredError
 from yleum_gateway.main import create_app
 from yleum_gateway.routers import messages_native
-from yleum_gateway.services import provider_calls
+from yleum_gateway.services import billing, provider_calls
 
 URL = "https://api.llmgw.ru/v1/chat/completions"
 BODY = {"error": {"code": "rate_limit_exceeded", "type": "rate_limit_error", "message": "private"}}
@@ -77,6 +77,39 @@ def test_retry_after_durable_failed_receipt(client, monkeypatch, native):
     assert receipt["status"] == "failed"
     assert receipt["provider_cost_rub"] is None and receipt["provider_cost_usd"] is None
     assert receipt["provider_request_id"] is None and "private" not in response.text
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("backup_outcome", ["preconnect", "uncertain"])
+def test_primary_retry_after_survives_only_a_safe_backup_failure(client, monkeypatch, native, backup_outcome):
+    monkeypatch.setenv("AITUNNEL_TEXT_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("AITUNNEL_TEXT_API_KEY", "synthetic-backup")
+    reset_settings_cache()
+    calls = []
+
+    def reply(request):
+        calls.append(request.url.host)
+        if request.url.host == "api.llmgw.ru":
+            return httpx.Response(429, json=BODY, headers={"retry-after": "30"})
+        if backup_outcome == "preconnect":
+            raise httpx.ConnectTimeout("synthetic failure", request=request)
+        raise httpx.ReadTimeout("synthetic failure", request=request)
+
+    install_transport(monkeypatch, reply)
+    response = send(client, native)
+    details = error(response, native)["details"]
+
+    assert calls == ["api.llmgw.ru", "api.aitunnel.ru"]
+    assert provider_calls.finish_call.await_count == 2
+    billing.charge.assert_not_awaited()
+    if backup_outcome == "preconnect":
+        assert response.status_code == (429 if native else 502), response.text
+        assert details["provider_charge_ambiguous"] is False and details["retry_safe"] is True
+        assert details["upstream_http_status"] == 429 and details["retry_after_seconds"] == 30
+        assert response.headers["retry-after"] == "30"
+    else:
+        assert details["provider_charge_ambiguous"] is True
+        assert "retry_after_seconds" not in details and "retry-after" not in response.headers
 
 
 @pytest.mark.parametrize("native", [False, True])

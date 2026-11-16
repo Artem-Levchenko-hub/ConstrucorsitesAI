@@ -668,10 +668,12 @@ async def test_final_assistant_closes_lifecycle_gap_for_queued_prompt(
     assert memory.version == 1
 
 
+@pytest.mark.parametrize("target", ["unscoped", "current", "earlier"])
 async def test_cancel_endpoint_marks_active_run_and_signals_redis(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
+    target: str,
 ) -> None:
     owner, project = await _owner_and_project(db_session)
     run = GenerationRun(
@@ -699,10 +701,19 @@ async def test_cancel_endpoint_marks_active_run_and_signals_redis(
     monkeypatch.setattr(messages, "request_generation_cancel", _signal)
     monkeypatch.setattr(messages, "publish_event", _publish)
     try:
-        response = await client.post(f"/api/projects/{project.id}/generation/cancel")
+        params = {} if target == "unscoped" else {
+            "run_id": str(run.id if target == "current" else uuid.uuid4()),
+        }
+        response = await client.post(f"/api/projects/{project.id}/generation/cancel", params=params)
     finally:
         app.dependency_overrides.pop(get_current_user, None)
 
+    if target == "earlier":
+        assert response.status_code == 409
+        assert not signalled
+        await db_session.refresh(run)
+        assert run.status == "running"
+        return
     assert response.status_code == 202
     assert response.json()["id"] == str(run.id)
     assert response.json()["status"] == "cancel_requested"
