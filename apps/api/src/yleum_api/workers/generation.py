@@ -543,6 +543,9 @@ def _recovery_release_pending_clause() -> Any:
 
 
 def _maintenance_candidates_query(active: Sequence[UUID]) -> Select[Any]:
+    from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
+    from yleum_api.models.project_cell import ProjectCellActivityLease
+    from yleum_api.services.project_cell_agent_release_command import AGENT_DEADLINE_BUILD_TOOL_KEY
     from yleum_api.services.project_cell_recovery_release import NONRETRYABLE_RELEASE_ERRORS
 
     # Ownership and unknown effects are still decided by execute_dispatch.
@@ -558,6 +561,27 @@ def _maintenance_candidates_query(active: Sequence[UUID]) -> Select[Any]:
     raw = GenerationRun.agent_state["recovery_v1"]
     release_id = raw["execution"]["release_operation_id"]
     release_proof = ProjectCellOperation.request_payload["request"]["require_environment_proof"]
+    effect, lease = GenerationRecoveryEffect, ProjectCellActivityLease
+    tracked_deadline_check = exists().where(
+        effect.run_id == GenerationRun.id,
+        effect.kind == "tool",
+        effect.tool_call_id == AGENT_DEADLINE_BUILD_TOOL_KEY,
+        effect.pre_binding["kind"].as_string() == "command_v1",
+        cast(effect.logical_step_seq, String) == raw["execution"]["logical_step_seq"].as_string(),
+        lease.operation_id == effect.operation_id,
+        lease.workspace_id == ProjectCellOperation.workspace_id,
+        lease.generation_run_id == GenerationRun.id,
+        lease.kind == "command",
+        lease.phase == "fast_check",
+        cast(lease.fencing_epoch, String) == raw["binding"]["fencing_epoch"].as_string(),
+        or_(
+            and_(lease.state == "active", effect.state.in_(("inflight", "confirmed"))),
+            and_(
+                lease.state.in_(("completed", "failed", "timed_out")),
+                effect.state == "confirmed",
+            ),
+        ),
+    ).correlate(GenerationRun, ProjectCellOperation)
     recovery_release_due = exists().where(
         ProjectCellOperation.generation_run_id == GenerationRun.id,
         ProjectCellOperation.kind == "release",
@@ -566,10 +590,27 @@ def _maintenance_candidates_query(active: Sequence[UUID]) -> Select[Any]:
             ProjectCellOperation.status == "completed",
             and_(
                 ProjectCellOperation.status.in_(("pending", "running", "indeterminate")),
-                release_proof["source_sha256"].as_string()
-                == raw["binding"]["source_sha256"].as_string(),
-                release_proof["environment_sha256"].as_string()
-                == raw["binding"]["environment_sha256"].as_string(),
+                or_(
+                    and_(
+                        release_proof["source_sha256"].as_string()
+                        == raw["binding"]["source_sha256"].as_string(),
+                        release_proof["environment_sha256"].as_string()
+                        == raw["binding"]["environment_sha256"].as_string(),
+                    ),
+                    # The worker must still verify the immutable command and release.
+                    and_(
+                        ProjectCellOperation.request_payload["request"].as_string() == "{}",
+                        raw["version"].as_string() == "3",
+                        raw["clock"]["stage"].as_string() == "edit",
+                        raw["phase"].as_string().in_(
+                            ("working", "waiting_dependency", "reconciling"),
+                        ),
+                        raw["execution"]["stage"].as_string() == "agent",
+                        raw["execution"]["substep"].as_string() == "tool_wait",
+                        raw["execution"]["pending_effect_id"].as_string().is_not(None),
+                        tracked_deadline_check,
+                    ),
+                ),
                 func.coalesce(ProjectCellOperation.error, "").not_in(
                     sorted(NONRETRYABLE_RELEASE_ERRORS),
                 ),

@@ -42,7 +42,15 @@ def test_worker_schedules_only_due_release_maintenance_for_a_parked_run():
         db.execute(
             "CREATE TABLE project_cell_operations (id text, generation_run_id text, "
             "execution_run_id text, kind text, status text, error text, next_attempt_at text, "
-            "request_payload text)"
+            "request_payload text, workspace_id text)"
+        )
+        db.execute(
+            "CREATE TABLE generation_recovery_effects (run_id text, kind text, tool_call_id text, "
+            "pre_binding text, logical_step_seq integer, operation_id text, state text)"
+        )
+        db.execute(
+            "CREATE TABLE project_cell_activity_leases (operation_id text, workspace_id text, "
+            "generation_run_id text, kind text, phase text, fencing_epoch integer, state text)"
         )
         db.execute(
             "INSERT INTO generation_runs VALUES (?, ?, 'worker', 'running', 'started', 0, ?)",
@@ -51,7 +59,7 @@ def test_worker_schedules_only_due_release_maintenance_for_a_parked_run():
         db.execute("INSERT INTO project_cell_workspaces VALUES (?, 'A')", (run_id.hex,))
         db.execute(
             "INSERT INTO project_cell_operations VALUES (?, ?, ?, 'release', 'indeterminate', "
-            "NULL, NULL, ?)", (str(release_id), run_id.hex, run_id.hex, json.dumps({
+            "NULL, NULL, ?, NULL)", (str(release_id), run_id.hex, run_id.hex, json.dumps({
                 "request": {"require_environment_proof": proof},
             })),
         )

@@ -56,6 +56,7 @@ def pending_recovery_release(run: GenerationRun, state: RecoveryState | None) ->
 
 async def _locked_release(
     session: AsyncSession, run_id: UUID, state: RecoveryStateV2,
+    *, confirmed_agent_build: bool = False, reading_agent_build: bool = False,
 ) -> tuple[GenerationRun, ProjectCellWorkspace, ProjectCellOperation] | None:
     execution, binding = state.execution, state.binding
     workspace_id, prior_fence = execution.control_workspace_id, execution.control_fencing_epoch
@@ -99,9 +100,10 @@ async def _locked_release(
     strict = request == {"require_environment_proof": {
         "source_sha256": binding.source_sha256, "environment_sha256": binding.environment_sha256,
     }}
+    owned_request = strict or ((confirmed_agent_build or reading_agent_build) and request == {})
     if operation.status == "pending":
         if (
-            not strict or workspace.generation_run_id != run.id
+            not owned_request or workspace.generation_run_id != run.id
             or prior_fence != binding.fencing_epoch or workspace.fencing_epoch != prior_fence
             or operation.fencing_epoch is not None or operation.execution_run_id is not None
         ):
@@ -120,7 +122,7 @@ async def _locked_release(
         ):
             return None
     elif operation.status != "pending" and (
-        operation.status not in {"running", "indeterminate"} or not strict
+        operation.status not in {"running", "indeterminate"} or not owned_request
         or workspace.generation_run_id != run.id or operation.execution_run_id != run.id
         or operation.error in NONRETRYABLE_RELEASE_ERRORS
     ):
@@ -134,8 +136,10 @@ async def _locked_release(
         ProjectCellActivityLease.workspace_id == workspace.id,
         ProjectCellActivityLease.state == "active",
     ).limit(1)
-    if (await session.scalar(other_operation) is not None
-            or await session.scalar(activity) is not None):
+    if (
+        await session.scalar(other_operation) is not None
+        or (not reading_agent_build and await session.scalar(activity) is not None)
+    ):
         return None
     return run, workspace, operation
 
@@ -157,9 +161,14 @@ def _record_release(
 async def resume_recovery_release(
     factory: async_sessionmaker[AsyncSession], run_id: UUID, state: RecoveryStateV2,
 ) -> None:
+    from yleum_api.services.project_cell_agent_release_command import confirm_agent_build_release
+
     await recovery_execution._require_session_owner(run_id)
+    confirmed_agent_build = await confirm_agent_build_release(factory, run_id, state)
     async with factory() as session:
-        owned = await _locked_release(session, run_id, state)
+        owned = await _locked_release(
+            session, run_id, state, confirmed_agent_build=confirmed_agent_build,
+        )
         if owned is None:
             return
         run, workspace, operation = owned
@@ -184,7 +193,9 @@ async def resume_recovery_release(
     )
     await recovery_execution._require_session_owner(run_id)
     async with factory() as session:
-        owned = await _locked_release(session, run_id, state)
+        owned = await _locked_release(
+            session, run_id, state, confirmed_agent_build=confirmed_agent_build,
+        )
         if owned is None:
             return
         run, workspace, operation = owned

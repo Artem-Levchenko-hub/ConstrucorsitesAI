@@ -9,7 +9,9 @@ import pytest
 from tests.test_project_machine_manifest import payload
 from tests.test_workspace_router import _client, _ready_provider
 from tests.test_workspace_router import _internal_settings as _internal_settings
+from yleum_orchestrator.core.cell_resources import CellFenceRejected
 from yleum_orchestrator.routers import workspace
+from yleum_orchestrator.schemas.workspace import WorkspaceAgentExecResponse
 from yleum_orchestrator.services.docker_cell_resources import DockerCommandResult
 
 
@@ -429,8 +431,9 @@ async def test_failed_restore_returns_durable_failure_without_inventorying_stopp
 
 
 @pytest.mark.usefixtures("_internal_settings")
+@pytest.mark.parametrize("tracked", [False, True])
 async def test_operation_journal_is_readable_while_command_holds_workspace_lock(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, tracked,
 ):
     workspace_id = uuid4()
     provider, manager, docker, run_id = await _ready_provider(tmp_path, workspace_id)
@@ -441,11 +444,22 @@ async def test_operation_journal_is_readable_while_command_holds_workspace_lock(
             self.started = asyncio.Event()
             self.release_command = asyncio.Event()
             self.compilation_receipt_requests = []
+            self.machine_completed = False
+            self.machine_response = None
 
         async def execute(self, state, manifest, request):
             self.started.set()
             await self.release_command.wait()
             return DockerCommandResult(exit_code=0, output="done", timed_out=False)
+
+        async def _inspect_request_status(self, **kwargs):
+            if kwargs["operation_id"] != operation_id:
+                raise CellFenceRejected("unknown machine request")
+            status = await super()._inspect_request_status(**kwargs)
+            if self.machine_completed:
+                status.state = "completed"
+                status.transport_response = self.machine_response
+            return status
 
         def compilation_receipt(self, state, operation_id):
             assert state.workspace_id == workspace_id
@@ -472,8 +486,11 @@ async def test_operation_journal_is_readable_while_command_holds_workspace_lock(
         "cmd": "omnia:full_build",
         "task_role": "full_build",
         "operation_id": str(operation_id),
+        "track_receipt": tracked,
     }
     headers = {"X-Internal-Token": "test-internal-token-not-a-real-secret"}
+    status_path = f"/internal/workspaces/{workspace_id}/agent/operations"
+    operation_path = f"{status_path}/{operation_id}"
     async with _client() as client:
         command = asyncio.create_task(
             client.post(
@@ -482,21 +499,62 @@ async def test_operation_journal_is_readable_while_command_holds_workspace_lock(
                 headers=headers,
             )
         )
-        await asyncio.wait_for(runtime.started.wait(), timeout=1)
-        status = await asyncio.wait_for(
-            client.get(
-                f"/internal/workspaces/{workspace_id}/agent/operations/{operation_id}",
-                headers=headers,
-            ),
-            timeout=1,
-        )
-        assert status.status_code == 200, status.text
-        assert status.json()["state"] == "running"
-        runtime.release_command.set()
-        response = await command
+        try:
+            await asyncio.wait_for(runtime.started.wait(), timeout=1)
+            status = await asyncio.wait_for(
+                client.get(operation_path, headers=headers),
+                timeout=1,
+            )
+            assert status.status_code == 200, status.text
+            assert status.json()["state"] == "running"
+            assert status.json()["terminal_response"] is None
+            unknown = await asyncio.wait_for(
+                client.get(f"{status_path}/{uuid4()}", headers=headers), timeout=1,
+            )
+            assert unknown.status_code == 409, unknown.text
+
+            runtime.machine_completed = True
+            before_response = await asyncio.wait_for(
+                client.get(operation_path, headers=headers), timeout=1,
+            )
+
+            identity = workspace._workspace_identity_digest(
+                files, manifest=None, environment_digest="e" * 64,
+            )
+            output = "unconfirmed command output"
+            runtime.machine_response = WorkspaceAgentExecResponse(
+                ok=True,
+                exit_code=0,
+                detail=output,
+                workspace_revision=identity.workspace_revision,
+                operation_id=operation_id,
+                before_identity=identity,
+                after_identity=identity,
+                environment_mutated=False,
+            ).model_dump(mode="json")
+            status = await asyncio.wait_for(client.get(operation_path, headers=headers), timeout=1)
+            if tracked:
+                assert output not in status.text
+                assert "terminal_response" not in status.json()
+                assert status.status_code == 409, status.text
+                assert before_response.status_code == 409, before_response.text
+            else:
+                assert status.status_code == 200, status.text
+                assert status.json()["terminal_response"]["detail"] == output
+                assert before_response.status_code == 200, before_response.text
+                assert before_response.json()["state"] == "completed"
+                assert before_response.json()["terminal_response"] is None
+        finally:
+            runtime.release_command.set()
+            response = await asyncio.wait_for(command, timeout=5)
         assert response.status_code == 200, response.text
         assert response.json()["compiled_asset_receipt"] is None
+        assert ("command_receipt" in response.json()) == tracked
         assert runtime.compilation_receipt_requests == [operation_id]
+        status = await client.get(operation_path, headers=headers)
+        assert status.status_code == 200, status.text
+        assert status.json()["state"] == "completed"
+        assert status.json()["terminal_response"]["detail"] == output
 
 
 @pytest.mark.usefixtures("_internal_settings")

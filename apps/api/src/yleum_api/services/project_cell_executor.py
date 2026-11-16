@@ -14,20 +14,29 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 from time import monotonic
 from typing import TYPE_CHECKING, Any, cast
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
 from yleum_api.core.db import get_engine
+from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.project import Project
-from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from yleum_api.models.project_cell import (
+    ProjectCellActivityLease,
+    ProjectCellOperation,
+    ProjectCellWorkspace,
+)
 from yleum_api.models.user import User
 from yleum_api.services.agent_builder import Action, Executor
 from yleum_api.services.exact_edit import validate_exact_edit
-from yleum_api.services.generation.recovery_contract import RecoveryStateV2, RecoveryStateV3
+from yleum_api.services.generation.recovery_contract import (
+    RecoveryState,
+    RecoveryStateV2,
+    RecoveryStateV3,
+)
 from yleum_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
     PREVIOUS_CELL_ENSURE_RECONCILIATION_REQUIRED,
@@ -731,6 +740,50 @@ class ProjectCellPreviewSyncResult:
     runtime_absent: bool = False
 
 
+async def _active_agent_build_command(
+    session: AsyncSession, run: GenerationRun,
+    state: RecoveryState | None, workspace: ProjectCellWorkspace,
+) -> bool:
+    from yleum_api.services.generation_deadline import is_restoration_adaptation
+    from yleum_api.services.project_cell_agent_release_command import (
+        AGENT_DEADLINE_BUILD_TOOL_KEY,
+        agent_build_command_cursor,
+    )
+
+    if (
+        not isinstance(state, RecoveryStateV3) or not agent_build_command_cursor(state)
+        or is_restoration_adaptation(run) or run.status != "running"
+        or run.execution_backend != "worker" or run.response_mode not in {"build", "edit"}
+    ):
+        return False
+    cursor, binding = state.execution, state.binding
+    assert binding is not None and cursor.pending_effect_id is not None
+    if (
+        cursor.physical_state not in {"active", "release_pending"}
+        or cursor.control_workspace_id != workspace.id
+        or binding.workspace_id != str(workspace.id)
+        or cursor.control_fencing_epoch != workspace.fencing_epoch
+        or binding.fencing_epoch != workspace.fencing_epoch
+    ):
+        return False
+    activity, effect = ProjectCellActivityLease, GenerationRecoveryEffect
+    return await session.scalar(
+        select(activity.operation_id)
+        .join(effect, effect.operation_id == activity.operation_id)
+        .where(
+            activity.workspace_id == workspace.id, activity.generation_run_id == run.id,
+            activity.fencing_epoch == workspace.fencing_epoch, activity.state == "active",
+            activity.kind == "command", activity.phase == "fast_check",
+            effect.effect_id == uuid5(cursor.pending_effect_id, "physical:1"),
+            effect.run_id == run.id, effect.project_id == run.project_id,
+            effect.user_id == run.user_id,
+            effect.logical_step_seq == cursor.logical_step_seq, effect.kind == "tool",
+            effect.tool_call_id == AGENT_DEADLINE_BUILD_TOOL_KEY,
+            effect.state.in_(("inflight", "confirmed")),
+        )
+    ) is not None
+
+
 async def _release_generation_lease(
     *,
     session_factory: async_sessionmaker[AsyncSession],
@@ -794,8 +847,6 @@ async def _release_generation_lease(
             if not isinstance(state, RecoveryStateV2) or not (valid_stop or valid_yield):
                 raise ProjectCellExecutorUnavailable("Adaptation yield/stop changed before release")
         if expected_fencing_epoch is not None:
-            from yleum_api.models.project_cell import ProjectCellActivityLease
-
             if await session.scalar(select(ProjectCellActivityLease.operation_id).where(
                 ProjectCellActivityLease.workspace_id == workspace_id,
                 ProjectCellActivityLease.state == "active",
@@ -835,12 +886,21 @@ async def _release_generation_lease(
             session, workspace_id=workspace_id, generation_run_id=generation_run_id,
             kind="release", idempotency_key=key, request=request,
         )
+        defer_command_release = (
+            not completion_ready and expected_fencing_epoch is None
+            and not request and operation.status == "pending"
+            and await _active_agent_build_command(session, run, state, workspace)
+        )
         retain_release(run, operation.id, workspace.fencing_epoch, "release_pending")
         completion_handoff = completion_ready and await retain_completion_release(
             session, run=run, workspace=workspace, operation=operation,
             profile_version=profile_version,
         )
         await session.commit()
+    if defer_command_release:
+        # The tracked command still owns this fence. Maintenance reads its
+        # receipt before dispatching the existing release intent.
+        raise ProjectCellExecutorUnavailable("Project Cell release awaits its tracked command")
     client = HttpProjectCellOrchestratorClient()
     deadline = monotonic() + _PROJECT_CELL_RELEASE_RETRY_SECONDS
     outcome = await execute_cell_operation(session_factory, operation.id, client)

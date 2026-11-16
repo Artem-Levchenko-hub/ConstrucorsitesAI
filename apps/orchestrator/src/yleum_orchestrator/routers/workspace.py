@@ -119,6 +119,7 @@ from yleum_orchestrator.services.machine_startup import (
     require_startup_admission,
 )
 from yleum_orchestrator.services.project_machine import machine_effect, machine_remaining_seconds
+from yleum_orchestrator.services.source_write_journal import require_source_writes_clear
 from yleum_orchestrator.services.workspace_provider_factory import (
     build_workspace_provider,
     settings_for_workspace,
@@ -1419,10 +1420,11 @@ async def get_workspace_agent_operation(
     verify_internal_token(x_internal_token)
     provider = _workspace_provider(workspace_id)
     manager = _require_docker_resource_manager(provider)
-    # Journal reads must remain available while the mutating request owns the
-    # workspace lock. The controller file is replaced atomically, so this path
-    # can safely observe it without contending with the long-running command.
-    state, _volume_name = await _workspace_volume_identity(manager, workspace_id)
+    # The controller replaces the journal atomically while the command holds
+    # the workspace lock. Status polling must be able to observe pending work.
+    state, _volume_name = await _workspace_volume_identity(
+        manager, workspace_id, read_command_status=True,
+    )
     if manager.machine_runtime is None:
         raise OrchestratorError(
             code="docker_unavailable",
@@ -1438,6 +1440,16 @@ async def get_workspace_agent_operation(
             message=str(exc),
             status_code=409,
         ) from exc
+    if status.state != "running" or status.transport_response is not None:
+        # A machine result can precede the tracked command's strict receipt.
+        try:
+            require_source_writes_clear(manager.state_store.root, workspace_id)
+        except CellIndeterminateOperation as exc:
+            raise OrchestratorError(
+                code="conflict",
+                message="command status is awaiting journal confirmation",
+                status_code=409,
+            ) from exc
     return WorkspaceAgentOperationStatusResponse(
         operation_id=operation_id,
         state=status.state,
@@ -2444,7 +2456,9 @@ def _raise_agent_stale_conflict(
 async def _workspace_volume_identity(
     manager: DockerCellResourceManager,
     workspace_id: UUID,
-    *, source_status: bool = False,
+    *,
+    source_status: bool = False,
+    read_command_status: bool = False,
 ) -> tuple[CellWorkspaceState, str]:
     from yleum_orchestrator.services.adaptation_recovery_barrier import (
         require_candidate_writers_allowed,
@@ -2458,8 +2472,7 @@ async def _workspace_volume_identity(
             code="conflict", message="candidate recovery barrier blocks writer authority",
             status_code=409,
         ) from exc
-    if not source_status:
-        from yleum_orchestrator.services.source_write_journal import require_source_writes_clear
+    if not (source_status or read_command_status):
         require_source_writes_clear(manager.state_store.root, workspace_id)
 
     if is_workspace_deleted(manager.profile.state_path, workspace_id):
