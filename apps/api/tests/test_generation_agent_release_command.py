@@ -31,19 +31,38 @@ from yleum_api.services.orchestrator_client import (
     ProjectCellWorkspaceIdentity,
     command_wire_digest,
 )
-from yleum_api.services.project_cell_proofs import MAX_BOOTSTRAP_CONTRACT_VERSION, ProofIdentity
+from yleum_api.services.project_cell_proofs import (
+    MAX_BOOTSTRAP_CONTRACT_VERSION,
+    ProofDimension,
+    ProofIdentity,
+    ProofOutcome,
+    create_proof_identity,
+    record_proof_result,
+)
 from yleum_api.services.project_cells import _canonical_operation_envelope
 from yleum_api.services.promotion_permit import workspace_revision_digest
 from yleum_api.workers.generation import _maintenance_candidates_query
 
-
-@pytest.mark.parametrize("case", [
+_BASE_CASES = (
     "terminal", "unclaimed_release", "previously_confirmed", "confirmed_active", "executor_defer",
     "terminal_red", "terminal_timeout", "pending", "foreign", "changed_identity", "wrong_prefix",
     "future_effect", "wrong_tool", "prior_source", "unsettled_prior_source",
     "minio_error", "minio_transport", "minio_timeout",
+)
+_CACHE_REJECTIONS = (
+    "cached_missing", "cached_red", "cached_schema", "cached_environment", "cached_fence",
+    "cached_contract", "cached_current_proof", "cached_ordinal_gap",
+    "cached_changes_during_receipt",
+)
+
+
+@pytest.mark.parametrize(("case", "cached_bootstrap"), [
+    *[(case, cached) for case in _BASE_CASES for cached in (False, True)],
+    *[(case, True) for case in _CACHE_REJECTIONS],
 ])
-async def test_release_after_tracked_agent_compiler_ack_lost(clock_owner, monkeypatch, case):
+async def test_release_after_tracked_agent_compiler_ack_lost(
+    clock_owner, monkeypatch, case, cached_bootstrap,
+):
     c = clock_owner
     now = datetime.now(UTC)
     state, run = c.driver.state, c.run
@@ -79,6 +98,28 @@ async def test_release_after_tracked_agent_compiler_ack_lost(clock_owner, monkey
         resource_profile_version="docker-owner-cell-resources-v2",
         build_config_digest=identity.build_config_digest,
     )
+    if cached_bootstrap:
+        if case != "cached_current_proof":
+            await create_proof_identity(c.session, identity=proof)
+        previous_identity = replace(proof, workspace_revision="9" * 64)
+        if case == "cached_schema":
+            previous_identity = replace(previous_identity, schema_data_digest="f" * 64)
+        elif case == "cached_environment":
+            previous_identity = replace(previous_identity, base_image_digest="f" * 64)
+        elif case == "cached_fence":
+            previous_identity = replace(previous_identity, fencing_epoch=2)
+        previous_proof = await create_proof_identity(
+            c.session, identity=previous_identity,
+        )
+        if case != "cached_missing":
+            cached_result = await record_proof_result(
+                c.session, proof=previous_proof, dimension=ProofDimension.BOOTSTRAP,
+                outcome=ProofOutcome.RED if case == "cached_red" else ProofOutcome.GREEN,
+                operation_id=uuid4(), artifact_ref=None,
+                detail="verified platform from the preceding source revision",
+            )
+            if case == "cached_contract":
+                cached_result.dimension_key = "f" * 64
     key = "legacy-action" if case == "wrong_tool" else "legacy-deadline-build"
     step = 83
     tool_id = uuid5(run.id, f"recovery-tool-v1:{step}:{key}")
@@ -177,12 +218,16 @@ async def test_release_after_tracked_agent_compiler_ack_lost(clock_owner, monkey
                 checkpoint_ref=previous_result.model_dump(mode="json"),
             ),
         ])
-    roles = (("bootstrap", "prepare"), ("fast_check", "fast_check"))
+    roles = (
+        (("fast_check", "fast_check"),) if cached_bootstrap
+        else (("bootstrap", "prepare"), ("fast_check", "fast_check"))
+    )
     for ordinal, (role, phase) in enumerate(roles):
-        contract = MAX_BOOTSTRAP_CONTRACT_VERSION if ordinal == 0 else "v1"
+        bootstrap = role == "bootstrap"
+        contract = MAX_BOOTSTRAP_CONTRACT_VERSION if bootstrap else "v1"
         op_id = uuid5(run.id, f"command:{workspace.id}:3:{proof.proof_key}:{role}:{contract}")
         command = tools.CommandContext(
-            cmd=f"omnia:{role}", timeout_seconds=900 if ordinal == 0 else 480,
+            cmd=f"omnia:{role}", timeout_seconds=900 if bootstrap else 480,
             task_role=role, before_files=files,
         )
         command_ref = await execution.store_execution_context(
@@ -198,8 +243,8 @@ async def test_release_after_tracked_agent_compiler_ack_lost(clock_owner, monkey
         bound = bound.model_copy(update={
             "request_sha256": tools._command_request_hash(bound, op_id, run.id, command),
         })
-        timed_out = ordinal == 1 and case == "terminal_timeout"
-        exit_code = 124 if timed_out else int(ordinal == 1 and case == "terminal_red")
+        timed_out = not bootstrap and case == "terminal_timeout"
+        exit_code = 124 if timed_out else int(not bootstrap and case == "terminal_red")
         response = ProjectCellAgentExecResponse(
             ok=exit_code == 0, exit_code=exit_code, detail="synthetic compiler terminal",
             timed_out=timed_out,
@@ -217,11 +262,14 @@ async def test_release_after_tracked_agent_compiler_ack_lost(clock_owner, monkey
             field: str(value) if isinstance(value, UUID) else value
             for field, value in asdict(receipt).items()
         }
-        finished = ordinal == 0 or case == "previously_confirmed"
+        finished = bootstrap or case == "previously_confirmed"
         confirmed = finished or case == "confirmed_active"
         effect_id = uuid5(tool_id, f"physical:{ordinal}")
+        if case == "cached_ordinal_gap":
+            effect_id = uuid5(tool_id, "physical:1")
         c.session.add(GenerationRecoveryEffect(
-            effect_id=uuid4() if case == "wrong_prefix" and finished else effect_id,
+            effect_id=uuid4()
+            if case == "wrong_prefix" and (bootstrap or cached_bootstrap) else effect_id,
             run_id=run.id, project_id=run.project_id, user_id=run.user_id,
             logical_step_seq=step, effect_ordinal=ordinal + 2 + 2 * tool_index, kind="tool",
             input_digest=tools.digest({
@@ -258,6 +306,9 @@ async def test_release_after_tracked_agent_compiler_ack_lost(clock_owner, monkey
         )
         if case == "pending":
             return ProjectCellCommandStatus(op_id, "pending", None, None)
+        if case == "cached_changes_during_receipt":
+            cached_result.outcome = ProofOutcome.RED.value
+            await c.session.commit()
         wire_receipt = receipt
         if case == "foreign":
             wire_receipt = replace(receipt, dispatch_fencing_epoch=2)

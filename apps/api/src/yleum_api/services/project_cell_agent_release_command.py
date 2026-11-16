@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from itertools import pairwise
 from uuid import UUID, uuid5
 
 from minio.error import S3Error
@@ -13,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from urllib3.exceptions import HTTPError as ObjectTransportError
 
 from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
-from yleum_api.models.project_cell import ProjectCellActivityLease
+from yleum_api.models.project_cell import ProjectCellActivityLease, ProjectCellProof
 from yleum_api.services import orchestrator_client
 from yleum_api.services.generation import recovery_execution
 from yleum_api.services.generation import recovery_tool_receipts as receipts
@@ -37,7 +38,14 @@ from yleum_api.services.orchestrator_client import (
     ProjectCellSourceWriteReceipt,
 )
 from yleum_api.services.project_cell_activity import ActivityState, finish_activity
-from yleum_api.services.project_cell_proofs import MAX_BOOTSTRAP_CONTRACT_VERSION, ProofIdentity
+from yleum_api.services.project_cell_proofs import (
+    MAX_BOOTSTRAP_CONTRACT_VERSION,
+    ProofDimension,
+    ProofIdentity,
+    ProofOutcome,
+    find_proof_result,
+    proof_identity_from_model,
+)
 from yleum_api.services.project_cells import _stored_request_payload
 from yleum_api.services.promotion_permit import workspace_revision_digest
 
@@ -49,13 +57,22 @@ _ROLE_SPECS = (
 
 
 @dataclass(frozen=True)
+class _BootstrapCacheWitness:
+    result_id: UUID
+    proof_id: UUID
+    operation_id: UUID
+    dimension_key: str
+
+
+@dataclass(frozen=True)
 class _CompilerSlot:
     operation_id: UUID
     effect_id: UUID
     effect_revision: int
     input_digest: str
     command: receipts.CommandBinding
-    prefix: ProjectCellCommandReceipt
+    prefix: ProjectCellCommandReceipt | None
+    bootstrap_cache: _BootstrapCacheWitness | None
     profile: str
     persisted_receipt: ProjectCellCommandReceipt | None
     activity_finished: bool
@@ -217,6 +234,33 @@ def _settled_prior_legacy_action(
     return True
 
 
+async def _cached_bootstrap(
+    session: AsyncSession, command: receipts.CommandBinding, state: RecoveryStateV2, profile: str,
+) -> _BootstrapCacheWitness | None:
+    """Use the same bootstrap dimension cache that permitted this FAST_CHECK."""
+    binding, activity = state.binding, command.activity
+    assert binding is not None and activity is not None
+    proof = await session.scalar(select(ProjectCellProof).where(
+        ProjectCellProof.workspace_id == command.workspace_id,
+        ProjectCellProof.generation_run_id == state.identity.run_id,
+        ProjectCellProof.fencing_epoch == binding.fencing_epoch,
+        ProjectCellProof.proof_key == activity.proof_key,
+        ProjectCellProof.workspace_revision == binding.source_sha256,
+        ProjectCellProof.schema_data_digest == binding.schema_sha256,
+        ProjectCellProof.base_image_digest == binding.environment_sha256,
+        ProjectCellProof.toolchain_digest == binding.environment_sha256,
+        ProjectCellProof.resource_profile_version == profile,
+    ))
+    if proof is None or proof_identity_from_model(proof).proof_key != activity.proof_key:
+        return None
+    result = await find_proof_result(session, proof=proof, dimension=ProofDimension.BOOTSTRAP)
+    if result is None or result.outcome != ProofOutcome.GREEN.value:
+        return None
+    return _BootstrapCacheWitness(
+        result.id, result.proof_id, result.operation_id, result.dimension_key,
+    )
+
+
 async def _read_slot(
     session: AsyncSession, state: RecoveryStateV2,
 ) -> _CompilerSlot | None:
@@ -254,13 +298,22 @@ async def _read_slot(
         GenerationRecoveryEffect.logical_step_seq == cursor.logical_step_seq,
         GenerationRecoveryEffect.kind == "tool",
     ).order_by(GenerationRecoveryEffect.effect_ordinal).limit(6).with_for_update())).all())
+    start = next(
+        (index for index, row in enumerate(rows)
+         if row.tool_call_id == AGENT_DEADLINE_BUILD_TOOL_KEY), len(rows),
+    )
+    compiler = rows[start:]
     if (
-        not 2 <= len(rows) < 6 or rows[-1].effect_ordinal != rows[-2].effect_ordinal + 1
-        or not _settled_prior_legacy_action(rows[:-2], state)
+        len(rows) >= 6 or len(compiler) not in {1, 2}
+        or any(right.effect_ordinal != left.effect_ordinal + 1
+               for left, right in pairwise(compiler))
+        or not _settled_prior_legacy_action(rows[:start], state)
     ):
         return None
     prefix = None
-    for ordinal, (row, spec) in enumerate(zip(rows[-2:], _ROLE_SPECS, strict=True)):
+    cached = None
+    specs = _ROLE_SPECS if len(compiler) == 2 else _ROLE_SPECS[1:]
+    for ordinal, (row, spec) in enumerate(zip(compiler, specs, strict=True)):
         role, phase, contract = spec
         if (
             row.effect_id != uuid5(cursor.pending_effect_id, f"physical:{ordinal}")
@@ -290,12 +343,15 @@ async def _read_slot(
                 "command", phase, activity.proof_key)
         ):
             return None
-        if ordinal == 0:
+        if role == "bootstrap":
             prefix = _stored_receipt(row, command, state)
             if prefix is None or lease.state != "completed" or lease.finished_at is None:
                 return None
             continue
-        assert prefix is not None
+        if prefix is None:
+            cached = await _cached_bootstrap(session, command, state, profile)
+            if cached is None:
+                return None
         retained = None
         finished = (
             lease.state in {ActivityState.COMPLETED, ActivityState.FAILED, ActivityState.TIMED_OUT}
@@ -306,8 +362,9 @@ async def _read_slot(
             retained = _stored_receipt(row, command, state)
             if (
                 retained is None
-                or (retained.physical_volume, retained.physical_volume_identity)
-                != (prefix.physical_volume, prefix.physical_volume_identity)
+                or (prefix is not None and
+                    (retained.physical_volume, retained.physical_volume_identity)
+                    != (prefix.physical_volume, prefix.physical_volume_identity))
                 or not (finished or active)
             ):
                 return None
@@ -325,7 +382,7 @@ async def _read_slot(
             return None
         return _CompilerSlot(
             row.operation_id, row.effect_id, row.revision, row.input_digest, command,
-            prefix, profile, retained, finished,
+            prefix, cached, profile, retained, finished,
         )
     return None
 
@@ -363,8 +420,9 @@ async def _read_terminal_receipt(
         or receipt is None or response is None
         or (slot.persisted_receipt is not None and receipt != slot.persisted_receipt)
         or not _matches_command_receipt(receipt, command, state, slot.operation_id)
-        or (receipt.physical_volume, receipt.physical_volume_identity)
-        != (slot.prefix.physical_volume, slot.prefix.physical_volume_identity)
+        or (slot.prefix is not None and
+            (receipt.physical_volume, receipt.physical_volume_identity)
+            != (slot.prefix.physical_volume, slot.prefix.physical_volume_identity))
         or response.ok != (response.exit_code == 0 and not response.timed_out)
         or response.environment_mutated or response.before_identity != response.after_identity
     ):

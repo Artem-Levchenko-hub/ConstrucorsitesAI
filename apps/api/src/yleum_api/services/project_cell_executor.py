@@ -774,7 +774,9 @@ async def _active_agent_build_command(
             activity.workspace_id == workspace.id, activity.generation_run_id == run.id,
             activity.fencing_epoch == workspace.fencing_epoch, activity.state == "active",
             activity.kind == "command", activity.phase == "fast_check",
-            effect.effect_id == uuid5(cursor.pending_effect_id, "physical:1"),
+            effect.effect_id.in_(
+                uuid5(cursor.pending_effect_id, f"physical:{ordinal}") for ordinal in (0, 1)
+            ),
             effect.run_id == run.id, effect.project_id == run.project_id,
             effect.user_id == run.user_id,
             effect.logical_step_seq == cursor.logical_step_seq, effect.kind == "tool",

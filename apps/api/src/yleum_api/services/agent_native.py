@@ -2020,6 +2020,24 @@ async def _run_native_segment(
             log.exception("agent_native.completion_check_failed")
             return f"Product acceptance check failed: {type(exc).__name__}."
 
+    async def _finish_exploration(*, steps: int) -> AgentResult:
+        """Apply the same no-progress outcome to prose and tool turns."""
+        if coordinated_max:
+            # Only finalization may accept a source-complete MAX candidate.
+            return await _finish_without_provider(
+                steps=steps, reason="exploring",
+                detail="stuck without user-facing product progress",
+            )
+        return AgentResult(
+            done=False,
+            summary=(
+                "stuck without user-facing product progress "
+                "(only reading/verifying or auxiliary-file churn)"
+            ),
+            files=written, steps=steps, transcript=convo, stop_reason="exploring",
+            evidence=_evidence(),
+        )
+
     async def _finish_without_provider(*, steps: int, reason: str, detail: str) -> AgentResult:
         """Stop provider traffic; flagged MAX transfers proof to finalization."""
         if edit_source_changed is not None and not edit_source_changed():
@@ -2818,10 +2836,8 @@ async def _run_native_segment(
                         stop_reason="done_green",
                         evidence=_evidence(),
                     )
-                if edit_source_changed is not None:
-                    _record_turn_progress(False)
-                elif source_repair:
-                    _record_turn_progress(False)
+                _record_turn_progress(False)
+                if source_repair and edit_source_changed is None:
                     if not _repair_source_changed():
                         gap = _SOURCE_REPAIR_NUDGE
                         if no_write_turns >= _SOURCE_REPAIR_DISCOVERY_TURNS and emit:
@@ -2858,6 +2874,8 @@ async def _run_native_segment(
                     return await _finish_without_provider(
                         steps=step + 1, reason="exploring", detail=_SOURCE_REPAIR_NUDGE,
                     )
+                if no_write_turns >= _NO_WRITE_ABORT_AT:
+                    return await _finish_exploration(steps=step + 1)
                 continue
 
             batch = PureCheckBatch(pure_check)
@@ -3285,26 +3303,7 @@ async def _run_native_segment(
                     evidence=_evidence(),
                 )
             if no_write_turns >= _NO_WRITE_ABORT_AT:
-                if coordinated_max:
-                    # Exploration exhaustion is also a provider stop. Reuse the
-                    # source gate; only finalization may prove a ready product.
-                    return await _finish_without_provider(
-                        steps=step + 1,
-                        reason="exploring",
-                        detail="stuck without user-facing product progress",
-                    )
-                return AgentResult(
-                    done=False,
-                    summary=(
-                        "stuck without user-facing product progress "
-                        "(only reading/verifying or auxiliary-file churn)"
-                    ),
-                    files=written,
-                    steps=step + 1,
-                    transcript=convo,
-                    stop_reason="exploring",
-                    evidence=_evidence(),
-                )
+                return await _finish_exploration(steps=step + 1)
 
     # Hard stop means no more provider calls. A local build decides whether the
     # tree can ship; otherwise the caller restores the last green snapshot.
