@@ -261,6 +261,14 @@ _PORTABLE_QUIESCENCE_COMMAND_STATUS_SOURCES = {
     **_PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES,
     "routers.workspace": "5fde41535169cc18d5c1b8497e04d2f416fa1594d892bcf1eea9d168f9d1eff1",
 }
+# The opt-in migration inventory checks protected source provenance under
+# the existing workspace lock without waking the project database. Review the
+# snapshot router and response schema as one successor to command status.
+_PORTABLE_QUIESCENCE_MIGRATION_INVENTORY_SOURCES = {
+    **_PORTABLE_QUIESCENCE_COMMAND_STATUS_SOURCES,
+    "routers.workspace": "ac3c84971e20fcfd78de9eeef47bc73de5d6bf3ff6e6e9f7fc68620f47bc461e",
+    "schemas.workspace": "bcfa4ea78b749842de52a99406a963da385d1394851976f3fc845de174e9bb16",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -285,6 +293,17 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES,
     _PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES,
     _PORTABLE_QUIESCENCE_COMMAND_STATUS_SOURCES,
+    _PORTABLE_QUIESCENCE_MIGRATION_INVENTORY_SOURCES,
+)
+# Only these reviewed producers may attest a pending fast_check wrapper.
+_PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES = (
+    _PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES,
+    _PORTABLE_QUIESCENCE_READER_WAIT_SOURCES,
+    _PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES,
+    _PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES,
+    _PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES,
+    _PORTABLE_QUIESCENCE_COMMAND_STATUS_SOURCES,
+    _PORTABLE_QUIESCENCE_MIGRATION_INVENTORY_SOURCES,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.
@@ -528,12 +547,7 @@ def _pending_portable_commands(machine: dict, *, sources: dict[str, str]) -> dic
         pending[operation_id] = _digest(record)
     if requests:
         _kernel_need(
-            sources in (_PORTABLE_QUIESCENCE_SOURCE_GUARD_LEASE_SOURCES,
-                        _PORTABLE_QUIESCENCE_READER_WAIT_SOURCES,
-                        _PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES,
-                        _PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES,
-                        _PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES,
-                        _PORTABLE_QUIESCENCE_COMMAND_STATUS_SOURCES)
+            sources in _PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES
             and len(requests) == 1 and len(pending) <= 1,
             "quiescence_command_scope",
         )

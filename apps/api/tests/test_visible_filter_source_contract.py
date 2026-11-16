@@ -70,8 +70,6 @@ def test_any_other_setter_reference_is_unknown_not_a_false_rejection(handler: st
 @pytest.mark.parametrize("prompt", [
     "Добавь описание тренировок, фильтры не нужны.",
     "Не добавляй кнопки фильтра.",
-    "API-only: add filters for workouts.",
-    "Только API: добавь фильтры тренировок.",
     "Объясни, почему кнопки фильтра отсутствуют.",
     "Review the existing visible filter buttons.",
     "Добавь фильтры в SQL, интерфейс не менять.",
@@ -187,9 +185,6 @@ def test_rendered_memo_catalog_cannot_hide_unreferenced_sort_setter(prompt: str)
 
 @pytest.mark.parametrize("prompt", [
     "Не добавляй сортировку каталога.",
-    "Только API: добавь сортировку каталога.",
-    "API-only: add catalog sorting.",
-    "Sort only API results, catalog UI unchanged.",
     "Добавь сортировку каталога в SQL, интерфейс не менять.",
     "Добавь сортировку каталога на сервере, интерфейс менять не нужно.",
     "Add server-side catalog sorting, keep UI unchanged.",
@@ -421,7 +416,6 @@ def test_working_status_filter_cannot_hide_requested_inert_priority(prompt: str)
 @pytest.mark.parametrize("prompt", [
     "Добавь видимый фильтр по статусу.",
     "Добавь видимые фильтры.",
-    "Только API: добавь видимый фильтр по приоритету.",
     "Не добавляй видимый фильтр по приоритету.",
     "Добавь видимый фильтр по статусу. Не меняй приоритет.",
 ])
@@ -496,11 +490,9 @@ def test_requested_selector_exposes_existing_inert_priority_filter(prompt: str) 
 
 
 @pytest.mark.parametrize("prompt", [
-    "Только API: добавь селектор фильтра по приоритету.",
     "Не добавляй селектор фильтра по приоритету.",
     "Покажи селектор фильтра по статусу. Не меняй приоритет.",
     "Покажи селектор приоритета в форме и метку в списке.",
-    "API-only: add a priority filter selector.",
     "Do not add a priority filter selector.",
     "Исправь только CSS-селектор фильтра по приоритету.",
     "Fix the CSS selector for the priority filter.",
@@ -511,6 +503,46 @@ def test_requested_selector_exposes_existing_inert_priority_filter(prompt: str) 
 ])
 def test_selector_does_not_invent_positive_priority_filter_intent(prompt: str) -> None:
     assert max_source_completion_gap(prompt, candidate(MIXED_PRIORITY_PAGE), portable=True) is None
+
+
+@pytest.mark.parametrize(("prompt", "page"), [
+    ("API-only: add filters for workouts.", PAGE),
+    ("Только API: добавь фильтры тренировок.", PAGE),
+    ("Только API: добавь сортировку каталога.", MEMO_CATALOG_PAGE),
+    ("API-only: add catalog sorting.", MEMO_CATALOG_PAGE),
+    ("Sort only API results, catalog UI unchanged.", MEMO_CATALOG_PAGE),
+    ("Только API: добавь видимый фильтр по приоритету.", MIXED_PRIORITY_PAGE),
+    ("Только API: добавь селектор фильтра по приоритету.", MIXED_PRIORITY_PAGE),
+    ("API-only: add a priority filter selector.", MIXED_PRIORITY_PAGE),
+])
+def test_api_only_collections_require_a_product_route_without_ui_changes(
+    prompt: str, page: str,
+) -> None:
+    files = candidate(page)
+    assert max_source_completion_gap(prompt, files, portable=True) == (
+        "Implement the requested product API route before done."
+    )
+    files["src/app/api/items/route.ts"] = '''
+import { getMaxUser } from "@/lib/max/session";
+
+const items = [
+  {duration: 25, price: 250, priority: "high"},
+  {duration: 40, price: 150, priority: "normal"},
+];
+
+export async function GET(request: Request) {
+  if (!await getMaxUser()) return new Response(null, {status: 401});
+  const query = new URL(request.url).searchParams;
+  const priority = query.get("priority");
+  const minDuration = Number(query.get("minDuration") ?? 0);
+  const results = items.filter(item =>
+    item.duration >= minDuration && (priority === null || item.priority === priority));
+  if (query.get("sort") === "price") results.sort((a, b) => a.price - b.price);
+  return Response.json({items: results});
+}
+'''
+    assert max_source_completion_gap(prompt, files, portable=True) is None
+
 
 @pytest.mark.parametrize("predicate", [
     'priority === "all" || o["priority"] === priority',

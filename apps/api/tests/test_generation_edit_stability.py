@@ -186,8 +186,9 @@ async def test_native_handoff_checkpoints_candidate_before_return(edit_workspace
         if len(calls) == 1:
             return turn("edit_file", {"path": "src/app/page.tsx", "search": "History",
                                       "replace": "Orders"})
-        if len(calls) == 2:
-            return turn("build", {})
+        assert len(calls) == 2
+        assert executed == ["edit_file", "build"]
+        assert saved[0]["source"]["src/app/page.tsx"] == "Catalog; Orders"
         return turn("done", {"summary": "changed"})
 
     async def checkpoint(result):

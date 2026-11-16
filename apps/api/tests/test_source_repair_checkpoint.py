@@ -106,6 +106,7 @@ async def test_failed_first_handoff_keeps_private_draft_and_cleans_red_tests(mon
     runtime = GenerationRuntime(
         handle=SimpleNamespace(
             export_files=export_files, stage_patch=stage_patch, run_role=run_role,
+            prove_restoration_adaptation=None,
         ),
         coordinator=SimpleNamespace(
             finalize_with_repair=finalize_with_repair, session_factory=None,

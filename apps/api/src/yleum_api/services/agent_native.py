@@ -2648,12 +2648,13 @@ async def _run_native_segment(
                 if marker is not None:
                     safe_reason = f"{marker.group(1)}: {failure_for_error(exc).message}"
                 reason_code = safe_reason.partition(":")[0].lower()
+                provider_diagnostic: dict[str, Any] | None = None
                 if isinstance(exc, _NativeProviderServerError):
-                    diagnostic = exc.diagnostics()
+                    provider_diagnostic = exc.diagnostics()
                 elif isinstance(exc, LLMError) and exc.code == "deadline_before_dispatch":
                     reason_code = exc.code
                     safe_reason = f"generation deadline exceeded before provider dispatch: {exc}"
-                    diagnostic = {
+                    provider_diagnostic = {
                         "tool": "provider_request", "kind": "provider_error",
                         "http_status": exc.http_status,
                         "error_origin": "gateway", "error_code": exc.code,
@@ -2661,8 +2662,6 @@ async def _run_native_segment(
                         "will_retry": False, "retry_decision": "stop",
                         **provider_error_context(exc),
                     }
-                else:
-                    diagnostic = None
                 if str(exc).startswith("PROVIDER_TIMEOUT:"):
                     reason_code = "provider_timeout"
                     safe_reason = (
@@ -2677,9 +2676,9 @@ async def _run_native_segment(
                     message_id=str(message_id) if message_id else None,
                     stage=call_stage,
                 )
-                if emit and diagnostic is not None:
+                if emit and provider_diagnostic is not None:
                     try:
-                        await emit("agent.provider_error", diagnostic)
+                        await emit("agent.provider_error", provider_diagnostic)
                     except Exception as diagnostic_error:
                         # A secondary trace failure must not replace the actual
                         # provider outcome or cause another model/tool request.

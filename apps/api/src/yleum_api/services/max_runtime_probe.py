@@ -431,14 +431,14 @@ async def _probe_signed_runtime(
                     client, business_path, expected_origin=origin,
                 )
                 if not business["ok"]:
-                    status = business["status"]
+                    business_status = business["status"]
                     reason = str(business["reason"])
-                    if isinstance(status, int):
-                        detail = f"{reason}: GET {business_path} (HTTP {status})"
+                    if isinstance(business_status, int):
+                        detail = f"{reason}: GET {business_path} (HTTP {business_status})"
                         if reason == "signed_business_route_readiness_invalid":
                             return MaxRuntimeProbe(False, detail, failure_kind="source")
                         return _http_failure(
-                            detail, status, product=True,
+                            detail, business_status, product=True,
                         )
                     return MaxRuntimeProbe(
                         False, reason, failure_kind=(

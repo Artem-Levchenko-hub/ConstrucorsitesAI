@@ -7,6 +7,7 @@ import json
 import os
 import re
 import stat
+from collections.abc import Mapping
 from dataclasses import fields, replace
 from typing import Any
 from uuid import UUID
@@ -130,7 +131,7 @@ def _adapter(raw: Any) -> PlatformBrowserAdapter:
                 "compact_name": None,
             },
         }
-        presets = {
+        presets: dict[str, Mapping[str, object]] = {
             COFFEE_UI_PRESET: coffee,
             THEME_UI_PRESET: theme,
             COFFEE_THEME_UI_PRESET: {**coffee, **theme, **density},

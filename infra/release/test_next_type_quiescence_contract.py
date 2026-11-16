@@ -28,7 +28,8 @@ class NextTypeSourceClosureTests(unittest.TestCase):
         self.meal = self.checker._PORTABLE_QUIESCENCE_MEAL_ACCEPTANCE_SOURCES
         self.release_environment = self.checker._PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES
         self.resilient_release = self.checker._PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES
-        self.current = self.checker._PORTABLE_QUIESCENCE_COMMAND_STATUS_SOURCES
+        self.command_status = self.checker._PORTABLE_QUIESCENCE_COMMAND_STATUS_SOURCES
+        self.current = self.checker._PORTABLE_QUIESCENCE_MIGRATION_INVENTORY_SOURCES
 
     def test_historical_complete_bundle_is_preserved_and_still_supported(self):
         old_fixture = json.loads((self.directory / "fixtures/platform-bootstrap-v2-quiescence-sources.json").read_bytes())
@@ -137,12 +138,25 @@ class NextTypeSourceClosureTests(unittest.TestCase):
 
     def test_command_status_keeps_the_complete_incumbent_bundle_and_changes_only_workspace(self):
         self.checker._require_reviewed_portable_sources(self.resilient_release)
-        self.checker._require_reviewed_portable_sources(self.current)
-        self.assertEqual(set(self.current), set(self.resilient_release))
+        self.checker._require_reviewed_portable_sources(self.command_status)
+        self.assertEqual(set(self.command_status), set(self.resilient_release))
         self.assertEqual(
-            {name for name in self.current if self.current[name] != self.resilient_release[name]},
+            {name for name in self.command_status if self.command_status[name] != self.resilient_release[name]},
             {"routers.workspace"},
         )
+
+    def test_migration_inventory_requires_the_router_and_schema_as_a_pair(self):
+        self.checker._require_reviewed_portable_sources(self.current)
+        self.assertEqual(set(self.current), set(self.command_status))
+        changed = {name for name in self.current if self.current[name] != self.command_status[name]}
+        self.assertEqual(changed, {"routers.workspace", "schemas.workspace"})
+        for name in changed:
+            with self.subTest(historical_module=name), self.assertRaisesRegex(
+                self.checker.PhysicalDrainError, "quiescence_unsupported_source"
+            ):
+                self.checker._require_reviewed_portable_sources(
+                    {**self.current, name: self.command_status[name]},
+                )
 
     def test_current_committed_source_closure_matches_linux_git_bytes(self):
         root = self.directory.parents[1] / "apps/orchestrator/src/yleum_orchestrator"

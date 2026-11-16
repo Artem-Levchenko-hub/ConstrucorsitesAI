@@ -29,6 +29,14 @@ function typeButton(name: string) {
   return [...group.querySelectorAll("button")].find(candidate => candidate.querySelector("span")?.textContent?.startsWith(name))!;
 }
 
+function moduleCheckbox(name: string) {
+  const group = [...document.querySelectorAll("fieldset")].find(fieldset => fieldset.querySelector("legend")?.textContent === "Управление в Yleum");
+  const label = [...(group?.querySelectorAll("label") ?? [])].find(candidate => candidate.querySelector("span span")?.textContent === name);
+  const checkbox = label?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+  expect(checkbox, name).toBeDefined();
+  return checkbox!;
+}
+
 async function renderStudio() {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.stubGlobal("fetch", vi.fn(async (path: string) => {
@@ -44,50 +52,33 @@ async function renderStudio() {
 }
 
 it("transfers the entire pasted brief from creation to the chat starter", async () => {
-  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.create.mockResolvedValue({ id: "long-brief-qa" });
-  mocks.save.mockResolvedValue({});
   const brief = "я".repeat(19_992) + "КОНЕЦ ТЗ";
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  const container = document.createElement("div"); document.body.append(container);
-  const root = createRoot(container);
+  const dispose = await renderStudio();
   try {
-    await act(async () => { root.render(<QueryClientProvider client={client}><MaxStudio email="qa@example.ru" /></QueryClientProvider>); });
-    await act(async () => { await vi.waitFor(() => expect([...container.querySelectorAll("button")].some(b => b.textContent?.includes("Создать приложение"))).toBe(true)); });
-    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.includes("Создать приложение"))!.click(); });
+    await click("Создать приложение");
     await click("Добавить детали");
     const input = document.querySelector<HTMLTextAreaElement>("#max-project-idea")!;
     expect(input.maxLength).toBe(-1);
     await act(async () => { change(document.querySelector<HTMLInputElement>("#max-project-name")!, "Склад"); change(input, brief); });
     expect(input.value).toBe(brief);
-    const next = () => [...document.querySelectorAll("button")].find(b => b.textContent?.trim() === "Далее")!;
     await act(async () => { change(input, "я".repeat(20_001)); });
-    expect(next().disabled).toBe(true);
+    expect(button("Далее").disabled).toBe(true);
     expect(input.value.length).toBe(20_001);
     await act(async () => { change(input, brief); });
-    for (let step = 0; step < 2; step++) await act(async () => { next().click(); });
-    const modules = [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
-    expect(modules[0].checked && modules[0].disabled).toBe(true);
-    expect(modules[2].checked && modules[2].disabled).toBe(true);
-    await act(async () => { modules[0].click(); modules[2].click(); });
-    expect(modules[0].checked && modules[2].checked).toBe(true);
-    expect(modules[1].checked).toBe(true);
-    await act(async () => { modules[1].click(); });
-    expect(modules[1].checked).toBe(false);
-    await act(async () => { next().click(); });
-    const submit = [...document.querySelectorAll("button")].find(b => b.textContent?.includes("Создать проект"))!;
-    await act(async () => { submit.click(); });
+    await click("Далее");
+    await click("Далее");
+    for (const name of ["Каталог", "Заказы", "Заявки"]) expect(moduleCheckbox(name).checked, name).toBe(true);
+    await click("Далее");
+    await click("Создать проект");
     await act(async () => { await vi.waitFor(() => expect(mocks.push).toHaveBeenCalled()); });
     expect(mocks.create.mock.calls[0][0].max_config.summary).toBe("Мини-приложение для пользователей MAX");
     expect(JSON.stringify(mocks.create.mock.calls[0][0])).not.toContain(brief);
-    expect(mocks.create.mock.calls[0][0].max_config.management_modules).toEqual(["catalog", "leads"]);
+    expect(mocks.create.mock.calls[0][0].max_config.management_modules).toEqual(["catalog", "orders", "leads"]);
     expect(mocks.save).not.toHaveBeenCalled();
     expect(sessionStorage.getItem("omnia:max:starter:long-brief-qa")).toContain(brief);
     expect(mocks.push).toHaveBeenCalledWith("/max/long-brief-qa?starter=1");
-  } finally {
-    await act(async () => { root.unmount(); });
-    container.remove(); client.clear(); sessionStorage.clear();
-  }
+  } finally { await dispose(); }
 });
 
 it("opens the home wizard without a tutorial and creates one mixed app after confirming all scenarios and reviewed catalog IDs and prices", async () => {
@@ -186,9 +177,13 @@ it("preserves explicit orders and bookings opt-outs for a mixed app through back
       typeButton("Запись").click();
     });
     for (let step = 0; step < 2; step += 1) await click("Далее");
-    const optionalModules = () => [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].filter(input => !input.disabled);
-    expect(optionalModules()).toHaveLength(2);
-    for (const input of optionalModules()) { expect(input.checked).toBe(true); await act(async () => input.click()); }
+    const optedOut = ["Заказы", "Запросы на запись"];
+    for (const name of optedOut) {
+      const input = moduleCheckbox(name);
+      expect(input.disabled, name).toBe(false);
+      expect(input.checked, name).toBe(true);
+      await act(async () => input.click());
+    }
     await click("Назад");
     await click("Назад");
     await act(async () => typeButton("Каталог").click());
@@ -196,14 +191,88 @@ it("preserves explicit orders and bookings opt-outs for a mixed app through back
     await act(async () => typeButton("Запись").click());
     for (const name of ["Лояльность", "Каталог", "Запись"]) expect(typeButton(name).getAttribute("aria-pressed")).toBe("true");
     for (let step = 0; step < 2; step += 1) await click("Далее");
-    expect(optionalModules().every(input => !input.checked)).toBe(true);
+    for (const name of optedOut) expect(moduleCheckbox(name).checked, name).toBe(false);
     await click("Далее");
     await click("Создать проект");
     await act(async () => { await vi.waitFor(() => expect(mocks.push).toHaveBeenCalled()); });
     expect(mocks.create).toHaveBeenCalledTimes(1);
-    expect(mocks.create.mock.calls[0][0].max_config.management_modules).toEqual(["catalog", "leads"]);
-    expect(mocks.create.mock.calls[0][0].max_config.features).toContain("Сценарий: Запись");
+    const payload = mocks.create.mock.calls[0][0];
+    expect(payload.management_module_opt_outs).toEqual(["orders", "bookings"]);
+    expect(payload.max_config.management_modules).toEqual(["catalog", "leads"]);
+    expect(payload.max_config.features).toContain("Сценарий: Запись");
     expect(sessionStorage.getItem("omnia:max:starter:mixed-optout-qa")).toContain("Управление в Yleum: Каталог, Заявки.");
+  } finally { await dispose(); }
+});
+
+it.each([
+  { optOutOfOrders: false, expected: ["catalog", "orders", "leads", "bookings"] },
+  { optOutOfOrders: true, expected: ["catalog", "leads", "bookings"] },
+])("restores dependent selections when catalog returns (orders opted out: $optOutOfOrders)", async ({ optOutOfOrders, expected }) => {
+  mocks.create.mockResolvedValue({ id: "catalog-roundtrip-qa" });
+  const dispose = await renderStudio();
+  try {
+    await click("Создать приложение");
+    await act(async () => {
+      change(document.querySelector<HTMLInputElement>("#max-project-name")!, "Клуб");
+      typeButton("Запись").click();
+    });
+    await click("Далее");
+    await click("Далее");
+    const dependents = ["Заказы", "Запросы на запись"];
+    for (const name of dependents) expect(moduleCheckbox(name).checked, name).toBe(true);
+    if (optOutOfOrders) await act(async () => moduleCheckbox("Заказы").click());
+
+    await act(async () => moduleCheckbox("Каталог").click());
+    await click("Назад");
+    await click("Назад");
+    await act(async () => typeButton("Каталог").click());
+    await click("Далее");
+    await click("Далее");
+    for (const name of dependents) {
+      expect(moduleCheckbox(name).disabled, name).toBe(true);
+      expect(moduleCheckbox(name).checked, name).toBe(false);
+    }
+
+    await act(async () => moduleCheckbox("Каталог").click());
+    for (const name of dependents) expect(moduleCheckbox(name).disabled, name).toBe(false);
+    expect(moduleCheckbox("Заказы").checked).toBe(!optOutOfOrders);
+    expect(moduleCheckbox("Запросы на запись").checked).toBe(true);
+    await click("Далее");
+    await click("Создать проект");
+    await act(async () => { await vi.waitFor(() => expect(mocks.push).toHaveBeenCalled()); });
+    const payload = mocks.create.mock.calls[0][0];
+    expect(payload.management_module_opt_outs).toEqual(optOutOfOrders ? ["orders"] : undefined);
+    expect(payload.max_config.management_modules).toEqual(expected);
+  } finally { await dispose(); }
+});
+
+it("can create an app after opting out of the catalog and leads", async () => {
+  mocks.create.mockResolvedValue({ id: "no-modules-qa" });
+  const dispose = await renderStudio();
+  try {
+    await click("Создать приложение");
+    await act(async () => change(document.querySelector<HTMLInputElement>("#max-project-name")!, "Справочник"));
+    await click("Далее");
+    await click("Далее");
+    for (const name of ["Каталог", "Заявки"]) {
+      const input = moduleCheckbox(name);
+      expect(input.checked, name).toBe(true);
+      expect(input.disabled, name).toBe(false);
+      await act(async () => input.click());
+    }
+    for (const name of ["Заказы", "Запросы на запись"]) {
+      expect(moduleCheckbox(name).checked, name).toBe(false);
+      expect(moduleCheckbox(name).disabled, name).toBe(true);
+    }
+    await click("Далее");
+    expect(document.querySelector(".max-initial-catalog")).toBeNull();
+    await click("Создать проект");
+    await act(async () => { await vi.waitFor(() => expect(mocks.push).toHaveBeenCalled()); });
+    const payload = mocks.create.mock.calls[0][0];
+    expect(payload.management_module_opt_outs).toEqual(["catalog", "leads"]);
+    expect(payload.max_config.management_modules).toEqual([]);
+    expect(payload.max_config.content).toEqual([]);
+    expect(payload.staff_settings.leads_enabled).toBe(false);
   } finally { await dispose(); }
 });
 

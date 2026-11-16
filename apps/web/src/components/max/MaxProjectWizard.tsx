@@ -44,8 +44,10 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
   const showDetails = customSelected || detailsRevealed || values.idea.length > 0;
   const briefOptOuts = briefManagementModuleOptOuts(values.idea);
   const moduleOptOuts = values.managementModuleOptOuts ?? [];
+  // Keep the draft selections when the catalog temporarily hides dependent modules.
+  const draftManagementModules = values.managementModules ?? defaultManagementModules(values.appType, values.appTypes);
   const managementModules = newProjectManagementModules(
-    values.appType, values.managementModules, values.appTypes, [...moduleOptOuts, ...briefOptOuts],
+    values.appType, draftManagementModules, values.appTypes, [...moduleOptOuts, ...briefOptOuts],
   );
   const length = Array.from(values.idea.trim()).length;
   const ideaTooShort = customSelected && length < 10;
@@ -70,7 +72,7 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
       appType: next[0],
       appTypes: next,
       managementModules: newProjectManagementModules(
-        next[0], [...managementModules, ...defaults], next, moduleOptOuts,
+        next[0], [...draftManagementModules, ...defaults], next,
       ),
     });
   }
@@ -186,7 +188,7 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
                         !managementModules.includes("catalog")
                       )}
                       onChange={event => {
-                        const selected = new Set(managementModules);
+                        const selected = new Set(draftManagementModules);
                         const excluded = new Set(moduleOptOuts);
                         if (event.target.checked) {
                           selected.add(module.id);

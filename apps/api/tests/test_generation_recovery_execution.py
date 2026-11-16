@@ -2792,6 +2792,19 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
             release=release,
             export_files=AsyncMock(return_value={}),
         )
+        if early_check:
+            # The edit pipeline selects compiler handoff from an attached
+            # coordinator, not from text in the stack prompt.
+            from yleum_api.services.max_finalization import MaxFinalizationCoordinator
+
+            coordinator = object.__new__(MaxFinalizationCoordinator)
+            coordinator.session_factory = factory
+            coordinator.generation_run_id = run.id
+            coordinator.project_id = run.project_id
+            coordinator.source_edit_deadline = AsyncMock(
+                return_value=started + timedelta(minutes=25),
+            )
+            kw["runtime"].coordinator = coordinator
         return SimpleNamespace(
             execute=execute,
             probe_runtime=AsyncMock(),
