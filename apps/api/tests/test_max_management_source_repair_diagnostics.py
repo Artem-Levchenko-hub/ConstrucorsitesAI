@@ -290,6 +290,7 @@ export async function redeem(receipt: string) {
     "unguarded_url", "aliased_open", "captured_popup", "untrusted_storage_key",
     "platform_storage_key", "mutated_storage", "tampered_business_sdk",
     "joined_url", "short_circuit_url", "joined_order_id", "joined_storage_key",
+    "template_early_return", "function_template_early_return",
     "joined_checkout_fn", "hidden_mutation", "hidden_window_override",
     "unrelated_idempotency_storage_key", "shadowed_crypto", "nonadjacent_idempotency_write",
     "unsafe_uuid_helper", "opaque_negation", "hidden_catch_mutation",
@@ -388,6 +389,18 @@ function freshOperation() { return crypto.randomUUID(); }
             "const url = (checkout as {confirmation_url: string | null}).confirmation_url;",
             """const url = unknownCondition()
                 ? checkout.confirmation_url : "https://example.test/pay";""",
+        ),
+        "template_early_return": (
+            "if (url) window.open",
+            """const label = unknownCondition() ? `Ready: ${url}` : 'Pending';
+    if (label) return;
+    if (url) window.open""",
+        ),
+        "function_template_early_return": (
+            "if (url) window.open",
+            """function label() { return `Ready: ${url}`; }
+    if (label()) return;
+    if (url) window.open""",
         ),
         "short_circuit_url": (
             "(checkout as {confirmation_url: string | null}).confirmation_url",

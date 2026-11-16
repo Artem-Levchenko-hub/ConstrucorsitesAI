@@ -319,14 +319,37 @@ def _primitive_literal(node: Node) -> object:
     return _UNSUPPORTED_LITERAL
 
 
+@dataclass(frozen=True)
+class _InterpolatedControl:
+    """What can be proven about a display value without knowing its contents."""
+
+    truth: bool | None
+    non_null: bool
+
+
+_UNKNOWN_DISPLAY_CONTROL = _InterpolatedControl(truth=None, non_null=False)
+
+
+def _unproved_statement_control(value: object) -> bool:
+    return value is _UNSUPPORTED_LITERAL or isinstance(value, _InterpolatedControl)
+
+
 def _literal_truth(value: object) -> bool | None:
+    if isinstance(value, _InterpolatedControl):
+        return value.truth
     if value is _NULL_LITERAL:
         return False
     return bool(value) if type(value) in {bool, str, float} else None
 
 
+def _literal_is_non_null(value: object) -> bool:
+    if isinstance(value, _InterpolatedControl):
+        return value.non_null
+    return value is not None and value is not _NULL_LITERAL and value is not _UNSUPPORTED_LITERAL
+
+
 def _comparison_literal(left: object, right: object, operator: str) -> object:
-    if left is _UNSUPPORTED_LITERAL or right is _UNSUPPORTED_LITERAL:
+    if _unproved_statement_control(left) or _unproved_statement_control(right):
         return _UNSUPPORTED_LITERAL
     if left is None or right is None:
         return None
@@ -477,6 +500,8 @@ class _Value:
     function: tuple[str, Node, dict[str, _Value]] | None = None
     sdk: str = ""
     literal: object = None
+    display_text: bool = False
+    display_inputs: tuple[_Value, ...] = ()
     setter: _Value | None = None
     state: bool = False
     elements: tuple[_Value, ...] | None = None
@@ -501,6 +526,15 @@ class _Value:
     nullable_catalog_lookup: bool = False
     catalog_lookup_issue: _SourceIssue | None = None
     catalog_items_lookup_issue: _SourceIssue | None = None
+
+
+def _discard_display_provenance(value: _Value) -> _Value:
+    if not value.display_text:
+        return value
+    literal = value.literal
+    if isinstance(literal, _InterpolatedControl):
+        literal = _UNSUPPORTED_LITERAL
+    return replace(value, literal=literal, display_text=False, display_inputs=())
 
 
 def _contract(files: Mapping[str, str]) -> ManagementContract | None:
@@ -580,7 +614,8 @@ class _Connections:
         ) and _CHECKOUT_IMPORT in self.owned_sdk_exports
         self.checkout_proof_source = self.checkout_browser_source or self.checkout_receipt_source
         self.catalog_selection = False
-        self.unsupported_constant_control = False
+        self.unsupported_constant_control: _SourceIssue | None = None
+        self.display_control_inputs: dict[int, tuple[_Value, Node, str]] = {}
         self.unsupported_effects = False
         self.first_unsupported: _SourceIssue | None = None
         self.catalog_render_rejection: _SourceIssue | None = None
@@ -600,6 +635,12 @@ class _Connections:
         self.unsupported_effects = True
         if self.first_unsupported is None and node is not None:
             self.first_unsupported = _source_issue(node, path, reason)
+
+    def reject_constant_control(self, node: Node, path: str) -> None:
+        if self.unsupported_constant_control is None:
+            self.unsupported_constant_control = _source_issue(
+                node, path, "unsupported_constant_control",
+            )
 
     @contextmanager
     def effects_only(self, *, strict: bool = False) -> Iterator[None]:
@@ -877,6 +918,8 @@ class _Connections:
         alias = _Value(state=state) if target is None else target
         previous_roots = alias.mutation_roots
         alias.tags = set(source.tags)
+        alias.display_text = False
+        alias.display_inputs = ()
         alias.props = dict(source.props)
         alias.elements = source.elements
         alias.statistic_elements = source.statistic_elements
@@ -918,7 +961,7 @@ class _Connections:
                 )
                 self.bind_supported(
                     child.child_by_field_name("value") if child.type == "pair_pattern" else child,
-                    self.member(value, key),
+                    _discard_display_provenance(self.member(value, key)),
                     env,
                 )
         elif pattern.type == "array_pattern" and value.state:
@@ -941,8 +984,10 @@ class _Connections:
                     )
                     self.bind_supported(
                         child,
-                        self.ambiguous_checkout_value(element)
-                        if value.checkout_ambiguous else element,
+                        _discard_display_provenance(
+                            self.ambiguous_checkout_value(element)
+                            if value.checkout_ambiguous else element
+                        ),
                         env,
                     )
 
@@ -1106,6 +1151,8 @@ class _Connections:
             current.literal = None
             current.passive = False
             current.primitive_string = False
+            current.display_text = False
+            current.display_inputs = ()
             current.nullable_string = False
             current.checkout_order_id = False
             current.checkout_receipt_string = False
@@ -1837,6 +1884,9 @@ class _Connections:
             else self.value(body, env, path, render)
         )
         self.active.remove(key)
+        # The interpreter may merge returned branches imprecisely. Display
+        # truth bounds are only used inside the expression's own scope.
+        result = _discard_display_provenance(result)
         if not (
             result.generated_uuid and not result.checkout_ambiguous and not args
             and body is not None and self.checkout_uuid_return(body)
@@ -1885,8 +1935,8 @@ class _Connections:
                 )
             if child.type == "if_statement":
                 condition = self.value(child.child_by_field_name("condition"), env, path)
-                if condition.literal is _UNSUPPORTED_LITERAL:
-                    self.unsupported_constant_control = True
+                if _unproved_statement_control(condition.literal):
+                    self.reject_constant_control(child, path)
                     return True, _Value()
                 truth = self.checkout_control_truth(condition)
                 alternative = child.child_by_field_name("alternative")
@@ -2022,8 +2072,8 @@ class _Connections:
                 self.loop_body_effects(child, scope, path)
         elif node.type == "if_statement":
             condition = self.value(node.child_by_field_name("condition"), env, path)
-            if condition.literal is _UNSUPPORTED_LITERAL:
-                self.unsupported_constant_control = True
+            if _unproved_statement_control(condition.literal):
+                self.reject_constant_control(node, path)
                 return
             truth = self.checkout_control_truth(condition)
             consequence = node.child_by_field_name("consequence")
@@ -2104,7 +2154,7 @@ class _Connections:
                 render and operator in {"||", "??"},
             )
             if left.literal is _UNSUPPORTED_LITERAL:
-                self.unsupported_constant_control = True
+                self.reject_constant_control(node, path)
                 return left
             right_node = node.child_by_field_name("right")
             if self.checkout_order_id(left) and operator in {"??", "||"}:
@@ -2118,16 +2168,25 @@ class _Connections:
                 # not make guards on that row unconditionally false.
                 return left
             truth = self.checkout_control_truth(left)
+            if isinstance(left.literal, _InterpolatedControl):
+                self.track_display_inputs(left, node, path)
             if ((operator == "&&" and truth is False)
                     or (operator == "||" and truth is True)
                     or (operator == "??" and not left.checkout_ambiguous
-                        and left.literal is not None
-                        and left.literal is not _NULL_LITERAL)):
+                        and _literal_is_non_null(left.literal))):
                 return left
+            if isinstance(left.literal, _InterpolatedControl):
+                return self.display_control_result(node, left, (right_node,), env, path)
             right = self.value(right_node, env, path, render)
+            if (
+                (operator == "??" and left.literal is _NULL_LITERAL and not left.checkout_ambiguous)
+                or (operator != "??" and truth is not None)
+            ):
+                return right
+            result = self.join_display_values(left, right, right)
             return (
-                self.ambiguous_checkout_value(right)
-                if left.literal is None or left.checkout_ambiguous else right
+                self.ambiguous_checkout_value(result)
+                if left.literal is None or left.checkout_ambiguous else result
             )
         # Comparisons render a Boolean, not either operand's SDK data. Both
         # operands still run for effects; neither can leak a render witness.
@@ -2243,20 +2302,23 @@ class _Connections:
                     self.invalidate(root, node=node, path=path)
                 self.invalidate(operand, node=node, path=path)
             truth = self.checkout_control_truth(operand)
-            if operator == "!" and truth is not None:
-                literal: object = not truth
+            if isinstance(operand.literal, _InterpolatedControl):
+                literal: object = _UNSUPPORTED_LITERAL
+            elif operator == "!" and truth is not None:
+                literal = not truth
             elif operator in {"+", "-"} and type(operand.literal) is float:
                 literal = -operand.literal if operator == "-" else operand.literal
             else:
                 literal = None if operand.literal is None else _UNSUPPORTED_LITERAL
             result = _Value(literal=literal, checkout_ambiguous=operand.checkout_ambiguous)
         elif kind in {"true", "false", "string", "number", "null"}:
-            result = _Value(literal=_primitive_literal(node))
+            literal = _primitive_literal(node)
+            result = _Value(literal=literal, display_text=type(literal) is str)
         elif kind == "member_expression":
-            result = self.member(
+            result = _discard_display_provenance(self.member(
                 self.value(node.child_by_field_name("object"), env, path),
                 _text(node.child_by_field_name("property")),
-            )
+            ))
         elif kind == "subscript_expression":
             # Unknown indices never grant readable history, but cannot hide aliases
             # from later opaque calls or mutations.
@@ -2338,15 +2400,7 @@ class _Connections:
             self.unsupported(node, path, "unsupported_class")
             result = _Value()
         elif kind == "template_string":
-            # Preserve passive labels used by existing pages, without evaluating
-            # JS strings or treating their Boolean comparisons as SDK rendering.
-            for child in node.named_children:
-                if child.type == "template_substitution":
-                    for expression in child.named_children:
-                        self.value_for_effects(expression, env, path)
-                elif child.type not in {"string_fragment", "escape_sequence"}:
-                    self.unsupported(child, path, "unsupported_template_part")
-            result = _Value(literal=_UNSUPPORTED_LITERAL)
+            result = self.interpolated_label(node, env, path)
         elif kind == "call_expression":
             result = self.call(node, env, path, render)
         elif kind in {"jsx_element", "jsx_self_closing_element", "jsx_fragment"}:
@@ -2356,11 +2410,23 @@ class _Connections:
         elif kind == "ternary_expression":
             condition = self.value(node.child_by_field_name("condition"), env, path)
             if condition.literal is _UNSUPPORTED_LITERAL:
-                self.unsupported_constant_control = True
+                self.reject_constant_control(node, path)
                 return _Value()
             truth = self.checkout_control_truth(condition)
-            if truth is None:
+            if isinstance(condition.literal, _InterpolatedControl):
+                alternatives = (
+                    (node.child_by_field_name("consequence"),) if truth is True
+                    else (
+                        node.child_by_field_name("alternative"),
+                        node.child_by_field_name("consequence"),
+                    )
+                )
+                self.track_display_inputs(condition, node, path)
+                return self.display_control_result(node, condition, alternatives, env, path)
+            alternative = (
                 self.value(node.child_by_field_name("alternative"), env, path, render)
+                if truth is None else None
+            )
             result = self.value(
                 node.child_by_field_name(
                     "alternative" if truth is False else "consequence"
@@ -2369,6 +2435,8 @@ class _Connections:
                 path,
                 render,
             )
+            if alternative is not None:
+                result = self.join_display_values(result, alternative, result)
             if truth is None or condition.checkout_ambiguous:
                 result = self.ambiguous_checkout_value(result)
         else:
@@ -2378,6 +2446,124 @@ class _Connections:
         if render and not self.render_suppression:
             self.rendered.update(result.tags)
         return result
+
+    @staticmethod
+    def is_string_input(value: _Value) -> bool:
+        pending, seen = [value], set()
+        found_string = False
+        while pending:
+            source = pending.pop()
+            if id(source) in seen:
+                continue
+            seen.add(id(source))
+            if (
+                len(seen) > 64 or source.checkout_ambiguous or source.props
+                or source.function is not None or source.sdk or source.elements is not None
+            ):
+                return False
+            if source.display_text and type(source.literal) is str:
+                found_string = True
+                continue
+            if source.literal is not None or not source.mutation_roots:
+                return False
+            pending.extend(source.mutation_roots)
+        return found_string
+
+    def track_display_inputs(self, value: _Value, node: Node, path: str) -> None:
+        for source in value.display_inputs:
+            self.display_control_inputs.setdefault(id(source), (source, node, path))
+
+    @staticmethod
+    def join_display_values(left: _Value, right: _Value, result: _Value) -> _Value:
+        # Do not turn the representative literal of either branch into a fact
+        # about the result of an unresolved conditional.
+        both_text = left.display_text and right.display_text
+        inputs: tuple[_Value, ...] = ()
+        if both_text:
+            sources = (*left.display_inputs, *right.display_inputs)
+            inputs = tuple({id(value): value for value in sources}.values())
+        if any(isinstance(value.literal, _InterpolatedControl) for value in (left, right)):
+            literal = _UNKNOWN_DISPLAY_CONTROL if both_text else _UNSUPPORTED_LITERAL
+            return _Value(literal=literal, display_text=both_text, display_inputs=inputs)
+        if result.display_text:
+            return replace(result, display_text=both_text, display_inputs=inputs)
+        return result
+
+    def display_control_result(
+        self, control: Node, condition: _Value, branches: tuple[Node | None, ...],
+        env: dict[str, _Value], path: str,
+    ) -> _Value:
+        # Keep this exception for passive labels. JSX, function calls and
+        # mutations must still use the regular, proven condition paths.
+        pending = list(branches)
+        inputs = {id(value): value for value in condition.display_inputs}
+        while pending:
+            node = pending.pop()
+            self.steps += 1
+            if node is None or node.has_error or self.steps > 4000:
+                break
+            if node.type == "string":
+                continue
+            if node.type in {"identifier", "template_string"}:
+                value = self.value(node, env, path)
+                if not value.display_text:
+                    break
+                inputs.update((id(source), source) for source in value.display_inputs)
+                continue
+            if node.type == "parenthesized_expression":
+                pending.extend(node.named_children)
+                continue
+            if (node.type == "binary_expression"
+                    and _text(node.child_by_field_name("operator")) in {"&&", "||", "??"}):
+                pending.extend(node.named_children)
+                continue
+            break
+        else:
+            result = _Value(
+                literal=_UNKNOWN_DISPLAY_CONTROL,
+                display_text=True,
+                display_inputs=tuple(inputs.values()),
+            )
+            self.track_display_inputs(result, control, path)
+            return result
+
+        self.reject_constant_control(control, path)
+        return _Value(literal=_UNSUPPORTED_LITERAL)
+
+    def interpolated_label(self, node: Node, env: dict[str, _Value], path: str) -> _Value:
+        # Keep evaluating substitutions for effects. A plain static fragment
+        # guarantees nonempty text, but gives no knowledge of the interpolated
+        # contents or authority to use them as a managed key or witness.
+        has_nonempty_fragment = False
+        inputs: dict[int, _Value] = {}
+        safe_shape = not (node.has_error or self.inspect_checkout or self.checkout_proof_source)
+        for child in node.named_children:
+            if child.type == "template_substitution":
+                for expression in child.named_children:
+                    value = self.value_for_effects(expression, env, path)
+                    if expression.type == "identifier":
+                        if value.display_text:
+                            inputs.update((id(source), source) for source in value.display_inputs)
+                        elif self.is_string_input(value):
+                            inputs[id(value)] = value
+                        else:
+                            safe_shape = False
+                    elif expression.type not in {"string", "number", "true", "false", "null"}:
+                        safe_shape = False
+            elif child.type == "string_fragment":
+                if (fragment := child.text) and b"\\" not in fragment:
+                    has_nonempty_fragment = True
+            elif child.type != "escape_sequence":
+                self.unsupported(child, path, "unsupported_template_part")
+                safe_shape = False
+        literal = (
+            _InterpolatedControl(truth=True, non_null=True)
+            if safe_shape and has_nonempty_fragment else _UNSUPPORTED_LITERAL
+        )
+        return (
+            _Value(literal=literal, display_text=True, display_inputs=tuple(inputs.values()))
+            if literal is not _UNSUPPORTED_LITERAL else _Value(literal=literal)
+        )
 
     def checkout_storage_uuid(
         self, node: Node, arguments: Node | None, path: str, key: str,
@@ -2410,6 +2596,12 @@ class _Connections:
             source = self.value(target.child_by_field_name("object"), env, path)
             operation = _text(target.child_by_field_name("property"))
             receiver = _text(target.child_by_field_name("object"))
+            if (
+                operation == "trim" and not args and not self.inspect_checkout
+                and not self.checkout_proof_source and not self.strict_effects_depth
+                and self.is_string_input(source)
+            ):
+                return _Value(display_text=True, display_inputs=(source,))
             if operation == "open" and (receiver == "window" or source is self.window):
                 if not (
                     _text(target) == "window.open" and source is self.window
@@ -2728,8 +2920,8 @@ class _Connections:
                     )
             if not self.render_suppression:
                 controls = [props.get(key, _Value()).literal for key in ("hidden", "disabled")]
-                if any(value is _UNSUPPORTED_LITERAL for value in controls):
-                    self.unsupported_constant_control = True
+                if any(map(_unproved_statement_control, controls)):
+                    self.reject_constant_control(opening, path)
                     return _Value()
                 if any(value is True for value in controls):
                     return _Value()
@@ -2939,9 +3131,16 @@ def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
                     repair_path=repair_path,
                 ), frozenset()
         return effect_detail, frozenset()
+    for source, node, path in connections.display_control_inputs.values():
+        if not connections.is_string_input(source):
+            connections.reject_constant_control(node, path)
+            break
     if connections.unsupported_constant_control:
         return (
-            "Managed source connection analysis cannot prove unsupported constant control.",
+            "Managed source connection analysis cannot prove unsupported constant control."
+            + _issue_detail(connections.unsupported_constant_control)
+            + " Use the underlying Boolean condition directly. Keep display text separate "
+            "and preserve the real SDK call and visible result.",
             frozenset(),
         )
     if "profile-field" not in connections.rendered:

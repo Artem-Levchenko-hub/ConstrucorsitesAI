@@ -1354,13 +1354,154 @@ def test_nested_empty_pure_statistics_remain_supported():
     assert management_source_gap(connection_files(source, modules)) is None
 
 
+def test_template_status_label_can_control_another_display_label():
+    source = LEAD_STATUS_PAGE.replace(
+        "return <main>",
+        "const label = status ? `Status: ${status}` : '';\n"
+        "const trimmed = status.trim();\n"
+        "const detail = label && trimmed ? `${label} / ${trimmed}` : label || trimmed;\n"
+        "return <main><p>{detail}</p>",
+    )
+    assert management_source_gap(connection_files(source, ("leads",))) is None
+
+
+@pytest.mark.parametrize("operator", ["||", "??"])
+def test_nonempty_template_does_not_render_unreachable_profile(operator):
+    source = LEAD_STATUS_PAGE.replace(
+        "<h1>{profile?.app_name}</h1>",
+        "{`Status: ${status}` " + operator + " <h1>{profile?.app_name}</h1>}",
+    )
+    gap = management_source_gap(connection_files(source, ("leads",)))
+    assert gap is not None and gap.startswith("Connect useYleumAppProfile")
+
+
+@pytest.mark.parametrize("guard", ["label || 'Ready'", "(label ?? 'Ready') || 'Ready'"])
+def test_interpolated_statement_control_cannot_hide_all_managed_ui(guard):
+    source = LEAD_STATUS_PAGE.replace(
+        "return <main>",
+        "const label = status ? `Status: ${status}` : '';\n"
+        f"if ({guard}) return <main />;\nreturn <main>",
+    )
+    assert management_source_gap(connection_files(source, ("leads",))) is not None
+
+
+@pytest.mark.parametrize("operator", ["&&", "?"])
+def test_interpolated_display_control_does_not_prove_a_managed_view(operator):
+    source = LEAD_STATUS_PAGE.replace(
+        "<h1>{profile?.app_name}</h1>",
+        "{`Status: ${status}` " + operator + " <h1>{profile?.app_name}</h1>"
+        + (" : null}" if operator == "?" else "}"),
+    )
+    assert management_source_gap(connection_files(source, ("leads",))) is not None
+
+
+@pytest.mark.parametrize(("fallback", "expression"), [
+    ("''", "label || leads.splice(0)"),
+    ("null", "label ?? leads.splice(0)"),
+    ("''", "label ? '' : leads.splice(0)"),
+])
+def test_interpolation_join_does_not_skip_possible_mutation(fallback, expression):
+    source = LEAD_STATUS_PAGE.replace(
+        "return <main>",
+        f"const preferred = status === 'unset' ? 'Ready' : {fallback};\n"
+        "const label = status === 'unset' ? `Status: ${status}` : preferred;\n"
+        f"{expression};\nreturn <main>",
+    )
+    assert management_source_gap(connection_files(source, ("leads",))) is not None
+
+
+@pytest.mark.parametrize("expression", [
+    "`Status: ${status}` && <Child />",
+    "`Status: ${status}` ? <Child /> : null",
+])
+def test_interpolated_control_cannot_hide_component_effects(expression):
+    source = LEAD_STATUS_PAGE.replace(
+        "export default function Page()",
+        "function Child() { throw new Error('broken'); }\nexport default function Page()",
+    ).replace("return <main>", f"return <main>{{{expression}}}")
+    assert management_source_gap(connection_files(source, ("leads",))) is not None
+
+
+@pytest.mark.parametrize("expression", [
+    "`Status: ${status}` && `Text: ${brokenLabel}`",
+    "`Status: ${status}` ? `Text: ${brokenLabel}` : ''",
+    "`Status: ${status}` && (`Text: ${brokenLabel}` || 'fallback')",
+])
+def test_interpolated_control_checks_template_branch_coercion(expression):
+    source = LEAD_STATUS_PAGE.replace(
+        "return <main>",
+        "const brokenLabel = {toString: () => { throw new Error('broken'); }};\n"
+        f"const detail = {expression};\nreturn <main><p>{{detail}}</p>",
+    )
+    assert management_source_gap(connection_files(source, ("leads",))) is not None
+
+
+def test_interpolated_control_does_not_admit_jsx_through_an_alias():
+    source = LEAD_STATUS_PAGE.replace(
+        "export default function Page()",
+        "function Child() { throw new Error('broken'); }\nexport default function Page()",
+    ).replace(
+        "return <main>",
+        "const alias = <Child />;\n"
+        "return <main>{`Status: ${status}` && alias}",
+    )
+    assert management_source_gap(connection_files(source, ("leads",))) is not None
+
+
+@pytest.mark.parametrize(("returned", "operator"), [("''", "||"), ("null", "??")])
+def test_function_join_cannot_hide_a_mutation_after_template_return(returned, operator):
+    source = LEAD_STATUS_PAGE.replace(
+        "return <main>",
+        f"function label() {{ if (status === 'idle') return {returned}; "
+        "return `Status: ${status}`; }\n"
+        f"label() {operator} leads.splice(0);\nreturn <main>",
+    )
+    assert management_source_gap(connection_files(source, ("leads",))) is not None
+
+
+@pytest.mark.parametrize("binding", [
+    "const value = status === 'unset' ? 'fallback' : BAD_OBJECT;",
+    "function choose() { if (status === 'idle') return BAD_OBJECT; return 'fallback'; } "
+    "const value = choose();",
+])
+def test_interpolated_branch_requires_proven_text_substitutions(binding):
+    source = LEAD_STATUS_PAGE.replace(
+        "return <main>",
+        binding.replace("BAD_OBJECT", "{toString: () => { throw new Error('broken'); }}")
+        + "\nconst detail = `Status: ${status}` && `Text: ${value}`;\nreturn <main><p>{detail}</p>",
+    )
+    assert management_source_gap(connection_files(source, ("leads",))) is not None
+
+
+def test_template_condition_still_checks_substitution_effects():
+    source = LEAD_STATUS_PAGE.replace(
+        "<h1>{profile?.app_name}</h1>",
+        "{`Status: ${opaque(leads)}` && <h1>{profile?.app_name}</h1>}",
+    )
+    assert management_source_gap(connection_files(source, ("leads",))) is not None
+
+
+def test_template_visibility_control_does_not_supply_connection_evidence():
+    source = LEAD_STATUS_PAGE.replace(
+        "<h1>{profile?.app_name}</h1>",
+        "<h1 hidden={`Status: ${status}`}>{profile?.app_name}</h1>",
+    )
+    assert management_source_gap(connection_files(source, ("leads",))) is not None
+
+
 @pytest.mark.parametrize("condition", [
     "0 == '0'", "0 != '0'", "1 + 1 === 2", "'x' < 'y'", r"'\u0078' === 'x'",
 ])
 def test_known_unsupported_comparison_control_fails_closed(condition):
     source = LEAD_STATUS_PAGE.replace("status === 'pending'", condition)
     gap = management_source_gap(connection_files(source, ("leads",)))
-    assert gap == "Managed source connection analysis cannot prove unsupported constant control."
+    assert gap is not None
+    assert gap.startswith(
+        "Managed source connection analysis cannot prove unsupported constant control.",
+    )
+    assert "Source location: src/app/page.tsx:" in gap
+    assert "reason unsupported_constant_control" in gap
+    assert "Use the underlying Boolean condition" in gap
 
 
 @pytest.mark.parametrize("expression", [
