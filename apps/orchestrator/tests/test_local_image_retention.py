@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import time
 from collections.abc import Callable
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -128,6 +129,40 @@ def roots(
     busy: frozenset[str] = frozenset(),
 ) -> Any:
     return policy.ImageRoots(image_ids=ids, image_refs=refs, busy_workspaces=busy)
+
+
+@pytest.fixture(autouse=True)
+def collector_lock_io_headroom(monkeypatch: pytest.MonkeyPatch) -> None:
+    # These tests exercise the collector's decisions and real OS exclusion,
+    # not CI filesystem latency. mkdir/fsync consume the acquisition budget,
+    # so a slow uncontended disk must not turn a deletion case into a busy case.
+    def fixture_lock(root: Path, *, acquire_timeout_seconds: float) -> WorkspaceOperationLock:
+        assert acquire_timeout_seconds == 0.1  # Keep the production sweep nonblocking.
+        return WorkspaceOperationLock(root, acquire_timeout_seconds=5.0)
+
+    monkeypatch.setattr(module(), "WorkspaceOperationLock", fixture_lock)
+
+
+async def test_slow_uncontended_lock_setup_still_exercises_the_collector(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = WorkspaceOperationLock._open_lock_file
+
+    def slow_open(path: Path) -> int:
+        time.sleep(0.12)
+        return original(path)
+
+    monkeypatch.setattr(WorkspaceOperationLock, "_open_lock_file", staticmethod(slow_open))
+    policy = module()
+    daemon = Docker()
+
+    result = await policy.collect_local_images(
+        tmp_path, lambda: roots(policy), apply=True, client=daemon, now=NOW,
+    )
+
+    assert result["removed"] == 1
+    assert result["busy"] == 0
+    assert daemon.attempts == [(IMAGE, False, True)]
 
 
 async def test_default_dry_run_reports_candidate_without_creating_lock_files(
