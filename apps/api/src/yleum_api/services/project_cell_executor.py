@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import PurePosixPath
 from time import monotonic
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -42,9 +42,11 @@ from yleum_api.services.orchestrator_client import (
     OrchestratorUnavailable,
     ProjectCellAgentExecResponse,
     ProjectCellAgentOperationStatus,
+    ProjectCellAgentWorkspaceSnapshot,
     ProjectCellEnvironmentRecoveryProof,
     ProjectCellPreviewSession,
     ProjectCellReleaseEnvironmentBinding,
+    ProjectCellResourceResponse,
     ProjectCellWorkspaceIdentity,
     RestorationAdaptationProof,
     RestorationAdaptationWorkspace,
@@ -90,6 +92,10 @@ from yleum_api.services.project_cells import (
     reserve_cell_operation,
     resolve_workspace_profile,
 )
+
+if TYPE_CHECKING:
+    from yleum_api.services.generation.recovery_execution import ExpiredProviderAttachment
+
 
 _PROJECT_CELL_PROFILE_V1 = "docker-owner-cell-resources-v1"
 _PROJECT_CELL_PROFILE_V2 = "docker-owner-cell-resources-v2"
@@ -947,6 +953,192 @@ async def _wait_for_previous_cell_reconciliation(
 CellAdmissionCallback = Callable[[UUID], Awaitable[RecoveryStateV2 | None]]
 
 
+def _ready_ensure_resources(
+    response: ProjectCellResourceResponse | None, workspace_id: UUID,
+) -> bool:
+    return (
+        response is not None and response.workspace_id == workspace_id
+        and response.state == "resources_ready"
+        and response.provider_ref is not None and response.fencing_epoch is not None
+        and response.has_workspace and response.has_agent_home
+        and response.has_postgres and response.has_redis
+    )
+
+
+def _ensure_key(run_id: UUID, profile: str, *, cycle: int | None = None) -> str:
+    key = f"generation:{run_id}:ensure:{profile}"
+    return key if cycle is None else f"{key}:cycle:{cycle}"
+
+
+async def verified_completed_attachment_ensure(
+    session: AsyncSession,
+    run: GenerationRun,
+    state: RecoveryStateV2,
+    *,
+    workspace: ProjectCellWorkspace,
+    expected_cycle: int,
+) -> ProjectCellOperation | None:
+    """Read an exact completed ensure under caller-held workspace/run locks.
+
+    The caller independently verifies the persisted attachment scope and live
+    worker claim. This function never reserves, retries, or dispatches an ensure.
+    """
+    from yleum_api.services.generation.recovery_execution import _owned_release_receipt
+
+    execution, binding, identity = state.execution, state.binding, state.identity
+    fence = workspace.fencing_epoch
+    if (
+        not isinstance(state, RecoveryStateV3)
+        or expected_cycle <= 0 or execution.lease_cycle_seq not in {
+            expected_cycle - 1, expected_cycle,
+        }
+        or execution.physical_state != "released" or execution.release_operation_id is None
+        or execution.control_workspace_id != workspace.id or fence <= 1
+        or execution.control_fencing_epoch not in (fence - 2, fence - 1)
+        or binding is None or binding.workspace_id != str(workspace.id)
+        or binding.fencing_epoch >= fence - 1
+        or identity.run_id != run.id or identity.project_id != run.project_id
+        or identity.user_id != run.user_id or identity.prompt_hash != run.prompt_hash
+    ):
+        return None
+    release = await session.get(
+        ProjectCellOperation, execution.release_operation_id, populate_existing=True,
+    )
+    if not _owned_release_receipt(
+        release, run_id=run.id, workspace_id=workspace.id, fence=fence - 1,
+    ):
+        return None
+    return await _read_completed_attachment_ensure(
+        session, run, workspace, expected_cycle=expected_cycle,
+    )
+
+
+async def verified_completed_retired_compiler_ensure(
+    session: AsyncSession,
+    run: GenerationRun,
+    state: RecoveryStateV3,
+    *,
+    workspace: ProjectCellWorkspace,
+    attachment: ExpiredProviderAttachment,
+) -> ProjectCellOperation | None:
+    """Validate the retired compiler cursor and read its already activated ensure."""
+    from yleum_api.services.generation import recovery_execution
+
+    cursor, binding = state.execution, state.binding
+    cycle = attachment.lease_cycle_seq + 1
+    fence = attachment.release_fencing_epoch + 1
+    if (
+        binding is None or binding.workspace_id != str(workspace.id)
+        or binding.source_sha256 != attachment.binding.source_sha256
+        or binding.schema_sha256 != attachment.binding.schema_sha256
+        or cursor.physical_state != "active" or cursor.control_workspace_id != workspace.id
+        or (binding.fencing_epoch, cursor.control_fencing_epoch, workspace.fencing_epoch)
+        != (fence, fence, fence)
+        or cursor.lease_cycle_seq != cycle
+        or workspace.state != "ready" or workspace.ready_at is None
+    ):
+        return None
+    validate = getattr(recovery_execution, "validate_retired_active_attachment", None)
+    if validate is None or not await validate(session, run, state, attachment):
+        return None
+    return await _read_completed_attachment_ensure(
+        session, run, workspace, expected_cycle=cycle,
+    )
+
+
+async def _read_completed_attachment_ensure(
+    session: AsyncSession,
+    run: GenerationRun,
+    workspace: ProjectCellWorkspace,
+    *,
+    expected_cycle: int,
+) -> ProjectCellOperation | None:
+    if (
+        workspace.generation_run_id != run.id or workspace.deleted_at is not None
+        or workspace.state in {"deleting", "deleted"}
+        or workspace.project_id != run.project_id or workspace.owner_id != run.user_id
+    ):
+        return None
+    fence = workspace.fencing_epoch
+    profiles = {
+        _ensure_key(run.id, profile, cycle=expected_cycle): profile
+        for profile in (_PROJECT_CELL_PROFILE_V1, _PROJECT_CELL_PROFILE_V2)
+    }
+    matches = (await session.scalars(
+        select(ProjectCellOperation).where(
+            ProjectCellOperation.workspace_id == workspace.id,
+            ProjectCellOperation.idempotency_key.in_(profiles),
+        ).execution_options(populate_existing=True)
+    )).all()
+    if len(matches) != 1:
+        return None
+    operation = matches[0]
+    if (
+        operation.generation_run_id != run.id or operation.execution_run_id != run.id
+        or operation.kind != "ensure" or operation.status != "completed"
+        or operation.fencing_epoch != fence or operation.attempt_count != 1
+        or operation.started_at is None or operation.finished_at is None
+        or operation.error is not None or operation.capacity_reason is not None
+        or operation.next_attempt_at is not None or type(operation.result_payload) is not dict
+    ):
+        return None
+    profile = profiles[operation.idempotency_key]
+    if (workspace.provider_metadata or {}).get("profile_version", profile) != profile:
+        return None
+    try:
+        if _stored_request_payload(operation) != {"profile_version": profile}:
+            return None
+        response = ProjectCellResourceResponse.from_json(operation.result_payload)
+    except (OrchestratorUnavailable, ProjectCellValidationError, ValueError):
+        return None
+    if not _ready_ensure_resources(response, workspace.id) or response.fencing_epoch != fence:
+        return None
+    observation = response.lease_observation
+    if observation is not None and (
+        observation.workspace_id != workspace.id or observation.project_id != run.project_id
+        or observation.owner_id != run.user_id or observation.operation_id != operation.id
+        or observation.request_digest != operation.request_digest
+        or observation.fencing_epoch != fence or observation.active_generation_run_id != run.id
+        or observation.active_generation_fencing_epoch != fence or observation.quiescent
+    ):
+        return None
+    unresolved = await session.scalar(
+        select(ProjectCellOperation.id).where(
+            ProjectCellOperation.workspace_id == workspace.id,
+            ProjectCellOperation.status.in_(("pending", "waiting_capacity", "running",
+                                             "indeterminate")),
+        ).limit(1)
+    )
+    return operation if unresolved is None else None
+
+
+async def _verify_retired_attachment_environment(
+    workspace_id: UUID, state: RecoveryStateV3, attachment: ExpiredProviderAttachment,
+) -> None:
+    """Observe the authenticated E10 release and E11 incarnation without starting it."""
+    owner, binding = state.identity, state.binding
+    assert binding is not None
+    try:
+        proof = await project_cell_environment_recovery_proof(
+            workspace_id, generation_run_id=owner.run_id, fencing_epoch=binding.fencing_epoch,
+            release_operation_id=attachment.release_operation_id,
+        )
+    except (OrchestratorBadRequest, OrchestratorUnavailable) as exc:
+        raise ProjectCellExecutorUnavailable("Retired compiler environment is unproved") from exc
+    if (
+        proof is None or proof.workspace_id != workspace_id or proof.project_id != owner.project_id
+        or proof.owner_id != owner.user_id or proof.generation_run_id != owner.run_id
+        or proof.release_operation_id != attachment.release_operation_id
+        or proof.previous_fencing_epoch != attachment.binding.fencing_epoch
+        or proof.release_fencing_epoch != attachment.release_fencing_epoch
+        or proof.fencing_epoch != binding.fencing_epoch
+        or proof.source_sha256 != binding.source_sha256
+        or proof.previous_environment_sha256 != attachment.binding.environment_sha256
+        or proof.environment_sha256 != binding.environment_sha256
+    ):
+        raise ProjectCellExecutorUnavailable("Retired compiler environment is unproved")
+
+
 async def _is_continuation_ensure(
     session: AsyncSession,
     run: GenerationRun,
@@ -1005,6 +1197,7 @@ async def maybe_create_project_cell_executor(
         else _PROJECT_CELL_PROFILE_V1
     )
     session_factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    completed_attachment: ProjectCellOperation | None = None
     async with session_factory() as session:
         # Serialize workspace creation, then match recovery/release namespace order.
         await lock_workspace_operations(session, project_id)
@@ -1027,8 +1220,44 @@ async def maybe_create_project_cell_executor(
             return None
         # Read the durable server-verified marker again on every worker attempt.
         # A browser flag or instruction in prompt prose never grants this path.
-        restoration_adaptation = "restoration_adaptation" in (run.agent_state or {})
-        saved_catalog_protocol = (run.agent_state or {}).get("max_catalog_runtime_protocol")
+        from yleum_api.services.generation import recovery_execution
+
+        saved_state = run.agent_state or {}
+        restoration_adaptation = "restoration_adaptation" in saved_state
+        recovery = None
+        attachment = None
+        retired_compiler = False
+        if "expired_provider_attachment_v1" in saved_state:
+            recovery = recovery_execution.recovery_state(run)
+            # The one-shot scheduler and executor independently check the same
+            # persisted claim. Never fall through on an unrecognized marker.
+            loader = getattr(recovery_execution, "load_expired_provider_attachment", None)
+            attachment = loader(run) if loader is not None else None
+            if (
+                attachment is None or not isinstance(recovery, RecoveryStateV3)
+                or restoration_adaptation
+                or existing_cell_id is None or not project_slug
+                or project.owner_id != user_id or run.user_id != user_id
+                or run.project_id != project_id
+                or run.status != "running" or run.started_at is None
+                or run.execution_backend != "worker" or on_admitted is not None
+            ):
+                raise ProjectCellExecutorUnavailable("Expired provider attachment scope changed")
+            await recovery_execution._require_session_owner(run.id, compatibility=False)
+            ordinary_plan = await recovery_execution.retired_attachment_ordinary_handoff(
+                session, run, recovery, attachment,
+            )
+            if ordinary_plan is not None:
+                # The prior attachment remains audit evidence. Reacquire and
+                # reconcile the current finalized release through ordinary MAX.
+                attachment = None
+            else:
+                retired_compiler = recovery.execution.physical_state == "active"
+                if not retired_compiler and not attachment.matches_claim(recovery):
+                    raise ProjectCellExecutorUnavailable(
+                        "Expired provider attachment scope changed",
+                    )
+        saved_catalog_protocol = saved_state.get("max_catalog_runtime_protocol")
         if saved_catalog_protocol is not None and (
             type(saved_catalog_protocol) is not int or saved_catalog_protocol != 1
         ):
@@ -1044,6 +1273,8 @@ async def maybe_create_project_cell_executor(
             has_workspace=existing_cell_id is not None,
         )
         if not readiness.selected:
+            if attachment is not None:
+                raise ProjectCellExecutorUnavailable("Expired provider attachment lost its cell")
             if restoration_adaptation:
                 raise ProjectCellExecutorUnavailable("Адаптация доступна только в Project Cell.")
             if existing_cell_id is not None or project.project_cell_enabled is True:
@@ -1062,6 +1293,15 @@ async def maybe_create_project_cell_executor(
                 user=user,
                 run=run,
             )
+            if attachment is not None:
+                assert isinstance(recovery, RecoveryStateV3)
+                if (
+                    workspace.generation_run_id not in {None, run.id}
+                    or workspace.id != recovery.execution.control_workspace_id
+                ):
+                    raise ProjectCellExecutorUnavailable(
+                        "Expired provider attachment lease changed"
+                    )
             if workspace.generation_run_id not in {None, run.id}:
                 previous_run = await session.get(GenerationRun, workspace.generation_run_id)
                 if previous_run is None or previous_run.status in ACTIVE_GENERATION_STATUSES:
@@ -1138,28 +1378,56 @@ async def maybe_create_project_cell_executor(
                     await session.refresh(run)
             if run.status == "cancel_requested" or run.status not in ACTIVE_GENERATION_STATUSES:
                 raise ProjectCellStateConflict("Generation is no longer active")
-            workspace.generation_run_id = run.id
-            profile_version = await resolve_workspace_profile(session, workspace, profile_version)
-            from yleum_api.services.generation.recovery_execution import recovery_state
-
-            recovery = recovery_state(run)
-            ensure_key = f"generation:{run.id}:ensure:{profile_version}"
-            if isinstance(recovery, RecoveryStateV2):
-                ensure_key += f":cycle:{recovery.execution.lease_cycle_seq}"
-            operation, _ = await reserve_cell_operation(
-                session,
-                workspace_id=workspace.id,
-                generation_run_id=run.id,
-                kind="ensure",
-                idempotency_key=ensure_key,
-                request={"profile_version": profile_version},
-            )
-            continuation_ensure = (
-                operation
-                if isinstance(recovery, RecoveryStateV2) and not restoration_adaptation
-                and await _is_continuation_ensure(session, run, workspace, operation, recovery)
-                else None
-            )
+            if (
+                attachment is not None and (
+                    retired_compiler or workspace.fencing_epoch != attachment.release_fencing_epoch
+                )
+            ):
+                assert isinstance(recovery, RecoveryStateV3)
+                if retired_compiler:
+                    completed_attachment = await verified_completed_retired_compiler_ensure(
+                        session, run, recovery, workspace=workspace, attachment=attachment,
+                    )
+                else:
+                    completed_attachment = await verified_completed_attachment_ensure(
+                        session, run, recovery, workspace=workspace,
+                        expected_cycle=attachment.lease_cycle_seq + 1,
+                    )
+                if completed_attachment is None:
+                    raise ProjectCellExecutorUnavailable(
+                        "Expired provider attachment lacks a completed owned ensure"
+                    )
+                profile_version = cast(str, _stored_request_payload(
+                    completed_attachment,
+                )["profile_version"])
+            else:
+                workspace.generation_run_id = run.id
+                profile_version = await resolve_workspace_profile(
+                    session, workspace, profile_version,
+                )
+                # Prior-generation cleanup may have refreshed the durable state.
+                recovery = recovery_execution.recovery_state(run)
+                cycle = recovery.execution.lease_cycle_seq if isinstance(
+                    recovery, RecoveryStateV2,
+                ) else None
+                operation, _ = await reserve_cell_operation(
+                    session,
+                    workspace_id=workspace.id,
+                    generation_run_id=run.id,
+                    kind="ensure",
+                    idempotency_key=_ensure_key(run.id, profile_version, cycle=cycle),
+                    request={"profile_version": profile_version},
+                )
+                continuation_ensure = (
+                    operation
+                    if isinstance(recovery, RecoveryStateV2) and not restoration_adaptation
+                    and await _is_continuation_ensure(session, run, workspace, operation, recovery)
+                    else None
+                )
+                if attachment is not None and continuation_ensure is None:
+                    raise ProjectCellExecutorUnavailable(
+                        "Expired provider attachment is not an unopened lease cycle"
+                    )
             await session.commit()
         except (
             ProjectCellBusy,
@@ -1174,42 +1442,59 @@ async def maybe_create_project_cell_executor(
     async def _discard_progress(_payload: dict[str, object]) -> None:
         return None
 
-    outcome = await wait_for_capacity(
-        session_factory,
-        run_id=generation_run_id,
-        operation_id=operation.id,
-        client=HttpProjectCellOrchestratorClient(),
-        emit=agent_emit or _discard_progress,
-        dispatch_token=capacity_dispatch_token,
-        continuation_ensure=continuation_ensure,
-        initial_attempt=lambda: execute_cell_operation(
+    response: ProjectCellResourceResponse | None
+    if completed_attachment is not None:
+        assert attachment is not None and completed_attachment.fencing_epoch is not None
+        assert completed_attachment.result_payload is not None
+        response = ProjectCellResourceResponse.from_json(completed_attachment.result_payload)
+        admitted_operation_id = completed_attachment.id
+    else:
+        outcome = await wait_for_capacity(
             session_factory,
-            operation.id,
-            HttpProjectCellOrchestratorClient(),
-        ),
-    )
-    response = outcome.response
-    if (
-        outcome.status != "completed"
-        or outcome.kind != "ensure"
-        or response is None
-        or response.workspace_id != workspace_id
-        or response.state != "resources_ready"
-        or response.provider_ref is None
-        or response.fencing_epoch is None
-        or not all(
-            (
-                response.has_workspace,
-                response.has_agent_home,
-                response.has_postgres,
-                response.has_redis,
+            run_id=generation_run_id,
+            operation_id=operation.id,
+            client=HttpProjectCellOrchestratorClient(),
+            emit=agent_emit or _discard_progress,
+            dispatch_token=capacity_dispatch_token,
+            continuation_ensure=continuation_ensure,
+            initial_attempt=lambda: execute_cell_operation(
+                session_factory,
+                operation.id,
+                HttpProjectCellOrchestratorClient(),
+            ),
+        )
+        response = outcome.response
+        if (
+            outcome.status != "completed" or outcome.kind != "ensure"
+            or not _ready_ensure_resources(response, workspace_id)
+        ):
+            resource_state = response.state if response is not None else "no_response"
+            raise ProjectCellExecutorUnavailable(
+                f"Project Cell ensure failed: operation={outcome.status}, "
+                f"resources={resource_state}"
             )
+        admitted_operation_id = outcome.operation_id
+    assert response is not None and response.fencing_epoch is not None
+    attachment_snapshot: ProjectCellAgentWorkspaceSnapshot | None = None
+    if attachment is not None:
+        # Verify the live physical lease before promotion or opening the handle.
+        # GET never seeds the tree, starts a guest, or repeats an ensure.
+        attachment_snapshot = await project_cell_agent_snapshot(
+            workspace_id,
+            generation_run_id=generation_run_id,
+            fencing_epoch=response.fencing_epoch,
         )
-    ):
-        resource_state = response.state if response is not None else "no_response"
-        raise ProjectCellExecutorUnavailable(
-            f"Project Cell ensure failed: operation={outcome.status}, resources={resource_state}"
-        )
+        if (
+            attachment_snapshot.generation_run_id != generation_run_id
+            or attachment_snapshot.fencing_epoch != response.fencing_epoch
+            or attachment_snapshot.seeded_from_project
+            or attachment_snapshot.workspace_revision != attachment.binding.source_sha256
+        ):
+            raise ProjectCellExecutorUnavailable("Expired provider attachment source changed")
+        if retired_compiler:
+            assert isinstance(recovery, RecoveryStateV3)
+            await _verify_retired_attachment_environment(workspace_id, recovery, attachment)
+        await recovery_execution._require_session_owner(generation_run_id, compatibility=False)
     admission = await promote_generation_after_admission(
         session_factory,
         run_id=generation_run_id,
@@ -1217,6 +1502,10 @@ async def maybe_create_project_cell_executor(
     )
     if admission != "admitted":
         if admission == "cancelled":
+            if retired_compiler:
+                # The durable compiler may own an in-flight role. Its owner
+                # reconciles that role before any physical release.
+                raise ProjectCellExecutorUnavailable("generation cancelled during admission")
             release_task = asyncio.create_task(
                 _release_generation_lease(
                     session_factory=session_factory,
@@ -1240,13 +1529,14 @@ async def maybe_create_project_cell_executor(
         generation_run_id=generation_run_id,
         provider_ref=response.provider_ref,
         fencing_epoch=response.fencing_epoch,
+        verify_existing=retired_compiler,
     )
     admitted_state = None
     if on_admitted is not None:
         from yleum_api.services.generation.recovery_execution import _require_session_owner
 
         try:
-            admitted_state = await on_admitted(outcome.operation_id)
+            admitted_state = await on_admitted(admitted_operation_id)
             if admitted_state is None:
                 raise ProjectCellExecutorUnavailable("Admitted cell lacks its executable entry")
         except BaseException:
@@ -1297,7 +1587,10 @@ async def maybe_create_project_cell_executor(
         from yleum_api.schemas.project import orchestrator_template
         from yleum_api.services.max_managed_generation import load_saved_business_config
 
-        if orchestrator_template(project.template) == "max-miniapp-nextjs":
+        if (
+            attachment_snapshot is None
+            and orchestrator_template(project.template) == "max-miniapp-nextjs"
+        ):
             config, version = await load_saved_business_config(
                 session_factory, project_id=project_id, owner_id=user_id,
                 default_name=project.name,
@@ -1312,11 +1605,13 @@ async def maybe_create_project_cell_executor(
                 generation_run_id=generation_run_id,
                 fencing_epoch=response.fencing_epoch,
             )
-        source_snapshot = await project_cell_agent_bootstrap(
-            workspace_id,
-            generation_run_id=generation_run_id,
-            fencing_epoch=response.fencing_epoch,
-        )
+        source_snapshot = attachment_snapshot
+        if source_snapshot is None:
+            source_snapshot = await project_cell_agent_bootstrap(
+                workspace_id,
+                generation_run_id=generation_run_id,
+                fencing_epoch=response.fencing_epoch,
+            )
         if (
             source_snapshot.generation_run_id != generation_run_id
             or source_snapshot.fencing_epoch != response.fencing_epoch
@@ -2474,6 +2769,7 @@ async def _mark_workspace_ready(
     generation_run_id: UUID,
     provider_ref: str | None,
     fencing_epoch: int,
+    verify_existing: bool = False,
 ) -> None:
     async with session_factory() as session:
         workspace = await session.scalar(
@@ -2496,6 +2792,13 @@ async def _mark_workspace_ready(
             or run.status not in {"pending", "queued_for_capacity", "running"}
         ):
             raise ProjectCellExecutorUnavailable("Project Cell lease changed before activation")
+        if verify_existing:
+            if (
+                workspace.state != "ready" or workspace.provider_ref != provider_ref
+                or workspace.deleted_at is not None or workspace.ready_at is None
+            ):
+                raise ProjectCellExecutorUnavailable("Retired compiler lease activation changed")
+            return
         workspace.state = "ready"
         workspace.provider_ref = provider_ref
         workspace.ready_at = datetime.now(UTC)

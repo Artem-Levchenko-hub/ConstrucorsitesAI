@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,7 @@ ROLES = {"api": "yleum-prod-api", "gateway": "yleum-prod-gw"}
 MAX_SCOPE = 8192
 IMAGE_REVISION = "org.opencontainers.image.revision"
 IMAGE_ROLE = "ru.yleum.release.role"
+AUTHORIZATION_DIR = Path("/var/lib/yleum-expired-provider")
 
 
 class ReleaseDenied(ValueError):
@@ -269,10 +271,70 @@ def scope_description(scope: dict, release: str) -> tuple[str, str, str]:
     return api["run_id"], incumbent, hashlib.sha256(canonical).hexdigest()
 
 
+def authorize_reattach(api: dict, release: str, *, check: bool = False) -> None:
+    name = "yleum-prod-generation-worker"
+    rows = json.loads(command(["docker", "inspect", name]))
+    require(type(rows) is list and len(rows) == 1)
+    worker = rows[0]
+    config = worker["Config"]
+    image = image_names(release)["api"]
+    require(
+        worker["Name"] == "/" + name and worker["State"]["Running"] is True
+        and config["Image"] == image
+        and config["Labels"].get("com.docker.compose.project") == PROJECT
+        and config["Labels"].get("com.docker.compose.service") == "generation-worker"
+        and "OMNIA_RELEASE_SHA=" + release in config["Env"]
+        and config["User"] in {"", "0", "0:0", "root", "root:root"}
+        and worker["Image"]
+        == command(["docker", "image", "inspect", image, "--format", "{{.Id}}"]).decode().strip()
+    )
+    require(any(
+        mount["Type"] == "bind" and mount["Source"] == str(AUTHORIZATION_DIR)
+        and mount["Destination"] == str(AUTHORIZATION_DIR) and mount["RW"] is False
+        for mount in worker["Mounts"]
+    ))
+    directory = AUTHORIZATION_DIR.lstat()
+    require(
+        os.geteuid() == 0 and stat.S_ISDIR(directory.st_mode)
+        and directory.st_uid == 0 and stat.S_IMODE(directory.st_mode) & 0o022 == 0
+    )
+    scope = {key: value for key, value in api.items() if key not in {
+        "release_sha", "reader_release_sha",
+    }}
+    authorization = json.dumps({
+        "release_sha": release, "scope": json.dumps(scope, separators=(",", ":"), sort_keys=True),
+    }, separators=(",", ":")).encode()
+    destination = AUTHORIZATION_DIR / "scope.json"
+    if check:
+        info = destination.lstat()
+        require(
+            stat.S_ISREG(info.st_mode) and info.st_uid == 0
+            and stat.S_IMODE(info.st_mode) == 0o600 and info.st_size == len(authorization)
+            and destination.read_bytes() == authorization
+        )
+        return
+    descriptor, temporary = tempfile.mkstemp(dir=AUTHORIZATION_DIR, prefix=".scope-")
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(authorization)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
+        directory_fd = os.open(AUTHORIZATION_DIR, os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
 def main() -> dict:
     require(len(sys.argv) == 3)
     mode, release = sys.argv[1:]
-    require(mode in {"scope", "stage", "migrate", "seal", "verify-images"})
+    require(mode in {
+        "scope", "stage", "migrate", "seal", "verify-images", "authorize-reattach", "check-reattach",
+    })
     require_revision(release)
     scope = decoded(sys.stdin.buffer.read(MAX_SCOPE + 1))
     run_id, incumbent, digest = scope_description(scope, release)
@@ -284,6 +346,9 @@ def main() -> dict:
         require(images_ready(image_names(release), release))
         return {"ok": True, "mode": mode}
     api, gateway = scope_pair(scope, release, incumbent)
+    if mode in {"authorize-reattach", "check-reattach"}:
+        authorize_reattach(api, release, check=mode == "check-reattach")
+        return {"ok": True, "mode": mode}
     project, database = live_roles(incumbent, scope["gateway_runtime"])
     command(["git", "-C", str(CHECKOUT), "merge-base", "--is-ancestor", release, "origin/main"])
     with tempfile.TemporaryDirectory(prefix="yleum-expired-provider-") as directory:

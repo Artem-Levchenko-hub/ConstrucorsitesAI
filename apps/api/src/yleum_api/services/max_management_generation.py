@@ -200,6 +200,22 @@ def _editable_app_source(path: str) -> bool:
     )
 
 
+def _editable_library_source(path: str) -> bool:
+    if (
+        not path.startswith("src/lib/")
+        or re.fullmatch(_TYPESCRIPT_SOURCE_PATH, path) is None
+        or posixpath.normpath(path) != path
+    ):
+        return False
+    parts = path.lower().split("/")[2:]
+    return all(
+        not part.startswith(".")
+        and part.split(".", 1)[0] not in {"auth", "db", "env", "environment", "max", "omnia"}
+        and not any(fragment in part for fragment in ("config", "credential", "secret"))
+        for part in parts
+    )
+
+
 def matches_parked_throw_diagnostic(detail: str, files: Mapping[str, str]) -> bool:
     """Match one stored source issue without interpreting the managed contract."""
     match = _PARKED_THROW_DIAGNOSTIC.fullmatch(detail)
@@ -2201,6 +2217,7 @@ class ManagedSourceObligation(StrEnum):
     CATALOG_RENDER = "catalog_render"
     CATALOG_SELECTION = "catalog_selection"
     THROW_STATEMENT = "throw_statement"
+    JSON_STRINGIFY = "json_stringify"
     ORDER_HISTORY = "order_create_history"
     LEAD_HISTORY = "lead_create_history"
     BOOKING_HISTORY = "booking_create_history"
@@ -2219,10 +2236,11 @@ class ManagedSourceGap(str):
     _obligation: ManagedSourceObligation | None
     _contract_hash: str | None
     _located_key: str | None
+    _repair_path: str | None
 
     def __new__(
         cls, diagnostic: str, *, obligation: ManagedSourceObligation | None = None,
-        contract_hash: str | None = None,
+        contract_hash: str | None = None, repair_path: str | None = None,
     ) -> ManagedSourceGap:
         if (obligation is None) != (contract_hash is None) or (
             obligation is not None and (
@@ -2232,16 +2250,23 @@ class ManagedSourceGap(str):
             )
         ):
             raise ValueError("managed source obligation requires a canonical contract identity")
+        if obligation is ManagedSourceObligation.JSON_STRINGIFY:
+            if repair_path is None or not _editable_library_source(repair_path):
+                raise ValueError("stringify repair requires an editable source path")
+        elif repair_path is not None:
+            raise ValueError("unexpected managed source repair path")
         gap = super().__new__(cls, diagnostic)
         gap._obligation = obligation
         gap._contract_hash = contract_hash
         gap._located_key = cls._location_key(diagnostic)
+        gap._repair_path = repair_path
         return gap
 
     def with_diagnostic(self, diagnostic: str) -> ManagedSourceGap:
         """Retain trusted identity across bounded, redacted model feedback."""
         gap = ManagedSourceGap(
             diagnostic, obligation=self._obligation, contract_hash=self._contract_hash,
+            repair_path=self._repair_path,
         )
         gap._located_key = self._located_key
         return gap
@@ -2249,6 +2274,11 @@ class ManagedSourceGap(str):
     @property
     def obligation(self) -> ManagedSourceObligation | None:
         return self._obligation
+
+    @property
+    def repair_path(self) -> str | None:
+        """Return the verified source target, independently of feedback redaction."""
+        return self._repair_path
 
     def rejection_key(self) -> str | None:
         if self._located_key is not None:
@@ -2321,14 +2351,23 @@ def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
         effect_detail = PARKED_THROW_DIAGNOSTIC_PREFIX + _issue_detail(issue)
         if issue is not None:
             path, _, _, kind, reason, _ = issue
+            obligation = None
+            repair_path = None
             if (
                 (kind, reason) == ("throw_statement", "unsupported_statement")
                 and _editable_app_source(path)
             ):
+                obligation = ManagedSourceObligation.THROW_STATEMENT
+            elif (
+                (kind, reason) == ("call_expression", "unproven_json_stringify")
+                and _editable_library_source(path)
+            ):
+                obligation = ManagedSourceObligation.JSON_STRINGIFY
+                repair_path = path
+            if obligation is not None:
                 return ManagedSourceGap(
-                    effect_detail,
-                    obligation=ManagedSourceObligation.THROW_STATEMENT,
-                    contract_hash=contract.contract_hash,
+                    effect_detail, obligation=obligation, contract_hash=contract.contract_hash,
+                    repair_path=repair_path,
                 ), frozenset()
         return effect_detail, frozenset()
     if connections.unsupported_constant_control:

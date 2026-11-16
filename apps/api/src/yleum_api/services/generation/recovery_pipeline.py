@@ -8,7 +8,7 @@ import re
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
-from typing import Annotated, Any, Literal, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 from uuid import UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
@@ -20,6 +20,7 @@ from yleum_api.services.design_plugin import DesignContract
 from yleum_api.services.generation.contracts import AgentPromptPlan, StackPrompt
 from yleum_api.services.generation.recovery_actions import recovery_binding
 from yleum_api.services.generation.recovery_contract import (
+    CompilerWitness,
     IncompleteResponseBudget,
     RecoveryBinding,
     RecoveryContractError,
@@ -31,9 +32,14 @@ from yleum_api.services.orchestrator_client import (
     OrchestratorBadRequest,
     OrchestratorMachineInventoryUnavailable,
     OrchestratorUnavailable,
+    ProjectCellEnvironmentRecoveryProof,
 )
 from yleum_api.services.project_cell_executor import ProjectCellExecutorHandle
 from yleum_api.services.promotion_permit import workspace_revision_digest
+
+if TYPE_CHECKING:
+    from yleum_api.services.generation.recovery_execution import GenerationYielded
+    from yleum_api.services.generation.recovery_reconciliation import ToolEffectCursor
 
 log = get_logger(__name__)
 
@@ -754,6 +760,11 @@ async def prepare_source_repair(
     targeted: bool,
     response_budget: IncompleteResponseBudget,
 ) -> SourceRepairEntry:
+    from yleum_api.services.generation.expired_native_finalization import (
+        _TRANSIENT_CHECKPOINT_ERRORS,
+        retired_finalization_plan,
+    )
+
     if (entry := pending_source_repair(driver)) is not None:
         return entry
     entry = SourceRepairEntry(
@@ -769,14 +780,20 @@ async def prepare_source_repair(
         "source_repair": entry.model_dump(mode="json"),
     }
     completed.pop(_NATIVE_REPAIR_LAST_REJECTION, None)
-    await driver.save(
-        driver.state.execution.model_copy(
-            update={
-                "budget": budget.model_copy(update={"repair_calls": budget.repair_calls + 1}),
-            }
-        ),
-        context={**driver.context, "completed": completed},
-    )
+    try:
+        await driver.save(
+            driver.state.execution.model_copy(
+                update={
+                    "budget": budget.model_copy(update={"repair_calls": budget.repair_calls + 1}),
+                }
+            ),
+            context={**driver.context, "completed": completed},
+        )
+    except _TRANSIENT_CHECKPOINT_ERRORS:
+        if retired_finalization_plan(driver) is None:
+            raise
+        await driver.wait(checkpoint_uncertain=True)
+        raise AssertionError("committed wait must leave retired repair entry") from None
     return entry
 
 
@@ -790,6 +807,23 @@ async def finish_source_repair(
         raise RecoveryContractError("source repair invocation is no longer active")
     if response_budget.total < entry.response_budget.total:
         raise RecoveryContractError("source repair response accounting was refunded")
+    await driver.save(
+        driver.state.execution.model_copy(
+            update={
+                "substep": "checkpoint_ready"
+                if driver.state.execution.stage == "finalization"
+                else "agent_entry",
+                "pending_effect_id": None,
+            }
+        ),
+        context=_completed_source_repair_context(driver, entry, result, response_budget),
+    )
+
+
+def _completed_source_repair_context(
+    driver: ExecutionDriver, entry: SourceRepairEntry, result: AgentResult,
+    response_budget: IncompleteResponseBudget,
+) -> dict[str, Any]:
     saved = entry.model_copy(
         update={
             "status": "complete",
@@ -809,16 +843,284 @@ async def finish_source_repair(
     }
     context.pop("native_outer", None)
     context["completed"].pop(_NATIVE_REPAIR_LAST_REJECTION, None)
+    return context
+
+
+_RETIRED_NATIVE_REPAIR_KEY = "retired_expired_native_repair"
+_RETIRED_NATIVE_REPAIR_STOP = "expired_provider_request_retired"
+_RETIRED_REPAIR_COORDINATOR_REQUIRED = (
+    "an expired attempt requires an enabled retired repair coordinator"
+)
+
+
+class _RetiredNativeRepair(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    version: Literal[1]
+    attempt_id: UUID
+    logical_step_seq: Annotated[int, Field(gt=0)]
+    binding: RecoveryBinding
+    checked_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RetiredNativeRepairCheck:
+    compiler: CompilerWitness
+    source_gap: str | None
+
+
+async def retire_expired_native_source_repair(
+    driver: ExecutionDriver, *, released: RecoveryStateV3, armed_attempt_id: UUID | None = None,
+) -> None:
+    """Atomically rebind the held checkpoint and retire its sealed unused wire."""
+    from datetime import UTC
+
+    from sqlalchemy import func, select
+
+    from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
+    from yleum_api.models.project_cell import ProjectCellOperation
+    from yleum_api.services.generation.provider_attempts import expired_reservation_closed
+    from yleum_api.services.generation.recovery_execution import (
+        _owned_release_receipt,
+        _require_session_owner,
+        _response_wait_attempt,
+        load_execution_context,
+        recovery_state,
+    )
+    from yleum_api.services.generation.recovery_quiescence import _provider_stopped
+    from yleum_api.services.generation.recovery_store import _locked_owner
+    from yleum_api.services.generation_deadline import is_restoration_adaptation
+    from yleum_api.services.project_cells import _stored_request_payload
+
+    original = released.execution
+    old = released.binding
+    release_id = original.release_operation_id
+    if (
+        driver.state != released or old is None or released.phase != "working"
+        or released.continuation_claim is None
+        or original.stage != "finalization" or original.substep != "response_wait"
+        or original.physical_state != "released" or release_id is None
+        or original.execution_context_ref is None or released.checkpoint is None
+        or original.execution_context_ref != released.context_ref
+        or original.next_tool_index != 0 or original.response_sha256 is not None
+        or original.budget.repair_calls != 1
+        or released.clock.stage != "repair" or not released.clock.repair_granted
+        or released.unresolved_operation_ids or not released.environment_rebind_supported
+        or str(original.control_workspace_id) != old.workspace_id
+        or original.control_fencing_epoch != old.fencing_epoch + 1
+        or driver.runtime_control != (original.control_workspace_id, old.fencing_epoch + 2)
+    ):
+        raise RecoveryContractError("expired repair retirement lost its exact released cursor")
+    owner = released.identity
+    await _require_session_owner(owner.run_id)
+    assert original.control_workspace_id is not None and original.control_fencing_epoch is not None
+    old_context = await load_execution_context(
+        owner, original.execution_context_ref, binding=old,
+    )
+    frame = driver.restore_frame("native")
+    entry = pending_source_repair(driver)
+    if (
+        old_context != driver.context or frame is None or entry is None or entry.status != "active"
+        or driver.context.get("active_tool") is not None
+        or _RETIRED_NATIVE_REPAIR_KEY in driver.context["completed"]
+    ):
+        raise RecoveryContractError("expired repair retirement has no matching active native frame")
+    raw_progress = driver.context["completed"].get("finalization_progress")
+    progress = FinalizationProgress.model_validate_json(json.dumps(raw_progress, allow_nan=False))
+    if progress.pending_detail is None or progress.no_progress:
+        raise RecoveryContractError("expired repair retirement has no pending source check")
+    budget = IncompleteResponseBudget.model_validate(frame.get("response_budget"))
+    if budget.total < entry.response_budget.total:
+        raise RecoveryContractError("expired repair retirement would refund response accounting")
+
+    async with driver.factory() as session:
+        run, project = await _locked_owner(
+            session, run_id=owner.run_id, project_id=owner.project_id, user_id=owner.user_id,
+        )
+        if (
+            recovery_state(run) != released
+            or project.template != "max_miniapp" or is_restoration_adaptation(run)
+            or run.execution_backend != "worker" or run.response_mode not in {"build", "edit"}
+        ):
+            raise RecoveryContractError("expired repair retirement lost its active run owner")
+        release = await session.get(ProjectCellOperation, release_id)
+        if (
+            release is None or not _owned_release_receipt(
+                release, run_id=owner.run_id, workspace_id=original.control_workspace_id,
+                fence=original.control_fencing_epoch,
+            )
+        ):
+            raise RecoveryContractError("expired repair retirement lost its terminal release")
+        request = _stored_request_payload(release)
+        if request and request != {"require_environment_proof": {
+            "source_sha256": old.source_sha256, "environment_sha256": old.environment_sha256,
+        }}:
+            raise RecoveryContractError("expired repair release request conflicts")
+        attempt = await _response_wait_attempt(session, released)
+        if attempt is None or original.provider_effect_id is None:
+            raise RecoveryContractError("expired repair has no owning no-dispatch receipt")
+        root = await session.get(GenerationRecoveryEffect, original.provider_effect_id)
+        if (
+            (armed_attempt_id is not None and attempt.attempt_id != armed_attempt_id)
+            or root is None or type(root.pre_binding) is not dict
+            or not await expired_reservation_closed(
+                session, attempt, held_binding=old, max_attempt_seq=released.attempt_seq,
+            )
+            or not await _provider_stopped(session, run)
+        ):
+            raise RecoveryContractError("expired repair has no owning no-dispatch receipt")
+        historical = root.pre_binding.get("source") != old.model_dump(mode="json")
+        checked_at = await session.scalar(select(func.clock_timestamp()))
+        assert checked_at is not None
+
+    if armed_attempt_id is None:
+        current, _ = await _read_released_environment(driver.snapshot, hold_lease=True)
+    else:
+        current = await _observe_released_candidate(driver, old, hold_lease=True)
+    if current != old.model_copy(update={
+        "fencing_epoch": old.fencing_epoch + 2, "environment_sha256": current.environment_sha256,
+    }):
+        raise RecoveryContractError("retired repair source, schema or lease changed")
+    if historical or not request or old.environment_sha256 != current.environment_sha256:
+        prove = driver.prove_environment_recovery
+        if prove is None:
+            raise RecoveryContractError("retired repair has no environment recovery reader")
+        proof = await _read_released_environment(
+            lambda: prove(release_id), hold_lease=True,
+        )
+        if not _release_environment_matches(
+            driver, proof, release_id, original.control_fencing_epoch,
+            old, current,
+        ):
+            raise RecoveryContractError("retired repair environment is not confirmed")
+
+    retired = _RetiredNativeRepair(
+        version=1, attempt_id=attempt.attempt_id, logical_step_seq=original.logical_step_seq,
+        binding=current, checked_at=checked_at.astimezone(UTC),
+    )
+    result = AgentResult(
+        done=False, summary="The expired provider request was never dispatched.",
+        files={}, steps=0, stop_reason=_RETIRED_NATIVE_REPAIR_STOP,
+    )
+    context = _completed_source_repair_context(driver, entry, result, budget)
+    context["completed"][_RETIRED_NATIVE_REPAIR_KEY] = retired.model_dump(mode="json")
+    # A cold process must see either the original held E9 frame or the retired
+    # frame at the new fence. The ordinary rebind would consume the old pointer.
     await driver.save(
-        driver.state.execution.model_copy(
-            update={
-                "substep": "checkpoint_ready"
-                if driver.state.execution.stage == "finalization"
-                else "agent_entry",
-                "pending_effect_id": None,
+        original.model_copy(update={
+            "substep": "checkpoint_ready", "pending_effect_id": None, "provider_effect_id": None,
+        }),
+        context=context, expected_binding=current,
+    )
+    driver._reconcile_response = False
+
+
+async def revalidate_retired_source_repair(
+    driver: ExecutionDriver, *, compiler_receipt_id: UUID,
+) -> RetiredNativeRepairCheck:
+    """Read an owned current check and source diagnostic, without granting model work."""
+    from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
+    from yleum_api.models.project_cell import ProjectCellActivityLease
+    from yleum_api.services.generation.recovery_execution import (
+        _require_session_owner,
+        load_execution_context,
+        recovery_state,
+    )
+    from yleum_api.services.generation.recovery_reconciliation import ToolEffectCursor
+    from yleum_api.services.generation.recovery_requirements import load_compiler_witness
+    from yleum_api.services.generation.recovery_store import _locked_owner
+    from yleum_api.services.generation.recovery_tool_receipts import CommandBinding, digest
+    from yleum_api.services.generation_runs import load_generation_dispatch
+    from yleum_api.services.max_generation_contract import max_source_completion_gap
+    from yleum_api.services.orchestrator_client import ProjectCellCommandReceipt
+
+    raw = driver.context["completed"].get(_RETIRED_NATIVE_REPAIR_KEY)
+    if raw is None:
+        raise RecoveryContractError("retired repair receipt is unavailable")
+    receipt = _RetiredNativeRepair.model_validate_json(json.dumps(raw, allow_nan=False))
+    state = driver.state
+    entry = pending_source_repair(driver)
+    if (
+        not isinstance(state, RecoveryStateV3) or state.continuation_claim is None
+        or state.phase != "working" or state.binding != receipt.binding
+        or state.execution.stage != "finalization" or state.execution.substep != "checkpoint_ready"
+        or state.execution.logical_step_seq <= receipt.logical_step_seq
+        or state.execution.pending_effect_id is not None
+        or state.execution.provider_effect_id is not None
+        or state.context_ref is None or entry is None or entry.status != "complete"
+        or entry.result is None
+        or entry.result.get("stop_reason") != _RETIRED_NATIVE_REPAIR_STOP
+    ):
+        raise RecoveryContractError("retired repair check lost its exact cursor")
+    owner = state.identity
+    await _require_session_owner(owner.run_id)
+    persisted_context = await load_execution_context(
+        owner, state.context_ref, binding=receipt.binding,
+    )
+    if persisted_context != driver.context:
+        raise RecoveryContractError("retired repair verification context changed")
+    binding, files = await driver.snapshot()
+    if binding != receipt.binding or workspace_revision_digest(files) != binding.source_sha256:
+        raise RecoveryContractError("retired repair source changed before verification")
+    async with driver.factory() as session:
+        run, _ = await _locked_owner(
+            session, run_id=owner.run_id, project_id=owner.project_id, user_id=owner.user_id,
+        )
+        if recovery_state(run) != state:
+            raise RecoveryContractError("retired repair check lost its active claim")
+        compiler = await load_compiler_witness(
+            session, run_id=owner.run_id, receipt_id=compiler_receipt_id, binding=binding,
+        )
+        operation = await session.get(ProjectCellActivityLease, compiler.operation_id)
+        if (
+            compiler.dimension != "fast_check" or operation is None
+            or operation.finished_at is None or operation.finished_at < operation.started_at
+            or operation.started_at < receipt.checked_at
+        ):
+            raise RecoveryContractError("retired repair requires a fresh compiler check")
+        cursor = ToolEffectCursor(
+            state.continuation_claim, state.state_revision, state.execution.logical_step_seq,
+            f"role:{compiler.operation_id}",
+        )
+        effect = await session.get(
+            GenerationRecoveryEffect, uuid5(cursor.root_effect_id, "physical:0"),
+        )
+        if (
+            effect is None or effect.kind != "tool" or effect.payload_version != 1
+            or effect.state != "confirmed" or effect.operation_id != compiler.operation_id
+            or effect.parent_effect_id is not None or effect.provider_attempt_id is not None
+            or effect.tool_call_id != cursor.tool_call_id or effect.attempt_seq > state.attempt_seq
+            or (effect.run_id, effect.project_id, effect.user_id, effect.logical_step_seq)
+            != (owner.run_id, owner.project_id, owner.user_id, cursor.logical_step_seq)
+            or type(effect.receipt_ref) is not dict
+            or effect.receipt_sha256 != digest(effect.receipt_ref)
+        ):
+            raise RecoveryContractError("retired repair compiler command binding conflicts")
+        command = CommandBinding.model_validate_json(
+            json.dumps(effect.pre_binding, allow_nan=False),
+        )
+        ack = ProjectCellCommandReceipt.from_json(effect.receipt_ref)
+        if (
+            command.context_binding != binding or command.workspace_id != operation.workspace_id
+            or command.fencing_epoch != binding.fencing_epoch or command.activity is None
+            or command.activity.operation_id != operation.operation_id
+            or command.activity.proof_key != operation.proof_key
+            or command.activity.phase != "fast_check"
+            or (ack.workspace_id, ack.project_id, ack.owner_id, ack.generation_run_id)
+            != (operation.workspace_id, owner.project_id, owner.user_id, owner.run_id)
+            or ack.operation_id != compiler.operation_id
+            or ack.dispatch_fencing_epoch != binding.fencing_epoch
+            or ack.request_sha256 != command.request_sha256
+            or {command.workspace_revision, ack.before_revision, ack.after_revision}
+            != {binding.source_sha256}
+            or effect.post_binding != {
+                "workspace_revision": binding.source_sha256,
+                "physical_volume_identity": ack.physical_volume_identity,
             }
-        ),
-        context=context,
+        ):
+            raise RecoveryContractError("retired repair compiler command binding conflicts")
+        prompt = load_generation_dispatch(run).prompt_text
+    return RetiredNativeRepairCheck(
+        compiler=compiler, source_gap=max_source_completion_gap(prompt, files, portable=True),
     )
 
 
@@ -983,6 +1285,25 @@ async def _read_released_environment[ReadResult](
     raise AssertionError("the last environment read must return or raise")
 
 
+def _release_environment_matches(
+    driver: ExecutionDriver, proof: ProjectCellEnvironmentRecoveryProof | None,
+    release_id: UUID, release_fence: int, old: RecoveryBinding, current: RecoveryBinding,
+) -> bool:
+    owner = driver.state.identity
+    return (
+        proof is not None and str(proof.workspace_id) == old.workspace_id
+        and proof.project_id == owner.project_id and proof.owner_id == owner.user_id
+        and proof.generation_run_id == owner.run_id and proof.release_operation_id == release_id
+        and proof.previous_fencing_epoch == old.fencing_epoch
+        and proof.release_fencing_epoch == release_fence == old.fencing_epoch + 1
+        and proof.fencing_epoch == current.fencing_epoch == release_fence + 1
+        and driver.runtime_control == (proof.workspace_id, proof.fencing_epoch)
+        and proof.source_sha256 == current.source_sha256
+        and proof.previous_environment_sha256 == old.environment_sha256
+        and proof.environment_sha256 == current.environment_sha256
+    )
+
+
 async def _rebind_release_environment(
     driver: ExecutionDriver, old: RecoveryBinding, current: RecoveryBinding,
 ) -> bool:
@@ -999,21 +1320,7 @@ async def _rebind_release_environment(
     release_id, prove = execution.release_operation_id, driver.prove_environment_recovery
     assert release_id is not None and prove is not None
     proof = await _read_released_environment(lambda: prove(release_id), hold_lease=True)
-    if (
-        proof is None or str(proof.workspace_id) != old.workspace_id
-        or proof.project_id != state.identity.project_id or proof.owner_id != state.identity.user_id
-        or proof.generation_run_id != state.identity.run_id
-        or proof.release_operation_id != release_id
-        or proof.previous_fencing_epoch != old.fencing_epoch
-        or proof.release_fencing_epoch != release_fence
-        or proof.release_fencing_epoch != old.fencing_epoch + 1
-        or proof.fencing_epoch != current.fencing_epoch
-        or driver.runtime_control != (proof.workspace_id, proof.fencing_epoch)
-        or proof.fencing_epoch != proof.release_fencing_epoch + 1
-        or proof.source_sha256 != current.source_sha256
-        or proof.previous_environment_sha256 != old.environment_sha256
-        or proof.environment_sha256 != current.environment_sha256
-    ):
+    if not _release_environment_matches(driver, proof, release_id, release_fence, old, current):
         raise _UnprovedReleaseEnvironment("generation release environment cannot be verified")
     # The orchestrator reads inside save recheck the current source and binding.
     await _read_released_environment(
@@ -1025,11 +1332,168 @@ async def _rebind_release_environment(
     return True
 
 
-async def rebind_continuation(driver: ExecutionDriver) -> None:
+async def _observe_released_candidate(
+    driver: ExecutionDriver, original: RecoveryBinding, *, hold_lease: bool,
+) -> RecoveryBinding:
+    try:
+        current, _ = await _read_released_environment(
+            driver.snapshot, hold_lease=hold_lease, allow_prepare=True,
+        )
+    except OrchestratorMachineInventoryUnavailable as error:
+        if (
+            driver.prepare_environment is None
+            or original.workspace_id != str(driver.state.execution.control_workspace_id)
+            or error.workspace_revision != original.source_sha256
+        ):
+            raise
+        await _require_reacquired_lease(driver)
+        try:
+            await _prepare_owned_environment(driver, error)
+        except OrchestratorUnavailable:
+            if not hold_lease:
+                raise
+            # Observe the same lease after a lost prepare response.
+        current, _ = await _read_released_environment(driver.snapshot, hold_lease=hold_lease)
+    return current
+
+
+async def _armed_retirement_attempt(driver: ExecutionDriver, state: RecoveryStateV3) -> UUID | None:
+    from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.services.generation.recovery_execution import (
+        _require_session_owner,
+        load_expired_provider_attachment,
+        recovery_state,
+    )
+
+    await _require_session_owner(state.identity.run_id)
+    async with driver.factory() as session:
+        run = await session.get(GenerationRun, state.identity.run_id)
+        if run is None:
+            raise RecoveryContractError("expired repair run is unavailable")
+        attachment = load_expired_provider_attachment(run)
+        if attachment is None:
+            return None
+        if (
+            run.status != "running" or recovery_state(run) != state
+            or not attachment.matches_claim(state)
+        ):
+            raise RecoveryContractError("expired provider attachment lost its claimed cursor")
+        return attachment.attempt_id
+
+
+def _pending_retirement_compiler(
+    driver: ExecutionDriver, *, phase: Literal["working", "waiting_dependency"] = "working",
+) -> bool:
+    completed = driver.context.get("completed", {})
+    if type(completed) is not dict or _RETIRED_NATIVE_REPAIR_KEY not in completed:
+        return False
+    receipt = _RetiredNativeRepair.model_validate_json(
+        json.dumps(completed[_RETIRED_NATIVE_REPAIR_KEY], allow_nan=False),
+    )
+    state = driver.state
+    cursor = state.execution
+    repair = pending_source_repair(driver)
+    if (
+        not isinstance(state, RecoveryStateV3) or state.binding != receipt.binding
+        or state.phase != phase or state.continuation_claim is None
+        or state.context_ref is None or cursor.execution_context_ref != state.context_ref
+        or cursor.physical_state != "active" or cursor.stage != "finalization"
+        or str(cursor.control_workspace_id) != receipt.binding.workspace_id
+        or cursor.control_fencing_epoch != receipt.binding.fencing_epoch
+        or driver.runtime_control != (cursor.control_workspace_id, cursor.control_fencing_epoch)
+        or cursor.logical_step_seq < receipt.logical_step_seq
+        or cursor.provider_effect_id is not None
+        or cursor.substep not in {"checkpoint_ready", "proof_wait"}
+        or driver.context.get("active_frame") is not None
+        or repair is None or repair.status != "complete" or repair.result is None
+        or repair.result.get("stop_reason") != _RETIRED_NATIVE_REPAIR_STOP
+    ):
+        raise RecoveryContractError("retired repair lost its compiler checkpoint")
+    if cursor.substep == "checkpoint_ready":
+        if cursor.pending_effect_id is not None:
+            raise RecoveryContractError("retired repair still has a pending effect")
+    else:
+        from yleum_api.services.generation.recovery_reconciliation import ToolEffectCursor
+
+        role = pending_role(driver)
+        if (
+            role is None or role.role not in {"bootstrap", "fast_check"}
+            or role.return_substep != "checkpoint_ready"
+        ):
+            raise RecoveryContractError("retired repair lost its compiler role")
+        owned = ToolEffectCursor(
+            state.continuation_claim, state.state_revision, cursor.logical_step_seq,
+            f"role:{role.operation_id}",
+        )
+        if cursor.pending_effect_id != owned.root_effect_id:
+            raise RecoveryContractError("retired repair compiler role has lost its effect")
+    return True
+
+
+def retain_retired_attachment_on_wait(driver: ExecutionDriver, handoff: GenerationYielded) -> bool:
+    from yleum_api.services.generation.expired_native_finalization import retired_finalization_plan
+
+    state = getattr(driver, "state", None)
+    if (
+        not isinstance(state, RecoveryStateV3) or state.phase != "waiting_dependency"
+        or state.identity.run_id != handoff.run_id or state.attempt_seq != handoff.attempt_seq
+        or state.checkpoint != handoff.checkpoint or handoff.phase != state.phase
+        or state.next_check_at is None
+    ):
+        return False
+    plan = retired_finalization_plan(driver)
+    if plan is None:
+        return _pending_retirement_compiler(driver, phase="waiting_dependency")
+    cursor = state.execution
+    return (
+        plan.repair_path is not None and state.binding == plan.proof.binding
+        and cursor.stage == "finalization" and cursor.substep == "checkpoint_ready"
+        and cursor.physical_state == "active" and cursor.budget.repair_calls in {1, 2}
+        and cursor.pending_effect_id is None and cursor.provider_effect_id is None
+        and driver.runtime_control == (cursor.control_workspace_id, cursor.control_fencing_epoch)
+        and driver.context.get("active_frame") is None and driver.context.get("active_tool") is None
+    )
+
+
+async def pending_retired_compiler_role(
+    driver: ExecutionDriver,
+) -> tuple[PendingRole, ToolEffectCursor] | None:
+    """Keep the original role cursor while reading its receipt or proving no intent."""
+    from yleum_api.services.generation.recovery_reconciliation import (
+        ToolEffectCursor,
+        tool_effect_scope,
+    )
+    from yleum_api.services.generation.recovery_tool_receipts import require_command_reconciliation
+
+    if not _pending_retirement_compiler(driver):
+        raise RecoveryContractError("retired repair has no owning compiler checkpoint")
+    pending = pending_role(driver)
+    state = driver.state
+    if pending is None:
+        return None
+    claim = state.continuation_claim
+    assert claim is not None
+    role = ToolEffectCursor(
+        claim, state.state_revision, state.execution.logical_step_seq,
+        f"role:{pending.operation_id}", reconcile_only=True,
+    )
+    owner = state.identity
+    with tool_effect_scope(role):
+        role.reconcile_only = await require_command_reconciliation(
+            driver.factory, run_id=owner.run_id, project_id=owner.project_id, user_id=owner.user_id,
+            undispatched_operation_id=pending.operation_id,
+        )
+    return pending, role
+
+
+async def rebind_continuation(
+    driver: ExecutionDriver, *, allow_expired_retirement: bool = False,
+) -> Literal[True] | None:
     """Reprove the retained tree under the new lease before any new logical effect.
 
     A source write whose terminal ACK was lost is reconciled by its own receipt
     first. Never checkpoint its old tree or accept a merely equal subset of files.
+    True hands the candidate only to the retired repair compiler coordinator.
     """
     from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
     from yleum_api.services.generation.recovery_execution import (
@@ -1044,33 +1508,49 @@ async def rebind_continuation(driver: ExecutionDriver) -> None:
     from yleum_api.services.generation_deployment_drain import require_generation_admission
 
     state = driver.state
+    from yleum_api.services.generation.expired_native_finalization import (
+        restore_retired_finalization_cursor,
+        retired_finalization_plan,
+    )
+
+    retired_plan = retired_finalization_plan(driver)
+    if retired_plan is not None:
+        if not allow_expired_retirement:
+            raise RecoveryContractError(_RETIRED_REPAIR_COORDINATOR_REQUIRED)
+        phase = await restore_retired_finalization_cursor(driver)
+        if phase == "pre_entry":
+            return True
+        if phase is not None:
+            return None
+    elif _pending_retirement_compiler(driver):
+        if not allow_expired_retirement:
+            raise RecoveryContractError(_RETIRED_REPAIR_COORDINATOR_REQUIRED)
+        return True
     if state.binding is None:
         await _bind_initial_candidate(driver)
-        return
+        return None
     if state.execution.physical_state != "released":
-        return
+        return None
+    cursor = state.execution
+    if (
+        isinstance(state, RecoveryStateV3)
+        and cursor.stage == "finalization" and cursor.substep == "response_wait"
+        and cursor.budget.repair_calls == 1 and state.clock.repair_granted
+    ):
+        attempt_id = await _armed_retirement_attempt(driver, state)
+        if attempt_id is not None:
+            if not allow_expired_retirement:
+                raise RecoveryContractError(_RETIRED_REPAIR_COORDINATOR_REQUIRED)
+            # Generic wait after E11 would drop the E10 release pointer, so this
+            # scoped transition reports failure without advancing its cursor.
+            await retire_expired_native_source_repair(
+                driver, released=state, armed_attempt_id=attempt_id,
+            )
+            return True
     old = state.binding
     hold_lease = _can_rebind_release_environment(driver)
     try:
-        try:
-            current, _ = await _read_released_environment(
-                driver.snapshot, hold_lease=hold_lease, allow_prepare=True,
-            )
-        except OrchestratorMachineInventoryUnavailable as error:
-            if (
-                driver.prepare_environment is None
-                or old.workspace_id != str(state.execution.control_workspace_id)
-                or error.workspace_revision != old.source_sha256
-            ):
-                raise
-            await _require_reacquired_lease(driver)
-            try:
-                await _prepare_owned_environment(driver, error)
-            except OrchestratorUnavailable:
-                if not hold_lease:
-                    raise
-                # Observe the same lease after a lost prepare response.
-            current, _ = await _read_released_environment(driver.snapshot, hold_lease=hold_lease)
+        current = await _observe_released_candidate(driver, old, hold_lease=hold_lease)
         if (
             current.workspace_id != old.workspace_id
             or current.fencing_epoch <= old.fencing_epoch
@@ -1084,13 +1564,13 @@ async def rebind_continuation(driver: ExecutionDriver) -> None:
         )
         if current.source_sha256 == old.source_sha256 and same_environment:
             await driver.save(state.execution, context=driver.context)
-            return
+            return None
         if hold_lease and (
             current.source_sha256 != old.source_sha256 or current.schema_sha256 != old.schema_sha256
         ):
             raise _UnprovedReleaseEnvironment("released candidate source or schema changed")
         if await _rebind_release_environment(driver, old, current):
-            return
+            return None
         # No source mutation is licensed by a pending row. This only allows the
         # owning read-only receipt path to establish the full post-state later.
         execution = state.execution
@@ -1154,3 +1634,4 @@ async def rebind_continuation(driver: ExecutionDriver) -> None:
         await driver.wait(needs_input=True)
     except Exception:
         await driver.wait()
+    return None

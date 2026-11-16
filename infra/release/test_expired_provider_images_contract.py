@@ -205,6 +205,7 @@ SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 API_RUNTIME_SHA="$SHA"
 READER_NONCE=11111111-1111-4111-8111-111111111111
 SCENARIO="$1"
+case "$SCENARIO" in hold-attach|attach) EXPIRED_REATTACH=1;; esac
 record() { printf '%s\n' "$1" >> calls; }
 api_maintenance() {
   [ "$3" = status ]
@@ -224,6 +225,7 @@ reader_control() {
 }
 publication_drain() { record "publication-$1"; }
 expired_provider_gateway_cutover() { record gateway; [ "$SCENARIO" != unhealthy ]; }
+expired_provider_images() { record "$1"; [ "$SCENARIO" != hold-attach ]; }
 verify_billing_runtime() { record billing; }
 expired_provider_end() {
   record end-sql
@@ -247,6 +249,10 @@ ingress_drain() { [ "$1" = clear-parked-source ]; record "$1"; }
                 ("lost-clear", False, ["sql-status", "core-clear", "commerce-clear"]),
                 ("final-retry", True, ["sql-status", "core-clear", "commerce-clear",
                                        "core-verify-current", "clear-parked-source"]),
+                ("hold-attach", False, ["sql-status", "core-clear", "commerce-clear",
+                                        "core-verify-current", "authorize-reattach"]),
+                ("attach", True, ["sql-status", "core-clear", "commerce-clear",
+                                  "core-verify-current", "authorize-reattach", "clear-parked-source"]),
             ):
                 with self.subTest(scenario=scenario):
                     calls.unlink(missing_ok=True)

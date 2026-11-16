@@ -23,6 +23,8 @@
 #     --expired-provider-scope FILE
 #                         закрыть один подтверждённый резерв до отправки в модели и выкатить
 #                         связанные исправления API и gateway; требуется --gateway --no-web
+#     --reattach-expired-provider разрешить тому же run продолжиться после проверок релиза;
+#                         требуется --expired-provider-scope с проверенным резервом
 #     --repair-window N   окно починки адаптации (RESTORATION_ADAPTATION_REPAIR_SECONDS), по умолчанию 3600:
 #                         пишется в .env платформы и сверяется в отрендеренном compose (защита от отката к умолчанию)
 #                         (compose и api берут её из docker-compose.yml / config.py)
@@ -57,6 +59,7 @@ PARKED_SOURCE_RUN=""
 PARKED_CONTROL_RETRY=0
 EXPIRED_SCOPE_PATH=""
 EXPIRED_SCOPE_DIGEST=""
+EXPIRED_REATTACH=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-web) WEB=0 ;;
@@ -68,6 +71,7 @@ while [ $# -gt 0 ]; do
     --bootstrap-admission) BOOTSTRAP=1 ;;
     --parked-source-run) PARKED_SOURCE_RUN="${2:?}"; shift ;;
     --expired-provider-scope) EXPIRED_SCOPE_PATH="${2:?}"; shift ;;
+    --reattach-expired-provider) EXPIRED_REATTACH=1 ;;
     --finalize-owned-release) FINALIZE_NONCE="${2:?}"; shift ;;
     --resume-owned-release) RESUME_NONCE="${2:?}"; shift ;;
     --control-revision) CONTROL_SHA="${2:?}"; shift ;;
@@ -122,6 +126,9 @@ fi
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "нужен полный 40-символьный sha, получено: $SHA" >&2; exit 2; }
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+if [ "$EXPIRED_REATTACH" = 1 ] && [ -z "$EXPIRED_SCOPE_PATH" ]; then
+  echo "--reattach-expired-provider requires --expired-provider-scope" >&2; exit 2
+fi
 if [ -n "$EXPIRED_SCOPE_PATH" ]; then
   [ "$API" = 1 ] && [ "$WEB" = 0 ] && [ "$GW" = 1 ] && [ "$BOOTSTRAP" = 0 ] \
     && [ -z "$PARKED_SOURCE_RUN$FINALIZE_NONCE$RESUME_NONCE$CONTROL_SHA$LEGAL$GENERATION_WINDOW" ] \
@@ -136,14 +143,16 @@ if [ -n "$EXPIRED_SCOPE_PATH" ]; then
   expiration=$(printf '%s' "$EXPIRED_SCOPE_DATA" \
     | python3 "$REPO/infra/release/generation-expired-provider-images.py" scope "$SHA" \
     | python3 -c '
-import json, re, sys
+import hashlib, json, re, sys
 from uuid import UUID
 d = json.load(sys.stdin)
 run, incumbent, digest = d["run_id"], d["reader_release_sha"], d["scope_sha256"]
 assert str(UUID(run)) == run and re.fullmatch("[0-9a-f]{40}", incumbent)
 assert re.fullmatch("[0-9a-f]{64}", digest)
+if sys.argv[1] == "1":
+    digest = hashlib.sha256(("reattach-expired-provider:" + digest).encode()).hexdigest()
 print(run, incumbent, digest)
-') || exit 75
+' "$EXPIRED_REATTACH") || exit 75
   read -r PARKED_SOURCE_RUN EXPIRED_INCUMBENT EXPIRED_SCOPE_DIGEST <<< "$expiration"
 fi
 RELEASE_DRIVER="${BASH_SOURCE[0]}"
@@ -314,6 +323,10 @@ print("released" if owner is None else "owned")
     reader_control "$host" clear --release "$SHA" --owner-nonce "$READER_NONCE" || return
   done
   reader_control core verify-current --release "$SHA" || return
+  # Publishing before SQL/reader gates finish could race the final drain proof.
+  if [ "${EXPIRED_REATTACH:-0}" = 1 ]; then
+    expired_provider_images authorize-reattach || return
+  fi
   ingress_drain clear-parked-source
 }
 
@@ -1124,6 +1137,15 @@ assert type(state["ingress_active"]) is bool
 print(scope or "-", int(state["ingress_active"]), digest, nonce)
 ')
   read -r scope ingress_active saved_scope_digest ending_nonce <<< "$scope_status"
+  if [ "${EXPIRED_REATTACH:-0}" = 1 ] && [ "$scope" = "-" ] && [ "$ingress_active" = 0 ] \
+    && [ "$API_RUNTIME_SHA" = "$SHA" ]; then
+    expired_provider_images check-reattach
+    api_maintenance -m yleum_api.services.generation_deployment_drain status "$SHA" \
+      | python3 -c 'import json,sys; assert json.load(sys.stdin)["release_sha"] is None'
+    reader_control core verify-current --release "$SHA"
+    say "разрешение восстановления для точного релиза $SHORT подтверждено"
+    exit 0
+  fi
   if [ "$saved_scope_digest" != "-" ] || { [ "$scope" != "-" ] && [ -n "${EXPIRED_SCOPE_DIGEST:-}" ]; }; then
     [ "${EXPIRED_SCOPE_DIGEST:-}" = "$saved_scope_digest" ] || {
       echo "existing ingress drain requires its original expired provider scope" >&2; exit 75;

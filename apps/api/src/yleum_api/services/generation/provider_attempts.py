@@ -505,12 +505,15 @@ def _matches_expiry_receipt(
 
 
 async def expired_reservation_closed(
-    session: AsyncSession, attempt: GenerationProviderAttempt,
+    session: AsyncSession, attempt: GenerationProviderAttempt, *,
+    held_binding: RecoveryBinding | None = None, max_attempt_seq: int | None = None,
 ) -> bool:
-    """Recognize only the matching Gateway-owned no-dispatch evidence."""
+    """Recognize the Gateway seal, optionally with exact held-draft authority."""
     if attempt.phase != "closed" or attempt.terminal_reason != "expired_before_dispatch":
         return False
-    frame = await _expired_provider_frame(session, attempt)
+    frame = await _expired_provider_frame(
+        session, attempt, current_binding=held_binding, max_attempt_seq=max_attempt_seq,
+    )
     return frame is not None and _matches_expiry_receipt(attempt, frame)
 
 

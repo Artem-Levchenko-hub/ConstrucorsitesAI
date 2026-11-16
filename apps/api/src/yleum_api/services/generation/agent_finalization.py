@@ -330,6 +330,13 @@ async def run_native_source_repair(
             return completed
         task, model_baseline, edit_deadline = entry.task, entry.baseline, entry.edit_deadline
         edit_deadline = continuation.soft_edit_deadline(edit_deadline)
+        from yleum_api.services.generation.expired_native_finalization import (
+            retired_finalization_plan,
+            retired_repair_edit_deadline,
+        )
+
+        if (retired := retired_finalization_plan(continuation)) is not None:
+            edit_deadline = retired_repair_edit_deadline(retired, edit_deadline)
         if entry.targeted and source_failure is None:
             # A historical path list is not current source-repair authority.
             source_failure = SourceFailure()
@@ -519,8 +526,13 @@ async def finalize_max_candidate(
         raise NativeSourceRepairFiltered()
     _max_finalization_proof: ProofBundle | None = None
     if runtime.coordinator is not None and (files or verification_only):
+        from yleum_api.services.generation.expired_native_finalization import (
+            retired_finalization_plan,
+            retired_repair_edit_deadline,
+        )
         from yleum_api.services.max_finalization import MaxFinalizationStatus
 
+        retired_plan = retired_finalization_plan(continuation) if continuation is not None else None
         assert runtime.handle is not None
         autonomous_repair = uses_autonomous_max_source_repair(runtime)
         single_repair = (
@@ -561,6 +573,12 @@ async def finalize_max_candidate(
         ) -> bool:
             if verification_only:
                 raise RuntimeError("MAX_FINALIZATION_FAILED: provider output filtered")
+            if retired_plan is not None:
+                if retired_plan.repair_path is None or detail != retired_plan.feedback:
+                    raise RecoveryContractError("retired repair diagnostic changed")
+                source_failure = SourceFailure(
+                    importer=retired_plan.repair_path, allowed_paths=(retired_plan.repair_path,),
+                )
             assert runtime.handle is not None
             assert runtime.coordinator is not None
             repair_files = await runtime.handle.snapshot_files()
@@ -588,6 +606,9 @@ async def finalize_max_candidate(
             strategy = strategy + "\n" if autonomous_repair else ""
             if continuation is None:
                 _repair_history.append(detail)
+            edit_deadline = await runtime.coordinator.source_edit_deadline(repair=True)
+            if retired_plan is not None:
+                edit_deadline = retired_repair_edit_deadline(retired_plan, edit_deadline)
             repaired = await run_native_source_repair(
                 task=(
                     f"{plan.user}\n\nFINAL SOURCE CHECK FEEDBACK:\n{detail}{_carry}\n"
@@ -599,7 +620,7 @@ async def finalize_max_candidate(
                 prompt_text=prompt_text, baseline=repair_files, runtime=runtime, ids=ids,
                 plan=plan, operations=operations, is_free=is_free,
                 shell_enabled=_max_shell_enabled,
-                edit_deadline=await runtime.coordinator.source_edit_deadline(repair=True),
+                edit_deadline=edit_deadline,
                 source_failure=source_failure,
                 feedback=detail,
                 require_edit_from=baseline.files if autonomous_repair and requires_edit else None,
@@ -619,6 +640,8 @@ async def finalize_max_candidate(
                 options["autonomous_source_repair"] = True
             if verification_only:
                 options["max_source_repairs"] = 0
+            elif retired_plan is not None:
+                options["max_source_repairs"] = retired_plan.maximum_repairs
             elif single_repair:
                 options["max_source_repairs"] = int(
                     not getattr(runtime, "source_repair_started", False)

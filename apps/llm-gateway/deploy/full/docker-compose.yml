@@ -505,6 +505,10 @@ services:
     volumes:
       - /opt/omnia-runtime/backups:/opt/omnia-runtime/backups:ro
       - type: bind
+        source: /var/lib/yleum-expired-provider
+        target: /var/lib/yleum-expired-provider
+        read_only: true
+      - type: bind
         source: /run/yleum-generation-readers
         target: /run/yleum-generation-readers
         read_only: true

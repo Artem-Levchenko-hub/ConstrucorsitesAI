@@ -80,6 +80,7 @@ from yleum_api.services.generation.contracts import (
 from yleum_api.services.generation.progress import GenerationProgress
 from yleum_api.services.generation.recovery_contract import (
     ContinuationClaim,
+    IncompleteResponseBudget,
     RecoveryContractError,
     RecoveryStateV2,
 )
@@ -106,6 +107,19 @@ _log = logging.getLogger("yleum_api.routers.messages")
 class _LoadedContinuationContext:
     state: RecoveryStateV2
     value: dict[str, Any]
+
+
+def _restore_finalization_response_budget(
+    runtime: GenerationRuntime, completed: dict[str, Any],
+) -> None:
+    if "response_budget" not in completed:
+        return
+    saved = IncompleteResponseBudget.model_validate_json(
+        json.dumps(completed["response_budget"], allow_nan=False),
+    )
+    if saved.total < runtime.response_recovery.budget.total:
+        raise RecoveryContractError("finalization response accounting was refunded")
+    runtime.response_recovery.budget = saved
 
 
 async def _finish_filtered_repair_message(
@@ -441,14 +455,7 @@ async def run_agent_generation(
                 )
             completed_turn = CompletedAgentTurn.from_json(completed["agent_turn"])
             runtime.response_recovery.budget = completed_turn.response_budget
-            if "response_budget" in completed:
-                from yleum_api.services.generation.recovery_contract import IncompleteResponseBudget
-                shared_budget = IncompleteResponseBudget.model_validate_json(
-                    json.dumps(completed["response_budget"], allow_nan=False),
-                )
-                if shared_budget.total < completed_turn.response_budget.total:
-                    raise RecoveryContractError("finalization response accounting was refunded")
-                runtime.response_recovery.budget = shared_budget
+            _restore_finalization_response_budget(runtime, completed)
         if "finalization_inputs" in completed:
             if completed_turn is None:
                 raise RecoveryContractError("finalization inputs have no completed main turn")
@@ -569,12 +576,15 @@ async def run_agent_generation(
         bindings.vision_context = (
             _design_contract.vision_context if _design_contract else prompt_text
         )
+    retired_native_repair = False
     if _resume_state is not None:
         assert execution_context is not None
         continuation = attach_driver(factory, _resume_state, execution_context, runtime.handle)
         runtime.continuation = continuation
         assert runtime.handle is not None
-        await rebind_continuation(continuation)
+        retired_native_repair = await rebind_continuation(
+            continuation, allow_expired_retirement=runtime.coordinator is not None,
+        ) is True
         if runtime.coordinator is not None:
             runtime.coordinator.continuation = continuation
 
@@ -620,9 +630,27 @@ async def run_agent_generation(
             factory, ids, NativeSourceRepairFiltered(), continuation,
         )
         return
-    if continuation is not None and runtime.handle is not None:
+    if retired_native_repair:
+        from yleum_api.services.generation.expired_native_finalization import (
+            prepare_retired_finalization,
+        )
+
+        assert continuation is not None and runtime.coordinator is not None
+        await prepare_retired_finalization(continuation, runtime.coordinator)
+    elif continuation is not None and runtime.handle is not None:
         from yleum_api.services.generation.recovery_pipeline import reconcile_pending_role
+
         await reconcile_pending_role(continuation, runtime.handle)
+
+    scoped_finalization = False
+    if continuation is not None:
+        from yleum_api.services.generation.expired_native_finalization import (
+            retired_finalization_plan,
+        )
+
+        scoped_finalization = retired_finalization_plan(continuation) is not None
+        if scoped_finalization:
+            _restore_finalization_response_budget(runtime, continuation.context["completed"])
 
     await require_named_behavior_readiness(
         runtime, prompt_text, template=project_info.template, factory=factory, ids=ids,
@@ -630,7 +658,7 @@ async def run_agent_generation(
     if prepared_entry is not None:
         # A cold worker must rebind optional trusted migration seeds to current
         # server-owned configuration; mutable workspace/entry SQL is no authority.
-        if project_info.template == "max_miniapp":
+        if project_info.template == "max_miniapp" and not scoped_finalization:
             await _seed_saved_max_config(factory, ids, project_info, runtime, catalog_runtime=True)
         _stack = prepared_entry.stack
     else:
@@ -733,7 +761,7 @@ async def run_agent_generation(
             runtime=runtime, bindings=bindings, emit=_agent_emit,
             draft_tests=draft_tests, continuation=continuation,
         )
-    if saved_source is not None and runtime.handle is not None:
+    if saved_source is not None and runtime.handle is not None and not scoped_finalization:
         source_handle = runtime.handle
         await run_bootstrap_stage(
             continuation, "adjacent_apply", lambda: _apply_project_cell_preview_files(

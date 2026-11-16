@@ -28,6 +28,7 @@ from yleum_api.core.db import (
     get_engine,
 )
 from yleum_api.core.redis import get_redis, publish_event
+from yleum_api.models.generation_provider_attempt import GenerationProviderAttempt
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.project import Project
@@ -616,6 +617,93 @@ def _maintenance_candidates_query(active: Sequence[UUID]) -> Select[Any]:
     )
 
 
+def _expired_provider_due_clause(raw: Any, attachment: Any) -> Any:
+    from sqlalchemy import false
+
+    from yleum_api.services.generation.recovery_execution import expired_provider_reattach_scope
+
+    scope = expired_provider_reattach_scope()
+    if scope is None:
+        return false()
+    execution = raw["execution"]
+    release_fence = execution["control_fencing_epoch"].as_string()
+    released_workspace = and_(
+        ProjectCellWorkspace.generation_run_id.is_(None),
+        cast(ProjectCellWorkspace.fencing_epoch, String) == release_fence,
+    )
+    # Completion is only a scan hint; the claimed owner must replay the exact
+    # existing Ensure by its trusted GET-first contract before performing work.
+    completed_ensure = exists().where(
+        ProjectCellOperation.workspace_id == ProjectCellWorkspace.id,
+        ProjectCellOperation.generation_run_id == GenerationRun.id,
+        ProjectCellOperation.kind == "ensure",
+        ProjectCellOperation.status == "completed",
+        ProjectCellOperation.fencing_epoch == ProjectCellWorkspace.fencing_epoch,
+        func.right(ProjectCellOperation.idempotency_key, func.length(func.concat(
+            ":cycle:", execution["lease_cycle_seq"].as_string(),
+        ))) == func.concat(":cycle:", execution["lease_cycle_seq"].as_string()),
+    )
+    scoped_marker = and_(
+        attachment["attempt_id"].as_string() == str(scope.attempt_id),
+        attachment["state_revision"].as_string() == str(scope.state_revision),
+        attachment["context_ref"]["sha256"].as_string() == scope.context_sha256,
+        attachment["clock_sha256"].as_string() == scope.clock_sha256,
+    )
+    phase = raw["phase"].as_string()
+    due = func.replace(raw["next_check_at"].as_string(), "Z", "+00:00")
+    compiler_resume = and_(
+        or_(
+            phase == "working",
+            and_(phase == "waiting_dependency", due <= datetime.now(UTC).isoformat()),
+        ),
+        execution["substep"].as_string().in_(("checkpoint_ready", "proof_wait")),
+        execution["physical_state"].as_string() == "active",
+        execution["provider_effect_id"].as_string().is_(None),
+        ProjectCellWorkspace.generation_run_id == GenerationRun.id,
+        ProjectCellWorkspace.state == "ready",
+        cast(ProjectCellWorkspace.fencing_epoch, String) == release_fence,
+        scoped_marker,
+        completed_ensure,
+    )
+    return and_(
+        GenerationRun.id == scope.run_id,
+        raw["version"].as_string() == "3",
+        execution["stage"].as_string() == "finalization",
+        raw["binding"]["source_sha256"].as_string() == scope.source_sha256,
+        cast(ProjectCellWorkspace.id, String) == execution["control_workspace_id"].as_string(),
+        exists().where(
+            GenerationProviderAttempt.attempt_id == scope.attempt_id,
+            GenerationProviderAttempt.run_id == GenerationRun.id,
+            GenerationProviderAttempt.phase == "closed",
+            GenerationProviderAttempt.terminal_reason == "expired_before_dispatch",
+        ),
+        or_(
+            compiler_resume,
+            and_(
+                execution["substep"].as_string() == "response_wait",
+                execution["physical_state"].as_string() == "released",
+                raw["context_ref"]["sha256"].as_string() == scope.context_sha256,
+                or_(
+                    and_(
+                        raw["phase"].as_string() == "needs_input", attachment.as_string().is_(None),
+                        raw["state_revision"].as_string() == str(scope.state_revision),
+                        released_workspace,
+                    ),
+                    and_(
+                        raw["phase"].as_string() == "working", scoped_marker,
+                        attachment["logical_step_seq"].as_string()
+                        == execution["logical_step_seq"].as_string(),
+                        or_(released_workspace, and_(
+                            ProjectCellWorkspace.generation_run_id == GenerationRun.id,
+                            completed_ensure,
+                        )),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
 def _recovery_due_clause() -> Any:
     """Filter the persisted UTC schedule before the bounded worker window.
 
@@ -623,15 +711,33 @@ def _recovery_due_clause() -> Any:
     again under claim ownership. This predicate cannot authorize execution.
     """
     from yleum_api.services.generation.parked_source_recovery import PARKED_SOURCE_REDRIVE_KEY
+    from yleum_api.services.generation.recovery_execution import EXPIRED_PROVIDER_ATTACHMENT_KEY
     from yleum_api.services.max_management_generation import PARKED_THROW_DIAGNOSTIC_PREFIX
 
     marker = GenerationRun.agent_state
     raw = marker["recovery_v1"]
     phase = raw["phase"].as_string()
+    attachment = marker[EXPIRED_PROVIDER_ATTACHMENT_KEY]
+    attachment_response_wait = and_(
+        raw["execution"]["substep"].as_string() == "response_wait",
+        attachment.as_string().is_not(None),
+        func.coalesce(
+            attachment["logical_step_seq"].as_string()
+            == raw["execution"]["logical_step_seq"].as_string(),
+            True,
+        ),
+    )
+    attachment_compiler = and_(
+        attachment.as_string().is_not(None),
+        raw["execution"]["stage"].as_string() == "finalization",
+        raw["execution"]["physical_state"].as_string() == "active",
+        raw["execution"]["substep"].as_string().in_(("checkpoint_ready", "proof_wait")),
+    )
     due = func.replace(raw["next_check_at"].as_string(), "Z", "+00:00")
     detail = marker["max_finalization"]["terminal_reason"].as_string()
     return or_(
         func.coalesce(raw["version"].as_string(), "") != "3",
+        _expired_provider_due_clause(raw, attachment),
         and_(
             phase == "needs_input",
             raw["execution"]["stage"].as_string() == "finalization",
@@ -652,6 +758,7 @@ def _recovery_due_clause() -> Any:
         ),
         and_(
             phase != "needs_input",
+            ~func.coalesce(or_(attachment_response_wait, attachment_compiler), False),
             or_(
                 phase.not_in(("waiting_dependency", "reconciling")),
                 due <= datetime.now(UTC).isoformat(),

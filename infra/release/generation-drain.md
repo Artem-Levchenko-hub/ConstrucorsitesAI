@@ -577,6 +577,14 @@ same file for retry. The ingress owner pins the canonical digest of all
 three fields. The parked-source mode for a different recovery cursor remains
 independent.
 
+Use `--reattach-expired-provider` on a release that supports resuming the same
+run. Keep that flag on retries. The release binds it to the persisted scope
+and verifies settlement before authorizing continuation.
+After opening SQL admission and clearing both reader gates, the release puts the
+bound run scope in the generation worker's read-only authorization volume.
+Only that release and the exact saved run can use the scope. This survives a
+host restart. On a failed authorization, retry with the same private scope file.
+
 The command stages the exact API and Gateway images before closing ingress.
 It then runs these two steps under the release mutex:
 

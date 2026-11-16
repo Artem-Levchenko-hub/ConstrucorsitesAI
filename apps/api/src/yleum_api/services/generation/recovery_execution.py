@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -15,7 +17,8 @@ from uuid import UUID, uuid4
 
 import httpx
 import structlog
-from sqlalchemy import select, text
+from pydantic import BaseModel, ConfigDict, NonNegativeInt, PositiveInt
+from sqlalchemy import exists, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
@@ -23,6 +26,7 @@ from yleum_api.core.db import get_engine
 from yleum_api.models.generation_provider_attempt import GenerationProviderAttempt
 from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
 from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
 from yleum_api.models.project_cell import (
     ProjectCellActivityLease,
     ProjectCellOperation,
@@ -30,6 +34,7 @@ from yleum_api.models.project_cell import (
 )
 from yleum_api.services.generation.recovery_contract import (
     CheckpointRef,
+    CompilerWitness,
     ContinuationClaim,
     ExecutionCursor,
     RecoveryBinding,
@@ -38,6 +43,7 @@ from yleum_api.services.generation.recovery_contract import (
     RecoveryState,
     RecoveryStateV2,
     RecoveryStateV3,
+    Sha256,
     decode_recovery,
 )
 from yleum_api.services.generation_deployment_drain import (
@@ -46,6 +52,7 @@ from yleum_api.services.generation_deployment_drain import (
 )
 
 if TYPE_CHECKING:
+    from yleum_api.services.generation.expired_native_finalization import RetiredFinalizationPlan
     from yleum_api.services.generation.provider_identity import GenerationProviderIdentity
     from yleum_api.services.generation.recovery_reconciliation import ProviderEffectCursor
     from yleum_api.services.orchestrator_client import ProjectCellEnvironmentRecoveryProof
@@ -54,6 +61,8 @@ if TYPE_CHECKING:
 # version, rather than ignoring a new sibling namespace and replaying dispatch.
 RECOVERY_KEY = "recovery_v1"
 PROVIDER_REFUSAL_REDRIVE_KEY = "provider_refusal_redrive_v1"
+EXPIRED_PROVIDER_ATTACHMENT_KEY = "expired_provider_attachment_v1"
+_EXPIRED_PROVIDER_SCOPE_ENV = "GENERATION_EXPIRED_PROVIDER_REATTACH_SCOPE"
 log = structlog.get_logger(__name__)
 
 
@@ -309,8 +318,10 @@ async def _armed_preconnect_wait(
         not isinstance(state, RecoveryStateV3)
         or state.phase != "waiting_dependency" or state.next_check_at is None
         or state.clock.wait_dependency is not None
-        or (state.identity.run_id, state.identity.project_id, state.identity.user_id)
-        != (run.id, run.project_id, run.user_id)
+        or (
+            state.identity.run_id, state.identity.project_id, state.identity.user_id,
+            state.identity.prompt_hash,
+        ) != (run.id, run.project_id, run.user_id, run.prompt_hash)
     ):
         return False
     armed = _preconnect_redrive_attempt(run)
@@ -399,6 +410,806 @@ async def _defer_open_response(
     return True
 
 
+class ExpiredProviderReattachScope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    version: Literal[1]
+    run_id: UUID
+    attempt_id: UUID
+    state_revision: NonNegativeInt
+    context_sha256: Sha256
+    source_sha256: Sha256
+    clock_sha256: Sha256
+
+
+def expired_provider_reattach_scope() -> ExpiredProviderReattachScope | None:
+    """An absent or invalid private worker scope never enables recovery."""
+    from yleum_api.services.generation.expired_provider_authorization import (
+        read_released_expired_provider_scope,
+    )
+
+    raw = os.environ.get(_EXPIRED_PROVIDER_SCOPE_ENV) or read_released_expired_provider_scope()
+    if not raw or len(raw) > 4096:
+        return None
+    try:
+        value = _context_json(raw.encode())
+        if type(value.get("version")) is not int:
+            return None
+        scope = ExpiredProviderReattachScope.model_validate_json(raw)
+        if any(str(getattr(scope, key)) != value[key] or not getattr(scope, key).int
+               for key in ("run_id", "attempt_id")):
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+    return scope
+
+
+class ExpiredProviderAttachment(BaseModel):
+    """Frozen authority of the parked run before claiming its next lease cycle."""
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    version: Literal[1]
+    run_id: UUID
+    attempt_id: UUID
+    state_revision: NonNegativeInt
+    attempt_seq: NonNegativeInt
+    logical_step_seq: PositiveInt
+    binding: RecoveryBinding
+    context_ref: CheckpointRef
+    checkpoint: CheckpointRef
+    release_operation_id: UUID
+    release_fencing_epoch: PositiveInt
+    lease_cycle_seq: NonNegativeInt
+    clock_sha256: Sha256
+
+    def matches_scope(self, scope: ExpiredProviderReattachScope) -> bool:
+        return (
+            self.run_id == scope.run_id and self.attempt_id == scope.attempt_id
+            and self.state_revision == scope.state_revision
+            and self.context_ref.sha256 == scope.context_sha256
+            and self.binding.source_sha256 == scope.source_sha256
+            and self.clock_sha256 == scope.clock_sha256
+        )
+
+    def matches_claim(self, state: RecoveryStateV2) -> bool:
+        from yleum_api.services.generation.expired_provider_drain import clock_sha256
+        from yleum_api.services.generation.recovery_reconciliation import provider_root_effect_id
+
+        execution = state.execution
+        claim = state.continuation_claim
+        delta = state.attempt_seq - self.attempt_seq
+        root = provider_root_effect_id(self.run_id, self.logical_step_seq)
+        return (
+            isinstance(state, RecoveryStateV3) and state.identity.run_id == self.run_id
+            and state.phase == "working" and state.next_check_at is None
+            and state.binding == self.binding and state.checkpoint == self.checkpoint
+            and state.context_ref == execution.execution_context_ref == self.context_ref
+            and execution.stage == "finalization" and execution.substep == "response_wait"
+            and execution.physical_state == "released"
+            and execution.response_sha256 is None and execution.next_tool_index == 0
+            and execution.budget.repair_calls == 1 and not state.unresolved_operation_ids
+            and execution.logical_step_seq == self.logical_step_seq
+            and execution.provider_effect_id == execution.pending_effect_id == root
+            and execution.release_operation_id == self.release_operation_id
+            and execution.control_fencing_epoch == self.release_fencing_epoch
+            and str(execution.control_workspace_id) == self.binding.workspace_id
+            and self.release_fencing_epoch == self.binding.fencing_epoch + 1
+            and execution.lease_cycle_seq == self.lease_cycle_seq + 1
+            and claim is not None and claim.run_id == self.run_id
+            and claim.attempt_seq == state.attempt_seq
+            and delta > 0 and state.state_revision - self.state_revision == delta
+            and clock_sha256(state) == self.clock_sha256
+        )
+
+
+def load_expired_provider_attachment(run: GenerationRun) -> ExpiredProviderAttachment | None:
+    if EXPIRED_PROVIDER_ATTACHMENT_KEY not in run.agent_state:
+        return None
+    raw = run.agent_state[EXPIRED_PROVIDER_ATTACHMENT_KEY]
+    try:
+        if type(raw) is not dict or type(raw.get("version")) is not int:
+            raise ValueError("invalid attachment shape")
+        attached = ExpiredProviderAttachment.model_validate_json(json.dumps(raw, allow_nan=False))
+        for field in ("run_id", "attempt_id", "release_operation_id"):
+            value = getattr(attached, field)
+            if not value.int or str(value) != raw[field]:
+                raise ValueError("invalid attachment identity")
+        if attached.run_id != run.id:
+            raise ValueError("attachment belongs to another run")
+        return attached
+    except (KeyError, TypeError, ValueError):
+        raise RecoveryContractError("invalid expired provider attachment") from None
+
+
+async def _attachment_release_matches(
+    session: AsyncSession, attached: ExpiredProviderAttachment, *,
+    workspace_id: UUID, historical_binding: RecoveryBinding,
+) -> bool:
+    from yleum_api.services.project_cells import ProjectCellValidationError, _stored_request_payload
+
+    release = await session.get(ProjectCellOperation, attached.release_operation_id)
+    if release is None or not _owned_release_receipt(
+        release, run_id=attached.run_id, workspace_id=workspace_id,
+        fence=attached.release_fencing_epoch,
+    ):
+        return False
+    try:
+        request = _stored_request_payload(release)
+    except (ProjectCellValidationError, TypeError, ValueError):
+        return False
+    if request == {"require_environment_proof": {
+        "source_sha256": attached.binding.source_sha256,
+        "environment_sha256": attached.binding.environment_sha256,
+    }}:
+        return True
+    # The verified two-row frame only allows the same environment. A changed
+    # environment across two fences here requires both historical role proofs
+    # and the intervening owned release, already checked by the caller.
+    # The executor still has to attest the legacy release physically at E11.
+    return (
+        request == {}
+        and historical_binding.fencing_epoch + 2 == attached.binding.fencing_epoch
+        and historical_binding.environment_sha256 != attached.binding.environment_sha256
+    )
+
+
+async def _attachment_workspace_available(
+    session: AsyncSession, run: GenerationRun, state: RecoveryStateV3,
+    attached: ExpiredProviderAttachment, *, retry: bool, historical_binding: RecoveryBinding,
+) -> bool:
+    from yleum_api.services import project_cell_executor
+
+    workspace_id = state.execution.control_workspace_id
+    workspace = await session.get(
+        ProjectCellWorkspace, workspace_id, with_for_update=True, populate_existing=True,
+    )
+    if (
+        workspace is None or workspace.project_id != run.project_id
+        or workspace.owner_id != run.user_id or workspace.deleted_at is not None
+    ):
+        return False
+    if not await _attachment_release_matches(
+        session, attached, workspace_id=workspace.id, historical_binding=historical_binding,
+    ):
+        return False
+    if await session.scalar(select(or_(
+        exists().where(
+            ProjectCellOperation.workspace_id == workspace.id,
+            ProjectCellOperation.status.in_(("pending", "waiting_capacity", "running",
+                                            "indeterminate")),
+        ),
+        exists().where(
+            ProjectCellActivityLease.workspace_id == workspace.id,
+            ProjectCellActivityLease.state == "active",
+        ),
+    ))) is not False:
+        return False
+    if (
+        workspace.generation_run_id is None
+        and workspace.fencing_epoch == attached.release_fencing_epoch
+        and workspace.state in {"ready", "stopped"}
+    ):
+        return not await session.scalar(select(exists().where(
+            ProjectCellOperation.workspace_id == workspace.id,
+            ProjectCellOperation.generation_run_id == run.id,
+            ProjectCellOperation.kind == "ensure",
+            ProjectCellOperation.idempotency_key.endswith(
+                f":cycle:{attached.lease_cycle_seq + 1}", autoescape=True,
+            ),
+        )))
+    # The completed Ensure reader is a separately delivered, GET-first kernel.
+    # Until it is present a progressed workspace always stays fenced.
+    completed_ensure = getattr(project_cell_executor, "verified_completed_attachment_ensure", None)
+    return (
+        retry and workspace.generation_run_id == run.id
+        and workspace.fencing_epoch == attached.release_fencing_epoch + 1
+        and workspace.state in {"ready", "provisioning"}
+        and callable(completed_ensure)
+        and await completed_ensure(
+            session, run, state, workspace=workspace,
+            expected_cycle=attached.lease_cycle_seq + 1,
+        ) is not None
+    )
+
+
+async def _eligible_expired_provider_attachment(
+    session: AsyncSession, run: GenerationRun, project: Project, state: RecoveryStateV2,
+    attached: ExpiredProviderAttachment | None,
+) -> ExpiredProviderAttachment | None:
+    from yleum_api.services.generation.expired_provider_drain import (
+        _other_provider_attempts_stopped,
+        clock_sha256,
+    )
+    from yleum_api.services.generation.provider_attempts import (
+        _expired_provider_frame,
+        _matches_expiry_receipt,
+    )
+    from yleum_api.services.generation_deadline import is_restoration_adaptation
+
+    scope = expired_provider_reattach_scope()
+    execution, binding = state.execution, state.binding
+    if (
+        scope is None or run.id != scope.run_id or not isinstance(state, RecoveryStateV3)
+        or run.execution_backend != "worker" or run.execution_started_at is None
+        or not run.started_at or run.response_mode not in {"build", "edit"}
+        or project.template != "max_miniapp" or is_restoration_adaptation(run)
+        or binding is None or binding.source_sha256 != scope.source_sha256
+        or state.context_ref is None or state.context_ref != execution.execution_context_ref
+        or state.context_ref.sha256 != scope.context_sha256 or state.checkpoint is None
+        or state.unresolved_operation_ids or not state.environment_rebind_supported
+        or state.clock.stage != "repair" or not state.clock.repair_granted
+        or state.clock.wait_dependency is not None or not state.clock.interval_open
+        or clock_sha256(state) != scope.clock_sha256 or execution.budget.repair_calls != 1
+        or execution.stage != "finalization" or execution.substep != "response_wait"
+        or execution.physical_state != "released" or execution.response_sha256 is not None
+        or execution.next_tool_index != 0 or execution.control_workspace_id is None
+        or binding.workspace_id != str(execution.control_workspace_id)
+        or execution.control_fencing_epoch != binding.fencing_epoch + 1
+        or execution.release_operation_id is None
+        or await session.scalar(text("SELECT clock_timestamp()")) < state.clock.segment_deadline
+    ):
+        return None
+    retry = attached is not None
+    if attached is None:
+        if (state.phase != "needs_input" or state.next_check_at is not None
+                or state.state_revision != scope.state_revision):
+            return None
+        attached = ExpiredProviderAttachment(
+            version=1, run_id=run.id, attempt_id=scope.attempt_id,
+            state_revision=state.state_revision, attempt_seq=state.attempt_seq,
+            logical_step_seq=execution.logical_step_seq, binding=binding,
+            context_ref=state.context_ref, checkpoint=state.checkpoint,
+            release_operation_id=execution.release_operation_id,
+            release_fencing_epoch=execution.control_fencing_epoch,
+            lease_cycle_seq=execution.lease_cycle_seq, clock_sha256=scope.clock_sha256,
+        )
+    elif not attached.matches_scope(scope) or not attached.matches_claim(state):
+        return None
+    attempt = await _response_wait_attempt(session, state)
+    if attempt is None or attempt.attempt_id != attached.attempt_id:
+        return None
+    frame = await _expired_provider_frame(
+        session, attempt, current_binding=binding, max_attempt_seq=attached.attempt_seq,
+    )
+    if (
+        frame is None or frame.root.effect_id != execution.provider_effect_id
+        or not _matches_expiry_receipt(attempt, frame)
+        or not await _other_provider_attempts_stopped(session, run, attached.attempt_id)
+        or not await _attachment_workspace_available(
+            session, run, state, attached, retry=retry, historical_binding=frame.source,
+        )
+    ):
+        return None
+    return attached
+
+
+def _retired_compiler_cursor(state: RecoveryStateV2) -> bool:
+    cursor = state.execution
+    return (
+        cursor.stage == "finalization" and cursor.physical_state == "active"
+        and cursor.substep in {"checkpoint_ready", "proof_wait"}
+    )
+
+
+def _matches_retired_compiler_context(
+    state: RecoveryStateV3, attached: ExpiredProviderAttachment, context: dict[str, Any],
+) -> bool:
+    from yleum_api.services.generation.recovery_pipeline import (
+        _RETIRED_NATIVE_REPAIR_KEY,
+        _RETIRED_NATIVE_REPAIR_STOP,
+        PendingRole,
+        SourceRepairEntry,
+        _RetiredNativeRepair,
+    )
+    from yleum_api.services.generation.recovery_reconciliation import ToolEffectCursor
+
+    cursor, claim = state.execution, state.continuation_claim
+    if (
+        cursor.budget.repair_calls != 1 or context.get("active_frame") is not None
+        or context.get("active_tool") is not None
+    ):
+        return False
+    if "native_outer" in context or claim is None:
+        return False
+    try:
+        completed = context["completed"]
+        if "retired_native_finalization_v1" in completed:
+            return False
+        raw = completed[_RETIRED_NATIVE_REPAIR_KEY]
+        if type(raw) is not dict or type(raw.get("version")) is not int:
+            return False
+        receipt = _RetiredNativeRepair.model_validate_json(json.dumps(raw, allow_nan=False))
+        repair = SourceRepairEntry.model_validate_json(
+            json.dumps(completed["source_repair"], allow_nan=False),
+        )
+        if (
+            receipt.attempt_id != attached.attempt_id or receipt.binding != state.binding
+            or receipt.logical_step_seq != attached.logical_step_seq
+            or receipt.checked_at.utcoffset() is None or repair.status != "complete"
+            or repair.result is None or repair.result.get("done") is not False
+            or repair.result.get("files") != {}
+            or repair.result.get("stop_reason") != _RETIRED_NATIVE_REPAIR_STOP
+        ):
+            return False
+        if cursor.substep == "checkpoint_ready":
+            return cursor.pending_effect_id is None and "pending_role" not in completed
+        role = PendingRole.model_validate_json(
+            json.dumps(completed["pending_role"], allow_nan=False),
+        )
+        return (
+            role.operation_id.int != 0
+            and role.role in {"bootstrap", "fast_check"}
+            and role.return_substep == "checkpoint_ready"
+            and cursor.logical_step_seq > attached.logical_step_seq
+            and cursor.pending_effect_id == ToolEffectCursor(
+                claim, state.state_revision, cursor.logical_step_seq, f"role:{role.operation_id}",
+            ).root_effect_id
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+async def _read_retired_attachment_context(
+    session: AsyncSession, run: GenerationRun, state: RecoveryStateV2,
+    attachment: ExpiredProviderAttachment,
+) -> dict[str, Any] | None:
+    """Reprove the original sealed attempt and read the current retained context."""
+    from yleum_api.services.generation.expired_provider_drain import (
+        _other_provider_attempts_stopped,
+    )
+    from yleum_api.services.generation.provider_attempts import (
+        _expired_provider_frame,
+        _matches_expiry_receipt,
+    )
+    from yleum_api.services.generation_deadline import is_restoration_adaptation
+
+    cursor, binding, claim = state.execution, state.binding, state.continuation_claim
+    scope = expired_provider_reattach_scope()
+    claim_delta = state.attempt_seq - attachment.attempt_seq
+    step_delta = cursor.logical_step_seq - attachment.logical_step_seq
+    if (
+        scope is None or not attachment.matches_scope(scope)
+        or not isinstance(state, RecoveryStateV3) or not _retired_compiler_cursor(state)
+        or run.id != attachment.run_id or run.status != "running"
+        or run.execution_backend != "worker" or not run.execution_started_at or not run.started_at
+        or run.response_mode not in {"build", "edit"} or is_restoration_adaptation(run)
+        or (state.identity.run_id, state.identity.project_id, state.identity.user_id)
+        != (run.id, run.project_id, run.user_id)
+        or state.phase not in {"working", "waiting_dependency"}
+        or (state.phase == "waiting_dependency") != (state.next_check_at is not None)
+        or claim is None or claim.run_id != run.id or claim.attempt_seq != state.attempt_seq
+        or claim_delta <= 0 or state.state_revision - attachment.state_revision <= claim_delta
+        or state.unresolved_operation_ids or cursor.provider_effect_id is not None
+        or cursor.response_sha256 is not None or cursor.next_tool_index != 0
+        or cursor.release_operation_id is not None or cursor.budget.repair_calls not in {1, 2}
+        or cursor.lease_cycle_seq != attachment.lease_cycle_seq + 1
+        or not 0 <= step_delta <= 2
+        or state.clock.stage != "repair" or not state.clock.repair_granted
+        or state.clock.wait_dependency is not None or not state.clock.interval_open
+        or binding is None or cursor.control_workspace_id is None
+        or str(cursor.control_workspace_id) != attachment.binding.workspace_id
+        or cursor.control_fencing_epoch != attachment.release_fencing_epoch + 1
+        or attachment.release_fencing_epoch != attachment.binding.fencing_epoch + 1
+        or binding != attachment.binding.model_copy(update={
+            "fencing_epoch": cursor.control_fencing_epoch,
+            "environment_sha256": binding.environment_sha256,
+        })
+        or state.context_ref is None or state.context_ref != cursor.execution_context_ref
+        or state.context_ref == attachment.context_ref or state.checkpoint is None
+    ):
+        return None
+    attempt = await session.get(GenerationProviderAttempt, attachment.attempt_id)
+    if (
+        attempt is None or (
+            attempt.run_id, attempt.project_id, attempt.user_id, attempt.prompt_hash,
+        ) != (run.id, run.project_id, run.user_id, run.prompt_hash)
+    ):
+        return None
+    frame = await _expired_provider_frame(
+        session, attempt, current_binding=attachment.binding,
+        max_attempt_seq=attachment.attempt_seq,
+    )
+    if (
+        frame is None or frame.root.logical_step_seq != attachment.logical_step_seq
+        or not _matches_expiry_receipt(attempt, frame)
+        or not await _other_provider_attempts_stopped(session, run, attachment.attempt_id)
+        or not await _attachment_release_matches(
+            session, attachment, workspace_id=cursor.control_workspace_id,
+            historical_binding=frame.source,
+        )
+    ):
+        return None
+    try:
+        return await load_execution_context(state.identity, state.context_ref, binding=binding)
+    except RecoveryContractError:
+        return None
+
+
+async def _retired_pre_wire_effects(
+    session: AsyncSession, state: RecoveryStateV3, attachment: ExpiredProviderAttachment,
+    witness: CompilerWitness, *, retired_at: datetime, window_started_at: datetime,
+) -> bool:
+    from dataclasses import replace
+
+    from yleum_api.models.project_cell import ProjectCellProof, ProjectCellProofResult
+    from yleum_api.services.generation.provider_attempts import _closed_role_binding
+    from yleum_api.services.project_cell_proofs import proof_identity_from_model
+
+    rows = (await session.scalars(
+        select(GenerationRecoveryEffect).where(
+            GenerationRecoveryEffect.run_id == state.identity.run_id,
+            GenerationRecoveryEffect.logical_step_seq > attachment.logical_step_seq,
+        ).order_by(GenerationRecoveryEffect.logical_step_seq).limit(3),
+    )).all()
+    if not 1 <= len(rows) <= 2:
+        return False
+    terminal = rows[-1]
+    if (
+        terminal.logical_step_seq != state.execution.logical_step_seq
+        or terminal.operation_id != witness.operation_id
+    ):
+        return False
+    for row in rows:
+        compiler = row is terminal
+        if (
+            (row.project_id, row.user_id) != (state.identity.project_id, state.identity.user_id)
+            or row.effect_ordinal != 0
+            or not attachment.attempt_seq < row.attempt_seq <= state.attempt_seq
+            or (not compiler and row.logical_step_seq != attachment.logical_step_seq + 1)
+        ):
+            return False
+        # These commands are standalone role frames. Each row owns its logical
+        # sequence and has no provider parent. Use the same owned role verifier.
+        if await _closed_role_binding(
+            session, row, row, attachment.binding,
+            "fast_check" if compiler else "prepare",
+            "fast_check" if compiler else "bootstrap",
+        ) != state.binding:
+            return False
+    result = await session.get(ProjectCellProofResult, witness.receipt_id)
+    if result is None or result.operation_id != witness.operation_id:
+        return False
+    proof = await session.get(ProjectCellProof, result.proof_id)
+    activity = await session.get(ProjectCellActivityLease, witness.operation_id)
+    if (
+        proof is None or activity is None or activity.finished_at is None
+        or result.dimension != "fast_check" or result.outcome != "green"
+        or proof.proof_key != activity.proof_key
+        or not retired_at <= activity.started_at <= activity.finished_at <= window_started_at
+    ):
+        return False
+    physical = proof_identity_from_model(proof)
+    return (
+        replace(physical, workspace_revision="0" * 64).proof_key == witness.comparison_sha256
+    )
+
+
+def _matches_targeted_source_entry(
+    raw: object, *, feedback: str, source_sha256: str, deadline: datetime | None = None,
+) -> bool:
+    from yleum_api.services.generation.recovery_pipeline import SourceRepairEntry
+    from yleum_api.services.promotion_permit import workspace_revision_digest
+
+    try:
+        if type(raw) is not dict or type(raw.get("version")) is not int:
+            return False
+        entry = SourceRepairEntry.model_validate_json(json.dumps(raw, allow_nan=False))
+        return (
+            entry.targeted and (entry.status == "complete") == (entry.result is not None)
+            and entry.edit_deadline is not None
+            and (deadline is None or (entry.status == "active" and entry.edit_deadline <= deadline))
+            and f"FINAL SOURCE CHECK FEEDBACK:\n{feedback}" in entry.task
+            and workspace_revision_digest(entry.baseline) == source_sha256
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+async def _validate_retired_pre_wire_context(
+    session: AsyncSession, state: RecoveryStateV3, attachment: ExpiredProviderAttachment,
+    context: dict[str, Any],
+) -> bool:
+    from yleum_api.services.generation.expired_native_finalization import (
+        _KEY,
+        _REPAIR_SECONDS,
+        RetiredFinalizationPlan,
+    )
+    from yleum_api.services.generation.recovery_pipeline import (
+        _RETIRED_NATIVE_REPAIR_KEY,
+        FinalizationProgress,
+        _RetiredNativeRepair,
+    )
+    from yleum_api.services.max_management_generation import (
+        PARKED_THROW_DIAGNOSTIC_PREFIX,
+        _editable_library_source,
+    )
+
+    cursor, clock, identity = state.execution, state.clock, state.identity
+    if (
+        cursor.substep != "checkpoint_ready" or cursor.pending_effect_id is not None
+        or cursor.logical_step_seq <= attachment.logical_step_seq
+        or context.get("active_frame") is not None or context.get("active_tool") is not None
+        or "native_outer" in context
+    ):
+        return False
+    try:
+        completed = context["completed"]
+        if "pending_role" in completed:
+            return False
+        raw = completed[_RETIRED_NATIVE_REPAIR_KEY]
+        if type(raw) is not dict or type(raw.get("version")) is not int:
+            return False
+        retired = _RetiredNativeRepair.model_validate_json(json.dumps(raw, allow_nan=False))
+        plan = RetiredFinalizationPlan.model_validate_json(
+            json.dumps(completed[_KEY], allow_nan=False),
+        )
+        progress = FinalizationProgress.model_validate_json(
+            json.dumps(completed["finalization_progress"], allow_nan=False),
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+    target, feedback, witness = plan.repair_path, plan.feedback, plan.proof
+    if (
+        retired.binding != state.binding or retired.logical_step_seq != attachment.logical_step_seq
+        or retired.attempt_id != plan.attempt_id or plan.attempt_id != attachment.attempt_id
+        or retired.checked_at.utcoffset() is None or plan.segment_seq != clock.segment_seq
+        or not witness.passed or witness.dimension != "fast_check"
+        or witness.binding != state.binding
+        or (witness.run_id, witness.project_id, witness.user_id, witness.prompt_hash)
+        != (identity.run_id, identity.project_id, identity.user_id, identity.prompt_hash)
+    ):
+        return False
+    now = await session.scalar(text("SELECT clock_timestamp()"))
+    if now is None:
+        return False
+    if target is None:
+        return (
+            cursor.budget.repair_calls == 1 and "source_repair" not in completed
+            and feedback is None and plan.repair_deadline is None and plan.maximum_repairs == 0
+            and progress.pending_detail is None and not progress.pending_targeted
+            and not progress.pending_fast_check and not progress.no_progress
+            and await _retired_pre_wire_effects(
+                session, state, attachment, witness, retired_at=retired.checked_at,
+                window_started_at=now,
+            )
+        )
+    if (
+        plan.segment_seq <= 0 or not _editable_library_source(target)
+        or clock.window_ms != _REPAIR_SECONDS * 1000 or clock.segment_used_ms >= clock.window_ms
+        or plan.repair_deadline != clock.segment_deadline
+        or not feedback or not progress.feedback or progress.feedback[-1] != feedback
+        or plan.maximum_repairs != len(progress.feedback) or progress.pending_detail != feedback
+        or progress.pending_targeted or not progress.pending_fast_check or progress.no_progress
+        or re.match(
+            re.escape(PARKED_THROW_DIAGNOSTIC_PREFIX)
+            + rf" Source location: {re.escape(target)}:[1-9][0-9]*:[1-9][0-9]*;"
+            r" AST call_expression; reason unproven_json_stringify; fingerprint [a-f0-9]{16}\.",
+            feedback,
+        ) is None
+    ):
+        return False
+    if cursor.budget.repair_calls == 1:
+        if "source_repair" in completed:
+            return False
+    elif not _matches_targeted_source_entry(
+        completed.get("source_repair"), feedback=feedback,
+        source_sha256=witness.binding.source_sha256, deadline=clock.segment_deadline,
+    ):
+        return False
+    window_started_at = clock.segment_deadline - timedelta(seconds=_REPAIR_SECONDS)
+    return (
+        window_started_at <= now < clock.segment_deadline
+        and await _retired_pre_wire_effects(
+            session, state, attachment, witness, retired_at=retired.checked_at,
+            window_started_at=window_started_at,
+        )
+    )
+
+
+async def validate_retired_active_attachment(
+    session: AsyncSession, run: GenerationRun, state: RecoveryStateV2,
+    attachment: ExpiredProviderAttachment,
+) -> bool:
+    """Accept only the exact retired compiler or already-granted pre-wire cursor."""
+    context = await _read_retired_attachment_context(session, run, state, attachment)
+    if not isinstance(state, RecoveryStateV3) or context is None:
+        return False
+    completed = context.get("completed")
+    if isinstance(completed, dict) and "retired_native_finalization_v1" in completed:
+        return await _validate_retired_pre_wire_context(session, state, attachment, context)
+    return _matches_retired_compiler_context(state, attachment, context)
+
+
+async def retired_attachment_ordinary_handoff(
+    session: AsyncSession, run: GenerationRun, state: RecoveryStateV3,
+    attachment: ExpiredProviderAttachment,
+) -> RetiredFinalizationPlan | None:
+    """Return the authenticated predecessor plan for an ordinary continuation."""
+    from yleum_api.services.generation.expired_native_finalization import (
+        _KEY,
+        RetiredFinalizationPlan,
+    )
+    from yleum_api.services.generation.provider_attempts import expired_reservation_closed
+    from yleum_api.services.generation.recovery_pipeline import (
+        _RETIRED_NATIVE_REPAIR_KEY,
+        PendingRole,
+        _RetiredNativeRepair,
+    )
+    from yleum_api.services.generation.recovery_reconciliation import ToolEffectCursor
+    from yleum_api.services.max_management_generation import _editable_library_source
+
+    cursor, binding, owner = state.execution, state.binding, state.identity
+    workspace_id = cursor.control_workspace_id
+    if (
+        run.id != attachment.run_id or run.status != "running"
+        or state.phase not in {
+            "working", "waiting_dependency", "reconciling", "repairing", "verifying",
+        }
+        or (owner.run_id, owner.project_id, owner.user_id, owner.prompt_hash)
+        != (run.id, run.project_id, run.user_id, run.prompt_hash)
+        or state.continuation_claim is None or state.continuation_claim.run_id != run.id
+        or state.continuation_claim.attempt_seq != state.attempt_seq
+        or cursor.stage != "finalization" or cursor.budget.repair_calls not in {1, 2}
+        or cursor.physical_state != "released" or cursor.release_operation_id is None
+        or cursor.release_operation_id == attachment.release_operation_id
+        or cursor.lease_cycle_seq < attachment.lease_cycle_seq + 1
+        or state.context_ref is None or cursor.execution_context_ref != state.context_ref
+        or workspace_id is None or binding is None or binding.workspace_id != str(workspace_id)
+        or binding.workspace_id != attachment.binding.workspace_id
+        or binding.fencing_epoch <= attachment.release_fencing_epoch
+        or cursor.control_fencing_epoch not in (binding.fencing_epoch, binding.fencing_epoch + 1)
+    ):
+        return None
+    release = await session.get(ProjectCellOperation, cursor.release_operation_id)
+    if not _owned_release_receipt(
+        release, run_id=run.id, workspace_id=workspace_id, fence=binding.fencing_epoch + 1,
+    ):
+        return None
+    old_attempt = await session.get(GenerationProviderAttempt, attachment.attempt_id)
+    if (
+        old_attempt is None or (
+            old_attempt.run_id, old_attempt.project_id, old_attempt.user_id,
+            old_attempt.prompt_hash,
+        ) != (run.id, run.project_id, run.user_id, run.prompt_hash)
+        or not await expired_reservation_closed(session, old_attempt)
+    ):
+        return None
+    try:
+        context = await load_execution_context(owner, state.context_ref, binding=binding)
+        completed = context["completed"]
+        raw = completed[_RETIRED_NATIVE_REPAIR_KEY]
+        if type(raw) is not dict or type(raw.get("version")) is not int:
+            return None
+        retired = _RetiredNativeRepair.model_validate_json(json.dumps(raw, allow_nan=False))
+        plan = RetiredFinalizationPlan.model_validate_json(
+            json.dumps(completed[_KEY], allow_nan=False),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+    witness = plan.proof
+    if (
+        retired.attempt_id != attachment.attempt_id or plan.attempt_id != attachment.attempt_id
+        or retired.logical_step_seq != attachment.logical_step_seq
+        or not witness.passed or witness.dimension != "fast_check"
+        or (witness.run_id, witness.project_id, witness.user_id, witness.prompt_hash)
+        != (run.id, run.project_id, run.user_id, run.prompt_hash)
+        or witness.binding != retired.binding
+        or retired.binding != attachment.binding.model_copy(update={
+            "fencing_epoch": attachment.release_fencing_epoch + 1,
+            "environment_sha256": retired.binding.environment_sha256,
+        })
+        or state.clock.segment_seq < plan.segment_seq
+    ):
+        return None
+    if plan.repair_path is None:
+        if (
+            cursor.budget.repair_calls != 1 or plan.feedback is not None
+            or plan.repair_deadline is not None or plan.maximum_repairs != 0
+            or plan.segment_seq != state.clock.segment_seq
+            or cursor.provider_effect_id is not None
+            or binding.source_sha256 != witness.binding.source_sha256
+            or context.get("active_frame") is not None or context.get("active_tool") is not None
+            or "native_outer" in context or "source_repair" in completed
+        ):
+            return None
+        role = completed.get("pending_role")
+        if cursor.substep == "checkpoint_ready":
+            return plan if role is None and cursor.pending_effect_id is None else None
+        if cursor.substep != "proof_wait" or role is None:
+            return None
+        try:
+            pending = PendingRole.model_validate_json(json.dumps(role, allow_nan=False))
+        except (TypeError, ValueError):
+            return None
+        role_effect = ToolEffectCursor(
+            state.continuation_claim, state.state_revision, cursor.logical_step_seq,
+            f"role:{pending.operation_id}", reconcile_only=True,
+        )
+        return plan if (
+            pending.return_substep == "checkpoint_ready"
+            and cursor.pending_effect_id == role_effect.root_effect_id
+        ) else None
+    if (
+        cursor.budget.repair_calls != 2 or not _editable_library_source(plan.repair_path)
+        or not plan.feedback or plan.segment_seq <= 0
+        or plan.repair_deadline is None or plan.repair_deadline.utcoffset() != timedelta(0)
+        or (state.clock.segment_seq == plan.segment_seq
+            and state.clock.segment_deadline > plan.repair_deadline)
+    ):
+        return None
+    # After the entry is committed, a cold worker follows the current cursor.
+    # In response_wait, only an existing, owned new reservation can be read.
+    if cursor.substep == "response_wait":
+        attempt = await _response_wait_attempt(session, state)
+        if (
+            cursor.logical_step_seq > attachment.logical_step_seq
+            and attempt is not None and attempt.attempt_id != attachment.attempt_id
+        ):
+            return plan
+        return None
+    if _matches_targeted_source_entry(
+        completed.get("source_repair"),
+        feedback=plan.feedback, source_sha256=witness.binding.source_sha256,
+    ):
+        return plan
+    # Finalization consumes the entry after it records the new result. Require
+    # that this run really has a subsequent owned provider intent before allowing
+    # an ordinary proof/publication continuation with no remaining source entry.
+    effect, provider_attempt = GenerationRecoveryEffect, GenerationProviderAttempt
+    newer_attempt = await session.scalar(select(exists().where(
+        effect.run_id == run.id, effect.project_id == run.project_id,
+        effect.user_id == run.user_id, effect.kind == "provider",
+        effect.logical_step_seq > attachment.logical_step_seq,
+        effect.logical_step_seq <= cursor.logical_step_seq,
+        effect.provider_attempt_id == provider_attempt.attempt_id,
+        effect.input_digest == provider_attempt.request_sha256,
+        provider_attempt.run_id == run.id, provider_attempt.project_id == run.project_id,
+        provider_attempt.user_id == run.user_id, provider_attempt.prompt_hash == run.prompt_hash,
+        provider_attempt.attempt_id != attachment.attempt_id,
+    )))
+    return plan if newer_attempt is True else None
+
+
+async def _retired_compiler_ensure_available(
+    session: AsyncSession, run: GenerationRun, state: RecoveryStateV2,
+    attachment: ExpiredProviderAttachment,
+) -> bool:
+    from yleum_api.services import project_cell_executor
+
+    verify = getattr(project_cell_executor, "verified_completed_retired_compiler_ensure", None)
+    if not callable(verify):
+        return False
+    workspace = await session.get(
+        ProjectCellWorkspace, state.execution.control_workspace_id,
+        with_for_update=True, populate_existing=True,
+    )
+    return workspace is not None and await verify(
+        session, run, state, workspace=workspace, attachment=attachment,
+    ) is not None
+
+
+async def _validate_attachment_context(state: RecoveryStateV2) -> None:
+    from yleum_api.services.generation.recovery_pipeline import SourceRepairEntry
+
+    ref = state.context_ref
+    if ref is None:
+        raise RecoveryContractError("expired provider attachment has no executable context")
+    context = await load_execution_context(state.identity, ref, binding=state.binding)
+    frame = context.get("active_frame")
+    try:
+        repair = SourceRepairEntry.model_validate_json(json.dumps(
+            context["completed"]["source_repair"], allow_nan=False,
+        ))
+    except (KeyError, TypeError, ValueError):
+        raise RecoveryContractError("expired provider attachment has no active repair") from None
+    if (
+        type(frame) is not dict or set(frame) != {"version", "kind", "value"}
+        or type(frame["version"]) is not int or frame["version"] != 1
+        or frame["kind"] != "native" or type(frame["value"]) is not dict
+        or context.get("active_tool") is not None or repair.status != "active"
+        or repair.result is not None
+    ):
+        raise RecoveryContractError("expired provider attachment has no native repair frame")
+
+
 async def claim_continuation(
     session: AsyncSession,
     *,
@@ -407,7 +1218,11 @@ async def claim_continuation(
     worker_id: str,
     now: datetime,
 ) -> ContinuationClaim | None:
-    from yleum_api.services.generation.recovery_store import _baseline_sha, _locked_owner
+    from yleum_api.services.generation.recovery_store import (
+        _baseline_sha,
+        _locked_owner,
+        _validate_retained_checkpoint,
+    )
 
     await _require_session_owner(run_id)
     if not await try_continuation_admission(session):
@@ -432,7 +1247,55 @@ async def claim_continuation(
         )
     ):
         return None
-    parked_repair = state.phase == "needs_input"
+    attached = None
+    existing_attachment = None
+    retired_plan = None
+    has_attachment = EXPIRED_PROVIDER_ATTACHMENT_KEY in run.agent_state
+    retired_compiler = has_attachment and _retired_compiler_cursor(state)
+    ordinary_handoff = has_attachment and (
+        state.execution.stage == "finalization" and state.execution.physical_state == "released"
+        and (
+            state.execution.budget.repair_calls == 2
+            or (
+                state.execution.budget.repair_calls == 1
+                and state.execution.substep in {"checkpoint_ready", "proof_wait"}
+            )
+        )
+    )
+    if state.execution.substep == "response_wait" or retired_compiler or ordinary_handoff:
+        try:
+            existing_attachment = load_expired_provider_attachment(run)
+        except RecoveryContractError:
+            return None
+        if retired_compiler:
+            if (
+                existing_attachment is None or project.template != "max_miniapp"
+                or not await _retired_compiler_ensure_available(
+                    session, run, state, existing_attachment,
+                )
+            ):
+                return None
+            attached = existing_attachment
+        elif ordinary_handoff:
+            if existing_attachment is None or not isinstance(state, RecoveryStateV3):
+                return None
+            # A normally yielded run may still be waiting. Its claimed working
+            # phase is granted below after exact normal release verification.
+            retired_plan = await retired_attachment_ordinary_handoff(
+                session, run, state, existing_attachment,
+            )
+            if retired_plan is None:
+                return None
+        elif state.phase == "needs_input" or (
+            existing_attachment is not None
+            and state.execution.logical_step_seq == existing_attachment.logical_step_seq
+        ):
+            attached = await _eligible_expired_provider_attachment(
+                session, run, project, state, existing_attachment,
+            )
+            if attached is None:
+                return None
+    parked_repair = state.phase == "needs_input" and attached is None
     if parked_repair:
         from yleum_api.services.generation.parked_source_recovery import (
             PARKED_SOURCE_REDRIVE_KEY,
@@ -441,33 +1304,48 @@ async def claim_continuation(
 
         if not await parked_source_repair(session, run, state):
             return None
-    elif state.phase not in {
+    elif attached is None and state.phase not in {
         "waiting_dependency", "reconciling", "working", "repairing", "verifying",
     }:
         return None
-    if isinstance(state, RecoveryStateV3) and await _defer_open_response(session, run, state, now):
+    if (attached is None and isinstance(state, RecoveryStateV3)
+            and await _defer_open_response(session, run, state, now)):
         return None
     from yleum_api.services.generation.agent_publication import publication_committed
-    if not await publication_committed(session, run=run, project=project, state=state):
-        await _baseline_sha(session, run=run, project=project, state=state)
+    published = await publication_committed(session, run=run, project=project, state=state)
+    if attached is not None and published:
+        return None
+    if not published:
+        baseline_sha = await _baseline_sha(session, run=run, project=project, state=state)
+        if attached is not None:
+            await _validate_retained_checkpoint(run, state, baseline_sha=baseline_sha)
+            if not retired_compiler:
+                await _validate_attachment_context(state)
     # A process can die before its WAIT acknowledgement. Working is resumable
     # only after the same physical quiescence proof below, never lease expiry.
     initial = state.execution.physical_state == "no_effects"
-    quiescent = (
-        await _initial_quiescent(session, run_id)
-        if initial
-        else await _released_quiescent(session, run, state)
-    )
-    if not quiescent:
-        return None
+    if attached is None:
+        quiescent = (
+            await _initial_quiescent(session, run_id)
+            if initial
+            else await _released_quiescent(session, run, state)
+        )
+        if not quiescent:
+            return None
     if isinstance(state, RecoveryStateV3):
         from yleum_api.services.generation.recovery_clock import resume_clock, start_interval
-        state = resume_clock(state, now=now)
-        start_interval(state.clock)
+        if attached is None:
+            max_deadline = (
+                retired_plan.repair_deadline
+                if retired_plan is not None and state.clock.stage == "repair"
+                and state.clock.segment_seq == retired_plan.segment_seq else None
+            )
+            state = resume_clock(state, now=now, max_deadline=max_deadline)
+        start_interval(state.clock, resume_existing=attached is not None)
     await _require_session_owner(run_id)
     execution = (
         state.execution
-        if initial
+        if initial or (attached is not None and existing_attachment is not None)
         else state.execution.model_copy(
             update={
                 "lease_cycle_seq": state.execution.lease_cycle_seq + 1,
@@ -495,6 +1373,8 @@ async def claim_continuation(
     persisted = {**run.agent_state, RECOVERY_KEY: updated.model_dump(mode="json")}
     if parked_repair:
         persisted[PARKED_SOURCE_REDRIVE_KEY] = state.state_revision
+    if attached is not None:
+        persisted[EXPIRED_PROVIDER_ATTACHMENT_KEY] = attached.model_dump(mode="json")
     run.agent_state = persisted
     await session.flush()
     return claim
@@ -1123,10 +2003,12 @@ class ExecutionDriver:
     async def wait(
         self, *, needs_input: bool = False,
         refusal_redrive: GenerationProviderIdentity | None = None,
+        checkpoint_uncertain: bool = False,
     ) -> None:
         # The dependency itself may be unavailable. Retain the last confirmed
         # source/context and active/unknown physical status; no stopped inference.
-        await self.account_work()
+        if not checkpoint_uncertain:
+            await self.account_work()
         self.state = await commit_current_wait(
             self.factory, self.state, runtime_control=self.runtime_control,
             phase="needs_input" if needs_input else "waiting_dependency",

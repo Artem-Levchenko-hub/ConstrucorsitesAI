@@ -92,6 +92,7 @@ def test_known_shape_feedback_keeps_identity_and_gives_a_bounded_supported_refer
 ):
     _, gap = source_gap(statement)
     assert gap and reason in gap
+    assert gap.obligation is None and gap.repair_path is None
     assert "Supported source repair:" in gap
     assert management._SUPPORTED_CART_REPAIR_EXAMPLE in gap
     assert "already proven local JSON" in gap and "existing validated cart schema" in gap
@@ -136,6 +137,53 @@ function useStored<T>(key: string, initial: T) {
     assert "wait for hydration" in guidance
     assert "moving the generic helper" in guidance
     assert "fixture-cart.v1" not in gap and len(gap.encode("utf-8")) < 1200
+
+
+@pytest.mark.parametrize(("folder", "editable"), [
+    ("lib", True),
+    ("lib/internal", True),
+    ("lib/db", False),
+    ("lib/max", False),
+    ("lib/auth", False),
+    ("components", False),
+])
+def test_only_editable_product_libraries_get_typed_stringify_repair(folder, editable):
+    path = f"src/{folder}/send-fixture.ts"
+    helper = """
+export function sendFixture(value: unknown) {
+  return fetch("/api/fixture", {method: "POST", body: JSON.stringify(value)});
+}
+"""
+    manifest = build_management_contract(["catalog"])
+    files = {
+        ".omnia/management.json": manifest.model_dump_json(),
+        "src/app/page.tsx": f'import {{sendFixture}} from "@/{folder}/send-fixture";\n'
+        + BASE.replace("EXTRA", "sendFixture(unknownPayload());"),
+        path: helper,
+    }
+    gap = management.management_source_gap(files)
+    assert gap
+    assert location(gap) == (path, 3, 55, "call_expression", "unproven_json_stringify")
+    plain, _, guidance = gap.partition("\n")
+    assert plain.startswith(management.PARKED_THROW_DIAGNOSTIC_PREFIX)
+    assert "Build the JSON.stringify input from explicit typed state" in guidance
+    assert "unknownPayload" not in gap and "/api/fixture" not in gap
+    assert gap.rejection_key() == management.ManagedSourceGap(plain).rejection_key()
+    assert management.management_implemented_capabilities(files) == frozenset()
+    if editable:
+        assert gap.obligation is not None and gap.obligation.value == "json_stringify"
+        assert gap.repair_path == path
+        assert gap._contract_hash == manifest.contract_hash
+        assert gap.with_diagnostic("redacted").repair_path == path
+        assert gap.with_diagnostic("redacted").rejection_key() == gap.rejection_key()
+    else:
+        assert gap.obligation is None and gap.repair_path is None
+    assert management.ManagedSourceGap(str(gap)).repair_path is None
+
+    # Real proof still requires a source correction for the exact rejected call.
+    files[path] = helper.replace("JSON.stringify(value)", "JSON.stringify({quantity: 1})")
+    assert management.management_source_gap(files) is None
+    assert "catalog" in management.management_implemented_capabilities(files)
 
 
 def test_explicit_hydrated_local_json_writes_keep_managed_connections_proven():

@@ -499,6 +499,61 @@ class MaxFinalizationCoordinator:
             phase=GenerationPhase.FAST_CHECK,
         )
 
+    async def retired_fast_check(self) -> ProjectCellProofResult:
+        """Complete only the exact compiler role saved after retiring a native frame."""
+        from yleum_api.services.generation.recovery_pipeline import pending_retired_compiler_role
+        from yleum_api.services.generation.recovery_reconciliation import tool_effect_scope
+
+        driver = self.continuation
+        if driver is None or self.executor.prove_restoration_adaptation is not None:
+            raise MaxFinalizationConflict("retired compiler needs an ordinary owned continuation")
+        owned = await pending_retired_compiler_role(driver)
+        if owned is None:
+            return await self.fast_check()
+        await self._raise_persisted_infrastructure_failure()
+        pending, effect = owned
+        role = ProjectCellCommandRole(pending.role)
+        bootstrap = role is ProjectCellCommandRole.BOOTSTRAP
+        dimension = ProofDimension.BOOTSTRAP if bootstrap else ProofDimension.FAST_CHECK
+        phase = GenerationPhase.PREPARE if bootstrap else GenerationPhase.FAST_CHECK
+        binding = driver.state.binding
+        with tool_effect_scope(effect):
+            if effect.reconcile_only:
+                run_role = self.executor.run_role
+                assert run_role is not None
+                observation = await run_role(role, pending.operation_id)
+            else:
+                current = await self._identity()
+                if recovery_binding(current) != binding:
+                    raise MaxFinalizationConflict("retired compiler workspace changed")
+                if self._role_operation_id(current, role) != pending.operation_id:
+                    raise MaxFinalizationConflict("retired compiler operation changed")
+                observation = await self._execute_role_activity(
+                    identity=current, dimension=dimension, role=role, phase=phase,
+                    operation_id=pending.operation_id,
+                )
+        identity = observation.before
+        if (
+            observation.role is not role or observation.operation_id != pending.operation_id
+            or self._role_operation_id(identity, role) != pending.operation_id
+            or recovery_binding(identity) != binding
+            or recovery_binding(observation.after) != binding
+            or await self._identity() != observation.after
+            or (not bootstrap and observation.after != identity)
+        ):
+            raise MaxFinalizationConflict("retired compiler observation changed")
+        proof = await self._proof(identity)
+        if bootstrap:
+            result, _, _ = await self._record_bootstrap_observation(
+                proof, identity, observation, retained_compiler=True,
+            )
+            return await self.fast_check() if result.outcome == ProofOutcome.GREEN.value else result
+        result, _, _ = await self._record_role_observation(
+            proof=proof, identity=identity, dimension=dimension, observation=observation,
+            retained_compiler=True,
+        )
+        return result
+
     async def ensure_bootstrap(self) -> ProjectCellProofResult | None:
         """Check the current platform proof without compiling unfinished product code."""
         await self._reconcile_tool_commands()
@@ -822,6 +877,9 @@ class MaxFinalizationCoordinator:
         )
         completed_repair = None
         if continuation is not None:
+            from yleum_api.services.generation.expired_native_finalization import (
+                retired_finalization_plan,
+            )
             from yleum_api.services.generation.recovery_pipeline import (
                 FinalizationProgress,
                 _result_from_data,
@@ -846,13 +904,19 @@ class MaxFinalizationCoordinator:
                 pending = pending_source_repair(continuation)
                 repair_completed = False
                 if pending is None or pending.status != "complete":
-                    if durable.pending_fast_check:
+                    retained_repair = (
+                        pending is not None and retired_finalization_plan(continuation) is not None
+                        and continuation.restore_frame("native") is not None
+                    )
+                    fresh_failure = None
+                    # The native reader owns any open provider/tool cursor.
+                    # A fresh compiler must not change that cursor before replay.
+                    if durable.pending_fast_check and not retained_repair:
                         current_check = await self.fast_check()
                         if current_check.dimension != ProofDimension.FAST_CHECK.value:
                             raise MaxFinalizationConflict(
                                 "pending repair prerequisite is not confirmed",
                             )
-                        fresh_failure = None
                         if durable.pending_targeted:
                             fresh_failure = SourceFailure()
                             if current_check.outcome == ProofOutcome.RED.value:
@@ -873,7 +937,7 @@ class MaxFinalizationCoordinator:
                             continuation, current_check,
                             managed_source_gap=durable.pending_detail if source_preflight else None,
                         )
-                    else:
+                    elif not retained_repair:
                         fresh_failure = await self.revalidate_pending_repair(
                             targeted=durable.pending_targeted,
                         )
@@ -1053,6 +1117,12 @@ class MaxFinalizationCoordinator:
         repair_started: bool = False,
     ) -> bool:
         continuation: ExecutionDriver | None = getattr(self, "continuation", None)
+        from yleum_api.services.generation.expired_native_finalization import (
+            retired_finalization_plan,
+            retired_repair_edit_deadline,
+        )
+
+        retired = retired_finalization_plan(continuation) if continuation is not None else None
         async with self.session_factory() as session:
             run = await self._locked_run(session)
             if run.status == "cancel_requested":
@@ -1076,9 +1146,15 @@ class MaxFinalizationCoordinator:
         )
         if continuation is not None:
             repair_end = continuation.soft_edit_deadline(repair_end) or repair_end
+        repair_end = retired_repair_edit_deadline(retired, repair_end) or repair_end
         remaining = (repair_end - datetime.now(UTC)).total_seconds()
+        if retired is not None and repair_started and continuation is not None:
+            if continuation.restore_frame("native") is not None:
+                # An expired editing window still permits the original retained
+                # GET and receipt reconciliation. The runner retains its edit cutoff.
+                remaining = max(remaining, minimum)
         if remaining < minimum:
-            if continuation is not None:
+            if continuation is not None and retired is None:
                 await continuation.soft_boundary(exhausted=True)
             raise TimeoutError("generation deadline exceeded before source repair")
         try:
@@ -1089,7 +1165,7 @@ class MaxFinalizationCoordinator:
                     return await repair_source(detail, failure) is True
                 return await repair(detail) is True
         except TimeoutError as exc:
-            if continuation is not None:
+            if continuation is not None and retired is None:
                 await continuation.soft_boundary(exhausted=True)
             raise TimeoutError("generation deadline exceeded during source repair") from exc
 
@@ -2317,6 +2393,16 @@ class MaxFinalizationCoordinator:
             role=ProjectCellCommandRole.BOOTSTRAP,
             phase=GenerationPhase.PREPARE,
         )
+        return await self._record_bootstrap_observation(proof, identity, observation)
+
+    async def _record_bootstrap_observation(
+        self,
+        proof: ProjectCellProof,
+        identity: ProofIdentity,
+        observation: ProjectCellCommandObservation,
+        *,
+        retained_compiler: bool = False,
+    ) -> tuple[ProjectCellProofResult, ProofIdentity, ProjectCellProof]:
         final_identity = observation.after
         final_proof = (
             proof
@@ -2330,7 +2416,8 @@ class MaxFinalizationCoordinator:
             operation_id=observation.operation_id,
             artifact_ref=None,
             detail=observation.redacted_detail,
-        ))
+            require_match=retained_compiler,
+        ), preserve_cursor=retained_compiler)
         return result, final_identity, final_proof
 
     async def _run_role_result(
@@ -2368,6 +2455,7 @@ class MaxFinalizationCoordinator:
     async def _record_role_observation(
         self, *, proof: ProjectCellProof, identity: ProofIdentity, dimension: ProofDimension,
         observation: ProjectCellCommandObservation, allow_full_build_startup: bool = False,
+        retained_compiler: bool = False,
     ) -> tuple[ProjectCellProofResult, ProofIdentity, ProjectCellProof]:
         transition = getattr(observation, "full_build_startup_transition", None)
         authorized_restart = bool(
@@ -2419,6 +2507,7 @@ class MaxFinalizationCoordinator:
                 refresh_incompatible=(
                     dimension is ProofDimension.FULL_BUILD and not authorized_restart
                 ),
+                require_match=retained_compiler,
             )
             if authorized_restart and (
                 result.proof_id != proof.id or result.operation_id != observation.operation_id
@@ -2427,7 +2516,9 @@ class MaxFinalizationCoordinator:
                 raise MaxFinalizationConflict("full-build transition conflicts with retained proof")
             return result
 
-        result = await self._commit_role_result(observation.operation_id, store)
+        result = await self._commit_role_result(
+            observation.operation_id, store, preserve_cursor=retained_compiler,
+        )
         return result, identity, proof
 
     async def _revalidate_full_build_startup(
@@ -2465,6 +2556,7 @@ class MaxFinalizationCoordinator:
 
     async def _commit_role_result(
         self, operation_id: UUID, store: Callable[[], Awaitable[ProjectCellProofResult]],
+        *, preserve_cursor: bool = False,
     ) -> ProjectCellProofResult:
         driver = getattr(self, "continuation", None)
         try:
@@ -2474,9 +2566,25 @@ class MaxFinalizationCoordinator:
                 await finish_recorded_role(driver, operation_id)
             return result
         except Exception:
-            if driver is not None:
+            if driver is not None and not preserve_cursor:
                 await driver.wait()
             raise
+
+    def _role_operation_id(self, identity: ProofIdentity, role: ProjectCellCommandRole) -> UUID:
+        # Proof reuse is dimension-specific; commands carry the full fenced
+        # envelope and must never alias after another identity field changes.
+        from yleum_api.services.project_cell_proofs import MAX_BOOTSTRAP_CONTRACT_VERSION
+
+        contract_version = {
+            ProjectCellCommandRole.BOOTSTRAP: MAX_BOOTSTRAP_CONTRACT_VERSION,
+            ProjectCellCommandRole.FULL_BUILD: MAX_FULL_BUILD_CONTRACT_VERSION,
+        }.get(role, "v1")
+        return uuid5(
+            self.generation_run_id,
+            "command:"
+            f"{identity.workspace_id}:{identity.fencing_epoch}:{identity.proof_key}:"
+            f"{role.value}:{contract_version}",
+        )
 
     async def _execute_role(
         self,
@@ -2486,20 +2594,7 @@ class MaxFinalizationCoordinator:
         role: ProjectCellCommandRole,
         phase: GenerationPhase,
     ) -> ProjectCellCommandObservation:
-        # Proof reuse is dimension-specific; commands carry the full fenced
-        # envelope and must never alias after another identity field changes.
-        from yleum_api.services.project_cell_proofs import MAX_BOOTSTRAP_CONTRACT_VERSION
-
-        contract_version = {
-            ProjectCellCommandRole.BOOTSTRAP: MAX_BOOTSTRAP_CONTRACT_VERSION,
-            ProjectCellCommandRole.FULL_BUILD: MAX_FULL_BUILD_CONTRACT_VERSION,
-        }.get(role, "v1")
-        operation_id = uuid5(
-            self.generation_run_id,
-            "command:"
-            f"{identity.workspace_id}:{identity.fencing_epoch}:{identity.proof_key}:"
-            f"{role.value}:{contract_version}",
-        )
+        operation_id = self._role_operation_id(identity, role)
         async def invoke() -> ProjectCellCommandObservation:
             return await self._execute_role_activity(
                 identity=identity, dimension=dimension, role=role, phase=phase,
@@ -2705,6 +2800,7 @@ class MaxFinalizationCoordinator:
         detail: str,
         artifact_digest: str | None = None,
         refresh_incompatible: bool = False,
+        require_match: bool = False,
     ) -> ProjectCellProofResult:
         detail_text = bounded_redacted_diagnostic(detail, max_bytes=_MAX_DETAIL_BYTES)
 
@@ -2741,6 +2837,10 @@ class MaxFinalizationCoordinator:
                 )
                 if stored_result is None:
                     raise
+                if require_match and needs_refresh(stored_result):
+                    raise MaxFinalizationConflict(
+                        "retired compiler conflicts with saved proof",
+                    ) from None
                 if refresh_incompatible and needs_refresh(stored_result):
                     locked = await session.scalar(
                         select(ProjectCellProofResult)

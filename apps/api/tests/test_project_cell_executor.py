@@ -46,6 +46,7 @@ from yleum_api.services.orchestrator_client import (
     ProjectCellCapacityRejection,
     ProjectCellCapacityWait,
     ProjectCellDraftApplyResponse,
+    ProjectCellEnvironmentRecoveryProof,
     ProjectCellPreviewSession,
     ProjectCellResourceResponse,
     ProjectCellWorkspaceIdentity,
@@ -1049,26 +1050,40 @@ async def test_immediate_ensure_with_dispatch_token_bootstraps_without_queueing(
     ]
 
 
-@pytest.mark.parametrize(
-    ("expired_cycle", "refused_once"), [(False, False), (True, False), (False, True)],
-    ids=["new-lease", "same-expired-lease", "first-capacity-refusal"],
-)
+@pytest.mark.parametrize("scenario", [
+    "new-lease", "same-expired-lease", "first-capacity-refusal",
+    "completed-attachment", "completed-unscoped", "different-source", "different-receipt",
+    "marked-new-lease", "marked-new-different-source", "marked-new-seeded-source",
+    "retired-compiler", "retired-invalid-context",
+    "retired-invalid-ensure", "retired-changed-environment",
+])
 async def test_aged_run_uses_owned_continuation_ensure_deadline(
     monkeypatch: pytest.MonkeyPatch,
     db_session: AsyncSession,
     test_engine: AsyncEngine,
-    expired_cycle: bool,
-    refused_once: bool,
+    business_config_rpc: AsyncMock,
+    scenario: str,
 ) -> None:
     from tests.test_generation_recovery_deadlines import _clock
     from tests.test_generation_recovery_execution import _bootstrap_wait
     from tests.test_generation_worker import _queued_dispatch
     from yleum_api.services.generation import recovery_execution
+    from yleum_api.services.generation.recovery_contract import CheckpointRef
     from yleum_api.services.generation_execution_context import execution_run_id
     from yleum_api.services.generation_runs import load_generation_dispatch, prompt_hash
     from yleum_api.services.project_cell_lifecycle import execute_cell_operation
     from yleum_api.workers import generation
 
+    expired_cycle = scenario == "same-expired-lease"
+    refused_once = scenario == "first-capacity-refusal"
+    retired = scenario.startswith("retired-")
+    completed = retired or scenario in {
+        "completed-attachment", "completed-unscoped", "different-source", "different-receipt",
+    }
+    marked_first_ensure = scenario.startswith("marked-new-")
+    marked = (completed and scenario != "completed-unscoped") or marked_first_ensure
+    changed_source = scenario in {"different-source", "marked-new-different-source"}
+    seeded_source = scenario == "marked-new-seeded-source"
     install_healthy_reader_inventory(monkeypatch, refresh=True)
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     run = await _queued_dispatch(db_session)
@@ -1137,12 +1152,46 @@ async def test_aged_run_uses_owned_continuation_ensure_deadline(
             )),
     )
     monkeypatch.setattr(project_cell_executor, "HttpProjectCellOrchestratorClient", lambda: client)
+    snapshot = ProjectCellAgentWorkspaceSnapshot(
+        files={"app/page.tsx": "retained"}, seeded_from_project=False,
+        generation_run_id=run.id, fencing_epoch=final_fence, workspace_revision="a" * 64,
+    )
+    bootstrap = AsyncMock(return_value=snapshot)
+    promote = AsyncMock(wraps=project_cell_executor.promote_generation_after_admission)
+
+    async def read_snapshot(*_args, **_kwargs):
+        if marked_first_ensure:
+            assert len(requests) == 1
+            async with factory() as session:
+                receipt = await session.get(ProjectCellOperation, requests[0].operation_id)
+                assert receipt is not None and receipt.status == "completed"
+                assert receipt.fencing_epoch == final_fence
+            promote.assert_not_awaited()
+            business_config_rpc.assert_not_awaited()
+            bootstrap.assert_not_awaited()
+        return replace(
+            snapshot,
+            workspace_revision="b" * 64 if changed_source else snapshot.workspace_revision,
+            seeded_from_project=seeded_source,
+        )
+
+    get_snapshot = AsyncMock(side_effect=read_snapshot)
+    write_files = AsyncMock()
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_bootstrap", bootstrap)
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_snapshot", get_snapshot)
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_write_files", write_files)
+    monkeypatch.setattr(project_cell_executor, "promote_generation_after_admission", promote)
+    environment = AsyncMock(return_value=ProjectCellEnvironmentRecoveryProof(
+        version=1, workspace_id=workspace.id, project_id=run.project_id, owner_id=run.user_id,
+        generation_run_id=run.id, release_operation_id=release.id,
+        previous_fencing_epoch=1, release_fencing_epoch=2, fencing_epoch=3,
+        source_sha256=snapshot.workspace_revision, manifest_sha256="e" * 64,
+        previous_environment_sha256="d" * 64,
+        environment_sha256=("1" if scenario == "retired-changed-environment" else "f") * 64,
+        artifact_sha256="0" * 64,
+    ))
     monkeypatch.setattr(
-        project_cell_executor, "project_cell_agent_bootstrap", AsyncMock(return_value=
-            ProjectCellAgentWorkspaceSnapshot(
-                files={}, seeded_from_project=False, generation_run_id=run.id,
-                fencing_epoch=final_fence, workspace_revision="0" * 64,
-            )),
+        project_cell_executor, "project_cell_environment_recovery_proof", environment,
     )
 
     async with test_engine.connect() as connection:
@@ -1170,6 +1219,12 @@ async def test_aged_run_uses_owned_continuation_ensure_deadline(
                     physical_state="released", control_workspace_id=str(workspace.id),
                     control_fencing_epoch=2, release_operation_id=str(release.id),
                 )
+                if completed or marked:
+                    state["binding"] = dict(
+                        source_sha256=snapshot.workspace_revision, schema_sha256="c" * 64,
+                        environment_sha256="d" * 64, workspace_id=str(workspace.id),
+                        fencing_epoch=1,
+                    )
                 saved.agent_state = {**saved.agent_state, "recovery_v1": state}
                 await session.commit()
             async with factory() as session:
@@ -1180,14 +1235,79 @@ async def test_aged_run_uses_owned_continuation_ensure_deadline(
                 assert claim is not None
                 await session.commit()
 
-            if expired_cycle:
+            if expired_cycle or completed:
                 async with factory() as session:
+                    if completed:
+                        current = await session.get(ProjectCellWorkspace, workspace.id)
+                        assert current is not None and current.fencing_epoch == 2
+                        current.generation_run_id = run.id
+                        current.provider_metadata = {"profile_version": profile}
                     old_ensure, _ = await reserve_cell_operation(
                         session, workspace_id=workspace.id, generation_run_id=run.id, kind="ensure",
                         idempotency_key=f"generation:{run.id}:ensure:{profile}:cycle:1",
                         request={"profile_version": profile},
                     )
                     old_ensure.created_at = old
+                    await session.commit()
+
+            if completed:
+                persisted = await execute_cell_operation(factory, old_ensure.id, client)
+                assert persisted.status == "completed" and persisted.fencing_epoch == final_fence
+                assert len(requests) == 1
+                requests.clear()
+            if marked:
+                async with factory() as session:
+                    saved = await session.get(GenerationRun, run.id)
+                    assert saved is not None
+                    saved.agent_state = {
+                        **saved.agent_state, "expired_provider_attachment_v1": {},
+                    }
+                    state = recovery_execution.recovery_state(saved)
+                    assert state is not None and state.binding is not None
+                    original_binding = state.binding
+                    marker = SimpleNamespace(
+                        binding=original_binding, release_fencing_epoch=2, lease_cycle_seq=0,
+                        release_operation_id=release.id, run_id=run.id,
+                        matches_claim=lambda candidate: not retired and candidate == state,
+                    )
+                    if retired:
+                        active_binding = original_binding.model_copy(update={
+                            "fencing_epoch": 3, "environment_sha256": "f" * 64,
+                        })
+                        ref = CheckpointRef(object_key="fixture", sha256="0" * 64)
+                        state = state.model_copy(update={
+                            "binding": active_binding, "cursor": "finalization",
+                            "context_ref": ref, "checkpoint": ref,
+                            "execution": state.execution.model_copy(update={
+                                "stage": "finalization", "substep": "checkpoint_ready",
+                                "physical_state": "active", "control_fencing_epoch": 3,
+                                "release_operation_id": None, "execution_context_ref": ref,
+                            }),
+                        })
+                        saved.agent_state = {
+                            **saved.agent_state, "recovery_v1": state.model_dump(mode="json"),
+                        }
+                        active_cell = await session.get(ProjectCellWorkspace, workspace.id)
+                        assert active_cell is not None
+                        active_cell.state = "ready"
+                        active_cell.provider_ref = "fixture"
+                        active_cell.ready_at = old
+                        validate_retired = AsyncMock(return_value=(
+                            scenario != "retired-invalid-context"
+                        ))
+                        monkeypatch.setattr(
+                            recovery_execution, "validate_retired_active_attachment",
+                            validate_retired, raising=False,
+                        )
+                    monkeypatch.setattr(
+                        recovery_execution, "load_expired_provider_attachment",
+                        lambda candidate: marker if candidate.id == run.id else None,
+                        raising=False,
+                    )
+                    if scenario in {"different-receipt", "retired-invalid-ensure"}:
+                        row = await session.get(ProjectCellOperation, old_ensure.id)
+                        assert row is not None
+                        row.result_payload = {**row.result_payload, "fencing_epoch": 999}
                     await session.commit()
 
             async def acquire():
@@ -1198,16 +1318,72 @@ async def test_aged_run_uses_owned_continuation_ensure_deadline(
                     capacity_dispatch_token=token,
                 )
 
-            if expired_cycle:
+            if expired_cycle or scenario == "completed-unscoped":
                 with pytest.raises(TimeoutError, match="capacity queue deadline exceeded"):
                     await acquire()
                 assert requests == []
+                get_snapshot.assert_not_awaited()
+            elif completed:
+                rejected = scenario in {
+                    "different-source", "different-receipt", "retired-invalid-context",
+                    "retired-invalid-ensure", "retired-changed-environment",
+                }
+                if rejected:
+                    with pytest.raises(project_cell_executor.ProjectCellExecutorUnavailable):
+                        await acquire()
+                else:
+                    handle = await acquire()
+                    assert handle is not None and handle.control_fencing_epoch == final_fence
+                assert requests == []
+                if scenario in {
+                    "different-receipt", "retired-invalid-context", "retired-invalid-ensure",
+                }:
+                    get_snapshot.assert_not_awaited()
+                else:
+                    get_snapshot.assert_awaited_once_with(
+                        workspace.id, generation_run_id=run.id, fencing_epoch=final_fence,
+                    )
+                bootstrap.assert_not_awaited()
+                business_config_rpc.assert_not_awaited()
+                if retired:
+                    validate_retired.assert_awaited_once()
+                    args = validate_retired.await_args.args
+                    assert args[1].id == run.id and args[2:] == (state, marker)
+                    if scenario in {"retired-compiler", "retired-changed-environment"}:
+                        environment.assert_awaited_once_with(
+                            workspace.id, generation_run_id=run.id, fencing_epoch=3,
+                            release_operation_id=release.id,
+                        )
+                    else:
+                        environment.assert_not_awaited()
+                else:
+                    environment.assert_not_awaited()
             else:
-                handle = await acquire()
-                assert handle is not None and handle.control_fencing_epoch == final_fence
+                if marked_first_ensure and (changed_source or seeded_source):
+                    with pytest.raises(
+                        project_cell_executor.ProjectCellExecutorUnavailable,
+                        match="Expired provider attachment source changed",
+                    ):
+                        await acquire()
+                    promote.assert_not_awaited()
+                else:
+                    handle = await acquire()
+                    assert handle is not None and handle.control_fencing_epoch == final_fence
+                    promote.assert_awaited_once()
                 assert len(requests) == (2 if refused_once else 1)
                 assert all(request.generation_run_id == run.id for request in requests)
                 assert {request.operation_id for request in requests} == {requests[0].operation_id}
+                if marked_first_ensure:
+                    get_snapshot.assert_awaited_once_with(
+                        workspace.id, generation_run_id=run.id, fencing_epoch=final_fence,
+                    )
+                    bootstrap.assert_not_awaited()
+                    business_config_rpc.assert_not_awaited()
+                    write_files.assert_not_awaited()
+                else:
+                    get_snapshot.assert_not_awaited()
+                    bootstrap.assert_awaited_once()
+                    business_config_rpc.assert_awaited_once()
         finally:
             execution_run_id.reset(execution_owner)
             recovery_execution._SESSION_OWNER.reset(owner)
@@ -1221,6 +1397,16 @@ async def test_aged_run_uses_owned_continuation_ensure_deadline(
         assert saved.status == "running" and saved.created_at == saved.started_at == old
         assert saved.agent_state["capacity_admitted_dispatch_token"] == str(token)
         assert historical_release.status == "completed" and historical_release.fencing_epoch == 2
+        if retired:
+            current = await session.get(ProjectCellWorkspace, workspace.id)
+            assert current is not None
+            assert current.generation_run_id == run.id and current.fencing_epoch == 3
+            assert current.ready_at == old
+            ensure_rows = (await session.scalars(select(ProjectCellOperation).where(
+                ProjectCellOperation.workspace_id == workspace.id,
+                ProjectCellOperation.kind == "ensure",
+            ))).all()
+            assert len(ensure_rows) == 1 and ensure_rows[0].id == old_ensure.id
 
 
 @pytest.mark.parametrize("old_ensure_status", ["completed", "indeterminate", "absent"])

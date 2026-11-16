@@ -2,3 +2,6 @@
 apps/api/src/yleum_api/templates/** text eol=lf
 # Generated reports must retain exact PDF bytes and use binary diffs.
 reports/**/*.pdf binary
+# These scripts are streamed from the checkout directly into Bash on a Linux host.
+infra/max-k3s/commerce/remote/*.sh text eol=lf
+infra/release/deploy-prod.sh text eol=lf

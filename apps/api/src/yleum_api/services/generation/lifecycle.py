@@ -268,24 +268,7 @@ async def cleanup_generation_runtime(
         try:
             if runtime.handle is not None:
                 try:
-                    release = runtime.handle.release
-                    completion_release = getattr(runtime.handle, "release_for_completion", None)
-                    if primary_error is None and completion_release is not None:
-                        release = completion_release
-                    release_task: asyncio.Future[None] = asyncio.ensure_future(
-                        release()
-                    )
-                    try:
-                        await asyncio.shield(release_task)
-                        continuation = getattr(runtime, "continuation", None)
-                        if continuation is not None:
-                            await continuation.account_work(stopped=True)
-                    except asyncio.CancelledError:
-                        # Keep the executor ownership lock until cleanup finishes;
-                        # shield alone leaves an untracked release running behind us.
-                        with suppress(Exception):
-                            await release_task
-                        raise
+                    await _release_generation_handle(runtime, primary_error)
                 except Exception as release_exc:
                     _log.warning(
                         "Project Cell generation lease release failed",
@@ -303,3 +286,32 @@ async def cleanup_generation_runtime(
                 await clear_stream_state(project_id, assistant_message_id)
             except Exception:
                 pass
+
+
+async def _release_generation_handle(
+    runtime: GenerationRuntime, primary_error: BaseException | None,
+) -> None:
+    handle = runtime.handle
+    assert handle is not None
+    continuation = getattr(runtime, "continuation", None)
+    if isinstance(primary_error, GenerationYielded) and continuation is not None:
+        from yleum_api.services.generation.recovery_pipeline import (
+            retain_retired_attachment_on_wait,
+        )
+
+        if retain_retired_attachment_on_wait(continuation, primary_error):
+            return
+    release = handle.release
+    completion_release = getattr(handle, "release_for_completion", None)
+    if primary_error is None and completion_release is not None:
+        release = completion_release
+    release_task: asyncio.Future[None] = asyncio.ensure_future(release())
+    try:
+        await asyncio.shield(release_task)
+        if continuation is not None:
+            await continuation.account_work(stopped=True)
+    except asyncio.CancelledError:
+        # Keep executor ownership until the release has actually finished.
+        with suppress(Exception):
+            await release_task
+        raise

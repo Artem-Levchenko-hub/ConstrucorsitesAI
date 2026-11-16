@@ -29,8 +29,9 @@ _INTERVAL: ContextVar[tuple[UUID, float] | None] = ContextVar(
 )
 
 
-def start_interval(clock: RecoveryClock) -> None:
-    _INTERVAL.set((clock.interval_id, time.monotonic()))
+def start_interval(clock: RecoveryClock, *, resume_existing: bool = False) -> None:
+    charged_seconds = clock.interval_charged_ms / 1000 if resume_existing else 0
+    _INTERVAL.set((clock.interval_id, time.monotonic() - charged_seconds))
 
 
 def interval_elapsed(clock: RecoveryClock) -> int:
@@ -100,7 +101,9 @@ def charge_interval(
     )
 
 
-def resume_clock(state: RecoveryStateV3, *, now: datetime) -> RecoveryStateV3:
+def resume_clock(
+    state: RecoveryStateV3, *, now: datetime, max_deadline: datetime | None = None,
+) -> RecoveryStateV3:
     if now.utcoffset() is None:
         raise RecoveryContractError("work clock resume requires absolute time")
     clock = state.clock
@@ -110,6 +113,11 @@ def resume_clock(state: RecoveryStateV3, *, now: datetime) -> RecoveryStateV3:
         if clock.interval_open
         else clock.segment_used_ms
     )
+    deadline = now + timedelta(milliseconds=max(0, clock.window_ms - used))
+    if max_deadline is not None:
+        if max_deadline.utcoffset() is None:
+            raise RecoveryContractError("work clock ceiling requires absolute time")
+        deadline = min(deadline, max_deadline)
     return state.model_copy(
         update={
             "clock": clock.model_copy(
@@ -118,8 +126,7 @@ def resume_clock(state: RecoveryStateV3, *, now: datetime) -> RecoveryStateV3:
                     "interval_id": uuid4(),
                     "interval_open": True,
                     "interval_charged_ms": 0,
-                    "segment_deadline": now
-                    + timedelta(milliseconds=max(0, clock.window_ms - used)),
+                    "segment_deadline": deadline,
                 }
             )
         }
@@ -307,7 +314,10 @@ async def _managed_source_repair_state(
     from yleum_api.services.generation.recovery_pipeline import CompletedAgentTurn
     from yleum_api.services.generation_deadline import MIN_PROVIDER_WINDOW_SECONDS
     from yleum_api.services.max_generation_contract import max_source_completion_gap
-    from yleum_api.services.max_management_generation import ManagedSourceGap
+    from yleum_api.services.max_management_generation import (
+        ManagedSourceGap,
+        ManagedSourceObligation,
+    )
     from yleum_api.services.promotion_permit import workspace_revision_digest
 
     state = driver.state
@@ -359,7 +369,11 @@ async def _managed_source_repair_state(
         return None
     prompt = driver.context["pipeline"]["prompt_text"]
     gap = max_source_completion_gap(prompt, files, portable=True)
-    if isinstance(gap, ManagedSourceGap) and gap.obligation is not None and gap == detail:
+    if (
+        isinstance(gap, ManagedSourceGap)
+        and gap.obligation not in {None, ManagedSourceObligation.JSON_STRINGIFY}
+        and gap == detail
+    ):
         return state
     return None
 
@@ -372,6 +386,7 @@ async def grant_window(
     from yleum_api.models.generation_run import GenerationRun
     from yleum_api.models.project import Project
     from yleum_api.services import max_behavior_proof as behavior
+    from yleum_api.services.generation.expired_native_finalization import retired_finalization_plan
     from yleum_api.services.generation.recovery_requirements import (
         load_compiler_witness,
         load_requirement_witness,
@@ -379,6 +394,8 @@ async def grant_window(
     from yleum_api.services.generation.recovery_store import _validate_binding
     from yleum_api.services.generation_deadline import is_restoration_adaptation
 
+    if retired_finalization_plan(driver) is not None:
+        return False
     source_repair_state = None
     if managed_source_gap is not None:
         if repair_receipt_id is not None:
