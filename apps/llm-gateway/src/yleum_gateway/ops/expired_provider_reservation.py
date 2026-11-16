@@ -14,11 +14,14 @@ from asyncpg import Connection
 from yleum_gateway.core import db
 from yleum_gateway.services.generation_attempts import (
     ExpiredReservationScope,
+    ReleaseExpiredReservationScope,
     close_expired_before_dispatch,
+    close_released_before_dispatch,
 )
 from yleum_gateway.services.generation_identity import GenerationProviderIdentity, decode_request
 
 _ACTION = "close_expired_before_dispatch"
+_RELEASED_ACTION = "close_released_before_dispatch"
 _HEAD = "0107_expired_provider_reservation"
 _MAX_INPUT_BYTES = 4096
 _FIELDS = {
@@ -49,15 +52,19 @@ _EXPECTED_CHECKS = {
 }
 
 
-def _scope(raw: bytes, launch_sha: str | None) -> ExpiredReservationScope:
+def _scope(
+    raw: bytes, launch_sha: str | None,
+) -> ExpiredReservationScope | ReleaseExpiredReservationScope:
     if not 0 < len(raw) <= _MAX_INPUT_BYTES or b"\0" in raw or raw.startswith(b"\xef\xbb\xbf"):
         raise ValueError("invalid settlement scope")
     raw.decode("utf-8")
     value = decode_request(raw)
+    released = value.get("action") == _RELEASED_ACTION
+    fields = _FIELDS | {"context_sha256"} if released else _FIELDS
     if (
-        set(value) != _FIELDS
+        set(value) != fields
         or type(value["version"]) is not int or value["version"] != 1
-        or value["action"] != _ACTION
+        or value["action"] != (_RELEASED_ACTION if released else _ACTION)
         or type(value["state_revision"]) is not int or value["state_revision"] < 0
         or type(value["source_sha256"]) is not str
         or _SHA256.fullmatch(value["source_sha256"]) is None
@@ -75,6 +82,14 @@ def _scope(raw: bytes, launch_sha: str | None) -> ExpiredReservationScope:
         identity.run_id, identity.project_id, identity.user_id, identity.attempt_id,
     )):
         raise ValueError("invalid settlement identity")
+    if released:
+        context = value["context_sha256"]
+        if type(context) is not str or _SHA256.fullmatch(context) is None:
+            raise ValueError("invalid settlement context")
+        return ReleaseExpiredReservationScope(
+            identity=identity, release_sha=release, state_revision=value["state_revision"],
+            context_sha256=context, source_sha256=value["source_sha256"],
+        )
     return ExpiredReservationScope(
         identity=identity, release_sha=release, state_revision=value["state_revision"],
         source_sha256=value["source_sha256"],
@@ -102,13 +117,16 @@ async def _exact_schema(connection: Connection) -> None:
         raise ValueError("settlement constraints are unconfirmed")
 
 
-async def _settle(scope: ExpiredReservationScope) -> str:
+async def _settle(scope: ExpiredReservationScope | ReleaseExpiredReservationScope) -> str:
     async with asyncio.timeout(45):
         pool = await db.init_pool()
         try:
             async with pool.acquire() as connection, connection.transaction():
                 await _exact_schema(connection)
-                receipt = await close_expired_before_dispatch(scope)
+                if isinstance(scope, ReleaseExpiredReservationScope):
+                    receipt = await close_released_before_dispatch(scope)
+                else:
+                    receipt = await close_expired_before_dispatch(scope)
         finally:
             await db.close_pool()
     return hashlib.sha256(json.dumps(

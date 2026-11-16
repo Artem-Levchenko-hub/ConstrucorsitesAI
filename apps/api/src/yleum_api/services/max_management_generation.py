@@ -15,7 +15,7 @@ import posixpath
 import re
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import lru_cache
 
@@ -52,16 +52,49 @@ _CREATE = {
     "leads": "createManagedLead",
     "bookings": "createManagedBooking",
 }
+_BUSINESS_IMPORT = "@/lib/omnia/business-client"
+_BUSINESS_SOURCE = "src/lib/omnia/business-client"
+_ORDER_CREATE = "createManagedOrder"
 _SDK = {
-    "@/lib/omnia/business-client": {*_CREATE.values(), "getManagedRecords"},
+    _BUSINESS_IMPORT: {*_CREATE.values(), "getManagedRecords"},
     "@/lib/omnia/app-profile-client": {"useYleumAppProfile"},
     "@/lib/omnia/catalog-client": {"useYleumCatalog", "useYleumCatalogSelection"},
     "react": {"useState", "useEffect", "useCallback"},
 }
+_CHECKOUT_IMPORT = "@/lib/omnia/integration-client"
 _CHECKOUT_SOURCE = "src/lib/omnia/integration-client"
+_CHECKOUT_IDENTITY_SOURCE = "src/lib/omnia/identity-scope"
+_CHECKOUT_BRIDGE_SOURCE = "src/lib/max/bridge"
+_CHECKOUT_RECEIPT = "getYleumOrderCheckoutReceipt"
+_CHECKOUT_CREATE = "createYleumOrderCheckout"
 _LEGACY_CHECKOUT = {"createYleumPayment", "createOmniaPayment"}
-_LINKED_CHECKOUT = {"createYleumOrderCheckout", "getYleumOrderCheckout"}
+_LINKED_CHECKOUT = {_CHECKOUT_CREATE, "getYleumOrderCheckout"}
 _CHECKOUT_ORDER_ID = "checkout-order-id"
+_CHECKOUT_STORAGE_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+_CHECKOUT_NO_OPENER = ("noopener", "noopener,noreferrer", "noreferrer,noopener")
+_CHECKOUT_PACKAGE_SPECIFIER = re.compile(
+    r"(?:@[A-Za-z0-9_][A-Za-z0-9_.-]*/)?[A-Za-z0-9_][A-Za-z0-9_.-]*"
+    r"(?:/[A-Za-z0-9_][A-Za-z0-9_.-]*)*"
+)
+_CHECKOUT_RESOLUTION_SUFFIXES = (
+    ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".json", ".wasm", ".node",
+)
+_REGISTRY_VERSION_ATOM = (
+    r"(?:[<>]=?|[~=^])? *v?(?:[0-9]+|[xX*])(?:\.(?:[0-9]+|[xX*])){0,2}"
+    r"(?:-[A-Za-z0-9.-]+)?(?:\+[A-Za-z0-9.-]+)?"
+)
+_CHECKOUT_REGISTRY_VERSION = re.compile(
+    rf"(?:[A-Za-z][A-Za-z0-9_-]*|{_REGISTRY_VERSION_ATOM}"
+    rf"(?: (?:- |\|\| )?{_REGISTRY_VERSION_ATOM})*)",
+)
+_CHECKOUT_DYNAMIC_LOADERS = {"require", "module", "__webpack_require__", "eval", "Function"}
+_CHECKOUT_LOCAL_LOCK_REFERENCE = re.compile(
+    r"(?<![\w.-])(?:link|file|workspace|portal|patch|local):|^(?:\.{1,2}|~)?[/\\]|^[A-Z]:",
+    re.IGNORECASE,
+)
+_CHECKOUT_LOCK_MAX_BYTES = 1024 * 1024
+_CHECKOUT_LOCK_MAX_NODES = 50_000
+_CHECKOUT_LOCK_MAX_DEPTH = 64
 # Only the explicitly supported React form/button events are connection evidence.
 _INTRINSIC_EVENTS = {"onClick", "onClickCapture", "onSubmit", "onSubmitCapture"}
 _VISIBLE_FIELDS = {
@@ -77,6 +110,196 @@ _DECIMAL_LITERAL = re.compile(
 _TYPE_ONLY_DECLARATIONS = {
     "interface_declaration", "type_alias_declaration", "ambient_declaration", "function_signature",
 }
+
+
+@lru_cache(maxsize=16)
+def _checkout_platform_file(path: str) -> str:
+    from yleum_api.services.max_project_kit import _template_file
+
+    return _template_file(path)
+
+
+def _checkout_package_dependencies_are_registry_versions(manifest: Mapping[str, object]) -> bool:
+    from yleum_api.services.secret_safety import _BLOCKED_PACKAGE_SPEC
+
+    if manifest.keys() & {"overrides", "resolutions"}:
+        return False
+    if "pnpm" in manifest:
+        # The model write guard forbids custom overrides. Keep the starter's pinned options.
+        canonical = json.loads(_checkout_platform_file("package.json"))
+        if manifest["pnpm"] != canonical.get("pnpm"):
+            return False
+    for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
+        specs = manifest.get(section, {})
+        if not isinstance(specs, dict) or any(
+            not isinstance(name, str) or not name or len(name) > 214
+            or not isinstance(specifier, str) or len(specifier) > 256
+            or _BLOCKED_PACKAGE_SPEC.search(specifier)
+            or not _CHECKOUT_REGISTRY_VERSION.fullmatch(specifier)
+            for name, specifier in specs.items()
+        ):
+            return False
+    return True
+
+
+def _checkout_lock_contains_only_registry_resolutions(lock: str) -> bool:
+    if len(lock) > _CHECKOUT_LOCK_MAX_BYTES or len(lock.encode()) > _CHECKOUT_LOCK_MAX_BYTES:
+        return False
+    try:
+        import yaml  # type: ignore[import-untyped]
+    except ImportError:
+        return False
+
+    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    try:
+        # Bound nesting and refuse aliases before composing the node graph.
+        depth = 0
+        for index, event in enumerate(yaml.parse(lock, Loader=loader)):
+            if index >= 2 * _CHECKOUT_LOCK_MAX_NODES or isinstance(event, yaml.AliasEvent):
+                return False
+            if isinstance(event, yaml.CollectionStartEvent):
+                depth += 1
+                if depth > _CHECKOUT_LOCK_MAX_DEPTH:
+                    return False
+            elif isinstance(event, yaml.CollectionEndEvent):
+                depth -= 1
+        document = yaml.compose(lock, Loader=loader)
+    except (yaml.YAMLError, RecursionError):
+        return False
+    if not isinstance(document, yaml.MappingNode):
+        return False
+
+    # Walk the parsed nodes without constructing tagged objects or expanding aliases.
+    pending = [document]
+    seen: set[int] = set()
+    while pending:
+        node = pending.pop()
+        if id(node) in seen or len(seen) >= _CHECKOUT_LOCK_MAX_NODES:
+            return False
+        seen.add(id(node))
+        if isinstance(node, yaml.ScalarNode):
+            if (
+                node.tag not in {
+                    "tag:yaml.org,2002:str", "tag:yaml.org,2002:bool", "tag:yaml.org,2002:null",
+                    "tag:yaml.org,2002:int", "tag:yaml.org,2002:float",
+                }
+                or _CHECKOUT_LOCAL_LOCK_REFERENCE.search(node.value.strip())
+            ):
+                return False
+        elif isinstance(node, yaml.MappingNode) and node.tag == "tag:yaml.org,2002:map":
+            keys: set[str] = set()
+            for key, value in node.value:
+                if not isinstance(key, yaml.ScalarNode) or key.value in keys:
+                    return False
+                keys.add(key.value)
+                pending.extend((key, value))
+        elif isinstance(node, yaml.SequenceNode) and node.tag == "tag:yaml.org,2002:seq":
+            pending.extend(node.value)
+        else:
+            return False
+
+    fields = {key.value: value for key, value in document.value}
+    version, importers = fields.get("lockfileVersion"), fields.get("importers")
+    if (
+        not isinstance(version, yaml.ScalarNode) or version.value != "9.0"
+        or not isinstance(importers, yaml.MappingNode)
+    ):
+        return False
+    for _, importer in importers.value:
+        if not isinstance(importer, yaml.MappingNode):
+            return False
+        for key, dependencies in importer.value:
+            if key.value not in {"dependencies", "devDependencies", "optionalDependencies"}:
+                continue
+            if not isinstance(dependencies, yaml.MappingNode):
+                return False
+            for _, dependency in dependencies.value:
+                if not isinstance(dependency, yaml.MappingNode):
+                    return False
+                descriptors = {key.value: value for key, value in dependency.value}
+                if any(
+                    not isinstance(descriptors.get(field), yaml.ScalarNode)
+                    for field in ("specifier", "version")
+                ):
+                    return False
+
+    packages = fields.get("packages")
+    if packages is None:
+        return True
+    if not isinstance(packages, yaml.MappingNode):
+        return False
+    for _, package in packages.value:
+        if not isinstance(package, yaml.MappingNode):
+            return False
+        resolution = next(
+            (value for key, value in package.value if key.value == "resolution"), None,
+        )
+        if (
+            not isinstance(resolution, yaml.MappingNode) or not resolution.value
+            or any(
+                key.value not in {"integrity", "tarball"}
+                or not isinstance(value, yaml.ScalarNode) or not value.value
+                or (key.value == "tarball" and not value.value.startswith(("https://", "http://")))
+                for key, value in resolution.value
+            )
+        ):
+            return False
+    return True
+
+
+def _checkout_platform_resolution_is_canonical(files: Mapping[str, str]) -> bool:
+    try:
+        config = json.loads(files.get("tsconfig.json", ""))
+        if not isinstance(config, dict) or "extends" in config:
+            return False
+        options = config.get("compilerOptions")
+        if (
+            not isinstance(options, dict) or options.get("baseUrl") is not None
+            or options.get("paths") != {"@/*": ["./src/*"]}
+        ):
+            return False
+
+        next_config_path = "next.config.ts"
+        for path, source in files.items():
+            if path.startswith("next.config."):
+                if path != next_config_path or source != _checkout_platform_file(next_config_path):
+                    return False
+            name = posixpath.basename(path)
+            if name == "pnpm-lock.yaml" and not _checkout_lock_contains_only_registry_resolutions(
+                source,
+            ):
+                return False
+            if name in {".babelrc", ".swcrc"} or name.startswith((".babelrc.", "babel.config.")):
+                return False
+            if name == "package.json":
+                manifest = json.loads(source)
+                # Package self-references and compiler metadata can redirect client imports.
+                if (
+                    not isinstance(manifest, dict)
+                    or manifest.keys() & {"babel", "browser", "exports"}
+                    or not _checkout_package_dependencies_are_registry_versions(manifest)
+                ):
+                    return False
+        return True
+    except (ValueError, RuntimeError, OSError, RecursionError):
+        return False
+
+
+def _checkout_sdk_sources_are_exact(files: Mapping[str, str], *source_bases: str) -> bool:
+    # Verify the SDK plus its runtime imports. Both locked leaves have no imports.
+    try:
+        for base in source_bases:
+            exact_path = base + ".ts"
+            if files.get(exact_path) != _checkout_platform_file(exact_path) or any(
+                path != exact_path and (
+                    path == base or path.startswith((base + ".", base + "/"))
+                )
+                for path in files
+            ):
+                return False
+        return True
+    except (ValueError, RuntimeError, OSError):
+        return False
 
 
 def _primitive_literal(node: Node) -> object:
@@ -265,6 +488,12 @@ class _Value:
     passive: bool = False
     primitive_string: bool = False
     nullable_string: bool = False
+    checkout_order_id: bool = False
+    checkout_receipt_string: bool = False
+    checkout_url: bool = False
+    checkout_ambiguous: bool = False
+    generated_uuid: bool = False
+    checkout_storage_key: str | None = None
     local_scalar_keys: bool = False
     scalar_key: bool = False
     # Refusal provenance, retained after invalidation and scheduled state changes.
@@ -297,12 +526,19 @@ class _Connections:
         }
         self.promise = _Value(sdk="Promise")
         self.boolean = _Value(sdk="Boolean")
+        self.string = _Value(sdk="trusted-string")
         self.json_parse = _Value(sdk="trusted-json-parse")
         self.json_stringify = _Value(sdk="trusted-json-stringify")
         self.json = _Value(props={"parse": self.json_parse, "stringify": self.json_stringify})
         self.storage_get_item = _Value(sdk="trusted-storage-get-item")
         self.storage = _Value(props={"getItem": self.storage_get_item})
-        self.window = _Value(props={"localStorage": self.storage}, native_namespace="window")
+        self.window_open = _Value(sdk="trusted-window-open")
+        self.crypto_random_uuid = _Value(sdk="trusted-crypto-random-uuid")
+        self.crypto = _Value(props={"randomUUID": self.crypto_random_uuid})
+        self.window = _Value(
+            props={"localStorage": self.storage, "open": self.window_open},
+            native_namespace="window",
+        )
         self.object_keys = _Value(sdk="trusted-object-keys")
         self.object = _Value(props={"keys": self.object_keys})
         self.array = _Value()
@@ -315,6 +551,34 @@ class _Connections:
         self.checkout_entry = False
         self.checkout_legacy_probe = False
         self.checkout_calls: set[str] = set()
+        self.checkout_receipt = _Value(sdk=_CHECKOUT_RECEIPT)
+        self.owned_checkout_create = _Value(sdk=_CHECKOUT_CREATE)
+        self.owned_order_create = _Value(sdk=_ORDER_CREATE)
+        self.source_files = files
+        self.owned_sdk_exports: dict[str, dict[str, _Value]] = {}
+        if (
+            _CHECKOUT_SOURCE + ".ts" in files
+            and _checkout_platform_resolution_is_canonical(files)
+            and _checkout_sdk_sources_are_exact(
+                files, _CHECKOUT_SOURCE, _CHECKOUT_IDENTITY_SOURCE, _CHECKOUT_BRIDGE_SOURCE,
+            )
+        ):
+            self.owned_sdk_exports[_CHECKOUT_IMPORT] = {
+                _CHECKOUT_RECEIPT: self.checkout_receipt,
+                _CHECKOUT_CREATE: self.owned_checkout_create,
+            }
+            if _checkout_sdk_sources_are_exact(files, _BUSINESS_SOURCE):
+                self.owned_sdk_exports[_BUSINESS_IMPORT] = {_ORDER_CREATE: self.owned_order_create}
+        # Check skipped branches for mutations only on the candidate checkout path.
+        self.checkout_storage_assignments: dict[tuple[str, int], tuple[str, str, _Value]] = {}
+        self.checkout_browser_source = any(
+            "window.open" in source for path, source in files.items() if path in self.programs
+        ) and _CHECKOUT_IMPORT in self.owned_sdk_exports
+        self.checkout_receipt_source = any(
+            _CHECKOUT_RECEIPT in source and _CHECKOUT_IMPORT in source
+            for path, source in files.items() if path in self.programs
+        ) and _CHECKOUT_IMPORT in self.owned_sdk_exports
+        self.checkout_proof_source = self.checkout_browser_source or self.checkout_receipt_source
         self.catalog_selection = False
         self.unsupported_constant_control = False
         self.unsupported_effects = False
@@ -356,7 +620,7 @@ class _Connections:
     @staticmethod
     def _source_base(path: str, source: str) -> str:
         return (
-            "src/" + source[2:]
+            posixpath.normpath("src/" + source[2:])
             if source.startswith("@/")
             else posixpath.normpath(posixpath.join(posixpath.dirname(path), source))
         )
@@ -366,7 +630,9 @@ class _Connections:
         return next(
             (
                 name
-                for name in (base, base + ".tsx", base + ".ts", base + "/index.tsx")
+                for name in (
+                    base, base + ".tsx", base + ".ts", base + "/index.tsx", base + "/index.ts",
+                )
                 if name in self.programs
             ),
             None,
@@ -378,16 +644,27 @@ class _Connections:
         env: dict[str, _Value] = {
             "Promise": self.promise, "Boolean": self.boolean, "JSON": self.json,
             "window": self.window, "localStorage": self.storage, "Object": self.object,
-            "Array": self.array,
+            "Array": self.array, "String": self.string,
             "Reflect": self.reflect, "globalThis": self.global_this,
         }
+        if self.checkout_browser_source:
+            env["crypto"] = self.crypto
         self.modules[path] = env
         program = self.programs[path]
         if program.has_error:
             return env
         for statement in program.named_children:
             if statement.type == "import_statement":
+                if any(child.type == "type" for child in statement.children):
+                    continue
                 source = _text(statement.child_by_field_name("source"))[1:-1]
+                target = self._resolve(path, source)
+                if self.checkout_proof_source:
+                    issue = self.checkout_import_issue(statement, path, source, target)
+                    if issue:
+                        self.unsupported(statement, path, issue)
+                    elif target is not None and source.startswith(("@/", "./", "../")):
+                        self.module(target)
                 checkout_import = (
                     self.inspect_checkout and self._source_base(path, source) == _CHECKOUT_SOURCE
                 )
@@ -396,23 +673,28 @@ class _Connections:
                     if checkout_import
                     else _SDK.get(source, ())
                 )
+                owned_exports = self.owned_sdk_exports.get(source, {})
                 for clause in statement.named_children:
                     if clause.type != "import_clause":
                         continue
                     for child in clause.named_children:
                         if child.type == "identifier":
-                            target = self._resolve(path, source)
                             env[_text(child)] = (
                                 self.module(target).get("default", _Value()) if target else _Value()
                             )
                         elif child.type == "named_imports":
                             for spec in child.named_children:
+                                if spec.type != "import_specifier" or any(
+                                    token.type == "type" for token in spec.children
+                                ):
+                                    continue
                                 name = _text(spec.child_by_field_name("name"))
                                 alias = _text(spec.child_by_field_name("alias")) or name
-                                if name in sdk:
+                                if name in owned_exports:
+                                    env[alias] = owned_exports[name]
+                                elif name in sdk:
                                     env[alias] = _Value(sdk=name)
                                 else:
-                                    target = self._resolve(path, source)
                                     env[alias] = (
                                         self.module(target).get(name, _Value())
                                         if target
@@ -423,6 +705,12 @@ class _Connections:
                                 props={name: _Value(sdk=name) for name in sdk}
                             )
             else:
+                if (
+                    self.checkout_proof_source and statement.type == "export_statement"
+                    and statement.child_by_field_name("source") is not None
+                    and all(child.type != "type" for child in statement.children)
+                ):
+                    self.unsupported(statement, path, "unproven_checkout_runtime_reexport")
                 declaration = (
                     statement.child_by_field_name("declaration")
                     if statement.type == "export_statement"
@@ -440,6 +728,70 @@ class _Connections:
                 elif statement.type == "export_statement":
                     env["default"] = self.value(statement.child_by_field_name("value"), env, path)
         return env
+
+    @staticmethod
+    def import_binds_runtime_values(statement: Node) -> bool:
+        return any(
+            child.type in {"identifier", "namespace_import"}
+            or (child.type == "named_imports" and any(
+                spec.type == "import_specifier"
+                and all(token.type != "type" for token in spec.children)
+                for spec in child.named_children
+            ))
+            for clause in statement.named_children if clause.type == "import_clause"
+            for child in clause.named_children
+        )
+
+    def checkout_import_issue(
+        self, statement: Node, path: str, source: str, target: str | None,
+    ) -> str | None:
+        binds_runtime = self.import_binds_runtime_values(statement)
+        relative = source.startswith(("./", "../"))
+        if not relative and not source.startswith("@/"):
+            if source == "module":
+                return "unproven_checkout_runtime_module_load"
+            if not binds_runtime:
+                return "unproven_checkout_side_effect_import"
+            return (
+                None if _CHECKOUT_PACKAGE_SPECIFIER.fullmatch(source)
+                else "unproven_checkout_package_import"
+            )
+        base = self._source_base(path, source)
+        candidates = {
+            candidate for candidate in (
+                base, base + "/package.json",
+                *(stem + suffix for stem in (base, base + "/index")
+                  for suffix in _CHECKOUT_RESOLUTION_SUFFIXES),
+            )
+            if candidate in self.source_files
+        }
+        if relative and base.endswith(".css") and not binds_runtime:
+            if not candidates:
+                return "missing_checkout_stylesheet"
+            if candidates == {base}:
+                return None
+        if not binds_runtime:
+            return "unproven_checkout_side_effect_import"
+        if len(candidates) == 1:
+            resolved = next(iter(candidates))
+            if (
+                (target == resolved and not self.programs[resolved].has_error)
+                or (base == resolved and base.endswith(".json"))
+            ):
+                return None
+            if self.checkout_platform_import_is_exact(resolved):
+                return None
+        return "unproven_checkout_local_import"
+
+    def checkout_platform_import_is_exact(self, path: str) -> bool:
+        from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
+
+        if path not in MAX_SECURITY_LOCKED_FILES or not path.endswith((".ts", ".tsx")):
+            return False
+        try:
+            return self.source_files[path] == _checkout_platform_file(path)
+        except (ValueError, RuntimeError, OSError):
+            return False
 
     def binding_is_supported(self, pattern: Node | None, value: _Value) -> bool:
         """Prove passive bindings, never omit defaults, computed keys or getters."""
@@ -529,8 +881,14 @@ class _Connections:
         alias.elements = source.elements
         alias.statistic_elements = source.statistic_elements
         alias.passive = source.passive
-        alias.primitive_string = source.primitive_string
+        alias.primitive_string = source.primitive_string and not (
+            source.checkout_receipt_string and alias.state
+        )
         alias.nullable_string = source.nullable_string
+        alias.checkout_order_id = source.checkout_order_id and not alias.state
+        alias.checkout_receipt_string = source.checkout_receipt_string and not alias.state
+        alias.checkout_url = source.checkout_url and not alias.state
+        alias.checkout_ambiguous = source.checkout_ambiguous
         alias.local_scalar_keys = source.local_scalar_keys
         alias.scalar_key = source.scalar_key
         alias.native_namespace = (
@@ -581,7 +939,12 @@ class _Connections:
                         if value.elements is not None and index < len(value.elements)
                         else _Value()
                     )
-                    self.bind_supported(child, element, env)
+                    self.bind_supported(
+                        child,
+                        self.ambiguous_checkout_value(element)
+                        if value.checkout_ambiguous else element,
+                        env,
+                    )
 
     def declare(self, node: Node, env: dict[str, _Value], path: str) -> None:
         if node.type == "function_declaration":
@@ -600,6 +963,30 @@ class _Connections:
         elif node.type not in _TYPE_ONLY_DECLARATIONS | {"comment", "empty_statement"}:
             self.unsupported(node, path, "unsupported_declaration")
 
+    def ambiguous_checkout_value(self, value: _Value) -> _Value:
+        if not self.checkout_proof_source or value.checkout_ambiguous:
+            return value
+        return replace(
+            value, checkout_ambiguous=True, mutation_roots=(value,),
+        )
+
+    @staticmethod
+    def checkout_control_truth(value: _Value) -> bool | None:
+        return None if value.checkout_ambiguous else _literal_truth(value.literal)
+
+    @staticmethod
+    def checkout_storage_key(value: _Value) -> str | None:
+        key = value.literal
+        return key if (
+            not value.checkout_ambiguous and isinstance(key, str)
+            and _CHECKOUT_STORAGE_KEY.fullmatch(key)
+            and not key.startswith(("yleum.managed-intent.", "omnia:"))
+        ) else None
+
+    @staticmethod
+    def checkout_order_id(value: _Value) -> bool:
+        return value.checkout_order_id and not value.checkout_ambiguous
+
     def member(self, value: _Value, key: str) -> _Value:
         if (value.native_namespace == "global"
                 or (value.native_namespace == "window"
@@ -612,7 +999,8 @@ class _Connections:
             self.unsupported(None, "", "unproven_prototype_access")
             return _Value()
         if key in value.props:
-            return value.props[key]
+            field = value.props[key]
+            return self.ambiguous_checkout_value(field) if value.checkout_ambiguous else field
         if key == "refresh" and value.tags & {"catalog-hook", "profile-hook"}:
             # The locked hooks expose a read/refresh operation, not an opaque mutator.
             return _Value(sdk="managed-hook-refresh")
@@ -719,6 +1107,11 @@ class _Connections:
             current.passive = False
             current.primitive_string = False
             current.nullable_string = False
+            current.checkout_order_id = False
+            current.checkout_receipt_string = False
+            current.checkout_url = False
+            current.generated_uuid = False
+            current.checkout_storage_key = None
             current.local_scalar_keys = False
             current.scalar_key = False
             current.nullable_catalog_lookup = False
@@ -1335,7 +1728,7 @@ class _Connections:
     def truthy_string_scope(
         self, condition: Node | None, env: dict[str, _Value],
     ) -> dict[str, _Value]:
-        """Narrow only the direct truthy guard on a trusted storage string/null."""
+        """Narrow a direct truthy guard on a trusted nullable string."""
         while condition is not None and condition.type == "parenthesized_expression":
             condition = condition.named_children[0] if condition.named_children else None
         if condition is None or condition.type != "identifier":
@@ -1362,6 +1755,7 @@ class _Connections:
             if (self.steps > 4000 or len(seen) > 512 or current.function is not None
                     or current.sdk or current.setter is not None or current.pending is not None
                     or "toJSON" in current.props
+                    or (current.checkout_receipt_string and current.checkout_ambiguous)
                     or not (current.passive or current.primitive_string or current.nullable_string
                             or type(current.literal) in {bool, str, float}
                             or current.literal is _NULL_LITERAL)):
@@ -1443,6 +1837,11 @@ class _Connections:
             else self.value(body, env, path, render)
         )
         self.active.remove(key)
+        if not (
+            result.generated_uuid and not result.checkout_ambiguous and not args
+            and body is not None and self.checkout_uuid_return(body)
+        ):
+            result = self.ambiguous_checkout_value(result)
         if self.state_callback_depth:
             if result.function is not None or result.sdk or result.setter is not None:
                 self.unsupported(node, path, "unproven_state_callback_value")
@@ -1453,6 +1852,18 @@ class _Connections:
             _Value(pending=result.pending or result)
             if any(child.type == "async" for child in node.children)
             else result
+        )
+
+    @staticmethod
+    def checkout_uuid_return(body: Node) -> bool:
+        statements = [child for child in body.named_children if child.type != "comment"]
+        if body.type != "statement_block" or len(statements) != 1:
+            return False
+        statement = statements[0]
+        return statement.type == "return_statement" and any(
+            child.type == "call_expression"
+            and _text(child.child_by_field_name("function")) == "crypto.randomUUID"
+            for child in statement.named_children
         )
 
     def block(
@@ -1477,14 +1888,15 @@ class _Connections:
                 if condition.literal is _UNSUPPORTED_LITERAL:
                     self.unsupported_constant_control = True
                     return True, _Value()
-                truth = _literal_truth(condition.literal)
+                truth = self.checkout_control_truth(condition)
                 alternative = child.child_by_field_name("alternative")
-                if self.checkout_entry and alternative is not None and alternative.named_children:
-                    # An unknown condition can still run a legacy charge in
-                    # its else arm. That arm must not add linked-flow proof.
+                if ((self.checkout_entry or self.checkout_proof_source)
+                        and alternative is not None and alternative.named_children):
                     alternative = alternative.named_children[-1]
                     if truth is None:
-                        self.checkout_legacy_branch(alternative, dict(env), path, render)
+                        # The skipped arm can mutate aliases or call a legacy charge.
+                        # Its actions cannot supply any required connection witness.
+                        self.checkout_alternate_branch(alternative, dict(env), path, render)
                 if (self.state_callback_depth and alternative is not None
                         and alternative.type == "else_clause" and alternative.named_children):
                     alternative = alternative.named_children[-1]
@@ -1494,6 +1906,8 @@ class _Connections:
                         self.truthy_string_scope(child.child_by_field_name("condition"), env)
                         if truth is not False else env
                     )
+                    if self.checkout_proof_source and branch.type == "statement_block":
+                        branch_env = dict(branch_env)
                     returned, value = self.statement(branch, branch_env, path, render)
                     if returned and truth is not None:
                         return True, value
@@ -1502,6 +1916,16 @@ class _Connections:
                 if self.checkout_entry and returned:
                     return True, value
         return False, _Value()
+
+    def checkout_alternate_branch(
+        self, node: Node, env: dict[str, _Value], path: str, render: bool,
+    ) -> None:
+        created, rendered = set(self.created), set(self.rendered)
+        selected = self.catalog_selection
+        try:
+            self.checkout_legacy_branch(node, env, path, render)
+        finally:
+            self.created, self.rendered, self.catalog_selection = created, rendered, selected
 
     def checkout_legacy_branch(
         self, node: Node, env: dict[str, _Value], path: str, render: bool,
@@ -1601,7 +2025,7 @@ class _Connections:
             if condition.literal is _UNSUPPORTED_LITERAL:
                 self.unsupported_constant_control = True
                 return
-            truth = _literal_truth(condition.literal)
+            truth = self.checkout_control_truth(condition)
             consequence = node.child_by_field_name("consequence")
             alternative = node.child_by_field_name("alternative")
             if truth is not False and consequence is not None:
@@ -1632,8 +2056,9 @@ class _Connections:
         elif node.type == "try_statement":
             body = node.child_by_field_name("body")
             if body is not None:
-                returned, value = self.block(body, env, path, render)
-                if self.checkout_entry:
+                scope = dict(env) if self.checkout_proof_source else env
+                returned, value = self.block(body, scope, path, render)
+                if self.checkout_entry or self.checkout_proof_source:
                     handler = node.child_by_field_name("handler")
                     if handler is not None:
                         handler_body = handler.child_by_field_name("body")
@@ -1682,6 +2107,9 @@ class _Connections:
                 self.unsupported_constant_control = True
                 return left
             right_node = node.child_by_field_name("right")
+            if self.checkout_order_id(left) and operator in {"??", "||"}:
+                # The canonical SDK guarantees this primitive is a nonempty UUID.
+                return left
             if (
                 operator == "??" and left.nullable_catalog_lookup
                 and right_node is not None and right_node.type == "null"
@@ -1689,13 +2117,18 @@ class _Connections:
                 # A verified lookup may find a row. The literal fallback must
                 # not make guards on that row unconditionally false.
                 return left
-            truth = _literal_truth(left.literal)
+            truth = self.checkout_control_truth(left)
             if ((operator == "&&" and truth is False)
                     or (operator == "||" and truth is True)
-                    or (operator == "??" and left.literal is not None
+                    or (operator == "??" and not left.checkout_ambiguous
+                        and left.literal is not None
                         and left.literal is not _NULL_LITERAL)):
                 return left
-            return self.value(right_node, env, path, render)
+            right = self.value(right_node, env, path, render)
+            return (
+                self.ambiguous_checkout_value(right)
+                if left.literal is None or left.checkout_ambiguous else right
+            )
         # Comparisons render a Boolean, not either operand's SDK data. Both
         # operands still run for effects; neither can leak a render witness.
         left = self.value_for_effects(node.child_by_field_name("left"), env, path)
@@ -1711,7 +2144,16 @@ class _Connections:
                 "<": left.literal < right.literal, "<=": left.literal <= right.literal,
                 ">": left.literal > right.literal, ">=": left.literal >= right.literal,
             }[operator])
-        return _Value(literal=_comparison_literal(left.literal, right.literal, operator))
+        return _Value(
+            literal=_comparison_literal(left.literal, right.literal, operator),
+            checkout_ambiguous=left.checkout_ambiguous or right.checkout_ambiguous,
+        )
+
+    def identifier_value(self, node: Node, env: dict[str, _Value], path: str) -> _Value:
+        name = _text(node)
+        if self.checkout_proof_source and name in _CHECKOUT_DYNAMIC_LOADERS and name not in env:
+            self.unsupported(node, path, "unproven_checkout_runtime_module_load")
+        return env.get(name, _Value())
 
     def object_value(self, node: Node, env: dict[str, _Value], path: str) -> _Value:
         props: dict[str, _Value] = {}
@@ -1732,13 +2174,17 @@ class _Connections:
                     passive = False
                 props[str(name)] = self.value(child.child_by_field_name("value"), env, path)
             elif child.type == "shorthand_property_identifier":
-                props[_text(child)] = env.get(_text(child), _Value())
+                props[_text(child)] = self.identifier_value(child, env, path)
             elif child.type == "spread_element":
                 source = self.value(
                     child.named_children[0] if child.named_children else None, env, path,
                 )
                 if source.passive or source.tags:
-                    props.update(source.props)
+                    props.update({
+                        key: self.ambiguous_checkout_value(value)
+                        if source.checkout_ambiguous else value
+                        for key, value in source.props.items()
+                    })
                     if (source.statistic_elements is not None
                             or (source.mutation_roots and self.contains_authority([source]))):
                         # A filtered SDK array also spreads numeric row keys
@@ -1764,8 +2210,11 @@ class _Connections:
         kind = node.type
         if kind == "comment":
             return _Value()
+        if kind == "import" and self.checkout_proof_source:
+            self.unsupported(node, path, "unproven_checkout_runtime_module_load")
+            return _Value()
         if kind == "identifier":
-            result = env.get(_text(node), _Value())
+            result = self.identifier_value(node, env, path)
             if result is self.reflect:
                 self.unsupported(node, path, "unproven_reflection_access")
         elif kind in {"arrow_function", "function_expression", "function_declaration"}:
@@ -1780,7 +2229,11 @@ class _Connections:
             )
         elif kind == "await_expression":
             result = self.value(node.named_children[0] if node.named_children else None, env, path)
-            result = result.pending or result
+            if result.pending is not None:
+                result = (
+                    self.ambiguous_checkout_value(result.pending)
+                    if result.checkout_ambiguous else result.pending
+                )
         elif kind == "unary_expression":
             operand = self.value(node.named_children[0] if node.named_children else None, env, path)
             operator = _text(node.children[0])
@@ -1789,14 +2242,14 @@ class _Connections:
                 if root is not None:
                     self.invalidate(root, node=node, path=path)
                 self.invalidate(operand, node=node, path=path)
-            truth = _literal_truth(operand.literal)
+            truth = self.checkout_control_truth(operand)
             if operator == "!" and truth is not None:
                 literal: object = not truth
             elif operator in {"+", "-"} and type(operand.literal) is float:
                 literal = -operand.literal if operator == "-" else operand.literal
             else:
                 literal = None if operand.literal is None else _UNSUPPORTED_LITERAL
-            result = _Value(literal=literal)
+            result = _Value(literal=literal, checkout_ambiguous=operand.checkout_ambiguous)
         elif kind in {"true", "false", "string", "number", "null"}:
             result = _Value(literal=_primitive_literal(node))
         elif kind == "member_expression":
@@ -1853,10 +2306,25 @@ class _Connections:
             "update_expression",
         }:
             assigned = node.child_by_field_name("left") or node.child_by_field_name("argument")
+            if self.checkout_proof_source and assigned is not None and assigned.type in {
+                "array_pattern", "object_pattern",
+            }:
+                self.unsupported(node, path, "unproven_checkout_assignment_pattern")
             root = self.mutation_root(assigned, env)
+            previous_key = root.checkout_storage_key if root is not None else None
             if root is not None:
                 self.invalidate(root, node=node, path=path)
             assigned_value = self.value(node.child_by_field_name("right"), env, path)
+            if (
+                self.checkout_browser_source and self.event_depth and not self.effects_only_depth
+                and kind == "assignment_expression" and assigned is not None
+                and assigned.type == "identifier" and previous_key is not None
+                and assigned_value.generated_uuid and not assigned_value.checkout_ambiguous
+                and node.parent is not None and node.parent.type == "expression_statement"
+            ):
+                self.checkout_storage_assignments[(path, node.parent.start_byte)] = (
+                    _text(assigned), previous_key, assigned_value,
+                )
             if (assigned is not None and assigned.type == "subscript_expression"
                     and (assigned_value.function is not None or assigned_value.sdk
                          or assigned_value.setter is not None)):
@@ -1890,7 +2358,7 @@ class _Connections:
             if condition.literal is _UNSUPPORTED_LITERAL:
                 self.unsupported_constant_control = True
                 return _Value()
-            truth = _literal_truth(condition.literal)
+            truth = self.checkout_control_truth(condition)
             if truth is None:
                 self.value(node.child_by_field_name("alternative"), env, path, render)
             result = self.value(
@@ -1901,6 +2369,8 @@ class _Connections:
                 path,
                 render,
             )
+            if truth is None or condition.checkout_ambiguous:
+                result = self.ambiguous_checkout_value(result)
         else:
             if kind not in {"undefined", "this", "super", "regex"}:
                 self.unsupported(node, path, "unsupported_expression")
@@ -1908,6 +2378,24 @@ class _Connections:
         if render and not self.render_suppression:
             self.rendered.update(result.tags)
         return result
+
+    def checkout_storage_uuid(
+        self, node: Node, arguments: Node | None, path: str, key: str,
+    ) -> bool:
+        if node.parent is None or node.parent.type != "expression_statement" or arguments is None:
+            return False
+        previous = node.parent.prev_named_sibling
+        if previous is None or previous.type != "expression_statement":
+            return False
+        assignment = self.checkout_storage_assignments.pop((path, previous.start_byte), None)
+        if assignment is None:
+            return False
+        name, read_key, uuid = assignment
+        target = arguments.named_children[-1]
+        return (
+            key == read_key and target.type == "identifier" and _text(target) == name
+            and uuid.generated_uuid and not uuid.checkout_ambiguous
+        )
 
     def call(self, node: Node, env: dict[str, _Value], path: str, render: bool) -> _Value:
         target = node.child_by_field_name("function")
@@ -1922,6 +2410,41 @@ class _Connections:
             source = self.value(target.child_by_field_name("object"), env, path)
             operation = _text(target.child_by_field_name("property"))
             receiver = _text(target.child_by_field_name("object"))
+            if operation == "open" and (receiver == "window" or source is self.window):
+                if not (
+                    _text(target) == "window.open" and source is self.window
+                    and self.checkout_browser_source
+                    and source.props.get("open") is self.window_open
+                    and self.event_depth and not self.effects_only_depth
+                    and node.parent is not None and node.parent.type == "expression_statement"
+                    and len(args) == 3 and arguments is not None
+                    and all(child.type == "string" for child in arguments.named_children[1:])
+                    and args[0].checkout_url and args[0].primitive_string
+                    and not args[0].checkout_ambiguous
+                    and args[1].literal == "_blank"
+                    and args[2].literal in _CHECKOUT_NO_OPENER
+                ):
+                    self.unsupported(node, path, "unproven_checkout_navigation")
+                return _Value()
+            if receiver == "window.localStorage" and operation == "setItem" and len(args) == 2:
+                # Storage.setItem coerces its arguments. The checkout path only
+                # preserves native handles for proved scalar pairs.
+                key = self.checkout_storage_key(args[0])
+                is_order_id = self.checkout_order_id(args[1])
+                if is_order_id or (key and self.checkout_storage_uuid(node, arguments, path, key)):
+                    if not (
+                        env.get("window") is self.window and source is self.storage
+                        and source.props.get("getItem") is self.storage_get_item
+                        and self.event_depth and not self.effects_only_depth and key
+                    ):
+                        self.unsupported(node, path, "unproven_checkout_storage")
+                    return _Value()
+            if (
+                self.checkout_browser_source and _text(target) == "crypto.randomUUID"
+                and source is self.crypto and not args and not self.effects_only_depth
+                and source.props.get(operation) is self.crypto_random_uuid
+            ):
+                return _Value(generated_uuid=True, primitive_string=True)
             if receiver == "JSON" and operation in {"parse", "stringify"}:
                 expected = self.json_parse if operation == "parse" else self.json_stringify
                 if source is not self.json or source.props.get(operation) is not expected:
@@ -1954,7 +2477,12 @@ class _Connections:
             ):
                 return _Value(
                     pending=_Value(
-                        elements=tuple(element.pending or element for element in args[0].elements)
+                        elements=tuple(
+                            self.ambiguous_checkout_value(element.pending or element)
+                            if args[0].checkout_ambiguous or element.checkout_ambiguous
+                            else element.pending or element
+                            for element in args[0].elements
+                        )
                     )
                 )
             statistic_elements = self.statistic_source_elements(source)
@@ -1994,7 +2522,10 @@ class _Connections:
                     try:
                         return _Value(
                             elements=tuple(
-                                self.invoke(args[0], [element], render)
+                                self.invoke(args[0], [
+                                    self.ambiguous_checkout_value(element)
+                                    if source.checkout_ambiguous else element,
+                                ], render)
                                 for element in source.elements
                             )
                         )
@@ -2003,7 +2534,9 @@ class _Connections:
                 if operation == "flat" and not args:
                     if all(element.elements is not None for element in source.elements):
                         flat = tuple(
-                            child for element in source.elements for child in element.elements or ()
+                            self.ambiguous_checkout_value(child)
+                            if source.checkout_ambiguous or element.checkout_ambiguous else child
+                            for element in source.elements for child in element.elements or ()
                         )
                         if len(flat) <= _MAX_COLLECTION_ITEMS:
                             return _Value(elements=flat)
@@ -2012,6 +2545,8 @@ class _Connections:
                     and len(args) == 1
                     and self.sort_is_read_only(args[0], source.elements)
                 ):
+                    # Read-only comparison does not prove the original order.
+                    source.checkout_ambiguous |= self.checkout_proof_source
                     return source
                 if operation == "find" and "catalog" in source.tags:
                     issue = (
@@ -2041,13 +2576,29 @@ class _Connections:
                 if operation != "then":
                     self.invalidate(source, node=node, path=path)
             if operation == "then" and args and source.pending is not None:
-                result = self.invoke(args[0], [source.pending])
-                return _Value(pending=result.pending or result)
+                result = self.invoke(args[0], [
+                    self.ambiguous_checkout_value(source.pending)
+                    if source.checkout_ambiguous else source.pending,
+                ])
+                return _Value(pending=self.ambiguous_checkout_value(result.pending or result))
         fn = self.value(target, env, path)
+        if fn is self.string and fn.sdk == "trusted-string":
+            if (
+                _text(target) == "String" and len(args) == 1
+                and self.checkout_order_id(args[0]) and not self.effects_only_depth
+            ):
+                return args[0]
+            # Preserve the existing conservative effects walk for unmodeled coercion.
+            fn = _Value()
         if fn is self.storage_get_item:
             if (fn.sdk == "trusted-storage-get-item" and len(args) == 1
                     and (type(args[0].literal) is str or args[0].primitive_string)):
-                return _Value(passive=True, nullable_string=True)
+                return _Value(
+                    passive=True, nullable_string=True,
+                    checkout_storage_key=self.checkout_storage_key(args[0]) if (
+                        _text(target) == "window.localStorage.getItem"
+                    ) else None,
+                )
             self.unsupported(node, path, "unproven_storage_read")
             return _Value()
         if fn is self.json_parse:
@@ -2103,30 +2654,48 @@ class _Connections:
                     for name in ("getOption", "selectOption", "setCategory")
                 },
             })
+        if fn is self.checkout_receipt and fn.sdk == _CHECKOUT_RECEIPT and len(args) == 1:
+            return _Value(pending=_Value(primitive_string=True, checkout_receipt_string=True))
         if fn.sdk == "getManagedRecords" and args and args[0].literal in _CREATE:
             return _Value(pending=_Value(tags={"response:" + str(args[0].literal)}))
         if fn.sdk in _CREATE.values() and self.event_depth and args and args[0].props:
             self.created.add(
                 next(resource for resource, method in _CREATE.items() if method == fn.sdk)
             )
-            if (
-                self.checkout_entry
-                and not self.checkout_legacy_probe
-                and fn.sdk == "createManagedOrder"
-            ):
-                return _Value(pending=_Value(props={"id": _Value(tags={_CHECKOUT_ORDER_ID})}))
+            if fn.sdk == _ORDER_CREATE:
+                linked = self.checkout_entry and not self.checkout_legacy_probe
+                owned = (
+                    self.checkout_browser_source and fn is self.owned_order_create
+                    and not self.effects_only_depth
+                )
+                if linked or owned:
+                    # The protected business SDK validates a nonempty UUID string.
+                    order_id = _Value(
+                        tags={_CHECKOUT_ORDER_ID} if linked else set(),
+                        checkout_order_id=owned, primitive_string=owned,
+                    )
+                    return _Value(pending=_Value(props={"id": order_id}))
         if self.inspect_checkout and fn.sdk in _LEGACY_CHECKOUT:
             self.checkout_calls.add(fn.sdk)
         elif self.checkout_entry and not self.checkout_legacy_probe:
             if fn.sdk == "getYleumOrderCheckout" and args and args[0].literal is None:
                 self.checkout_calls.add(fn.sdk)
             elif (
-                fn.sdk == "createYleumOrderCheckout"
+                fn.sdk == _CHECKOUT_CREATE
                 and self.event_depth
                 and args
                 and _CHECKOUT_ORDER_ID in args[0].tags
             ):
                 self.checkout_calls.add(fn.sdk)
+        if (
+            fn is self.owned_checkout_create and fn.sdk == _CHECKOUT_CREATE
+            and self.event_depth and not self.effects_only_depth
+            and len(args) == 1 and self.checkout_order_id(args[0])
+        ):
+            # The protected integration SDK checks the response URL before returning it.
+            return _Value(pending=_Value(props={
+                "confirmation_url": _Value(checkout_url=True, nullable_string=True),
+            }))
         if fn.function is None and not fn.sdk and fn.setter is None:
             root = self.mutation_root(target, env)
             if root is not None:
@@ -2443,12 +3012,19 @@ def _source_repair_guidance(diagnostic: str) -> str:
         return ""
     match = re.search(
         r"; reason (unproven_native_intrinsic_effect|unsupported_loop_control|"
-        r"unproven_loop_iterable|unproven_json_stringify); fingerprint [a-f0-9]{16}\.",
+        r"unproven_loop_iterable|unproven_json_stringify|missing_checkout_stylesheet); "
+        r"fingerprint [a-f0-9]{16}\.",
         diagnostic,
     )
     if match is None:
         return ""
     reason = match[1]
+    if reason == "missing_checkout_stylesheet":
+        return (
+            "\nThe relative CSS import has no stylesheet in this source revision. "
+            "Restore the intended stylesheet at the imported path, or point the import at "
+            "the existing stylesheet that implements this page's design."
+        )
     if reason == "unproven_json_stringify":
         return (
             "\nBuild the JSON.stringify input from explicit typed state holding validated "

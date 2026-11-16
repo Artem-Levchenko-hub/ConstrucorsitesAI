@@ -128,6 +128,29 @@ def verify_generation_response_token(
     return GenerationProviderIdentity.from_wire(claims["identity"])
 
 
+def verify_expired_reservation_token(
+    token: str, *, now: datetime | None = None, secret: str | None = None,
+) -> tuple[GenerationProviderIdentity, int, str, str]:
+    claims = _verified(token, secret=_secret(secret), domain=_DOMAIN, now=now or datetime.now(UTC))
+    if (
+        set(claims) != {
+            "aud", "purpose", "identity", "state_revision", "context_sha256", "source_sha256",
+            "iat", "exp",
+        }
+        or claims["aud"] != "llm-gateway" or claims["purpose"] != "generation_attempt.expire"
+        or type(claims["state_revision"]) is not int or claims["state_revision"] < 0
+        or any(
+            not isinstance(claims[key], str) or re.fullmatch(r"[a-f0-9]{64}", claims[key]) is None
+            for key in ("context_sha256", "source_sha256")
+        )
+    ):
+        raise ValueError("invalid generation expiry assertion")
+    return (
+        GenerationProviderIdentity.from_wire(claims["identity"]), claims["state_revision"],
+        claims["context_sha256"], claims["source_sha256"],
+    )
+
+
 _CAPACITY_DOMAIN = b"yleum:generation-response-capacity:v1"
 CAPACITY_HEADER = "x-generation-response-capacity-authorization"
 

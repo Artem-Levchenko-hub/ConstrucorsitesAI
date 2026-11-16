@@ -38,6 +38,7 @@ from yleum_api.services.project_cell_executor import ProjectCellExecutorHandle
 from yleum_api.services.promotion_permit import workspace_revision_digest
 
 if TYPE_CHECKING:
+    from yleum_api.services.generation.expired_native_finalization import RetiredFinalizationPlan
     from yleum_api.services.generation.recovery_execution import GenerationYielded
     from yleum_api.services.generation.recovery_reconciliation import ToolEffectCursor
 
@@ -237,22 +238,25 @@ async def _finish_role_cursor(
     pending: PendingRole,
     *,
     cold: bool = False,
+    expected_binding: RecoveryBinding | None = None,
 ) -> None:
     completed = dict(driver.context["completed"])
     completed.pop("pending_role")
     # Source checkpoint follows exact terminal receipt/current physical validation.
-    await driver.save(
-        driver.state.execution.model_copy(
-            update={
-                "substep": pending.return_substep,
-                "pending_effect_id": (
-                    driver.state.execution.provider_effect_id
-                    if pending.return_substep in _PROVIDER_FRAME_STEPS else None
-                ),
-            }
-        ),
-        context={**driver.context, "completed": completed},
+    execution = driver.state.execution.model_copy(
+        update={
+            "substep": pending.return_substep,
+            "pending_effect_id": (
+                driver.state.execution.provider_effect_id
+                if pending.return_substep in _PROVIDER_FRAME_STEPS else None
+            ),
+        }
     )
+    context = {**driver.context, "completed": completed}
+    if expected_binding is None:
+        await driver.save(execution, context=context)
+    else:
+        await driver.save(execution, context=context, expected_binding=expected_binding)
     if cold:
         driver._reconcile_response = pending.return_substep in _PROVIDER_FRAME_STEPS
 
@@ -848,6 +852,8 @@ def _completed_source_repair_context(
 
 _RETIRED_NATIVE_REPAIR_KEY = "retired_expired_native_repair"
 _RETIRED_NATIVE_REPAIR_STOP = "expired_provider_request_retired"
+_EXPIRED_REPAIR_PROOF_KEY = "closed_expired_repair_proof_only"
+_EXPIRED_CATALOG_REPAIR_PROOF_KEY = "closed_expired_catalog_repair_proof_only"
 _RETIRED_REPAIR_COORDINATOR_REQUIRED = (
     "an expired attempt requires an enabled retired repair coordinator"
 )
@@ -866,10 +872,12 @@ class _RetiredNativeRepair(BaseModel):
 class RetiredNativeRepairCheck:
     compiler: CompilerWitness
     source_gap: str | None
+    missing_catalog_hook: bool = False
 
 
 async def retire_expired_native_source_repair(
     driver: ExecutionDriver, *, released: RecoveryStateV3, armed_attempt_id: UUID | None = None,
+    proof_only: bool = False,
 ) -> None:
     """Atomically rebind the held checkpoint and retire its sealed unused wire."""
     from datetime import UTC
@@ -878,7 +886,16 @@ async def retire_expired_native_source_repair(
 
     from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
     from yleum_api.models.project_cell import ProjectCellOperation
-    from yleum_api.services.generation.provider_attempts import expired_reservation_closed
+    from yleum_api.services.generation.expired_native_finalization import (
+        _owns_retired_repair_entry,
+        retired_finalization_plan,
+    )
+    from yleum_api.services.generation.expired_provider_recovery import resumable_expired_repair
+    from yleum_api.services.generation.provider_attempts import (
+        _expired_provider_frame,
+        _matches_expiry_receipt,
+        expired_reservation_closed,
+    )
     from yleum_api.services.generation.recovery_execution import (
         _owned_release_receipt,
         _require_session_owner,
@@ -894,6 +911,11 @@ async def retire_expired_native_source_repair(
     original = released.execution
     old = released.binding
     release_id = original.release_operation_id
+    catalog = proof_only and original.budget.repair_calls == 3
+    seal_key = (
+        _EXPIRED_CATALOG_REPAIR_PROOF_KEY if catalog
+        else _EXPIRED_REPAIR_PROOF_KEY if proof_only else _RETIRED_NATIVE_REPAIR_KEY
+    )
     if (
         driver.state != released or old is None or released.phase != "working"
         or released.continuation_claim is None
@@ -902,7 +924,7 @@ async def retire_expired_native_source_repair(
         or original.execution_context_ref is None or released.checkpoint is None
         or original.execution_context_ref != released.context_ref
         or original.next_tool_index != 0 or original.response_sha256 is not None
-        or original.budget.repair_calls != 1
+        or original.budget.repair_calls not in ({1, 2, 3} if proof_only else {1})
         or released.clock.stage != "repair" or not released.clock.repair_granted
         or released.unresolved_operation_ids or not released.environment_rebind_supported
         or str(original.control_workspace_id) != old.workspace_id
@@ -921,13 +943,26 @@ async def retire_expired_native_source_repair(
     if (
         old_context != driver.context or frame is None or entry is None or entry.status != "active"
         or driver.context.get("active_tool") is not None
-        or _RETIRED_NATIVE_REPAIR_KEY in driver.context["completed"]
+        or seal_key in driver.context["completed"]
+        or (not catalog and _EXPIRED_REPAIR_PROOF_KEY in driver.context["completed"])
     ):
         raise RecoveryContractError("expired repair retirement has no matching active native frame")
     raw_progress = driver.context["completed"].get("finalization_progress")
     progress = FinalizationProgress.model_validate_json(json.dumps(raw_progress, allow_nan=False))
     if progress.pending_detail is None or progress.no_progress:
         raise RecoveryContractError("expired repair retirement has no pending source check")
+    if catalog:
+        plan = retired_finalization_plan(driver)
+        preceding = _RetiredNativeRepair.model_validate_json(json.dumps(
+            old_context["completed"][_EXPIRED_REPAIR_PROOF_KEY], allow_nan=False,
+        ))
+        if (
+            plan is None or plan.catalog_gap_key is None or plan.attempt_id != preceding.attempt_id
+            or original.logical_step_seq <= preceding.logical_step_seq
+            or plan.feedback != progress.pending_detail
+            or not _owns_retired_repair_entry(entry, plan)
+        ):
+            raise RecoveryContractError("expired catalog repair has no exact bounded entry")
     budget = IncompleteResponseBudget.model_validate(frame.get("response_budget"))
     if budget.total < entry.response_budget.total:
         raise RecoveryContractError("expired repair retirement would refund response accounting")
@@ -940,6 +975,7 @@ async def retire_expired_native_source_repair(
             recovery_state(run) != released
             or project.template != "max_miniapp" or is_restoration_adaptation(run)
             or run.execution_backend != "worker" or run.response_mode not in {"build", "edit"}
+            or (catalog and not resumable_expired_repair(run, released))
         ):
             raise RecoveryContractError("expired repair retirement lost its active run owner")
         release = await session.get(ProjectCellOperation, release_id)
@@ -951,22 +987,36 @@ async def retire_expired_native_source_repair(
         ):
             raise RecoveryContractError("expired repair retirement lost its terminal release")
         request = _stored_request_payload(release)
-        if request and request != {"require_environment_proof": {
+        strict_request = {"require_environment_proof": {
             "source_sha256": old.source_sha256, "environment_sha256": old.environment_sha256,
-        }}:
+        }}
+        if (proof_only or request) and request != strict_request:
             raise RecoveryContractError("expired repair release request conflicts")
         attempt = await _response_wait_attempt(session, released)
         if attempt is None or original.provider_effect_id is None:
             raise RecoveryContractError("expired repair has no owning no-dispatch receipt")
         root = await session.get(GenerationRecoveryEffect, original.provider_effect_id)
-        if (
-            (armed_attempt_id is not None and attempt.attempt_id != armed_attempt_id)
-            or root is None or type(root.pre_binding) is not dict
-            or not await expired_reservation_closed(
+        if root is None or type(root.pre_binding) is not dict or (
+            armed_attempt_id is not None and attempt.attempt_id != armed_attempt_id
+        ):
+            raise RecoveryContractError("expired repair has no owning no-dispatch receipt")
+        if proof_only:
+            frame_receipt = await _expired_provider_frame(
+                session, attempt, max_attempt_seq=released.attempt_seq,
+            )
+            matches = (
+                frame_receipt is not None and _matches_expiry_receipt(attempt, frame_receipt)
+                and frame_receipt.root.effect_id == root.effect_id
+                and frame_receipt.source.workspace_id == old.workspace_id
+                and frame_receipt.source.source_sha256 == old.source_sha256
+                and frame_receipt.source.schema_sha256 == old.schema_sha256
+                and frame_receipt.source.fencing_epoch <= old.fencing_epoch
+            )
+        else:
+            matches = await expired_reservation_closed(
                 session, attempt, held_binding=old, max_attempt_seq=released.attempt_seq,
             )
-            or not await _provider_stopped(session, run)
-        ):
+        if not matches or not await _provider_stopped(session, run):
             raise RecoveryContractError("expired repair has no owning no-dispatch receipt")
         historical = root.pre_binding.get("source") != old.model_dump(mode="json")
         checked_at = await session.scalar(select(func.clock_timestamp()))
@@ -1000,9 +1050,10 @@ async def retire_expired_native_source_repair(
     result = AgentResult(
         done=False, summary="The expired provider request was never dispatched.",
         files={}, steps=0, stop_reason=_RETIRED_NATIVE_REPAIR_STOP,
+        needs_finalization=proof_only,
     )
     context = _completed_source_repair_context(driver, entry, result, budget)
-    context["completed"][_RETIRED_NATIVE_REPAIR_KEY] = retired.model_dump(mode="json")
+    context["completed"][seal_key] = retired.model_dump(mode="json")
     # A cold process must see either the original held E9 frame or the retired
     # frame at the new fence. The ordinary rebind would consume the old pointer.
     await driver.save(
@@ -1014,8 +1065,70 @@ async def retire_expired_native_source_repair(
     driver._reconcile_response = False
 
 
+def _same_retired_candidate(current: RecoveryBinding, sealed: RecoveryBinding) -> bool:
+    return (
+        current.workspace_id == sealed.workspace_id
+        and current.source_sha256 == sealed.source_sha256
+        and current.schema_sha256 == sealed.schema_sha256
+        and (current == sealed or current.fencing_epoch > sealed.fencing_epoch)
+    )
+
+
+def expired_repair_proof_only(driver: ExecutionDriver | None) -> bool:
+    if driver is None:
+        return False
+    completed = driver.context["completed"]
+    record = completed.get(_EXPIRED_REPAIR_PROOF_KEY)
+    if record is None:
+        return False
+    from yleum_api.services.generation.expired_native_finalization import retired_finalization_plan
+
+    plan = retired_finalization_plan(driver)
+    state = driver.state
+    if plan is not None and plan.catalog_gap_key is not None:
+        exhausted = completed.get(_EXPIRED_CATALOG_REPAIR_PROOF_KEY)
+        if exhausted is None:
+            return False
+        preceding = _RetiredNativeRepair.model_validate_json(json.dumps(record, allow_nan=False))
+        catalog = _RetiredNativeRepair.model_validate_json(json.dumps(exhausted, allow_nan=False))
+        if (
+            state.execution.budget.repair_calls != 3
+            or catalog.logical_step_seq <= preceding.logical_step_seq
+            or catalog.attempt_id == preceding.attempt_id
+        ):
+            raise RecoveryContractError("expired catalog repair lost its consumed scope")
+        record = exhausted
+    receipt = _RetiredNativeRepair.model_validate_json(json.dumps(record, allow_nan=False))
+    if (
+        not isinstance(state, RecoveryStateV3) or state.binding is None
+        or state.execution.stage != "finalization"
+        or state.execution.logical_step_seq < receipt.logical_step_seq
+        or not _same_retired_candidate(state.binding, receipt.binding)
+    ):
+        raise RecoveryContractError("expired repair no longer owns the verified source")
+    return True
+
+
+async def _closed_expired_repair_attempt(
+    driver: ExecutionDriver, state: RecoveryStateV3,
+) -> UUID | None:
+    from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.services.generation.expired_provider_recovery import resumable_expired_repair
+    from yleum_api.services.generation.provider_attempts import expired_reservation_closed
+    from yleum_api.services.generation.recovery_execution import _response_wait_attempt
+
+    async with driver.factory() as session:
+        run = await session.get(GenerationRun, state.identity.run_id)
+        if run is None or not resumable_expired_repair(run, state):
+            return None
+        attempt = await _response_wait_attempt(session, state)
+        if attempt is not None and await expired_reservation_closed(session, attempt):
+            return attempt.attempt_id
+    return None
+
+
 async def revalidate_retired_source_repair(
-    driver: ExecutionDriver, *, compiler_receipt_id: UUID,
+    driver: ExecutionDriver, *, compiler_receipt_id: UUID, proof_only: bool = False,
 ) -> RetiredNativeRepairCheck:
     """Read an owned current check and source diagnostic, without granting model work."""
     from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
@@ -1033,7 +1146,8 @@ async def revalidate_retired_source_repair(
     from yleum_api.services.max_generation_contract import max_source_completion_gap
     from yleum_api.services.orchestrator_client import ProjectCellCommandReceipt
 
-    raw = driver.context["completed"].get(_RETIRED_NATIVE_REPAIR_KEY)
+    seal_key = _EXPIRED_REPAIR_PROOF_KEY if proof_only else _RETIRED_NATIVE_REPAIR_KEY
+    raw = driver.context["completed"].get(seal_key)
     if raw is None:
         raise RecoveryContractError("retired repair receipt is unavailable")
     receipt = _RetiredNativeRepair.model_validate_json(json.dumps(raw, allow_nan=False))
@@ -1041,7 +1155,19 @@ async def revalidate_retired_source_repair(
     entry = pending_source_repair(driver)
     if (
         not isinstance(state, RecoveryStateV3) or state.continuation_claim is None
-        or state.phase != "working" or state.binding != receipt.binding
+        or state.phase != "working" or state.binding is None
+        or (
+            not _same_retired_candidate(state.binding, receipt.binding)
+            if proof_only else state.binding != receipt.binding
+        )
+        or (proof_only and (
+            state.execution.physical_state != "active"
+            or driver.runtime_control != (
+                state.execution.control_workspace_id, state.execution.control_fencing_epoch,
+            )
+            or str(state.execution.control_workspace_id) != state.binding.workspace_id
+            or state.execution.control_fencing_epoch != state.binding.fencing_epoch
+        ))
         or state.execution.stage != "finalization" or state.execution.substep != "checkpoint_ready"
         or state.execution.logical_step_seq <= receipt.logical_step_seq
         or state.execution.pending_effect_id is not None
@@ -1054,12 +1180,12 @@ async def revalidate_retired_source_repair(
     owner = state.identity
     await _require_session_owner(owner.run_id)
     persisted_context = await load_execution_context(
-        owner, state.context_ref, binding=receipt.binding,
+        owner, state.context_ref, binding=state.binding,
     )
     if persisted_context != driver.context:
         raise RecoveryContractError("retired repair verification context changed")
     binding, files = await driver.snapshot()
-    if binding != receipt.binding or workspace_revision_digest(files) != binding.source_sha256:
+    if binding != state.binding or workspace_revision_digest(files) != binding.source_sha256:
         raise RecoveryContractError("retired repair source changed before verification")
     async with driver.factory() as session:
         run, _ = await _locked_owner(
@@ -1119,9 +1245,60 @@ async def revalidate_retired_source_repair(
         ):
             raise RecoveryContractError("retired repair compiler command binding conflicts")
         prompt = load_generation_dispatch(run).prompt_text
-    return RetiredNativeRepairCheck(
-        compiler=compiler, source_gap=max_source_completion_gap(prompt, files, portable=True),
+    gap = max_source_completion_gap(prompt, files, portable=True)
+    page = files.get("src/app/page.tsx")
+    missing_catalog_hook = (
+        proof_only and page is not None and re.search(r"\buseYleumCatalog\b", page) is None
     )
+    if missing_catalog_hook and page is not None:
+        gap = _retired_catalog_gap(prompt, files, page, gap)
+    return RetiredNativeRepairCheck(
+        compiler=compiler, source_gap=gap, missing_catalog_hook=missing_catalog_hook,
+    )
+
+
+def _retired_catalog_gap(
+    prompt: str, files: dict[str, str], page: str, gap: str | None,
+) -> str | None:
+    from yleum_api.services.max_generation_contract import max_source_completion_gap
+    from yleum_api.services.max_management_generation import (
+        ManagedSourceGap,
+        ManagedSourceObligation,
+    )
+
+    location = re.search(
+        r" Source location: src/app/page\.tsx:([1-9][0-9]*):1; "
+        r"AST import_statement; reason missing_checkout_stylesheet;",
+        str(gap),
+    )
+    if not isinstance(gap, ManagedSourceGap) or gap.obligation is not None or location is None:
+        return gap
+    lines = page.splitlines(keepends=True)
+    row = int(location.group(1)) - 1
+    if row >= len(lines):
+        return gap
+    statement = re.fullmatch(
+        r"""import[ \t]+(['"])\./([A-Za-z0-9][A-Za-z0-9_.-]*\.css)\1[ \t]*;?[ \t]*[\r\n]*""",
+        lines[row],
+    )
+    if statement is None:
+        return gap
+    css = "src/app/" + statement.group(2)
+    if any(path == css or path.startswith((css + ".", css + "/")) for path in files):
+        return gap
+    # Determine whether this exact page repair can also satisfy the admitted catalog.
+    # The real candidate and its publication proof still run with the actual source.
+    candidate = {**files, "src/app/page.tsx": "".join(lines[:row] + lines[row + 1:])}
+    latent = max_source_completion_gap(prompt, candidate, portable=True)
+    if (
+        isinstance(latent, ManagedSourceGap)
+        and latent.obligation is ManagedSourceObligation.CATALOG_RENDER
+    ):
+        return latent.with_diagnostic(
+            f"{latent} Remove the missing relative stylesheet import at page.tsx:{row + 1} "
+            "or select an existing local stylesheet; do not fabricate styling dependencies.",
+        )
+    return gap
 
 
 def attach_driver(
@@ -1304,6 +1481,19 @@ def _release_environment_matches(
     )
 
 
+async def _require_rebound_environment(
+    driver: ExecutionDriver, old: RecoveryBinding, current: RecoveryBinding,
+) -> None:
+    release_fence = await _require_reacquired_lease(driver)
+    release_id = driver.state.execution.release_operation_id
+    prove = driver.prove_environment_recovery
+    if release_id is None or prove is None:
+        raise _UnprovedReleaseEnvironment("generation release environment reader is unavailable")
+    proof = await _read_released_environment(lambda: prove(release_id), hold_lease=True)
+    if not _release_environment_matches(driver, proof, release_id, release_fence, old, current):
+        raise _UnprovedReleaseEnvironment("generation release environment cannot be verified")
+
+
 async def _rebind_release_environment(
     driver: ExecutionDriver, old: RecoveryBinding, current: RecoveryBinding,
 ) -> bool:
@@ -1316,12 +1506,7 @@ async def _rebind_release_environment(
         or old.schema_sha256 != current.schema_sha256
     ):
         return False
-    release_fence = await _require_reacquired_lease(driver)
-    release_id, prove = execution.release_operation_id, driver.prove_environment_recovery
-    assert release_id is not None and prove is not None
-    proof = await _read_released_environment(lambda: prove(release_id), hold_lease=True)
-    if not _release_environment_matches(driver, proof, release_id, release_fence, old, current):
-        raise _UnprovedReleaseEnvironment("generation release environment cannot be verified")
+    await _require_rebound_environment(driver, old, current)
     # The orchestrator reads inside save recheck the current source and binding.
     await _read_released_environment(
         lambda: driver.save(execution, context=driver.context, expected_binding=current),
@@ -1329,6 +1514,123 @@ async def _rebind_release_environment(
     )
     log.info("generation.release_environment_rebound", run_id=str(state.identity.run_id),
              previous_fence=old.fencing_epoch, fencing_epoch=current.fencing_epoch)
+    return True
+
+
+async def _rebind_undispatched_catalog_compiler_role(
+    driver: ExecutionDriver, plan: RetiredFinalizationPlan,
+    old: RecoveryBinding, current: RecoveryBinding,
+) -> bool:
+    from sqlalchemy import or_, select
+
+    from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
+    from yleum_api.models.project_cell import ProjectCellActivityLease, ProjectCellOperation
+    from yleum_api.services.generation.expired_native_finalization import _owns_retired_repair_entry
+    from yleum_api.services.generation.recovery_execution import (
+        _require_session_owner,
+        recovery_state,
+    )
+    from yleum_api.services.generation.recovery_quiescence import _provider_stopped
+    from yleum_api.services.generation.recovery_reconciliation import ToolEffectCursor
+    from yleum_api.services.generation.recovery_store import _locked_owner
+    from yleum_api.services.generation_deadline import is_restoration_adaptation
+    from yleum_api.services.project_cells import _stored_request_payload
+
+    state, context = driver.state, driver.context
+    if (
+        not isinstance(state, RecoveryStateV3) or state.clock.stage != "repair"
+        or state.phase != "working" or state.continuation_claim is None
+        or state.unresolved_operation_ids
+        or state.execution.stage != "finalization" or state.execution.substep != "proof_wait"
+        or state.execution.physical_state != "released"
+        or state.execution.release_operation_id is None
+        or state.execution.provider_effect_id is not None or state.context_ref is None
+        or state.context_ref != state.execution.execution_context_ref
+        or context.get("active_frame") is not None or context.get("active_tool") is not None
+        or "native_outer" in context or "legacy_outer" in context
+        or not _same_retired_candidate(current, old)
+    ):
+        return False
+
+    pending = pending_role(driver)
+    if (
+        pending is None or pending.operation_id.int == 0
+        or pending.role not in {"bootstrap", "fast_check"}
+        or pending.return_substep != "checkpoint_ready"
+    ):
+        return False
+    cursor = ToolEffectCursor(
+        state.continuation_claim, state.state_revision, state.execution.logical_step_seq,
+        f"role:{pending.operation_id}", reconcile_only=True,
+    )
+    if state.execution.pending_effect_id != cursor.root_effect_id:
+        return False
+
+    calls, entry = state.execution.budget.repair_calls, pending_source_repair(driver)
+    if plan.catalog_gap_key is None:
+        if (
+            calls != 2 or entry is None or entry.status != "complete"
+            or not expired_repair_proof_only(driver)
+        ):
+            return False
+    elif (
+        not _same_retired_candidate(old, plan.proof.binding)
+        or not ((calls == 2 and entry is None) or (
+            calls == 3 and entry is not None and entry.status == "active"
+            and _owns_retired_repair_entry(entry, plan)
+        ))
+    ):
+        return False
+
+    owner = state.identity
+    await _require_session_owner(owner.run_id)
+    async with driver.factory() as session:
+        run, project = await _locked_owner(
+            session, run_id=owner.run_id, project_id=owner.project_id, user_id=owner.user_id,
+        )
+        if (
+            recovery_state(run) != state or run.prompt_hash != owner.prompt_hash
+            or project.template != "max_miniapp" or is_restoration_adaptation(run)
+            or project.current_snapshot_id != owner.accepted_snapshot_id
+            or run.execution_backend != "worker" or run.response_mode not in {"build", "edit"}
+        ):
+            return False
+        release = await session.get(ProjectCellOperation, state.execution.release_operation_id)
+        if release is None or _stored_request_payload(release) != {"require_environment_proof": {
+            "source_sha256": old.source_sha256, "environment_sha256": old.environment_sha256,
+        }}:
+            return False
+
+        effects = GenerationRecoveryEffect
+        physical_id = uuid5(cursor.root_effect_id, "physical:0")
+        if await session.scalar(select(effects.effect_id).where(or_(
+            effects.effect_id == physical_id,
+            effects.operation_id == pending.operation_id,
+            (effects.run_id == owner.run_id)
+            & (effects.logical_step_seq >= cursor.logical_step_seq),
+        )).limit(1)) is not None:
+            # Issued or conflicting effects stay with the normal receipt reader.
+            return False
+        activity = ProjectCellActivityLease
+        if await session.scalar(select(activity.operation_id).where(or_(
+            activity.operation_id == pending.operation_id,
+            (
+                (activity.workspace_id == state.execution.control_workspace_id)
+                | (activity.generation_run_id == owner.run_id)
+            ) & (
+                activity.finished_at.is_(None) | (activity.fencing_epoch >= current.fencing_epoch)
+            ),
+        )).limit(1)) is not None or not await _provider_stopped(session, run):
+            return False
+        if await session.get(ProjectCellOperation, pending.operation_id) is not None:
+            return False
+
+    # The run advisory lock excludes new command intent until the checkpoint CAS.
+    await _require_rebound_environment(driver, old, current)
+    await _read_released_environment(
+        lambda: _finish_role_cursor(driver, pending, cold=True, expected_binding=current),
+        hold_lease=True,
+    )
     return True
 
 
@@ -1446,7 +1748,8 @@ def retain_retired_attachment_on_wait(driver: ExecutionDriver, handoff: Generati
         return _pending_retirement_compiler(driver, phase="waiting_dependency")
     cursor = state.execution
     return (
-        plan.repair_path is not None and state.binding == plan.proof.binding
+        plan.catalog_gap_key is None
+        and plan.repair_path is not None and state.binding == plan.proof.binding
         and cursor.stage == "finalization" and cursor.substep == "checkpoint_ready"
         and cursor.physical_state == "active" and cursor.budget.repair_calls in {1, 2}
         and cursor.pending_effect_id is None and cursor.provider_effect_id is None
@@ -1547,6 +1850,13 @@ async def rebind_continuation(
                 driver, released=state, armed_attempt_id=attempt_id,
             )
             return True
+    if allow_expired_retirement and isinstance(state, RecoveryStateV3):
+        closed_attempt = await _closed_expired_repair_attempt(driver, state)
+        if closed_attempt is not None:
+            await retire_expired_native_source_repair(
+                driver, released=state, armed_attempt_id=closed_attempt, proof_only=True,
+            )
+            return None
     old = state.binding
     hold_lease = _can_rebind_release_environment(driver)
     try:
@@ -1558,6 +1868,10 @@ async def rebind_continuation(
             or driver.runtime_control[0] != state.execution.control_workspace_id
         ):
             raise RecoveryContractError("resumed candidate identity conflicts")
+        if retired_plan is not None and await _rebind_undispatched_catalog_compiler_role(
+            driver, retired_plan, old, current,
+        ):
+            return None
         same_environment = (
             current.schema_sha256 == old.schema_sha256
             and current.environment_sha256 == old.environment_sha256

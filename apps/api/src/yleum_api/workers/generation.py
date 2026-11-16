@@ -178,6 +178,11 @@ async def execute_dispatch(run_id: UUID) -> bool:
 
     engine = get_engine()
     factory = async_sessionmaker(engine, expire_on_commit=False)
+    from yleum_api.services.generation.expired_provider_recovery import (
+        settle_expired_repair_before_claim,
+    )
+
+    await settle_expired_repair_before_claim(factory, run_id)
     async with engine.connect() as ownership:
         locked = await ownership.scalar(
             text("SELECT pg_try_advisory_lock(:ns, :key)"),

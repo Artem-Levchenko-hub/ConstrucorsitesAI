@@ -70,11 +70,17 @@ def scope_pair(scope: dict, release: str, incumbent: str) -> tuple[dict, dict]:
     )
     api, gateway = scope["api"], scope["gateway"]
     common = {"version", "release_sha", "reader_release_sha", "state_revision", "source_sha256"}
+    require(type(gateway) is dict and gateway.get("action") in (
+        "close_expired_before_dispatch", "close_released_before_dispatch",
+    ))
+    autonomous = gateway["action"] == "close_released_before_dispatch"
+    gateway_fields = common | {"action", "identity"}
+    if autonomous:
+        gateway_fields.add("context_sha256")
     require(
         type(api) is dict
         and set(api) == common | {"run_id", "attempt_id", "context_sha256", "clock_sha256"}
-        and type(gateway) is dict
-        and set(gateway) == common | {"action", "identity"}
+        and set(gateway) == gateway_fields
         and type(api["version"]) is int and type(gateway["version"]) is int
         and api["version"] == gateway["version"] == 1
         and api["release_sha"] == gateway["release_sha"] == release
@@ -82,7 +88,7 @@ def scope_pair(scope: dict, release: str, incumbent: str) -> tuple[dict, dict]:
         and type(api["state_revision"]) is int and type(gateway["state_revision"]) is int
         and api["state_revision"] == gateway["state_revision"] and api["state_revision"] > 0
         and api["source_sha256"] == gateway["source_sha256"]
-        and gateway["action"] == "close_expired_before_dispatch"
+        and (not autonomous or api["context_sha256"] == gateway["context_sha256"])
     )
     for name in ("source_sha256", "context_sha256", "clock_sha256"):
         require(type(api[name]) is str and re.fullmatch(r"[0-9a-f]{64}", api[name]))

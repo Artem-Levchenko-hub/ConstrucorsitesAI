@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Literal
 from uuid import UUID, uuid4, uuid5
 
@@ -49,6 +50,19 @@ class ExpiredReservationScope:
     source_sha256: str
 
 
+@dataclass(frozen=True, slots=True)
+class RuntimeExpiredReservationScope:
+    identity: GenerationProviderIdentity
+    state_revision: int
+    context_sha256: str
+    source_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseExpiredReservationScope(RuntimeExpiredReservationScope):
+    release_sha: str
+
+
 def _record(value: Any) -> dict[str, Any]:
     if isinstance(value, str):
         value = json.loads(value)
@@ -70,7 +84,7 @@ def _release_matches(reply: dict[str, Any], workspace: UUID, fence: int) -> bool
 
 async def _locked_parked_cursor(
     conn: Any, scope: ExpiredReservationScope,
-) -> tuple[dict[str, Any], dict[str, Any], int, int, datetime]:
+) -> tuple[dict[str, Any], dict[str, Any], int, int, Any]:
     """Snapshot the selected parked owner under the existing admission fence."""
     identity = scope.identity
     if (
@@ -87,8 +101,90 @@ async def _locked_parked_cursor(
         )
     ):
         raise ValueError("generation drain ownership is not confirmed")
+    return await _locked_released_cursor(conn, scope)
+
+
+async def _runtime_admission_owned(conn: Any, scope: RuntimeExpiredReservationScope) -> bool:
+    if isinstance(scope, ReleaseExpiredReservationScope):
+        return bool(
+            re.fullmatch(r"[0-9a-f]{40}", scope.release_sha)
+            and await conn.fetchval(
+                "SELECT pg_try_advisory_xact_lock(hashtext($1))", _ADMISSION_LOCK,
+            )
+            and await conn.fetchval(
+                "SELECT release_sha FROM deployment_drains WHERE scope='generation'",
+            ) == scope.release_sha
+        )
+    return bool(
+        await conn.fetchval(
+            "SELECT pg_try_advisory_xact_lock_shared(hashtext($1))", _ADMISSION_LOCK,
+        )
+        and not await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM deployment_drains WHERE scope='generation')",
+        )
+    )
+
+
+async def _locked_runtime_cursor(
+    conn: Any, scope: RuntimeExpiredReservationScope,
+) -> tuple[dict[str, Any], dict[str, Any], int, int, Any]:
+    # The worker calls before acquiring its own per-run lock. Do not wait on
+    # either a deployment or an executing worker, or hold these locks over IO.
+    await conn.execute("SET LOCAL statement_timeout = '3s'")
+    if (
+        type(scope.state_revision) is not int or scope.state_revision < 0
+        or not _hex_digest(scope.source_sha256) or not _hex_digest(scope.context_sha256)
+        or not await _runtime_admission_owned(conn, scope)
+        or not await conn.fetchval(
+            "SELECT pg_try_advisory_xact_lock(1195724366,$1)",
+            int.from_bytes(scope.identity.run_id.bytes[-4:], "big", signed=True),
+        )
+    ):
+        raise ValueError("generation runtime ownership is not confirmed")
+    return await _locked_released_cursor(conn, scope)
+
+
+def _runtime_repair_budget_matches(
+    agent: dict[str, Any], state: dict[str, Any], cursor: dict[str, Any],
+) -> bool:
+    calls = _record(cursor["budget"])["repair_calls"]
+    if type(calls) is not int or calls not in {1, 2, 3}:
+        return False
+    if calls < 3:
+        return True
+    marker = agent.get("retired_catalog_repair_resume_v1")
+    clock = _record(state["clock"])
+    if (
+        not isinstance(marker, dict)
+        or set(marker) != {"version", "segment_seq", "deadline", "predecessor_attachment"}
+        or type(marker["version"]) is not int or marker["version"] != 1
+        or type(marker["segment_seq"]) is not int
+        or type(clock.get("segment_seq")) is not int or marker["segment_seq"] != clock["segment_seq"]
+        or clock.get("stage") != "repair" or clock.get("repair_granted") is not True
+        or not isinstance(clock.get("segment_deadline"), str)
+        or not isinstance(marker["deadline"], str)
+        or not (marker["predecessor_attachment"] is None
+                or isinstance(marker["predecessor_attachment"], dict))
+    ):
+        return False
+    deadline = datetime.fromisoformat(marker["deadline"])
+    current_deadline = datetime.fromisoformat(clock["segment_deadline"])
+    return (
+        deadline.utcoffset() == timedelta(0)
+        and deadline.isoformat() == marker["deadline"]
+        and current_deadline.utcoffset() == timedelta(0)
+        and current_deadline <= deadline
+    )
+
+
+async def _locked_released_cursor(
+    conn: Any, scope: ExpiredReservationScope | RuntimeExpiredReservationScope,
+) -> tuple[dict[str, Any], dict[str, Any], int, int, Any]:
+    runtime = isinstance(scope, RuntimeExpiredReservationScope)
+    identity = scope.identity
     owner = await conn.fetchrow(
-        "SELECT r.agent_state,p.current_snapshot_id FROM generation_runs r "
+        "SELECT r.agent_state,r.started_at,r.execution_started_at,p.current_snapshot_id "
+        "FROM generation_runs r "
         "JOIN projects p ON p.id=r.project_id WHERE r.id=$1 AND p.id=$2 "
         "AND r.user_id=$3 AND p.owner_id=$3 AND r.prompt_hash=$4 AND r.status='running' "
         "AND r.execution_backend='worker' AND r.response_mode IN ('build','edit') "
@@ -112,7 +208,9 @@ async def _locked_parked_cursor(
         or type(state["version"]) is not int or state["version"] != 3
         or type(revision) is not int or revision != scope.state_revision
         or type(attempt_seq) is not int or attempt_seq < 1
-        or state["phase"] != "needs_input" or state["next_check_at"] is not None
+        or (not runtime and (
+            state["phase"] != "needs_input" or state["next_check_at"] is not None
+        ))
         or state["unresolved_operation_ids"] != []
         or (own["run_id"], own["project_id"], own["user_id"], own["prompt_hash"]) != (
             str(identity.run_id), str(identity.project_id), str(identity.user_id), identity.prompt_hash,
@@ -141,9 +239,35 @@ async def _locked_parked_cursor(
             or not re.fullmatch(r"[0-9a-f]{64}", ref["sha256"])
         ):
             raise ValueError("generation retained references are unconfirmed")
+    if isinstance(scope, RuntimeExpiredReservationScope):
+        claim = _record(state["continuation_claim"])
+        phase, due = state["phase"], state["next_check_at"]
+        if (
+            owner["started_at"] is None or owner["execution_started_at"] is None
+            or not _runtime_repair_budget_matches(agent, state, cursor)
+            or phase not in {"working", "waiting_dependency"}
+            or (phase == "waiting_dependency") != (due is not None)
+            or (due is not None and (
+                (next_check := datetime.fromisoformat(due)).utcoffset() is None
+                # The named drain owns this exact cursor independently of the
+                # worker schedule. The persisted dispatch deadline is checked below.
+                or (
+                    not isinstance(scope, ReleaseExpiredReservationScope)
+                    and next_check > await conn.fetchval("SELECT clock_timestamp()")
+                )
+            ))
+            or _record(state["clock"])["wait_dependency"] is not None
+            or state["context_ref"]["sha256"] != scope.context_sha256
+            or claim["run_id"] != str(identity.run_id)
+            or type(claim["attempt_seq"]) is not int or claim["attempt_seq"] != attempt_seq
+            or type(cursor["next_tool_index"]) is not int or cursor["next_tool_index"] != 0
+            or cursor["response_sha256"] is not None
+            or type(cursor["lease_cycle_seq"]) is not int or cursor["lease_cycle_seq"] < 0
+        ):
+            raise ValueError("generation runtime scope changed")
     workspace = UUID(binding["workspace_id"])
     release = await conn.fetchrow(
-        "SELECT o.result_payload,o.finished_at FROM project_cell_workspaces w "
+        "SELECT o.* FROM project_cell_workspaces w "
         "JOIN project_cell_operations o ON o.workspace_id=w.id "
         "WHERE w.id=$1 AND w.project_id=$2 AND w.owner_id=$3 AND w.deleted_at IS NULL "
         "AND w.generation_run_id IS NULL AND w.fencing_epoch=$4 AND o.id=$5 "
@@ -164,7 +288,200 @@ async def _locked_parked_cursor(
         )
     ):
         raise ValueError("current physical release is unconfirmed")
-    return cursor, binding, step, attempt_seq, release["finished_at"]
+    if runtime and await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM project_cell_operations "
+        "WHERE (workspace_id=$1 OR generation_run_id=$2 OR execution_run_id=$2) "
+        "AND status IN ('pending','waiting_capacity','running'))",
+        workspace, identity.run_id,
+    ):
+        raise ValueError("generation has an active operation")
+    return cursor, binding, step, attempt_seq, release
+
+
+_CELL_PROFILES = ("docker-owner-cell-resources-v1", "docker-owner-cell-resources-v2")
+
+
+def _runtime_lease_operation_matches(
+    operation: Any, identity: GenerationProviderIdentity, *, workspace: UUID, fence: int,
+    profile: str, cycle: int, kind: str, request: dict[str, Any],
+) -> bool:
+    envelope = {
+        "workspace_id": str(workspace), "generation_run_id": str(identity.run_id),
+        "kind": kind, "request": request,
+    }
+    reply = _record(operation["result_payload"])
+    attempt_count = operation["attempt_count"]
+    # A completed release may have reconciled the same envelope after an ACK loss.
+    if (
+        operation["workspace_id"] != workspace or operation["kind"] != kind
+        or operation["generation_run_id"] != identity.run_id
+        or operation["execution_run_id"] != identity.run_id
+        or operation["fencing_epoch"] != fence
+        or type(attempt_count) is not int or attempt_count < 1
+        or (kind == "ensure" and attempt_count != 1)
+        or operation["status"] != "completed" or operation["error"] is not None
+        or operation["capacity_reason"] is not None or operation["next_attempt_at"] is not None
+        or operation["idempotency_key"]
+        != f"generation:{identity.run_id}:{kind}:{profile}:cycle:{cycle}"
+        or _record(operation["request_payload"]) != envelope
+        or operation["request_digest"] != _record_sha(envelope)
+        or not _release_matches(reply, workspace, fence)
+        or not all(reply[key] for key in (
+            "has_workspace", "has_agent_home", "has_postgres", "has_redis",
+        ))
+        or operation["started_at"] is None or operation["finished_at"] is None
+        or operation["started_at"] > operation["finished_at"]
+    ):
+        return False
+    observation = reply.get("lease_observation")
+    if observation is None:
+        return True
+    observed = _record(observation)
+    ensuring = kind == "ensure"
+    return (
+        (observed.get("workspace_id"), observed.get("project_id"), observed.get("owner_id"))
+        == (str(workspace), str(identity.project_id), str(identity.user_id))
+        and (observed.get("operation_id"), observed.get("request_digest"))
+        == (str(operation["id"]), operation["request_digest"])
+        and type(observed.get("fencing_epoch")) is int and observed["fencing_epoch"] == fence
+        and observed.get("active_generation_run_id") == (str(identity.run_id) if ensuring else None)
+        and observed.get("active_generation_fencing_epoch") == (fence if ensuring else None)
+        and observed.get("quiescent") is not ensuring
+        and type(observed.get("quiescent")) is bool
+    )
+
+
+async def _require_reconciled_runtime_history(
+    conn: Any, identity: GenerationProviderIdentity, *, workspace: UUID,
+    first_fence: int, created: datetime,
+) -> None:
+    """Earlier unresolved rows need their own committed, superseding observation."""
+    unresolved = await conn.fetch(
+        "SELECT o.*,r.project_id,r.user_id FROM project_cell_operations o "
+        "LEFT JOIN generation_runs r ON r.id=o.generation_run_id "
+        "WHERE (o.workspace_id=$1 OR o.generation_run_id=$2 OR o.execution_run_id=$2) "
+        "AND o.status='indeterminate' FOR UPDATE OF o NOWAIT",
+        workspace, identity.run_id,
+    )
+    for old in unresolved:
+        old_fence, run_id = old["fencing_epoch"], old["generation_run_id"]
+        if (
+            old["workspace_id"] != workspace or run_id is None
+            or (old["project_id"], old["user_id"]) != (identity.project_id, identity.user_id)
+            or type(old_fence) is not int or not 0 < old_fence < first_fence
+            or old["started_at"] is None
+        ):
+            raise ValueError("generation has an unresolved operation")
+        target = str(old["id"])
+        # Capacity recovery executes as the requesting run while reconciling the
+        # old lease. Both owners have already been bound to this project.
+        matches = await conn.fetch(
+            "SELECT * FROM project_cell_operations WHERE workspace_id=$1 "
+            "AND generation_run_id=$2 AND execution_run_id IN ($2,$8) AND kind='reconcile' "
+            "AND status='completed' AND fencing_epoch>$3 AND fencing_epoch<=$4 "
+            "AND request_payload->'request'->>'indeterminate_operation_id'=$5 "
+            "AND started_at>=$6 AND finished_at>=started_at AND finished_at<=$7 "
+            "FOR UPDATE NOWAIT",
+            workspace, run_id, old_fence, first_fence, target,
+            old["finished_at"] or old["started_at"], created, identity.run_id,
+        )
+        if len(matches) != 1:
+            raise ValueError("historical operation reconciliation is unconfirmed")
+        reconciled = matches[0]
+        envelope = {
+            "workspace_id": str(workspace), "generation_run_id": str(run_id), "kind": "reconcile",
+            "request": {"indeterminate_operation_id": target},
+        }
+        reply = _record(reconciled["result_payload"])
+        if (
+            reconciled["error"] is not None
+            or _record(reconciled["request_payload"]) != envelope
+            or reconciled["request_digest"] != _record_sha(envelope)
+            or reply.get("reconciles_operation_id") != target
+            or not _release_matches(reply, workspace, reconciled["fencing_epoch"])
+            or not all(reply[key] for key in (
+                "has_workspace", "has_agent_home", "has_postgres", "has_redis",
+            ))
+        ):
+            raise ValueError("historical operation reconciliation conflicts")
+        if (observation := reply.get("lease_observation")) is not None:
+            observed = _record(observation)
+            if (
+                (observed.get("workspace_id"), observed.get("project_id"), observed.get("owner_id"))
+                != (str(workspace), str(identity.project_id), str(identity.user_id))
+                or (observed.get("operation_id"), observed.get("request_digest"))
+                != (str(reconciled["id"]), reconciled["request_digest"])
+                or type(observed.get("fencing_epoch")) is not int
+                or observed["fencing_epoch"] != reconciled["fencing_epoch"]
+            ):
+                raise ValueError("historical lease observation conflicts")
+
+
+async def _require_runtime_release_chain(
+    conn: Any, identity: GenerationProviderIdentity, *, cursor: dict[str, Any],
+    historical: dict[str, Any], binding: dict[str, Any], latest_release: Any,
+    created: datetime,
+) -> None:
+    """Verify each owned fence crossing without a new wire or environment inference."""
+    workspace = UUID(binding["workspace_id"])
+    first_fence, held_fence = historical["fencing_epoch"], binding["fencing_epoch"]
+    await _require_reconciled_runtime_history(
+        conn, identity, workspace=workspace, first_fence=first_fence, created=created,
+    )
+    cycles, odd = divmod(held_fence - first_fence, 2)
+    final_cycle = cursor["lease_cycle_seq"]
+    matches = [
+        profile for profile in _CELL_PROFILES
+        if latest_release["idempotency_key"]
+        == f"generation:{identity.run_id}:release:{profile}:cycle:{final_cycle}"
+    ]
+    if (
+        odd or cycles > final_cycle or len(matches) != 1
+        or (cycles == 0 and historical != binding)
+    ):
+        raise ValueError("released lease lineage conflicts")
+    rows = await conn.fetch(
+        "SELECT * FROM project_cell_operations "
+        "WHERE workspace_id=$1 AND fencing_epoch>$2 AND fencing_epoch<=$3 "
+        "ORDER BY fencing_epoch FOR UPDATE NOWAIT",
+        workspace, first_fence, held_fence,
+    )
+    if len(rows) != 2 * cycles:
+        raise ValueError("released lease lineage is incomplete")
+    profile = matches[0]
+    last_finish = created
+    for offset, operation in enumerate([*rows, latest_release], start=1):
+        ensuring = offset % 2 == 0
+        if ensuring:
+            kind = "ensure"
+            request: dict[str, Any] = {"profile_version": profile}
+        else:
+            kind = "release"
+            if operation["id"] == latest_release["id"]:
+                expected_environment = binding["environment_sha256"]
+            elif offset == 1:
+                expected_environment = historical["environment_sha256"]
+            else:
+                saved = _record(_record(operation["request_payload"])["request"])
+                expected_environment = _record(saved["require_environment_proof"])[
+                    "environment_sha256"
+                ]
+                if not _hex_digest(expected_environment):
+                    raise ValueError("intermediate environment receipt is invalid")
+            request = {"require_environment_proof": {
+                "source_sha256": binding["source_sha256"],
+                "environment_sha256": expected_environment,
+            }}
+        if (
+            not _runtime_lease_operation_matches(
+                operation, identity, workspace=workspace, fence=first_fence + offset,
+                profile=profile, cycle=final_cycle - cycles + offset // 2,
+                kind=kind, request=request,
+            )
+            or operation["started_at"] < last_finish
+        ):
+            raise ValueError("released lease lineage is unconfirmed")
+        last_finish = operation["finished_at"]
 
 
 async def _prior_release(
@@ -297,10 +614,40 @@ async def close_expired_before_dispatch(scope: ExpiredReservationScope) -> dict[
     The Gateway dispatch, reservation and response admission paths serialize on
     the attempt row. Neither local wire intent nor its age proves no charge.
     """
+    return await _seal_expired_reservation(scope)
+
+
+async def close_runtime_expired_before_dispatch(
+    scope: RuntimeExpiredReservationScope,
+) -> dict[str, Any]:
+    """Settle the currently released expired reservation during normal runtime."""
+    return await _seal_expired_reservation(scope)
+
+
+async def close_released_before_dispatch(
+    scope: ReleaseExpiredReservationScope,
+) -> dict[str, Any]:
+    """Settle the exact released runtime cursor under the owning release fence."""
+    return await _seal_expired_reservation(scope)
+
+
+async def _seal_expired_reservation(
+    scope: ExpiredReservationScope | RuntimeExpiredReservationScope,
+) -> dict[str, Any]:
     identity = scope.identity
+    runtime = isinstance(scope, RuntimeExpiredReservationScope)
     try:
-        async with get_pool().acquire() as conn, conn.transaction():
-            cursor, binding, step, attempt_seq, released_at = await _locked_parked_cursor(conn, scope)
+        async with (
+            asyncio.timeout(3 if runtime else None),
+            get_pool().acquire() as conn,
+            conn.transaction(),
+        ):
+            if isinstance(scope, RuntimeExpiredReservationScope):
+                owned = await _locked_runtime_cursor(conn, scope)
+            else:
+                owned = await _locked_parked_cursor(conn, scope)
+            cursor, binding, step, attempt_seq, release = owned
+            released_at = release["finished_at"]
             root_id = uuid5(identity.run_id, f"recovery-provider-v1:{step}")
             wire_id = uuid5(root_id, "wire-v1:0:0")
             if (
@@ -332,6 +679,8 @@ async def close_expired_before_dispatch(scope: ExpiredReservationScope) -> dict[
                 raise ValueError("provider effect has additional or missing work")
             root, wire = provider_effects = effects[:2]
             later = effects[2:]
+            if runtime and later:
+                raise ValueError("runtime expiry has additional effects in the provider step")
             if (
                 any(
                     (row["run_id"], row["project_id"], row["user_id"], row["input_digest"])
@@ -375,7 +724,7 @@ async def close_expired_before_dispatch(scope: ExpiredReservationScope) -> dict[
                 or any(historical[key] != binding[key] for key in (
                     "workspace_id", "schema_sha256", "source_sha256",
                 ))
-                or (changed_environment and (
+                or (not runtime and changed_environment and (
                     historic_fence + 1 >= binding["fencing_epoch"] or not later
                 ))
                 or set(wire_binding) != {"dispatch_v1"}
@@ -389,9 +738,14 @@ async def close_expired_before_dispatch(scope: ExpiredReservationScope) -> dict[
                 }
             ):
                 raise ValueError("provider wire is not the exact expired reservation")
+            if runtime:
+                await _require_runtime_release_chain(
+                    conn, identity, cursor=cursor, historical=historical, binding=binding,
+                    latest_release=release, created=max(root["created_at"], wire["created_at"]),
+                )
             previous_release_at = (
                 await _prior_release(conn, identity, historical, released_at=released_at)
-                if changed_environment else None
+                if not runtime and changed_environment else None
             )
             if later:
                 await _confirmed_later_commands(

@@ -530,9 +530,11 @@ async def finalize_max_candidate(
             retired_finalization_plan,
             retired_repair_edit_deadline,
         )
+        from yleum_api.services.generation.recovery_pipeline import expired_repair_proof_only
         from yleum_api.services.max_finalization import MaxFinalizationStatus
 
         retired_plan = retired_finalization_plan(continuation) if continuation is not None else None
+        read_only_candidate = verification_only or expired_repair_proof_only(continuation)
         assert runtime.handle is not None
         autonomous_repair = uses_autonomous_max_source_repair(runtime)
         single_repair = (
@@ -544,7 +546,7 @@ async def finalize_max_candidate(
             (_is_edit or _max_has_generated_snapshot)
             and runtime.handle.prove_restoration_adaptation is None
         )
-        requires_edit = check_edit and (verification_only or source_change_required(prompt_text))
+        requires_edit = check_edit and (read_only_candidate or source_change_required(prompt_text))
 
         async def unchanged_candidate() -> EditSourceChangeVerdict | None:
             assert runtime.handle is not None
@@ -558,7 +560,7 @@ async def finalize_max_candidate(
 
         # A healthy unchanged tree cannot prove that the requested edit happened.
         # Check before spending minutes on a production build or running SQL.
-        if check_edit and not verification_only:
+        if check_edit and not read_only_candidate:
             unchanged = await unchanged_candidate()
             if unchanged is not None:
                 if unchanged.failure and not autonomous_repair:
@@ -571,8 +573,12 @@ async def finalize_max_candidate(
         async def _repair_finalization_source(
             detail: str, source_failure: SourceFailure | None = None,
         ) -> bool:
-            if verification_only:
-                raise RuntimeError("MAX_FINALIZATION_FAILED: provider output filtered")
+            if read_only_candidate:
+                reason = (
+                    "provider output filtered" if verification_only
+                    else "read-only candidate verification"
+                )
+                raise RuntimeError(f"MAX_FINALIZATION_FAILED: {reason}")
             if retired_plan is not None:
                 if retired_plan.repair_path is None or detail != retired_plan.feedback:
                     raise RecoveryContractError("retired repair diagnostic changed")
@@ -582,6 +588,30 @@ async def finalize_max_candidate(
             assert runtime.handle is not None
             assert runtime.coordinator is not None
             repair_files = await runtime.handle.snapshot_files()
+            if retired_plan is not None and retired_plan.catalog_gap_key is not None:
+                from yleum_api.services.generation.recovery_pipeline import pending_source_repair
+                from yleum_api.services.promotion_permit import workspace_revision_digest
+
+                assert continuation is not None
+                if (
+                    pending_source_repair(continuation) is None
+                    or continuation.state.execution.provider_effect_id is None
+                ):
+                    binding = continuation.state.binding
+                    original = retired_plan.proof.binding
+                    if (
+                        binding is None
+                        or (binding.workspace_id, binding.source_sha256, binding.schema_sha256)
+                        != (original.workspace_id, original.source_sha256, original.schema_sha256)
+                        or workspace_revision_digest(repair_files) != binding.source_sha256
+                    ):
+                        raise RecoveryContractError("catalog repair candidate changed before entry")
+                    if binding != original:
+                        refreshed = await runtime.coordinator.fast_check()
+                        if (refreshed.dimension, refreshed.outcome) != ("fast_check", "green"):
+                            raise RecoveryContractError(
+                                "catalog repair requires a green compiler on its new lease",
+                            )
             history = _repair_history
             if continuation is not None:
                 from yleum_api.services.generation.recovery_pipeline import FinalizationProgress
@@ -609,10 +639,17 @@ async def finalize_max_candidate(
             edit_deadline = await runtime.coordinator.source_edit_deadline(repair=True)
             if retired_plan is not None:
                 edit_deadline = retired_repair_edit_deadline(retired_plan, edit_deadline)
+            catalog_instruction = (
+                "Connect both the visible catalog and its selection to the live SDK items. "
+                "Use useYleumCatalog and useYleumCatalogSelection(items), rendering the items "
+                "and using the live SDK option selection. Preserve checkout and payment flows. "
+                if retired_plan is not None and retired_plan.catalog_gap_key is not None
+                else ""
+            )
             repaired = await run_native_source_repair(
                 task=(
                     f"{plan.user}\n\nFINAL SOURCE CHECK FEEDBACK:\n{detail}{_carry}\n"
-                    f"{strategy}"
+                    f"{strategy}{catalog_instruction}"
                     "Fix the existing product in this same workspace. Preserve working "
                     "features and data. Do not repeat SQL effects already completed. "
                     "Make real source changes, run build, then done."
@@ -638,7 +675,7 @@ async def finalize_max_candidate(
                 options["continuation"] = continuation
             if autonomous_repair:
                 options["autonomous_source_repair"] = True
-            if verification_only:
+            if read_only_candidate:
                 options["max_source_repairs"] = 0
             elif retired_plan is not None:
                 options["max_source_repairs"] = retired_plan.maximum_repairs
@@ -693,7 +730,7 @@ async def finalize_max_candidate(
                 raise AdaptationActivationPending(str(exc)) from exc
             await checkpoint_before_rollback(operations)
             raise_if_terminal_cell_error(exc)
-            if verification_only or isinstance(exc, NativeSourceRepairFiltered):
+            if read_only_candidate or isinstance(exc, NativeSourceRepairFiltered):
                 # The rejected source remains private. This controller phase
                 # has no journal authority to restore a physical workspace.
                 raise

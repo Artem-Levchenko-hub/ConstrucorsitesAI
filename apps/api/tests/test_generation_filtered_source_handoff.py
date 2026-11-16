@@ -136,11 +136,20 @@ async def test_native_frame_uses_the_same_filtered_source_proof_gate(monkeypatch
 
 
 @pytest.mark.parametrize(
-    "outcome,existing",
-    [("verified", True), ("candidate failed", True), ("candidate failed", False),
-     ("provider output filtered", True)],
+    "outcome,existing,expired_proof",
+    [("verified", True, False), ("candidate failed", True, False),
+     ("candidate failed", False, False), ("provider output filtered", True, False),
+     ("verified", True, True), ("candidate failed", True, True),
+     ("candidate failed", False, True)],
 )
-async def test_confirmed_filter_runs_full_proof_with_zero_repairs(monkeypatch, outcome, existing):
+async def test_read_only_finalization_preserves_source_and_runs_no_repair(
+    monkeypatch, outcome, existing, expired_proof,
+):
+    from yleum_api.services.generation import recovery_pipeline
+
+    monkeypatch.setattr(
+        recovery_pipeline, "expired_repair_proof_only", lambda _driver: expired_proof,
+    )
     baseline = {_PAGE: "accepted"}
     candidate = {_PAGE: "candidate", "src/lib/new-draft.ts": "rejected helper"}
     restore = AsyncMock()
@@ -189,7 +198,7 @@ async def test_confirmed_filter_runs_full_proof_with_zero_repairs(monkeypatch, o
         is_free=False, prompt_text="Add priority filters", runtime=runtime,
         plan=SimpleNamespace(),
         operations=SimpleNamespace(probe_build=AsyncMock(), checkpoint=checkpoint),
-        source_handoff=True, verification_only=True,
+        source_handoff=True, verification_only=not expired_proof,
         render_core_on_rejection=AsyncMock(),
     )
 

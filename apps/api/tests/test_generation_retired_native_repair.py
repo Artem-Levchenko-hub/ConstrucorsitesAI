@@ -345,7 +345,9 @@ async def _held_repair(c, monkeypatch, case):
     return released, files, workspace, attempt, root
 
 
-async def _compiler_after_retirement(c, workspace, *, with_bootstrap):
+async def _compiler_after_retirement(
+    c, workspace, *, with_bootstrap, check_historical_witness=True,
+):
     binding = c.driver.state.binding
     identity = ProofIdentity(
         workspace_id=workspace.id, generation_run_id=c.run.id,
@@ -385,14 +387,16 @@ async def _compiler_after_retirement(c, workspace, *, with_bootstrap):
         c.driver, role="fast_check", operation_id=lease.operation_id, invoke=AsyncMock(),
     )
     await pipeline.finish_recorded_role(c.driver, lease.operation_id)
-    with pytest.raises(ValueError, match="requires a fresh compiler"):
-        await pipeline.revalidate_retired_source_repair(c.driver, compiler_receipt_id=result.id)
+    if check_historical_witness:
+        with pytest.raises(ValueError, match="requires a fresh compiler"):
+            await pipeline.revalidate_retired_source_repair(c.driver, compiler_receipt_id=result.id)
     fresh = datetime.now(UTC)
     lease.started_at = lease.finished_at = lease.heartbeat_at = fresh
     lease.deadline_at = fresh + timedelta(minutes=1)
     await c.session.commit()
-    with pytest.raises(ValueError, match="compiler command binding"):
-        await pipeline.revalidate_retired_source_repair(c.driver, compiler_receipt_id=result.id)
+    if check_historical_witness:
+        with pytest.raises(ValueError, match="compiler command binding"):
+            await pipeline.revalidate_retired_source_repair(c.driver, compiler_receipt_id=result.id)
     state = c.driver.state
     seq = state.execution.logical_step_seq
     tool_call = f"role:{lease.operation_id}"
@@ -500,6 +504,27 @@ async def test_sealed_expired_repair_retirement_preserves_checkpoint_and_counter
         with pytest.raises(ValueError):
             await pipeline.retire_expired_native_source_repair(c.driver, released=released)
         assert c.driver.state == verified
+
+
+async def test_expired_unarmed_repair_enters_call_free_finalization(
+    clock_owner, response_schema, monkeypatch,
+):
+    c = clock_owner
+    released, _, _, attempt, _ = await _held_repair(c, monkeypatch, "rebound")
+    async with c.owned():
+        assert await pipeline.rebind_continuation(c.driver, allow_expired_retirement=True) is None
+        assert pipeline.expired_repair_proof_only(c.driver)
+        assert c.driver.state.identity.run_id == released.identity.run_id
+        assert c.driver.state.execution.substep == "checkpoint_ready"
+        assert c.driver.state.execution.pending_effect_id is None
+        assert c.driver.state.execution.provider_effect_id is None
+        assert c.driver.state.execution.budget == released.execution.budget
+        assert c.driver.state.clock.segment_deadline == released.clock.segment_deadline
+        assert c.driver.restore_frame("native") is None
+        completed = pipeline.pending_source_repair(c.driver)
+        assert completed is not None and completed.status == "complete"
+        assert completed.result["needs_finalization"] is True and completed.result["done"] is False
+        assert attempt.provider_call_id is None
 
 
 async def _attach_repair_marker(c, released, attempt, *, claim_delta, marker_change):

@@ -389,11 +389,23 @@ async def _is_retained_content_filter(
 
 async def _defer_open_response(
     session: AsyncSession, run: GenerationRun, state: RecoveryStateV3, now: datetime,
+    *, max_project: bool,
 ) -> bool:
+    from yleum_api.services.generation.expired_provider_recovery import (
+        dispatch_window_expired,
+        resumable_expired_repair,
+    )
     from yleum_api.services.generation.recovery_clock import next_dependency_check
 
     attempt = await _response_wait_attempt(session, state)
-    if attempt is None or attempt.phase not in {"dispatching", "indeterminate"}:
+    if attempt is None or (
+        attempt.phase not in {"dispatching", "indeterminate"}
+        and not (
+            max_project
+            and resumable_expired_repair(run, state)
+            and await dispatch_window_expired(session, state, attempt, now=now)
+        )
+    ):
         return False
     # An open receipt cannot become usable through cell acquisition. A later
     # poll rereads the same logical step without reopening the active clock.
@@ -1308,8 +1320,12 @@ async def claim_continuation(
         "waiting_dependency", "reconciling", "working", "repairing", "verifying",
     }:
         return None
-    if (attached is None and isinstance(state, RecoveryStateV3)
-            and await _defer_open_response(session, run, state, now)):
+    if (
+        attached is None and isinstance(state, RecoveryStateV3)
+        and await _defer_open_response(
+            session, run, state, now, max_project=project.template == "max_miniapp",
+        )
+    ):
         return None
     from yleum_api.services.generation.agent_publication import publication_committed
     published = await publication_committed(session, run=run, project=project, state=state)
@@ -1335,6 +1351,31 @@ async def claim_continuation(
     if isinstance(state, RecoveryStateV3):
         from yleum_api.services.generation.recovery_clock import resume_clock, start_interval
         if attached is None:
+            from yleum_api.services.generation.expired_native_finalization import (
+                CATALOG_REPAIR_RESUME_KEY,
+                _read_retired_finalization_plan,
+            )
+
+            if CATALOG_REPAIR_RESUME_KEY in run.agent_state:
+                if state.context_ref is None or state.execution.budget.repair_calls not in {2, 3}:
+                    return None
+                try:
+                    context = await load_execution_context(
+                        state.identity, state.context_ref, binding=state.binding,
+                    )
+                    retired_plan = _read_retired_finalization_plan(state, context)
+                    resume = run.agent_state[CATALOG_REPAIR_RESUME_KEY]
+                    if (
+                        retired_plan is None or retired_plan.catalog_gap_key is None
+                        or retired_plan.repair_deadline is None or type(resume) is not dict
+                        or type(resume.get("version")) is not int or resume["version"] != 1
+                        or type(resume.get("segment_seq")) is not int
+                        or resume["segment_seq"] != retired_plan.segment_seq
+                        or resume.get("deadline") != retired_plan.repair_deadline.isoformat()
+                    ):
+                        return None
+                except (KeyError, TypeError, ValueError):
+                    return None
             max_deadline = (
                 retired_plan.repair_deadline
                 if retired_plan is not None and state.clock.stage == "repair"

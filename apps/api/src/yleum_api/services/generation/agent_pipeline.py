@@ -648,10 +648,20 @@ async def run_agent_generation(
     scoped_finalization = False
     if continuation is not None:
         from yleum_api.services.generation.expired_native_finalization import (
+            prepare_retired_finalization,
             retired_finalization_plan,
         )
+        from yleum_api.services.generation.recovery_pipeline import expired_repair_proof_only
 
-        scoped_finalization = retired_finalization_plan(continuation) is not None
+        if (
+            runtime.coordinator is not None and expired_repair_proof_only(continuation)
+            and retired_finalization_plan(continuation) is not None
+        ):
+            await prepare_retired_finalization(continuation, runtime.coordinator)
+        scoped_finalization = (
+            retired_finalization_plan(continuation) is not None
+            or expired_repair_proof_only(continuation)
+        )
         if scoped_finalization:
             _restore_finalization_response_budget(runtime, continuation.context["completed"])
 

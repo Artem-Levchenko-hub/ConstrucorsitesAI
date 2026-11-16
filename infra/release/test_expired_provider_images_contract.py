@@ -71,6 +71,17 @@ class ScopeTests(TestCase):
         with self.assertRaises(self.launcher.ReleaseDenied):
             self.launcher.decoded(b'{"api":null,"api":null}')
 
+    def test_released_repair_requires_same_context_in_both_envelopes(self):
+        request = scope()
+        request["gateway"]["action"] = "close_released_before_dispatch"
+        with self.assertRaises(self.launcher.ReleaseDenied):
+            self.launcher.scope_description(request, TARGET)
+        request["gateway"]["context_sha256"] = request["api"]["context_sha256"]
+        self.assertEqual(self.launcher.scope_description(request, TARGET)[:2], (RUN, INCUMBENT))
+        request["gateway"]["context_sha256"] = "a" * 64
+        with self.assertRaises(self.launcher.ReleaseDenied):
+            self.launcher.scope_description(request, TARGET)
+
     def test_wrong_image_labels_or_docker_failure_cannot_reuse_an_image(self):
         names = self.launcher.image_names(TARGET)
         rows = [

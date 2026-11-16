@@ -18,9 +18,11 @@ from yleum_api.models.project import Project
 from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from yleum_api.models.provider_call import ProviderCall
 from yleum_api.services import generation_deployment_drain as drain
+from yleum_api.services.generation.expired_provider_recovery import resumable_expired_repair
 from yleum_api.services.generation.provider_attempts import (
     _expired_provider_frame,
     _matches_expiry_receipt,
+    expired_reservation_closed,
 )
 from yleum_api.services.generation.recovery_contract import RecoveryContractError, RecoveryStateV3
 from yleum_api.services.generation.recovery_execution import (
@@ -30,6 +32,7 @@ from yleum_api.services.generation.recovery_execution import (
 )
 from yleum_api.services.generation.recovery_readers import require_recovery_readers
 from yleum_api.services.generation_deadline import is_restoration_adaptation
+from yleum_api.services.project_cells import ProjectCellValidationError, _stored_request_payload
 
 _OLD_HEAD = "0106_native_transcript_refusal"
 _NEW_HEAD = "0107_expired_provider_reservation"
@@ -91,7 +94,10 @@ async def _other_provider_attempts_stopped(
         ):
             return False
         if row.provider_call_id is None:
-            if not await native_transcript_attempt_closed(session, row):
+            if not (
+                await native_transcript_attempt_closed(session, row)
+                or await expired_reservation_closed(session, row)
+            ):
                 return False
             continue
         call = await session.get(ProviderCall, row.provider_call_id)
@@ -110,7 +116,7 @@ async def _other_provider_attempts_stopped(
 
 async def _exact_reservation(
     session: AsyncSession, run: GenerationRun, state: RecoveryStateV3,
-    scope: ExpiredProviderScope, *, mode: Mode,
+    scope: ExpiredProviderScope, *, mode: Mode, released_repair: bool = False,
 ) -> bool:
     attempt = await _response_wait_attempt(session, state)
     if (
@@ -120,9 +126,20 @@ async def _exact_reservation(
     ):
         return False
     frame = await _expired_provider_frame(
-        session, attempt, current_binding=state.binding, max_attempt_seq=state.attempt_seq,
+        session, attempt, current_binding=None if released_repair else state.binding,
+        max_attempt_seq=state.attempt_seq,
     )
     if frame is None or frame.root.logical_step_seq != state.execution.logical_step_seq:
+        return False
+    if released_repair and (
+        frame.source.workspace_id != state.binding.workspace_id
+        or frame.source.source_sha256 != state.binding.source_sha256
+        or frame.source.schema_sha256 != state.binding.schema_sha256
+        or frame.source.fencing_epoch > state.binding.fencing_epoch
+        or await session.scalar(text(
+            "SELECT EXISTS(SELECT 1 FROM provider_calls WHERE run_id=:run AND created_at>=:created)"
+        ), {"run": run.id, "created": attempt.created_at}) is not False
+    ):
         return False
     if mode == "eligibility":
         return (
@@ -143,15 +160,23 @@ async def _selected_run(
     ):
         return False
     state = recovery_state(run)
+    if not isinstance(state, RecoveryStateV3):
+        return False
+    released_repair = (
+        state.phase == "waiting_dependency" and state.next_check_at is not None
+        and resumable_expired_repair(run, state)
+    )
+    parked_repair = (
+        state.phase == "needs_input" and state.next_check_at is None and state.clock.interval_open
+    )
     if (
-        not isinstance(state, RecoveryStateV3) or state.phase != "needs_input"
-        or state.next_check_at is not None or state.unresolved_operation_ids
+        not (parked_repair or released_repair) or state.unresolved_operation_ids
         or state.state_revision != scope.state_revision or state.binding is None
         or state.binding.source_sha256 != scope.source_sha256
         or state.checkpoint is None or state.context_ref is None
         or state.context_ref.sha256 != scope.context_sha256
         or state.context_ref != state.execution.execution_context_ref
-        or clock_sha256(state) != scope.clock_sha256 or not state.clock.interval_open
+        or clock_sha256(state) != scope.clock_sha256
         or state.clock.wait_dependency is not None
         or await session.scalar(text("SELECT clock_timestamp()")) < state.clock.segment_deadline
     ):
@@ -174,6 +199,17 @@ async def _selected_run(
         return False
     workspace = await session.get(ProjectCellWorkspace, execution.control_workspace_id)
     release = await session.get(ProjectCellOperation, execution.release_operation_id)
+    if released_repair:
+        try:
+            if release is None or _stored_request_payload(release) != {
+                "require_environment_proof": {
+                    "source_sha256": binding.source_sha256,
+                    "environment_sha256": binding.environment_sha256,
+                },
+            }:
+                return False
+        except ProjectCellValidationError:
+            return False
     return (
         workspace is not None and workspace.project_id == run.project_id
         and workspace.owner_id == run.user_id and workspace.deleted_at is None
@@ -182,7 +218,9 @@ async def _selected_run(
         and _owned_release_receipt(
             release, run_id=run.id, workspace_id=workspace.id, fence=workspace.fencing_epoch,
         )
-        and await _exact_reservation(session, run, state, scope, mode=mode)
+        and await _exact_reservation(
+            session, run, state, scope, mode=mode, released_repair=released_repair,
+        )
         and await _other_provider_attempts_stopped(session, run, scope.attempt_id)
     )
 

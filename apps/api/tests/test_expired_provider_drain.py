@@ -33,6 +33,7 @@ from yleum_api.services.generation.recovery_contract import (
 from yleum_api.services.generation.recovery_tool_receipts import digest
 from yleum_api.services.orchestrator_client import ProjectCellResourceResponse
 from yleum_api.services.project_cell_proofs import ProofDimension, ProofIdentity
+from yleum_api.services.project_cells import _canonical_operation_envelope
 
 
 @pytest.fixture
@@ -83,6 +84,13 @@ async def expired_release_head(db_session, test_engine):
         ("eligibility", "historical_wrong_role_post", False, False),
         ("settled", "historical_later_call", False, False),
         ("eligibility", "invented_wire_source", False, False),
+        ("eligibility", "released_expired", True, False),
+        ("settled", "released_expired", True, True),
+        ("eligibility", "released_unproved", False, False),
+        ("eligibility", "released_wrong_source", False, False),
+        ("eligibility", "released_catalog_armed", True, False),
+        ("eligibility", "released_catalog_missing", False, False),
+        ("eligibility", "released_catalog_wrong_segment", False, False),
     ],
 )
 async def test_expired_provider_release_classification(
@@ -97,6 +105,8 @@ async def test_expired_provider_release_classification(
     )
 
     now = datetime.now(UTC)
+    released_repair = case.startswith("released_")
+    catalog_repair = case.startswith("released_catalog_")
     run = await _queued_dispatch(db_session)
     run.status, run.execution_backend, run.response_mode = "running", "worker", "build"
     workspace = ProjectCellWorkspace(
@@ -124,22 +134,47 @@ async def test_expired_provider_release_classification(
         "workspace_id": str(workspace.id), "fencing_epoch": 9, "source_sha256": "c" * 64,
         "schema_sha256": "d" * 64, "environment_sha256": "e" * 64,
     }
+    if released_repair and case != "released_unproved":
+        release.request_payload, release.request_digest = _canonical_operation_envelope(
+            workspace.id, run.id, "release", {"require_environment_proof": {
+                "source_sha256": binding["source_sha256"],
+                "environment_sha256": binding["environment_sha256"],
+            }},
+        )
     raw = _bootstrap_wait(run)
     state = decode_recovery({
-        **raw, "version": 3, "phase": "needs_input", "next_check_at": None,
+        **raw, "version": 3, "phase": "waiting_dependency" if released_repair else "needs_input",
+        "next_check_at": (now + timedelta(minutes=1)).isoformat() if released_repair else None,
         "cursor": "finalization", "context_ref": refs, "checkpoint": refs, "binding": binding,
-        "state_revision": 15, "clock": {**_clock(now - timedelta(seconds=5)),
-                                       "stage": "repair", "repair_granted": True},
+        "state_revision": 15, "clock": {
+            **_clock(now - timedelta(seconds=5)), "stage": "repair", "repair_granted": True,
+            "interval_open": not released_repair,
+        },
         "execution": {
             **raw["execution"], "stage": "finalization", "substep": "response_wait",
             "physical_state": "released", "release_operation_id": str(release.id),
             "control_workspace_id": str(workspace.id), "control_fencing_epoch": 10,
             "provider_effect_id": str(root), "pending_effect_id": str(root),
             "logical_step_seq": 86, "execution_context_ref": refs,
+            **({"budget": {
+                **raw["execution"].get("budget", {}), "repair_calls": 3 if catalog_repair else 2,
+            }}
+               if released_repair else {}),
         },
     })
     assert isinstance(state, RecoveryStateV3)
     run.agent_state = {**run.agent_state, "recovery_v1": state.model_dump(mode="json")}
+    if catalog_repair and case != "released_catalog_missing":
+        grant_segment = state.clock.segment_seq + int(case == "released_catalog_wrong_segment")
+        run.agent_state = {
+            **run.agent_state,
+            "retired_catalog_repair_resume_v1": {
+                "version": 1,
+                "segment_seq": grant_segment,
+                "deadline": state.clock.segment_deadline.isoformat(),
+                "predecessor_attachment": None,
+            },
+        }
     scope = ExpiredProviderScope(
         release_sha="a" * 40, run_id=run.id, attempt_id=attempt,
         state_revision=15, context_sha256=refs["sha256"], source_sha256="c" * 64,
@@ -148,9 +183,9 @@ async def test_expired_provider_release_classification(
     terminal = mode == "settled" and case != "reserved"
     historical = {**binding, "fencing_epoch": 7}
     shared_roles = case.startswith("historical_")
-    if shared_roles:
+    if shared_roles or released_repair:
         historical["environment_sha256"] = "9" * 64
-    if case == "historical_source_changed":
+    if case in {"historical_source_changed", "released_wrong_source"}:
         historical["source_sha256"] = "8" * 64
     db_session.add(GenerationProviderAttempt(
         attempt_id=attempt, run_id=run.id, project_id=run.project_id, user_id=run.user_id,

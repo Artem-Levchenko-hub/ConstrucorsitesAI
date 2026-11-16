@@ -1,4 +1,4 @@
-"""Private authenticated reads, with current SQL ownership before any object access."""
+"""Private authenticated response reads and bounded journal reconciliation."""
 
 import json
 from typing import Any
@@ -7,8 +7,17 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Request
 
 from yleum_gateway.core.config import get_settings
-from yleum_gateway.core.generation_response_auth import HEADER, verify_generation_response_token
-from yleum_gateway.services.generation_attempts import native_transcript_rejection_details
+from yleum_gateway.core.generation_response_auth import (
+    HEADER,
+    verify_expired_reservation_token,
+    verify_generation_response_token,
+)
+from yleum_gateway.services.generation_attempts import (
+    AttemptConflict,
+    RuntimeExpiredReservationScope,
+    close_runtime_expired_before_dispatch,
+    native_transcript_rejection_details,
+)
 from yleum_gateway.services.generation_response_store import (
     load_generation_response,
     reconcile_generation_response,
@@ -39,6 +48,33 @@ async def reconcile_response(attempt_id: UUID, request: Request) -> dict[str, An
     return {
         "version": 1, "identity": identity.to_wire(),
         "state": "confirmed" if confirmed else "pending",
+    }
+
+
+@router.post("/{attempt_id}/expire")
+async def expire_reservation(attempt_id: UUID, request: Request) -> dict[str, Any]:
+    settings = get_settings()
+    if not (settings.generation_provider_attempts_enabled
+            and settings.generation_response_retention_enabled):
+        raise HTTPException(503, "generation expiry is disabled")
+    headers = request.headers.getlist(HEADER)
+    if len(headers) != 1:
+        raise HTTPException(403, "generation response authentication required")
+    try:
+        identity, revision, context, source = verify_expired_reservation_token(headers[0])
+        if identity.attempt_id != attempt_id:
+            raise ValueError
+    except ValueError:
+        raise HTTPException(403, "generation response authentication denied") from None
+    try:
+        receipt = await close_runtime_expired_before_dispatch(
+            RuntimeExpiredReservationScope(identity, revision, context, source),
+        )
+    except AttemptConflict:
+        raise HTTPException(409, "generation expiry is unconfirmed") from None
+    return {
+        "version": 1, "identity": identity.to_wire(),
+        "state": "expired_before_dispatch", "receipt": receipt,
     }
 
 

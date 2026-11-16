@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import httpx
@@ -19,6 +21,71 @@ TRANSCRIPT_REJECTION = {
         "provider_charge_ambiguous": False, "durable": True,
     },
 }
+
+
+@pytest.mark.parametrize("outcome", ["confirmed", "foreign", "unconfirmed", "reader_inhibited"])
+async def test_expire_generation_reservation_uses_exact_signed_internal_action(
+    monkeypatch, outcome,
+):
+    from yleum_api.services.generation import expired_provider_recovery, recovery_readers
+    from yleum_api.services.generation.recovery_contract import RecoveryContractError
+
+    settings = SimpleNamespace(
+        generation_response_retention_enabled=True,
+        generation_response_signing_secret=SecretStr("synthetic-test-secret-32-bytes-long"),
+        llm_gateway_url="http://gateway.test",
+    )
+    monkeypatch.setattr("yleum_api.core.config.get_settings", lambda: settings)
+    monkeypatch.setattr(expired_provider_recovery, "get_settings", lambda: settings)
+    readers = AsyncMock(
+        return_value="a" * 64,
+        side_effect=(
+            RecoveryContractError("reader rollout is inhibited")
+            if outcome == "reader_inhibited" else None
+        ),
+    )
+    monkeypatch.setattr(recovery_readers, "require_recovery_readers", readers)
+    calls = []
+
+    def reply(request):
+        calls.append((request.method, request.url.path))
+        assert not request.content
+        claims = response_auth._verified(
+            request.headers[response_auth.HEADER],
+            secret=settings.generation_response_signing_secret.get_secret_value(),
+            domain=response_auth._DOMAIN,
+            now=datetime.now(UTC),
+        )
+        assert claims["purpose"] == "generation_attempt.expire"
+        assert claims["identity"] == IDENTITY.to_wire()
+        assert (claims["state_revision"], claims["context_sha256"], claims["source_sha256"]) == (
+            17, "c" * 64, "d" * 64,
+        )
+        if outcome == "unconfirmed":
+            return httpx.Response(409)
+        return httpx.Response(200, json={
+            "version": 1,
+            "identity": IDENTITY.to_wire() if outcome == "confirmed" else {},
+            "state": "expired_before_dispatch",
+            "receipt": {
+                "kind": "gateway_expired_before_dispatch",
+                "attempt_id": str(IDENTITY.attempt_id),
+                "request_sha256": IDENTITY.request_sha256,
+                "source_sha256": "d" * 64,
+            },
+        })
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: original(transport=httpx.MockTransport(reply), **kw),
+    )
+    assert await expired_provider_recovery.seal_expired_reservation(
+        IDENTITY, state_revision=17, context_sha256="c" * 64, source_sha256="d" * 64,
+    ) is (outcome == "confirmed")
+    readers.assert_awaited_once_with()
+    assert calls == ([] if outcome == "reader_inhibited" else [(
+        "POST", f"/_internal/generation-responses/{IDENTITY.attempt_id}/expire",
+    )])
 
 
 @pytest.mark.parametrize("edge", ["fresh", "cold", "unit_without_retention"])

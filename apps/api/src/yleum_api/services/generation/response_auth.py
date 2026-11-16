@@ -134,6 +134,29 @@ def verify_generation_response_token(
     return GenerationProviderIdentity.from_wire(claims["identity"])
 
 
+def mint_expired_reservation_token(
+    identity: GenerationProviderIdentity, *, state_revision: int,
+    context_sha256: str, source_sha256: str,
+) -> str:
+    if (
+        type(state_revision) is not int or state_revision < 0
+        or re.fullmatch(r"[0-9a-f]{64}", context_sha256) is None
+        or re.fullmatch(r"[0-9a-f]{64}", source_sha256) is None
+    ):
+        raise ValueError("invalid expired reservation scope")
+    issued = int(datetime.now(UTC).timestamp())
+    return _signed(
+        {
+            "aud": "llm-gateway", "purpose": "generation_attempt.expire",
+            "identity": identity.to_wire(), "state_revision": state_revision,
+            "context_sha256": context_sha256, "source_sha256": source_sha256,
+            "iat": issued, "exp": issued + 60,
+        },
+        _secret(None),
+        _DOMAIN,
+    )
+
+
 _CAPACITY_DOMAIN = b"yleum:generation-response-capacity:v1"
 CAPACITY_HEADER = "x-generation-response-capacity-authorization"
 

@@ -615,6 +615,27 @@ packages by revision and role and checks the configured database string against
 both canonical live roles. The API migrator uses a dedicated maintenance alias
 of the exact staged image. The target reader loader remains read-only.
 
+Use the gateway action `close_released_before_dispatch` when the selected
+MAX repair reached `waiting_dependency` with an exact completed release.
+The gateway scope includes the same `context_sha256` as the API scope. The
+staged gateway writer checks the original dispatch deadline against the
+database clock. It verifies the owned source, release lineage and unused
+reservation before recording the terminal receipt. This operator action can
+run before the worker's scheduled retry while the named drain owns admission.
+The normal authenticated worker action waits for that retry time.
+
+For this action, prepare both exact images with the launcher's `stage` mode
+under the standard release mutex. After staging, read the selected scope
+again from the incumbent release. Start the canonical release while the
+workspace is released and enough time remains before the scheduled worker
+check. The scope digest pins the state revision and clock for the remainder
+of the release.
+
+After a confirmed seal, the ordinary worker continues the same run with the
+saved source in the regular finalization checks. Sealing preserves the original
+repair accounting. Any subsequent repair requires its own current source
+evidence and must pass the worker's repair policy.
+
 The target API one-off entry point is
 `python -m yleum_api.ops.expired_provider_migration`. The reviewed launcher
 supplies one bounded JSON object on stdin with the integer `version` equal to
