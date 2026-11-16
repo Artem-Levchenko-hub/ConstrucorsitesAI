@@ -131,7 +131,7 @@ async def test_cold_real_history_preserves_pre_upgrade_cap_clock_and_used_wires(
             else:
                 assert await attempts.resume_generation_wire(
                     identity, allow_provider_refusal=False,
-                ) == (used, False)
+                ) == rec.ColdWireContinuation(used, "same_transport")
                 assert cold.dispatch.wire_used == used
                 assert cold.dispatch.plan == original
         assert await effect_count(test_engine, run.id) == before_count

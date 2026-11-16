@@ -1725,25 +1725,53 @@ async def test_v2_stream_native_also_reserve_before_physical_http(
             await owner.commit()
 
 
-@pytest.mark.parametrize("case", ["child", "cold"])
+@pytest.mark.parametrize("case", [
+    "child", "cold_pre_wire", "cold_reserved_wire", "cold_clock_changed", "cold_second_refusal",
+])
 async def test_wire_provider_child_interleaving_and_cold_latest_receipt(
     db_session,
     test_engine,
     monkeypatch,
     case,
 ):
+    import json
     from dataclasses import replace
 
+    import httpx
     from sqlalchemy import select, text
 
     from yleum_api.models.generation_provider_attempt import GenerationProviderAttempt
     from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
     from yleum_api.models.provider_call import ProviderCall
+    from yleum_api.services import llm_client
     from yleum_api.services.generation import provider_attempts as attempts
     from yleum_api.services.generation import recovery_reconciliation as rec
 
     run, cursor, body = await _provider_context(db_session, test_engine, monkeypatch)
+    body["model"] = "claude-sonnet-5.5"
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    posts = []
+
+    async def transport(request):
+        posts.append(json.loads(request.content)["metadata"]["generation_provider_identity"])
+        if case == "cold_second_refusal":
+            return httpx.Response(503, json={"error": {"code": "api_error", "details": {
+                "provider_failure_kind": "upstream_refused",
+                "provider_charge_ambiguous": False,
+                "retry_safe": True,
+                "retry_policy": "llmgw_unavailable_v1",
+                "upstream_http_status": 503,
+            }}})
+        return httpx.Response(200, json={"choices": []})
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(
+        llm_client.httpx,
+        "AsyncClient",
+        lambda **kwargs: client(transport=httpx.MockTransport(transport), **kwargs),
+    )
+    monkeypatch.setattr(llm_client, "record_headers", lambda *_: None)
+    monkeypatch.setattr(llm_client, "recover_generation_response", AsyncMock(return_value=None))
     async with test_engine.connect() as owner:
         await owner.execute(
             text("SELECT pg_advisory_lock(1195724366,:key)"),
@@ -1755,7 +1783,7 @@ async def test_wire_provider_child_interleaving_and_cold_latest_receipt(
         )
         try:
             with rec.provider_effect_scope(cursor):
-                rec.begin_provider_dispatch("chat", allowance=2, seconds=30)
+                rec.begin_provider_dispatch("chat", allowance=4, seconds=30)
                 parent = await attempts.prepare_generation_attempt(body, "/v1/chat/completions")
                 await attempts.reserve_generation_wire(parent, wire_attempt=0)
                 # Existing committed financial journal predicate, synthetic rows;
@@ -1765,7 +1793,7 @@ async def test_wire_provider_child_interleaving_and_cold_latest_receipt(
                         id=uuid4(),
                         provider_scope="llmgw",
                         route="/v1/chat/completions",
-                        requested_model="synthetic",
+                        requested_model=body["model"],
                         expense_owner="user",
                         user_id=run.user_id,
                         project_id=run.project_id,
@@ -1774,13 +1802,14 @@ async def test_wire_provider_child_interleaving_and_cold_latest_receipt(
                         free=False,
                         status="failed",
                         receipt_hash="b" * 64,
-                        finished_at=datetime.now(UTC),
+                        retry_after_seconds=1,
+                        finished_at=datetime.now(UTC) - timedelta(seconds=2),
                     )
                     session.add(call)
                     saved = await session.get(GenerationProviderAttempt, parent.attempt_id)
                     saved.phase, saved.terminal_reason, saved.provider_call_id = (
                         "closed",
-                        "preconnect",
+                        "upstream_refused",
                         call.id,
                     )
                     await session.commit()
@@ -1788,17 +1817,57 @@ async def test_wire_provider_child_interleaving_and_cold_latest_receipt(
                     body, "/v1/chat/completions", parent=parent
                 )
                 assert child != parent
-                if case == "child":
+                if case in {"child", "cold_reserved_wire"}:
                     await attempts.reserve_generation_wire(child, wire_attempt=1)
-            if case == "cold":
+
+            if case == "cold_clock_changed":
+                async with factory() as session:
+                    intent = await session.scalar(select(GenerationRecoveryEffect).where(
+                        GenerationRecoveryEffect.provider_attempt_id == child.attempt_id,
+                    ))
+                    plan = intent.pre_binding["dispatch_v1"]
+                    intent.pre_binding = {
+                        **intent.pre_binding,
+                        "dispatch_v1": {
+                            **plan,
+                            "deadline": (cursor.dispatch.plan.deadline + timedelta(seconds=30))
+                            .isoformat(),
+                        },
+                    }
+                    await session.commit()
+                cold = replace(cursor, reconcile_only=True, dispatch=rec._DispatchState())
+                with (
+                    rec.provider_effect_scope(cold),
+                    pytest.raises(rec.RecoveryContractError, match="committed wire clock"),
+                ):
+                    await llm_client._chat_post(body, "https://synthetic.invalid/chat", 300)
+                assert posts == []
+                return
+
+            if case in {"cold_pre_wire", "cold_second_refusal"}:
                 cold = replace(cursor, reconcile_only=True, dispatch=rec._DispatchState())
                 with rec.provider_effect_scope(cold):
-                    rec.begin_provider_dispatch("chat", allowance=2, seconds=30)
-                    resumed = await attempts.prepare_generation_attempt(
-                        body, "/v1/chat/completions"
-                    )
-                    assert resumed == child
-                    assert cold.dispatch.plan.deadline == cursor.dispatch.plan.deadline
+                    if case == "cold_second_refusal":
+                        with pytest.raises(llm_client.LLMError) as refused:
+                            await llm_client._chat_post(body, "https://synthetic.invalid/chat", 300)
+                        assert refused.value.code == "upstream_refused"
+                        assert refused.value.retry_safe is False
+                    else:
+                        response = await llm_client._chat_post(
+                            body, "https://synthetic.invalid/chat", 300,
+                        )
+                        assert response.status_code == 200
+                assert posts == [child.to_wire()]
+                assert cold.dispatch.plan.deadline == cursor.dispatch.plan.deadline
+
+            if case != "child":
+                cold = replace(cursor, reconcile_only=True, dispatch=rec._DispatchState())
+                with (
+                    rec.provider_effect_scope(cold),
+                    pytest.raises(llm_client.LLMError, match="still pending"),
+                ):
+                    await llm_client._chat_post(body, "https://synthetic.invalid/chat", 300)
+                assert posts == ([] if case == "cold_reserved_wire" else [child.to_wire()])
             async with factory() as session:
                 rows = (
                     await session.scalars(
@@ -1809,11 +1878,8 @@ async def test_wire_provider_child_interleaving_and_cold_latest_receipt(
                         .order_by(GenerationRecoveryEffect.effect_ordinal)
                     )
                 ).all()
-                assert [r.kind for r in rows] == (
-                    ["provider", "progress", "provider", "progress"]
-                    if case == "child"
-                    else ["provider", "progress", "provider"]
-                )
+                assert [r.kind for r in rows] == ["provider", "progress", "provider", "progress"]
+                assert rows[-1].pre_binding["dispatch_v1"]["wire_attempt"] == 1
         finally:
             recovery_execution._SESSION_OWNER.reset(token)
             await owner.execute(text("SELECT pg_advisory_unlock_all()"))

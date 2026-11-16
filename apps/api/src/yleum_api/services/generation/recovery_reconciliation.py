@@ -77,6 +77,15 @@ class _DispatchState:
     history_plan: ProviderDispatchPlan | None = None
     outer_advanced: bool = False
     preconnect_allowance: int | None = None
+    history_latest_attempt_has_wire: bool = False
+    history_overload_used: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ColdWireContinuation:
+    wire_attempt: int
+    mode: Literal["same_transport", "new_child", "reserved_child"]
+    overload_used: bool = False
 
 
 def provider_root_effect_id(run_id: UUID, logical_step_seq: int) -> UUID:
@@ -273,6 +282,8 @@ async def _latest_provider_identity(
     )
     previous: GenerationProviderIdentity | None = None
     previous_effect: GenerationRecoveryEffect | None = None
+    attempts_with_wires: set[UUID] = set()
+    overload_used = False
     providers: dict[UUID, GenerationProviderIdentity] = {}
     parents: dict[UUID, UUID | None] = {}
     wire_counts: dict[int, int] = {}
@@ -319,7 +330,7 @@ async def _latest_provider_identity(
                 digest,
             )
             if previous is not None:
-                await require_closed_provider_parent(session, previous, identity)
+                overload_used = await require_closed_provider_parent(session, previous, identity)
             if cursor.dispatch.plan is not None:
                 plan = _dispatch_plan(row.pre_binding)
                 cursor.dispatch.plan = _preserve_legacy_chat_allowance(cursor.dispatch.plan, plan)
@@ -383,6 +394,7 @@ async def _latest_provider_identity(
                 await _require_safe_wire_transition(session, last_wire, linked)
                 plans[bound.outer_attempt] = wire_plan
             latest_plan, last_wire = wire_plan, row
+            attempts_with_wires.add(linked.attempt_id)
             wire_counts[bound.outer_attempt] = bound.wire_attempt + 1
         else:
             raise RecoveryContractError("unsupported provider history entry")
@@ -393,6 +405,8 @@ async def _latest_provider_identity(
             raise RecoveryContractError("provider history has no original clock")
         cursor.dispatch.history_plan = latest_plan
         cursor.dispatch.wire_used = wire_counts.get(latest_plan.outer_attempt, 0)
+        cursor.dispatch.history_latest_attempt_has_wire = previous.attempt_id in attempts_with_wires
+        cursor.dispatch.history_overload_used = overload_used
     return previous
 
 
@@ -400,6 +414,8 @@ async def _require_safe_wire_transition(
     session: AsyncSession,
     prior: GenerationRecoveryEffect,
     identity: GenerationProviderIdentity,
+    *,
+    same_outer_plan: ProviderDispatchPlan | None = None,
 ) -> None:
     import json
 
@@ -416,6 +432,11 @@ async def _require_safe_wire_transition(
         json.dumps(prior.pre_binding["dispatch_v1"]),
         strict=True,
     )
+    if same_outer_plan is not None and any(
+        getattr(bound, key) != getattr(same_outer_plan, key)
+        for key in ProviderDispatchPlan.model_fields
+    ):
+        raise RecoveryContractError("reserved child changed the committed wire clock")
     if bound.attempt_id == identity.attempt_id:
         if prior.state != "confirmed" or prior.receipt_ref != {
             "version": 1,
@@ -821,7 +842,8 @@ async def authorize_cold_wire_continuation(
     identity: GenerationProviderIdentity | None,
     *,
     allow_provider_refusal: bool,
-) -> tuple[int, bool] | None:
+    allow_reserved_child: bool = False,
+) -> ColdWireContinuation | None:
     """A retained read happened first; only independently committed safe evidence can continue."""
     from yleum_api.models.generation_run import GenerationRun
     from yleum_api.models.project import Project
@@ -838,6 +860,7 @@ async def authorize_cold_wire_continuation(
     ):
         return None
     plan, used = cursor.dispatch.plan, cursor.dispatch.wire_used
+    overload_used = cursor.dispatch.history_overload_used
     pending_outer = cursor.outer_attempt == plan.outer_attempt + 1
     if cursor.outer_attempt != plan.outer_attempt and not pending_outer:
         return None
@@ -892,10 +915,34 @@ async def authorize_cold_wire_continuation(
             "kind": "gateway_preconnect",
             "attempt_id": str(identity.attempt_id),
         }
-        if not same_transport:
-            if not allow_provider_refusal:
+        mode: Literal["same_transport", "new_child", "reserved_child"]
+        if same_transport:
+            mode = "same_transport"
+        elif allow_provider_refusal:
+            overload_used = await require_closed_provider_parent(session, identity, identity)
+            mode = "new_child"
+        elif (
+            allow_reserved_child
+            and not pending_outer
+            and not cursor.dispatch.history_latest_attempt_has_wire
+        ):
+            attempt = await session.get(GenerationProviderAttempt, identity.attempt_id)
+            if (
+                attempt is None
+                or attempt.parent_attempt_id is None
+                or attempt.phase != "reserved"
+                or any(value is not None for value in (
+                    attempt.provider_call_id, attempt.terminal_reason,
+                    attempt.response_manifest_key, attempt.response_sha256,
+                ))
+            ):
                 return None
-            await require_closed_provider_parent(session, identity, identity)
+            # The signed pending read excludes a retained response. Validate
+            # the last consumed wire against this child's exact closed parent.
+            await _require_safe_wire_transition(session, prior, identity, same_outer_plan=plan)
+            mode = "reserved_child"
+        else:
+            return None
         if datetime.now(UTC) >= deadline:
             return None
         await session.commit()
@@ -928,7 +975,7 @@ async def authorize_cold_wire_continuation(
             )
         return None  # Keep the already authenticated provider refusal unchanged.
     cursor.dispatch.resume_authorized = True
-    return used, not same_transport
+    return ColdWireContinuation(used, mode, overload_used)
 
 
 async def record_wire_observation(

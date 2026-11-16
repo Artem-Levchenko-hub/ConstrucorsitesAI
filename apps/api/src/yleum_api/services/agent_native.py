@@ -1501,21 +1501,25 @@ async def _call_messages(
                              or failure.retry_after_seconds is not None
                              or failure.code == "upstream_refused")
                     ),
+                    allow_reserved_child=failure.code == "generation_response_pending",
                 )
                 if resumed is None:
                     raise
-                attempt, provider_refusal = resumed
-                overload_used = failure.code == "upstream_refused"
+                attempt = resumed.wire_attempt
+                overload_used = resumed.overload_used or failure.code == "upstream_refused"
                 remaining = provider_dispatch_remaining()
                 delay = min(45.0, 4.0 * (2 ** (attempt - 1)))
-                if failure.retry_after_seconds is not None:
+                if resumed.mode == "reserved_child":
+                    delay = 0
+                elif failure.retry_after_seconds is not None:
                     delay = max(6.0 * attempt, failure.retry_after_seconds)
                 if remaining is None or delay >= remaining:
                     raise
                 started_at = loop.time() - (retry_window - remaining)
-                if provider_refusal:
+                if resumed.mode == "new_child":
                     retry_parent, generation_attempt = generation_attempt, None
-                await asyncio.sleep(delay)
+                if delay:
+                    await asyncio.sleep(delay)
                 continue  # Remint one-use runner authentication for the exact saved index.
             _validate_response_stop_reason(retained)
             return retained

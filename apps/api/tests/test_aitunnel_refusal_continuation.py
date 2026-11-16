@@ -10,6 +10,7 @@ import pytest
 from yleum_api.services import agent_native, llm_client
 from yleum_api.services.generation import provider_attempts
 from yleum_api.services.generation.provider_identity import GenerationProviderIdentity
+from yleum_api.services.generation.recovery_reconciliation import ColdWireContinuation
 
 URL = "https://gateway.test/v1/messages"
 PROOF = {
@@ -276,7 +277,7 @@ async def test_cold_chat_refusal_reads_same_parent_then_sends_one_child(monkeypa
     monkeypatch.setattr(provider_attempts, "prepare_generation_attempt", prepare)
     monkeypatch.setattr(rec, "provider_reconciliation_requested", lambda: True)
     monkeypatch.setattr(rec, "provider_dispatch_remaining", lambda: 20)
-    resumed = AsyncMock(return_value=(1, True))
+    resumed = AsyncMock(return_value=ColdWireContinuation(1, "new_child"))
     monkeypatch.setattr(provider_attempts, "resume_generation_wire", resumed)
     failure = llm_client._gateway_failure(refusal(native=False))
     monkeypatch.setattr(llm_client, "require_recovered_response", AsyncMock(side_effect=failure))
@@ -287,7 +288,7 @@ async def test_cold_chat_refusal_reads_same_parent_then_sends_one_child(monkeypa
     )
     monkeypatch.setattr(llm_client.asyncio, "sleep", AsyncMock())
     assert await llm_client.complete_chat([], "claude-sonnet-5.5", max_tokens=None) == "ok"
-    resumed.assert_awaited_once_with(root, allow_provider_refusal=True)
+    resumed.assert_awaited_once_with(root, allow_provider_refusal=True, allow_reserved_child=False)
     assert parents == [None, root]
     assert len(sent) == 1
     assert sent[0]["metadata"]["generation_provider_identity"] == child.to_wire()
@@ -322,7 +323,7 @@ async def test_cold_native_refusal_reuses_saved_root_and_child(monkeypatch):
     monkeypatch.setattr(provider_attempts, "prepare_generation_attempt", prepare)
     monkeypatch.setattr(rec, "provider_reconciliation_requested", lambda: True)
     monkeypatch.setattr(rec, "provider_dispatch_remaining", lambda: 20)
-    resumed = AsyncMock(return_value=(1, True))
+    resumed = AsyncMock(return_value=ColdWireContinuation(1, "new_child"))
     monkeypatch.setattr(provider_attempts, "resume_generation_wire", resumed)
     failure = llm_client._gateway_failure(refusal())
     recovered = AsyncMock(side_effect=[failure, {"content": [], "stop_reason": "end_turn"}])
@@ -330,7 +331,7 @@ async def test_cold_native_refusal_reuses_saved_root_and_child(monkeypatch):
     monkeypatch.setattr(agent_native.asyncio, "sleep", AsyncMock())
     async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
         await agent_native._call_messages(client, URL, [], "s")
-    resumed.assert_awaited_once_with(root, allow_provider_refusal=True)
+    resumed.assert_awaited_once_with(root, allow_provider_refusal=True, allow_reserved_child=False)
     assert parents == [None, root]
     # Cold child is itself read before any dispatch, preserving no-replay semantics.
     assert sent == []
@@ -509,7 +510,8 @@ async def test_cold_preserved_budget_exhaustion_stops_before_dispatch(monkeypatc
         provider_attempts, "prepare_generation_attempt", AsyncMock(return_value=root)
     )
     monkeypatch.setattr(
-        provider_attempts, "resume_generation_wire", AsyncMock(return_value=(2, True))
+        provider_attempts, "resume_generation_wire",
+        AsyncMock(return_value=ColdWireContinuation(2, "new_child")),
     )
     monkeypatch.setattr(rec, "provider_reconciliation_requested", lambda: True)
     monkeypatch.setattr(rec, "provider_dispatch_remaining", lambda: 20)
@@ -550,7 +552,8 @@ async def test_cold_stream_cannot_use_second_backup_child(monkeypatch):
     prepare = AsyncMock(return_value=root)
     monkeypatch.setattr(provider_attempts, "prepare_generation_attempt", prepare)
     monkeypatch.setattr(
-        provider_attempts, "resume_generation_wire", AsyncMock(return_value=(1, True))
+        provider_attempts, "resume_generation_wire",
+        AsyncMock(return_value=ColdWireContinuation(1, "new_child")),
     )
     monkeypatch.setattr(rec, "provider_reconciliation_requested", lambda: True)
     monkeypatch.setattr(rec, "provider_dispatch_remaining", lambda: 20)

@@ -190,10 +190,12 @@ async def test_cold_refusal_preserves_clock_and_reads_then_dispatches_child(monk
     monkeypatch.setattr(recovery_reconciliation, "provider_dispatch_remaining", lambda: 300)
     monkeypatch.setattr(llm_client, "require_recovered_response", AsyncMock(
         side_effect=llm_client._gateway_failure(refusal())))
-    resumed = AsyncMock(return_value=(1, True))
+    resumed = AsyncMock(return_value=recovery_reconciliation.ColdWireContinuation(1, "new_child"))
     monkeypatch.setattr(provider_attempts, "resume_generation_wire", resumed)
     assert (await llm_client._chat_post(payload(), URL, 600)).status_code == 200
-    resumed.assert_awaited_once_with(identity(), allow_provider_refusal=True)
+    resumed.assert_awaited_once_with(
+        identity(), allow_provider_refusal=True, allow_reserved_child=False,
+    )
     assert parents == [None, identity()] and sleeps == [120] and len(sent) == 1
     actual = sent[0]["metadata"]["generation_provider_identity"]
     assert actual["attempt_id"] != str(identity().attempt_id)
@@ -292,10 +294,10 @@ async def test_actual_retained_native_402_is_read_then_waits_and_continues(monke
         parents.append(parent)
         return child if parent is not None else root
 
-    async def resume(original, *, allow_provider_refusal):
-        assert original == root and allow_provider_refusal is True
+    async def resume(original, *, allow_provider_refusal, allow_reserved_child):
+        assert original == root and allow_provider_refusal is True and allow_reserved_child is False
         reconciling[0] = False
-        return 1, True
+        return recovery_reconciliation.ColdWireContinuation(1, "new_child")
 
     def reply(request):
         requests.append((request.method, request.url.path))

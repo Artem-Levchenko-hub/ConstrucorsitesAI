@@ -824,7 +824,6 @@ async def _chat_stream_data(
         mark_generation_wire_outward,
         prepare_generation_attempt,
         reserve_generation_wire,
-        resume_generation_wire,
     )
     from yleum_api.services.generation.recovery_reconciliation import (
         provider_dispatch_remaining,
@@ -837,39 +836,9 @@ async def _chat_stream_data(
         try:
             retained = await require_recovered_response(identity)
         except LLMError as failure:
-            refusal_delay = _provider_refusal_delay(failure)
-            resumed = await resume_generation_wire(identity, allow_provider_refusal=(
-                (failure.code == "model_unavailable" and failure.retry_safe is True
-                and failure.provider_charge_ambiguous is False
-                and failure.upstream_http_status is None)
-                or (failure.code == "upstream_refused" and failure.retry_safe is True
-                and failure.provider_charge_ambiguous is False)
-                or refusal_delay is not None
-            ))
-            if resumed is None:
-                raise
-            start_attempt, retry_parent = resumed
-            overload_used = failure.code == "upstream_refused"
-            failover_preconnect = (
-                retry_parent and start_attempt == 1
-                and failure.retry_policy in _FAILOVER_PRECONNECT_POLICIES
+            start_attempt, identity, overload_used, deadline = await _resume_chat_dispatch(
+                payload, identity, failure,
             )
-            if (failure.code != "upstream_refused" and refusal_delay is None
-                    and start_attempt >= _chat_attempt_allowance(payload)
-                    and not failover_preconnect):
-                raise
-            remaining = provider_dispatch_remaining()
-            if remaining is None or remaining <= 0.5:
-                raise
-            deadline = asyncio.get_running_loop().time() + remaining
-            if refusal_delay is not None:
-                await _wait_for_provider_refusal(failure, deadline)
-            else:
-                await asyncio.sleep(0.5)
-            if retry_parent:
-                identity = await prepare_generation_attempt(
-                    payload, "/v1/chat/completions", parent=identity,
-                )
         else:
             events = retained.get("events")
             if retained.get("format") != "sse" or not isinstance(events, list):
@@ -1120,13 +1089,67 @@ def _response_preconnect_policy(response: httpx.Response) -> str | None:
     return _committed_preconnect_policy(body.get("detail")) if isinstance(body, dict) else None
 
 
+async def _resume_chat_dispatch(
+    payload: dict[str, Any],
+    identity: GenerationProviderIdentity | None,
+    failure: LLMError,
+) -> tuple[int, GenerationProviderIdentity | None, bool, float]:
+    from yleum_api.services.generation.provider_attempts import (
+        prepare_generation_attempt,
+        resume_generation_wire,
+    )
+    from yleum_api.services.generation.recovery_reconciliation import provider_dispatch_remaining
+
+    refusal_delay = _provider_refusal_delay(failure)
+    committed_refusal = (
+        failure.retry_safe is True and failure.provider_charge_ambiguous is False
+        and (
+            (failure.code == "model_unavailable" and failure.upstream_http_status is None)
+            or failure.code == "upstream_refused"
+        )
+    )
+    resumed = await resume_generation_wire(
+        identity,
+        allow_provider_refusal=committed_refusal or refusal_delay is not None,
+        allow_reserved_child=failure.code == "generation_response_pending",
+    )
+    if resumed is None:
+        raise failure
+    start_attempt = resumed.wire_attempt
+    reserved_child = resumed.mode == "reserved_child"
+    failover_preconnect = (
+        resumed.mode == "new_child" and start_attempt == 1
+        and failure.retry_policy in _FAILOVER_PRECONNECT_POLICIES
+    )
+    if (
+        not reserved_child and not failover_preconnect
+        and failure.code != "upstream_refused" and refusal_delay is None
+        and start_attempt >= _chat_attempt_allowance(payload)
+    ):
+        raise failure
+    remaining = provider_dispatch_remaining()
+    if remaining is None or remaining <= (0 if reserved_child else 0.5):
+        raise failure
+    deadline = asyncio.get_running_loop().time() + remaining
+    # Live retry commits its child after the applicable backoff has passed.
+    if refusal_delay is not None:
+        await _wait_for_provider_refusal(failure, deadline)
+    elif not reserved_child:
+        await asyncio.sleep(0.5)
+    if resumed.mode == "new_child":
+        identity = await prepare_generation_attempt(
+            payload, "/v1/chat/completions", parent=identity,
+        )
+    overload_used = resumed.overload_used or failure.code == "upstream_refused"
+    return start_attempt, identity, overload_used, deadline
+
+
 async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.Response:
     from yleum_api.services.generation.provider_attempts import (
         attach_identity,
         confirm_generation_preconnect,
         prepare_generation_attempt,
         reserve_generation_wire,
-        resume_generation_wire,
     )
 
     loop = asyncio.get_running_loop()
@@ -1150,39 +1173,9 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
         try:
             retained = await require_recovered_response(identity)
         except LLMError as failure:
-            refusal_delay = _provider_refusal_delay(failure)
-            resumed = await resume_generation_wire(identity, allow_provider_refusal=(
-                (failure.code == "model_unavailable" and failure.retry_safe is True
-                and failure.provider_charge_ambiguous is False
-                and failure.upstream_http_status is None)
-                or (failure.code == "upstream_refused" and failure.retry_safe is True
-                and failure.provider_charge_ambiguous is False)
-                or refusal_delay is not None
-            ))
-            if resumed is None:
-                raise
-            start_attempt, retry_parent = resumed
-            overload_used = failure.code == "upstream_refused"
-            failover_preconnect = (
-                retry_parent and start_attempt == 1
-                and failure.retry_policy in _FAILOVER_PRECONNECT_POLICIES
+            start_attempt, identity, overload_used, deadline = await _resume_chat_dispatch(
+                payload, identity, failure,
             )
-            if (failure.code != "upstream_refused" and refusal_delay is None
-                    and start_attempt >= _chat_attempt_allowance(payload)
-                    and not failover_preconnect):
-                raise
-            remaining = provider_dispatch_remaining()
-            if remaining is None or remaining <= 0.5:
-                raise
-            deadline = loop.time() + remaining
-            if refusal_delay is not None:
-                await _wait_for_provider_refusal(failure, deadline)
-            else:
-                await asyncio.sleep(0.5)
-            if retry_parent:
-                identity = await prepare_generation_attempt(
-                    payload, "/v1/chat/completions", parent=identity,
-                )
         else:
             if not isinstance(retained.get("choices"), list):
                 raise LLMError(

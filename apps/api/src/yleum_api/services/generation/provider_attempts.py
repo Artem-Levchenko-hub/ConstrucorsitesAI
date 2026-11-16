@@ -22,6 +22,7 @@ from yleum_api.services.generation.provider_identity import (
 if TYPE_CHECKING:
     from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
     from yleum_api.services.generation.recovery_contract import RecoveryBinding
+    from yleum_api.services.generation.recovery_reconciliation import ColdWireContinuation
 
 
 async def prepare_generation_attempt(
@@ -541,8 +542,8 @@ async def require_native_transcript_refusal(identity: GenerationProviderIdentity
 
 async def require_closed_provider_parent(
     session: AsyncSession, parent: GenerationProviderIdentity, identity: GenerationProviderIdentity,
-) -> None:
-    """Existing Task7 affirmative receipt predicate, shared by live and cold arithmetic."""
+) -> bool:
+    """Validate an affirmative receipt and report whether its ancestry used overload failover."""
     prior = (
         (await session.execute(
             text(
@@ -573,6 +574,7 @@ async def require_closed_provider_parent(
         for key in ("run_id", "project_id", "user_id", "prompt_hash", "request_sha256")
     ):
         raise ValueError("provider parent has no affirmative committed receipt")
+    return prior["terminal_reason"] == "upstream_refused" or prior["prior_overload"] is True
 
 
 def attach_identity(body: dict[str, Any], identity: GenerationProviderIdentity | None) -> None:
@@ -608,8 +610,9 @@ async def confirm_generation_preconnect(
 
 
 async def resume_generation_wire(
-    identity: GenerationProviderIdentity | None, *, allow_provider_refusal: bool,
-) -> tuple[int, bool] | None:
+    identity: GenerationProviderIdentity | None, *,
+    allow_provider_refusal: bool, allow_reserved_child: bool = False,
+) -> ColdWireContinuation | None:
     from yleum_api.services.generation.recovery_reconciliation import (
         authorize_cold_wire_continuation,
         has_provider_effect_context,
@@ -619,6 +622,7 @@ async def resume_generation_wire(
     return await authorize_cold_wire_continuation(
         async_sessionmaker(get_engine(), expire_on_commit=False), identity,
         allow_provider_refusal=allow_provider_refusal,
+        allow_reserved_child=allow_reserved_child,
     )
 
 
