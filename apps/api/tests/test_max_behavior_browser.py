@@ -174,9 +174,10 @@ def test_executed_browser_sources_exactly_match_frozen_probe_version():
 
 
 def test_scoped_accessible_control_allows_localized_and_duplicate_elsewhere():
+    executable_path = installed_chromium()
     with sync_playwright() as playwright:
         chromium = playwright.chromium.launch(
-            executable_path=installed_chromium(), args=["--no-sandbox"],
+            executable_path=executable_path, args=["--no-sandbox"],
         )
         try:
             page = chromium.new_page()

@@ -11,6 +11,7 @@ import pytest
 
 from tests.test_generation_recovery_deadlines import clock_owner as clock_owner
 from tests.test_generation_recovery_deadlines import response_schema as response_schema
+from tests.test_max_generation_contract import _portable_crm_files
 from tests.test_max_management_generation import MISSING_SELECTION_PAGE, connection_files
 from tests.test_max_management_source_repair_diagnostics import BASE
 from yleum_api.models.generation_provider_attempt import GenerationProviderAttempt
@@ -42,7 +43,7 @@ from yleum_api.services.generation.recovery_reconciliation import (
 )
 from yleum_api.services.generation.recovery_tool_receipts import digest as receipt_digest
 from yleum_api.services.max_finalization import MaxFinalizationConflict, MaxFinalizationCoordinator
-from yleum_api.services.max_generation_contract import max_source_completion_gap
+from yleum_api.services.max_management_generation import management_source_advisory
 from yleum_api.services.orchestrator_client import (
     OrchestratorMachineInventoryUnavailable,
     ProjectCellEnvironmentRecoveryProof,
@@ -153,7 +154,11 @@ async def _held_repair(c, monkeypatch, case):
         'const payload=catalog.items;'
         'fetch("/api/products",{method:"POST",body:JSON.stringify(payload)});',
     ) if historical else MISSING_SELECTION_PAGE
+    # Retire the exact saved source, including its portable platform contract.
+    # Its old SDK advisory must not override a fresh compiler receipt.
     files = connection_files(source, ("catalog",))
+    files[".omnia/cell.json"] = _portable_crm_files()[".omnia/cell.json"]
+    assert management_source_advisory(files) is not None
     source_hash = workspace_revision_digest(files)
     c.run.execution_backend = "worker"
     c.run.response_mode = "build"
@@ -497,9 +502,8 @@ async def test_sealed_expired_repair_retirement_preserves_checkpoint_and_counter
             c.driver, compiler_receipt_id=fresh_id,
         )
         assert observation.compiler.passed and observation.compiler.binding == persisted.binding
-        assert observation.source_gap == max_source_completion_gap(_PROMPT, files, portable=True)
-        assert ("unproven_json_stringify" if case == "historical" else "useYleumCatalogSelection") \
-            in observation.source_gap
+        assert observation.source_gap is None
+        assert not observation.missing_catalog_hook
         assert await expired_reservation_closed(c.session, attempt)
         with pytest.raises(ValueError):
             await pipeline.retire_expired_native_source_repair(c.driver, released=released)
@@ -855,7 +859,8 @@ async def test_retired_fast_check_keeps_one_pending_role_and_records_the_proof(
                 verified = await pipeline.revalidate_retired_source_repair(
                     c.driver, compiler_receipt_id=result.id,
                 )
-                assert verified.compiler.passed and "unproven_json_stringify" in verified.source_gap
+                assert verified.compiler.passed and verified.source_gap is None
+                assert not verified.missing_catalog_hook
         assert c.driver.state.execution.logical_step_seq == before.execution.logical_step_seq
         assert c.driver.state.execution.budget == before.execution.budget
         assert c.driver.state.binding == before.binding

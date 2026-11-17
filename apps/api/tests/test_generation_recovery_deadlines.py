@@ -1227,8 +1227,10 @@ async def test_managed_source_gap_can_open_only_one_owned_repair_window(
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
+    from tests.test_max_generation_contract import _portable_crm_files
     from tests.test_max_management_generation import connection_files
     from yleum_api.models.project import Project
+    from yleum_api.services import max_generation_contract
     from yleum_api.services.agent_builder import AgentResult
     from yleum_api.services.generation import recovery_store
     from yleum_api.services.generation.continuation import SourceNoveltyTracker
@@ -1242,7 +1244,12 @@ async def test_managed_source_gap_can_open_only_one_owned_repair_window(
         CompletedAgentTurn,
         FinalizationProgress,
     )
-    from yleum_api.services.max_generation_contract import max_source_completion_gap
+    from yleum_api.services.max_management_generation import (
+        ManagedSourceGap,
+        ManagedSourceObligation,
+        management_source_advisory,
+        management_source_gap,
+    )
     from yleum_api.services.promotion_permit import workspace_revision_digest
 
     c, p = proof_clock.owner, proof_clock
@@ -1250,10 +1257,21 @@ async def test_managed_source_gap_can_open_only_one_owned_repair_window(
     project.template = "max_miniapp"
     prompt = "Собери приложение"
     files = connection_files("", ("catalog",))
+    files[".omnia/cell.json"] = _portable_crm_files()[".omnia/cell.json"]
     files.pop("src/app/page.tsx")
     files["src/app/api/catalog/route.ts"] = "export const GET = () => Response.json([])"
-    gap = max_source_completion_gap(prompt, files, portable=True)
-    assert gap is not None and gap.startswith("Connect useYleumAppProfile")
+    # The live gate no longer interprets SDK source. Retain the historical
+    # rejection explicitly to cover one-time grants and their ownership guards.
+    assert management_source_gap(files) is None
+    gap = management_source_advisory(files)
+    assert isinstance(gap, ManagedSourceGap)
+    assert gap.obligation is ManagedSourceObligation.PROFILE_FIELD
+
+    def historical_feedback(actual_prompt, candidate, *, portable):
+        assert actual_prompt == prompt and candidate == files and portable is True
+        return gap
+
+    monkeypatch.setattr(max_generation_contract, "max_source_completion_gap", historical_feedback)
     binding = p.binding.model_copy(update={"source_sha256": workspace_revision_digest(files)})
     ref = CheckpointRef(object_key="retained", sha256="c" * 64)
     clock = c.driver.state.clock

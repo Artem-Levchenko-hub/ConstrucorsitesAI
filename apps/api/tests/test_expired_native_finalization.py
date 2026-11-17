@@ -16,6 +16,7 @@ from yleum_api.models.generation_provider_attempt import GenerationProviderAttem
 from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
 from yleum_api.models.project_cell import ProjectCellOperation
 from yleum_api.models.provider_call import ProviderCall
+from yleum_api.services import max_generation_contract
 from yleum_api.services.generation import expired_native_finalization as retirement
 from yleum_api.services.generation import recovery_execution as execution
 from yleum_api.services.generation import recovery_pipeline as pipeline
@@ -32,6 +33,38 @@ from yleum_api.services.generation.recovery_contract import (
     IncompleteResponseBudget,
 )
 from yleum_api.services.generation.recovery_reconciliation import provider_root_effect_id
+from yleum_api.services.max_management_generation import (
+    ManagedSourceGap,
+    ManagedSourceObligation,
+    management_source_advisory,
+    management_source_gap,
+)
+
+
+def _historical_source_feedback(monkeypatch, files, *, missing_css=False):
+    """Exercise saved repair protocols without restoring the runtime AST gate."""
+    assert management_source_gap(files) is None
+    gap = management_source_advisory(files)
+    assert isinstance(gap, ManagedSourceGap)
+    candidates = [(dict(files), gap)]
+    if missing_css:
+        page = "src/app/page.tsx"
+        assert files[page].startswith('import "./meal.css";\n')
+        candidate = {**files, page: files[page].split("\n", 1)[1]}
+        latent = management_source_advisory(candidate)
+        assert isinstance(latent, ManagedSourceGap)
+        assert latent.obligation is ManagedSourceObligation.CATALOG_RENDER
+        candidates.append((candidate, latent))
+
+    def saved_feedback(prompt, candidate, *, portable):
+        assert prompt == fixture._PROMPT and portable is True
+        for expected, feedback in candidates:
+            if candidate == expected:
+                return feedback
+        raise AssertionError("historical feedback does not belong to this source")
+
+    monkeypatch.setattr(max_generation_contract, "max_source_completion_gap", saved_feedback)
+    return gap
 
 
 @pytest.mark.parametrize(
@@ -57,6 +90,8 @@ async def test_retired_repair_grant_commits_source_plan_and_budget_once(
 
     monkeypatch.setattr(fixture, "connection_files", library_request)
     _released, files, workspace, _attempt, _root = await _held_repair(c, monkeypatch, "historical")
+    gap = _historical_source_feedback(monkeypatch, files)
+    assert gap.obligation is ManagedSourceObligation.JSON_STRINGIFY and gap.repair_path == path
     state = c.driver.state
     previous = state.model_copy(update={
         "clock": state.clock.model_copy(update={
@@ -246,11 +281,6 @@ async def test_retired_repair_grant_commits_source_plan_and_budget_once(
 async def test_sealed_second_repair_grants_new_catalog_entry_once(
     clock_owner, response_schema, monkeypatch, case, prior_maximum,
 ):
-    from yleum_api.services.max_generation_contract import max_source_completion_gap
-    from yleum_api.services.max_management_generation import (
-        ManagedSourceGap,
-        ManagedSourceObligation,
-    )
     from yleum_api.services.max_project_kit import _template_file
     from yleum_api.services.promotion_permit import workspace_revision_digest
 
@@ -288,8 +318,7 @@ export default function Page() {
 
     monkeypatch.setattr(fixture, "connection_files", catalog_files)
     released, files, workspace, attempt, _root = await _held_repair(c, monkeypatch, "rebound")
-    gap = max_source_completion_gap(fixture._PROMPT, files, portable=True)
-    assert isinstance(gap, ManagedSourceGap)
+    gap = _historical_source_feedback(monkeypatch, files, missing_css=case == "missing_css")
     if case == "missing_css":
         assert gap.obligation is None and "reason missing_checkout_stylesheet" in gap
     else:

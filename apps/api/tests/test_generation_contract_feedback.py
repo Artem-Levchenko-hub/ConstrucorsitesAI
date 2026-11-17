@@ -113,7 +113,7 @@ async def test_native_completion_uses_trusted_template_for_catalog_noop_guard(
 async def test_first_native_max_completion_uses_the_existing_workspace_tree(monkeypatch, deleted):
     from inspect import isawaitable
 
-    from yleum_api.services import max_behavior_proof
+    from yleum_api.services import max_behavior_proof, max_generation_contract
     from yleum_api.services.agent_builder import AgentResult
     from yleum_api.services.generation import agent_generation
     from yleum_api.services.generation.contracts import SourceBaseline
@@ -133,9 +133,17 @@ async def test_first_native_max_completion_uses_the_existing_workspace_tree(monk
         "src/app/shared.ts": "export function prepare() { return true; }",
     }
     stale = {**current, deleted_path: 'export function prepare() { throw new Error("invalid"); }'}
-    brief = "Preserve the product"
+    brief = "Remove obsolete src/app/shared.tsx and preserve the product"
+
+    def completion_gap(prompt, files, *, portable=False):
+        gap = max_source_completion_gap(prompt, files, portable=portable)
+        # This test observes actual source deletion, independently of the
+        # optional SDK syntax advisory that used to reject a throw statement.
+        return gap or (f"Remove obsolete {deleted_path}" if deleted_path in files else None)
+
+    monkeypatch.setattr(max_generation_contract, "max_source_completion_gap", completion_gap)
     assert max_source_completion_gap(brief, current, portable=True) is None
-    assert deleted_path in max_source_completion_gap(brief, stale, portable=True)
+    assert deleted_path in completion_gap(brief, stale, portable=True)
     current = current if deleted else stale
     monkeypatch.setattr(max_behavior_proof, "freeze_for_turn", AsyncMock())
     monkeypatch.setattr(
@@ -154,7 +162,7 @@ async def test_first_native_max_completion_uses_the_existing_workspace_tree(monk
         if deleted:
             assert gap is None
         else:
-            assert deleted_path in gap and "throw_statement" in gap
+            assert deleted_path in gap
         return AgentResult(done=gap is None, summary=gap or "done", files={}, steps=1)
 
     monkeypatch.setattr(agent_native, "run_native_build", run_native)
@@ -236,10 +244,13 @@ async def test_coordinator_fast_check_uses_fixed_accepted_schema_baseline():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["located", "structural"])
-async def test_green_native_build_reports_managed_source_rejections(kind):
+@pytest.mark.parametrize("kind", ["located", "structural", "contract"])
+async def test_green_native_build_preserves_compiler_result_and_server_contract(kind):
     from yleum_api.services.generation.agent_runtime import guard_native_source_contract
-    from yleum_api.services.max_management_generation import ManagedSourceGap
+    from yleum_api.services.max_management_generation import (
+        ManagedSourceGap,
+        management_source_advisory,
+    )
 
     from .test_max_management_generation import (
         MISSING_SELECTION_PAGE,
@@ -253,7 +264,12 @@ async def test_green_native_build_reports_managed_source_rejections(kind):
         "return <main>",
         "const count = orders.filter(row => opaque(row)).length;\nreturn <main>",
     )
-    candidate = connection_files(broken if kind == "located" else MISSING_SELECTION_PAGE, modules)
+    candidate = connection_files(
+        broken if kind == "located" else MISSING_SELECTION_PAGE, modules,
+    )
+    assert management_source_advisory(candidate) is not None
+    if kind == "contract":
+        candidate[".omnia/management.json"] = "{"
     handle = SimpleNamespace(snapshot_files=AsyncMock(side_effect=lambda: dict(candidate)))
     runtime = GenerationRuntime(handle=handle)
     ids = GenerationIds(*(uuid4() for _ in range(5)))
@@ -267,10 +283,11 @@ async def test_green_native_build_reports_managed_source_rejections(kind):
     )
     verdict = await guarded(action)
     assert verdict["ok"] is True
-    gap = verdict["managed_source_gap"]
-    assert isinstance(gap, ManagedSourceGap) and gap.rejection_key()
-    expected = "unproven_statistic_callback" if kind == "located" else "useYleumCatalogSelection"
-    assert expected in gap
+    if kind == "contract":
+        gap = verdict["managed_source_gap"]
+        assert isinstance(gap, ManagedSourceGap) and "Invalid .omnia/management.json" in gap
+    else:
+        assert verdict == {"ok": True}
     execute.return_value = {"ok": False}
     assert await guarded(action) == {"ok": False}
     execute.return_value = {"ok": True}
