@@ -12,6 +12,7 @@ from uuid import UUID
 from yleum_api.core.config import get_settings
 from yleum_api.services import agent_builder
 from yleum_api.services import repo as repo_svc
+from yleum_api.services.agent_output_budget import KIMI_PILOT_MODEL, is_sonnet55_model
 from yleum_api.services.generation.agent_recovery import _restore_max_core
 from yleum_api.services.generation.contracts import (
     AgentOperations,
@@ -54,6 +55,7 @@ _NO_SOURCE_CHANGE_MESSAGE = (
     "Не удалось применить правку: итоговый код не изменился. "
     "Повтори запрос или уточни, что именно нужно изменить."
 )
+_KIMI_REPAIR_SOURCE_KINDS = {"type_error", "react_effect", "relative_import", "workspace_alias"}
 _REPAIR_APPROACHES = (
     "Use the current diagnostic to apply one small source change, then verify it.",
     "Change approach. Use existing working components or interfaces and fix one failing "
@@ -301,6 +303,7 @@ async def run_native_source_repair(
     continuation = getattr(operations, "continuation", None)
     accounting = getattr(operations, "response_recovery", None)
     model_baseline = baseline
+    kimi_repair = False
     autonomous_repair = uses_autonomous_max_source_repair(runtime)
 
     def actionable_managed_gap(files: Mapping[str, str]) -> str | None:
@@ -334,13 +337,25 @@ async def run_native_source_repair(
         )
         # Persist exact context once. A resumed paid request keeps its original
         # task/baseline even when a later observation is larger or different.
-        if pending_source_repair(continuation) is None:
+        cursor = continuation.state.execution
+        kimi_source_proven = (
+            source_failure is not None and bool(source_failure.allowed_paths)
+            and source_failure.kind in _KIMI_REPAIR_SOURCE_KINDS
+        )
+        use_kimi = (
+            kimi_source_proven
+            and is_sonnet55_model(plan.model)
+            and cursor.stage == "finalization" and cursor.budget.repair_calls == 1
+            and str(ids.project_id) in get_settings().max_kimi_repair_project_ids.split(",")
+        )
+        if not use_kimi and pending_source_repair(continuation) is None:
             task = with_managed_source_context(task, baseline)
         entry = await prepare_source_repair(
             continuation, task=task, baseline=dict(baseline), edit_deadline=edit_deadline,
             targeted=source_failure is not None,
             response_budget=(accounting.budget if accounting is not None
                              else IncompleteResponseBudget()),
+            repair_model=KIMI_PILOT_MODEL if use_kimi else None,
         )
         if accounting is not None:
             accounting.budget = entry.response_budget
@@ -350,6 +365,9 @@ async def run_native_source_repair(
                 raise NativeSourceRepairFiltered()
             return completed
         task, model_baseline, edit_deadline = entry.task, entry.baseline, entry.edit_deadline
+        kimi_repair = entry.repair_model == KIMI_PILOT_MODEL
+        if kimi_repair and not kimi_source_proven:
+            raise RecoveryContractError("Kimi repair lost its confirmed source diagnostic")
         edit_deadline = continuation.soft_edit_deadline(edit_deadline)
         from yleum_api.services.generation.expired_native_finalization import (
             retired_finalization_plan,
@@ -402,6 +420,9 @@ async def run_native_source_repair(
                         ):
                             return await operations.execute(action)
                     return {"ok": False, "detail": "Source repair path is not authorized."}
+            elif kimi_repair and action.name not in {"build", "done"}:
+                if action.name != "read_file" or action.path not in allowed:
+                    return {"ok": False, "detail": "Source repair scope does not permit this tool."}
             elif action.name not in {"read_file", "list_dir", "grep", "build", "done"}:
                 return {"ok": False, "detail": "Source repair action is not authorized."}
             return await operations.execute(action)
@@ -472,7 +493,7 @@ async def run_native_source_repair(
             response_recovery=getattr(operations, "response_recovery", None),
             take_verified_progress=getattr(operations, "take_verified_progress", None),
             pure_check=getattr(operations, "pure_check", None),
-            model=plan.model,
+            model=KIMI_PILOT_MODEL if kimi_repair else plan.model,
             system=agent_native.native_system_prompt(
                 plan.stack_guide or "", plan.skills, coordinator_handoff=True,
             ),
@@ -490,8 +511,13 @@ async def run_native_source_repair(
             ),
             snapshot_files=snapshot if callable(snapshot) else None,
             source_repair=True,
+            kimi_repair=kimi_repair,
+            kimi_repair_paths=(
+                source_failure.allowed_paths if kimi_repair and source_failure else ()
+            ),
             directed_path=directed_path,
-            allow_max_bash=shell_enabled, portable_cell=True, coordinator_handoff=True,
+            allow_max_bash=shell_enabled and not kimi_repair,
+            portable_cell=True, coordinator_handoff=True,
             initial_files=model_baseline,
             edit_deadline=edit_deadline, completion_check=repair_completion,
         )

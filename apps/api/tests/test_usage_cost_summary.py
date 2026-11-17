@@ -31,6 +31,33 @@ def test_scope_v2_classifies_rub_with_or_without_a_cache_tariff(
     assert classify_cost({**proof, "provider_scope": "unknown"}, Decimal("0.3")) == "unknown"
 
 
+def test_aitunnel_kimi_receipt_is_confirmed_and_forged_shapes_are_unknown():
+    proof = receipt({
+        "schema_version": 2,
+        "provider_scope": "aitunnel",
+        "tariff_source": "aitunnel-kimi-k3.1-pro-usage-cost-rub",
+        "basis": "provider_reported_rub",
+        "rub_source": "usage:cost_rub",
+        "reported_cost_rub": "2.7912345",
+        "calculated_cost_rub": None,
+        "tariff": None,
+        "tariff_revision": None,
+    })
+    stored_cost = Decimal("2.7912")
+    assert classify_cost(proof, stored_cost) == "confirmed"
+    for overrides in (
+        {"schema_version": 1},
+        {"rub_source": "header:x-cost-rub"},
+        {"tariff": {}},
+        {"tariff_revision": "0" * 64},
+        {"calculated_cost_rub": "2.7912345"},
+    ):
+        assert classify_cost({**proof, **overrides}, stored_cost) == "unknown"
+    assert classify_cost(
+        {**proof, "effective_cost_rub": "0", "reported_cost_rub": "0"}, Decimal(0),
+    ) == "unknown"
+
+
 @pytest.mark.parametrize("provenance,expected", [
     ({"basis": "provider_reported_rub", "reported_cost_rub": "0"}, "confirmed"),
     ({"basis": "provider_reported_rub", "reported_cost_rub": "2.50"}, "confirmed"),

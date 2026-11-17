@@ -46,10 +46,15 @@ from yleum_api.services.generation.onboarding import (
     _compose_build_prompt,
 )
 from yleum_api.services.generation.publication import ORCHESTRATION_LABEL
+from yleum_api.services.generation.source_intent import (
+    READONLY_SOURCE_TURN_KEY,
+    readonly_source_request,
+)
 from yleum_api.services.generation.supervisor import (
     _spawn_async_onboarding,
     _spawn_clarify,
     _spawn_process_prompt,
+    _spawn_readonly_source_turn,
     _spawn_text_turn,
 )
 from yleum_api.services.generation_runs import (
@@ -134,6 +139,8 @@ class PromptAcceptance:
         self.project = project
         self.settings = get_settings()
         self.pilot_model: str | None = None
+        self.readonly_source = False
+        self.readonly_source_sha: str | None = None
 
     async def accept(self) -> PromptResponse:
         from yleum_api.services.phone_verification import (
@@ -168,7 +175,8 @@ class PromptAcceptance:
             self.unit_free_first_build = bool(context.plan and context.plan.code == "free")
         await self.prepare_adaptation()
         await self.check_admission()
-        await self.prepare_model_pilot()
+        if not self.readonly_source:
+            await self.prepare_model_pilot()
         from yleum_api.services.generation_billing import admit_policy
         from yleum_api.services.llm_client import set_generation_billing_context
 
@@ -405,6 +413,20 @@ class PromptAcceptance:
             if self.explain_failed_build and _previous_run is not None
             else None
         )
+        self.readonly_source = (
+            not self.credential_redirect
+            and not self.explain_failed_build
+            and self.payload.restoration_adaptation is None
+            and self.payload.max_config_version is None
+            and self.payload.supersedes_run_id is None
+            and readonly_source_request(self.payload.prompt)
+        )
+        if (
+            self.readonly_source
+            and _cur_snapshot is not None
+            and _cur_snapshot.project_id == self.project_id
+        ):
+            self.readonly_source_sha = _cur_snapshot.commit_sha
 
         # Free-tier gate: every project spends the owner's personal allowance.
         # `UNLIMITED_GENERATIONS=true` (testing escape hatch) forces every gen to be
@@ -462,7 +484,7 @@ class PromptAcceptance:
         # chosen design preset here so the build uses it directly. Validated against
         # the known catalog (an unknown id is ignored); persisted with the project
         # changes the handler commits below. Additive — absent on normal prompts.
-        if self.payload.design_preset_id:
+        if self.payload.design_preset_id and not self.readonly_source:
             from yleum_api.services.design_presets import PRESETS as _PRESETS
 
             if self.payload.design_preset_id in _PRESETS:
@@ -559,6 +581,7 @@ class PromptAcceptance:
             and not self.selected_dump
             and not self.credential_redirect
             and not self.explain_failed_build
+            and not self.readonly_source
         )
         if interview_eligible and self.settings.use_progressive_discovery:
             # Gather the prior conversation (questions already asked + answers) to
@@ -669,6 +692,7 @@ class PromptAcceptance:
             not self.selected_dump
             and not self.credential_redirect
             and not self.explain_failed_build
+            and not self.readonly_source
             and (intent == ORCHESTRATE or bool(self.font_selections or self.resolved_fonts))
         )
 
@@ -722,7 +746,7 @@ class PromptAcceptance:
         # first prompt is the strongest language signal we have.  A connected
         # user's explicit `default_language` preference beats auto-detection.
         # Fail-soft (R-10): any hiccup must never block the build.
-        if self.is_first_build and self.project.language == "ru":
+        if self.is_first_build and not self.readonly_source and self.project.language == "ru":
             try:
                 from yleum_api.services.lang_detect import detect_language
 
@@ -748,6 +772,7 @@ class PromptAcceptance:
             if (
                 self.credential_redirect
                 or self.explain_failed_build
+                or self.readonly_source
                 or self.discovery_ask
                 or self.async_onboarding
                 or self.do_clarify
@@ -758,9 +783,15 @@ class PromptAcceptance:
         self.generation_run.assistant_message_id = self.assistant_msg.id
         self.generation_run.user_message_id = self.user_msg.id
         self.generation_run.response_mode = self.turn_mode
-        from yleum_api.services.project_versions import ensure_generation_version
+        if self.readonly_source:
+            self.generation_run.agent_state = {
+                **(self.generation_run.agent_state or {}),
+                READONLY_SOURCE_TURN_KEY: True,
+            }
+        else:
+            from yleum_api.services.project_versions import ensure_generation_version
 
-        await ensure_generation_version(self.session, self.generation_run, self.project)
+            await ensure_generation_version(self.session, self.generation_run, self.project)
         await self.session.commit()
         await self.session.refresh(self.user_msg)
         await self.session.refresh(self.assistant_msg)
@@ -785,6 +816,18 @@ class PromptAcceptance:
                 self.assistant_msg.id,
                 self.failed_build_reply,
                 run_id=self.generation_run.id,
+            )
+        elif self.readonly_source:
+            _spawn_readonly_source_turn(
+                self.project_id,
+                self.assistant_msg.id,
+                run_id=self.generation_run.id,
+                user_id=self.current_user.id,
+                commit_sha=self.readonly_source_sha,
+                prompt=self.effective_prompt,
+                model_id=self.routing_model,
+                is_free=self.is_free,
+                language=self.project.language,
             )
         elif self.async_onboarding:
             # Deferred first-turn onboarding: no gateway call ran in-request. Plan the

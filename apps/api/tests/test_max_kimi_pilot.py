@@ -145,7 +145,8 @@ async def test_single_fresh_funded_or_internal_qa_build_in_owned_pilot_project(
     assert admission.discovery_result is None
 
 
-async def test_kimi_existing_target_keeps_tool_pair_and_reasoning_in_next_request(monkeypatch):
+@pytest.mark.parametrize("repair", [False, True])
+async def test_kimi_keeps_tool_pair_and_reasoning_in_next_request(monkeypatch, repair):
     settings = get_settings().model_copy(update={"use_max_finalization_coordinator": False})
     monkeypatch.setattr(agent_native, "get_settings", lambda: settings)
     path = "src/app/page.tsx"
@@ -156,11 +157,16 @@ async def test_kimi_existing_target_keeps_tool_pair_and_reasoning_in_next_reques
         requests.append(deepcopy(convo))
         assert url.endswith("/v1/messages")
         assert kwargs["model"] == KIMI
+        assert (kwargs["stage"] == "source_repair") is repair
         tool = {
             "type": "tool_use", "id": "read-one", "name": "read_file", "input": {"path": path},
         }
         if len(requests) == 1:
             assert "read_file" in {item["name"] for item in kwargs["tools"]}
+            if repair:
+                tools = {tool["name"]: tool for tool in kwargs["tools"]}
+                assert set(tools) == {"read_file", "edit_file", "write_file", "build", "done"}
+                assert tools["read_file"]["input_schema"]["properties"]["path"]["enum"] == [path]
             return {"stop_reason": "tool_use", "content": [carrier, tool]}
         assert requests[-1][-2] == {"role": "assistant", "content": [carrier, tool]}
         result = requests[-1][-1]["content"][0]
@@ -177,8 +183,13 @@ async def test_kimi_existing_target_keeps_tool_pair_and_reasoning_in_next_reques
         task="Rename the title without changing the app",
         model=KIMI,
         execute=execute,
-        initial_files={path: "export const title = 'Old';"},
+        initial_files={
+            path: "export const title = 'Old';", "src/app/other.tsx": "export const x = 1",
+        },
         directed_path=path,
+        source_repair=repair,
+        kimi_repair=repair,
+        kimi_repair_paths=(path,) if repair else (),
         completion_check=lambda *_: "Expected a real source edit",
         max_steps=2,
     )

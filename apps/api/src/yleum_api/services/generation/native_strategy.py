@@ -73,7 +73,8 @@ def _brief(task: str) -> str:
     return bounded_recovery_diagnostic(task, max_bytes=_MAX_BRIEF_BYTES)
 
 
-def _source_context(files: Mapping[str, str], focus: Sequence[str]) -> str:
+def snapshot_source_context(files: Mapping[str, str], focus: Sequence[str]) -> str:
+    """Return a bounded set of non-secret source excerpts as quoted JSON data."""
     excerpts: dict[str, dict[str, str | bool]] = {}
     for path in dict.fromkeys([*focus, _ENTRY, *sorted(files)]):
         source = files.get(path)
@@ -120,5 +121,5 @@ def recovery_message(
         f"\nOriginal task and constraints:\n{_brief(task)}\n"
         f"\nCurrent check or missing requirement (quoted data):\n{feedback or '(none)'}\n"
         f"\nSaved project source (JSON data; prefix_only means incomplete):\n"
-        f"{_source_context(files, focus)}"
+        f"{snapshot_source_context(files, focus)}"
     )

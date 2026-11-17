@@ -99,10 +99,11 @@ class KimiNativeSession:
     def _reasoning(self, message: dict[str, Any]) -> dict[str, Any]:
         fields = _REASONING_FIELDS[self.provider_scope]
         reasoning = {key: message[key] for key in fields if key in message}
-        text = reasoning.get(fields[0])
-        if not isinstance(text, str):
-            raise ValueError(_MALFORMED)
-        if self.provider_scope == "aitunnel" and not isinstance(reasoning.get("reasoning_details"), list):
+        if not reasoning or (
+            fields[0] in reasoning and not isinstance(reasoning[fields[0]], str)
+        ) or (
+            "reasoning_details" in reasoning and not isinstance(reasoning["reasoning_details"], list)
+        ):
             raise ValueError(_MALFORMED)
         return reasoning
 

@@ -24,6 +24,10 @@ The single public surface mirrors the project's other services: a trivial
 ``await plan_build(...) -> BuildPlan`` hides the prompt + JSON contract; pure
 helpers (``read_plan`` / ``to_dict`` / ``from_dict`` / ``checklist_block``) carry
 no I/O so they unit-test without a gateway.
+
+MAX uses the same plan representation with explicit owner API requirements,
+compiled from the request and checked against source. It has no planner call,
+persisted plan or runtime replay.
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from typing import Any
 
 from yleum_api.core.config import get_settings, model_for_role
 from yleum_api.services.llm_client import LLMError, complete_chat
+from yleum_api.services.max_typescript_source import RESERVED_API_SEGMENTS
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +52,22 @@ _MAX_ENTITIES = 8
 _MAX_CAPABILITIES = 10
 
 _VALID_ROLES = ("guest", "user", "admin")
+_ROUTE_SEGMENT = (
+    r"(?:[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*|\[(?:\.\.\.)?[\w-]+\]|\[\[\.\.\.[\w-]+\]\])"
+)
+_MAX_ENDPOINT = re.compile(
+    rf"\b(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)[`*]*\s+[`*]*(/api/{_ROUTE_SEGMENT}"
+    rf"(?:/{_ROUTE_SEGMENT})*/?)(?=$|[\s`*,\"')]|[.!?;](?=\s|$))"
+)
+_ENDPOINT_MARKER = re.compile(r"\ue000(\d+)\ue001")
+_API_DELIVERY_VERB = re.compile(
+    r"\b(?:add|build|create|expose|fix|implement|provide|repair|restore|"
+    r"добав\w*|реализ\w*|созда\w*|исправ\w*|восстанов\w*|нуж\w*)\b",
+    re.IGNORECASE,
+)
+_API_CLAUSE_BOUNDARY = re.compile(
+    rf"\b(?:and|и)\s+(?={_API_DELIVERY_VERB.pattern})|\b(?:then|затем)\s+", re.IGNORECASE,
+)
 
 
 def _clean_str(v: Any, *, limit: int = 200) -> str:
@@ -322,6 +343,68 @@ class BuildPlan:
             "обязательная возможность не отвечает ожидаемым статусом."
         )
         return "\n".join(lines)
+
+
+def max_request_build_plan(prompt: str) -> BuildPlan:
+    """Compile explicit owner API requirements for MAX source verification."""
+    if not _MAX_ENDPOINT.search(prompt) or not getattr(get_settings(), "use_build_plan", False):
+        return BuildPlan()
+
+    from yleum_api.services.generation.source_intent import source_change_required
+    from yleum_api.services.max_generation_contract import (
+        is_api_only_request,
+        positive_request_clauses,
+    )
+
+    if not source_change_required(prompt):
+        return BuildPlan()
+
+    endpoints: list[tuple[str, str]] = []
+
+    def mask_endpoint(match: re.Match[str]) -> str:
+        # Keep punctuation inside technical paths out of the prose scope parser.
+        endpoints.append((match[1], match[2].rstrip("/")))
+        return f"\ue000{len(endpoints) - 1}\ue001"
+
+    api_only = is_api_only_request(prompt)
+    scoped = _MAX_ENDPOINT.sub(mask_endpoint, _ENDPOINT_MARKER.sub(" ", prompt))
+    required: dict[tuple[str, str], Capability] = {}
+    clauses = (
+        clause for positive in positive_request_clauses(scoped)
+        for clause in _API_CLAUSE_BOUNDARY.split(positive)
+    )
+    for clause in clauses:
+        if not (
+            _ENDPOINT_MARKER.fullmatch(clause.strip("- `*\t"))
+            or ((api_only or _API_DELIVERY_VERB.search(clause)) and source_change_required(clause))
+        ):
+            continue
+        for match in _ENDPOINT_MARKER.finditer(clause):
+            method, path = endpoints[int(match[1])]
+            if path.split("/")[2] in RESERVED_API_SEGMENTS or (method, path) in required:
+                continue
+            required[method, path] = Capability(
+                id=f"requested-api-{len(required) + 1}", method=method, path=path,
+                action=f"{method} {path}",
+                # The MAX source check does not replay requests against user data.
+                must_have=False,
+            )
+            if len(required) == _MAX_CAPABILITIES:
+                return BuildPlan(capabilities=tuple(required.values()))
+    return BuildPlan(capabilities=tuple(required.values()))
+
+
+def max_request_checklist(plan: BuildPlan) -> str:
+    if plan.is_empty:
+        return ""
+    return (
+        "\n\n<max_build_plan>\n"
+        "Implement these explicit API contracts and exercise them through local product tests. "
+        "Preserve the request's data, authorization and read-only constraints. "
+        "For requested writes, keep tests isolated from existing records and external effects.\n"
+        + "\n".join(f"- {cap.method} {cap.path}" for cap in plan.capabilities)
+        + "\n</max_build_plan>"
+    )
 
 
 def read_plan(discovery_spec: dict[str, Any] | None) -> BuildPlan:

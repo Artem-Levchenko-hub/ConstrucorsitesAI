@@ -476,8 +476,8 @@ class Settings(BaseSettings):
     #                          gateway multimodal support; best-effort, fail-soft)
     use_freeform_render: bool = Field(default=True)
 
-    # Build Plan + Coverage gate (owner directive 2026-06-30 «эскиз перед стройкой,
-    # не на зелёном минимуме»). `use_build_plan` runs a planner pass (role
+    # MAX derives a source checklist from explicitly named API contracts without a model call.
+    # The legacy Build Plan + Coverage gate runs a planner pass (role
     # `planner` → Opus) BEFORE the agent build that emits a bounded feature spec
     # (screens/entities/capabilities), persists it in
     # projects.discovery_spec['build_plan'], and injects it into the build prompt
@@ -817,8 +817,9 @@ class Settings(BaseSettings):
     generation_recovery_canary_project_ids: str = ""
     # Internal, comma-separated canonical UUIDs; blank disables new admissions.
     max_kimi_pilot_project_ids: str = ""
+    max_kimi_repair_project_ids: str = ""
 
-    @field_validator("max_kimi_pilot_project_ids")
+    @field_validator("max_kimi_pilot_project_ids", "max_kimi_repair_project_ids")
     @classmethod
     def normalize_kimi_pilot_scope(cls, value: str) -> str:
         ids = [part.strip() for part in value.split(",")] if value.strip() else []

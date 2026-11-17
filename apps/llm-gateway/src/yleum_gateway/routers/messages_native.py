@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, cast
 from uuid import UUID, uuid4
@@ -58,7 +59,7 @@ from yleum_gateway.providers.rate_limit import bounded_error_body, refusal_retry
 from yleum_gateway.services import billing, file_logger, generation_attempts, text_failover
 from yleum_gateway.services import provider_calls as provider_calls
 from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
-from yleum_gateway.services.generation_credit_guard import KIMI_PILOT_STAGES
+from yleum_gateway.services.generation_credit_guard import KIMI_PILOT_STAGES, KIMI_REPAIR_STAGE
 from yleum_gateway.services.generation_identity import GenerationProviderIdentity
 from yleum_gateway.services.kimi_native import (
     KIMI_LLMGW_MODEL,
@@ -86,7 +87,7 @@ from yleum_gateway.services.provider_receipt_cleanup import (
     await_provider_receipt as _await_provider_receipt,
 )
 from yleum_gateway.services.provider_validation_diagnostics import provider_validation_scope
-from yleum_gateway.services.receipt_evidence import receipt_evidence
+from yleum_gateway.services.receipt_evidence import aitunnel_request_id, receipt_evidence
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -770,10 +771,20 @@ async def _dispatch_native_provider(
         )
     except DispatchDeadlineError as exc:
         return _err(exc.http_status, exc.code, exc.message, details=exc.details)
-    backup_enabled = text_failover.enabled(model)
-    generation_retries = backup_enabled and run_id is not None and project_id is not None
     stage = dispatch_options["stage"]
+    # A Kimi history carrier is tied to one gateway. Only a fresh transcript
+    # can start with the other provider after its original refusal is closed.
+    kimi_failover = (
+        kimi is not None and stage == KIMI_REPAIR_STAGE
+        and not any(message["role"] == "assistant" for message in payload["messages"])
+    )
+    backup_enabled = (
+        text_failover.enabled(model) if kimi is None
+        else kimi_failover and text_failover.enabled(text_failover.MODEL)
+    )
+    generation_retries = backup_enabled and run_id is not None and project_id is not None
     sonnet_repair = stage == "source_repair" and model == text_failover.MODEL
+    long_response = sonnet_repair or (kimi is not None and stage == KIMI_REPAIR_STAGE)
     timed_generation = sonnet_repair or kimi is not None or generation_retries or (timed_primary and backup_enabled)
     loop = asyncio.get_running_loop()
     attempts: dict[str, int] = {}
@@ -785,6 +796,7 @@ async def _dispatch_native_provider(
             and route in ("/v1/messages", "/v1/project-cell/messages")
             and await text_failover.confirmed_chain_exhausted(
                 identity, call_id, route=route, user_id=dispatch_options.get("user_id"),
+                **({"model": model} if kimi_failover else {}),
             )
         )
 
@@ -841,7 +853,7 @@ async def _dispatch_native_provider(
             else:
                 async with open_timed_response(
                     url, payload, headers, deadline=timed_deadline, evidence=transport_evidence,
-                    provider_scope=provider_scope, **({"read_until_deadline": True} if sonnet_repair else {}),
+                    provider_scope=provider_scope, **({"read_until_deadline": True} if long_response else {}),
                 ) as upstream:
                     await upstream.aread()
         except (httpx.HTTPError, TimeoutError, DispatchDeadlineError, StreamReceiptError) as exc:
@@ -889,7 +901,7 @@ async def _dispatch_native_provider(
             if safe_to_retry and recorded:
                 # These failures occur before the request reaches the provider.
                 # Publish permission only after the failed attempt receipt commits.
-                if provider_scope == "aitunnel" and backup_enabled:
+                if provider_scope == "aitunnel" and backup_enabled and not kimi_failover:
                     delay = await text_failover.retry_after_backup_preconnect(identity, provider_call_id, primary_retry_at)
                     if delay is not None:
                         confirm_response_accounting()
@@ -912,7 +924,9 @@ async def _dispatch_native_provider(
                     "provider_failure_kind": "preconnect", "provider_charge_ambiguous": False,
                 }
                 if identity is not None or not backup_enabled:
-                    proof_details.update(text_failover.preconnect_proof(provider_scope, model, transport_stage))
+                    proof_details.update(text_failover.preconnect_proof(
+                        provider_scope, model, transport_stage, kimi_repair=kimi_failover,
+                    ))
                 return _err(502, "api_error", "Provider connection could not be established", details=proof_details)
             # Once a request may have been accepted, replay risks a second paid call.
             # Deployed API callers already stop on this terminal billing error.
@@ -934,10 +948,12 @@ async def _dispatch_native_provider(
             retry_after = text_failover.primary_retry_after(rate_limit)
             cooldown = {"retry_after_seconds": retry_after} if retry_after is not None else {}
             category = "rate_limit" if inflight is not None else llmgw._refusal_category(upstream)
-            overload = (
-                text_failover.primary_refusal_candidate(upstream, model)
-                if provider_scope == "llmgw" and inflight is None else None
-            )
+            overload = None
+            if provider_scope == "llmgw" and inflight is None:
+                if kimi_failover:
+                    overload = text_failover.primary_refusal_candidate(upstream, model, kimi_repair=True)
+                elif kimi is None:
+                    overload = text_failover.primary_refusal_candidate(upstream, model)
             if overload is not None:
                 failure_type = (
                     provider_calls.LLMGW_BALANCE_REFUSED
@@ -1027,6 +1043,22 @@ async def _dispatch_native_provider(
         return provider_call_id, upstream, provider_scope
 
 
+async def _kimi_repair_messages(
+    body: dict[str, Any], primary: KimiNativeSession,
+) -> tuple[KimiNativeSession, list[dict[str, Any]]]:
+    try:
+        messages = _openai_messages(body, kimi=primary)
+    except NativeRequestValidationError as exc:
+        if exc.reason != "invalid_kimi_reasoning" or not text_failover.enabled(text_failover.MODEL):
+            raise
+        backup = replace(primary, provider_scope="aitunnel")
+        return backup, _openai_messages(body, kimi=backup)
+    if any(message["role"] == "assistant" for message in messages):
+        return primary, messages
+    scope = await text_failover.select_kimi_repair_scope(primary.identity)
+    return replace(primary, provider_scope=scope), messages
+
+
 async def _native_messages_execute(
     request: Request,
     *,
@@ -1109,14 +1141,19 @@ async def _native_messages_execute(
             field="model", scope=dispatch_options, retry_count=retry_count,
         )
     kimi: KimiNativeSession | None = None
+    kimi_repair = model == KIMI_MODEL and stage == KIMI_REPAIR_STAGE
     if model == KIMI_MODEL:
         settings = get_settings()
         secret = settings.generation_response_signing_secret
+        projects = settings.max_kimi_repair_project_ids if kimi_repair else settings.max_kimi_pilot_project_ids
         if (
             retained_identity is None or identity != retained_identity
-            or retained_identity.project_id not in settings.max_kimi_pilot_project_ids
+            or retained_identity.project_id not in projects
             or user_id != retained_identity.user_id or runner_claims is not None or secret is None
-            or type(metadata.get("free", False)) is not bool or stage not in KIMI_PILOT_STAGES
+            or type(metadata.get("free", False)) is not bool
+            or (kimi_repair and (message_id is None or project_id != retained_identity.project_id
+                                 or run_id != retained_identity.run_id))
+            or (not kimi_repair and stage not in KIMI_PILOT_STAGES)
             or (raw_message_id is not None and message_id is None)
         ):
             return _err(409, "model_unavailable", "Kimi requires an approved retained native generation")
@@ -1137,7 +1174,13 @@ async def _native_messages_execute(
         )
 
     try:
-        messages = _openai_messages(body, kimi=kimi)
+        if kimi_repair:
+            assert kimi is not None
+            kimi, messages = await _kimi_repair_messages(body, kimi)
+        else:
+            messages = _openai_messages(body, kimi=kimi)
+    except GatewayError as exc:
+        return _err(exc.http_status, exc.code, exc.message, details=exc.details)
     except ValueError as exc:
         reason, field = (
             (exc.reason, exc.field) if isinstance(exc, NativeRequestValidationError)
@@ -1193,7 +1236,7 @@ async def _native_messages_execute(
                 if not await billing.precheck_kimi_pilot(
                     kimi.identity, stage, KIMI_MODEL, requested_free=free, message_id=message_id,
                 ):
-                    return _err(409, "model_unavailable", "Kimi requires an approved initial build billing policy")
+                    return _err(409, "model_unavailable", "Kimi requires an approved generation billing policy")
             else:
                 unit_covered = run_id is not None and await billing.precheck_generation_units(
                     user_id, project_id, run_id, stage, identity,
@@ -1248,6 +1291,18 @@ async def _native_messages_execute(
             adapted = _anthropic_response(upstream_data, actual_model)
             usage = adapted["usage"]
         else:
+            if provider_scope == "aitunnel":
+                request_id = aitunnel_request_id({"x-request-id": upstream_data.get("id")})
+                header_id = upstream.headers.get("x-request-id")
+                if (
+                    request_id is None
+                    or known_evidence["provider_request_id"] != request_id
+                    or (header_id is not None and header_id != request_id)
+                ):
+                    known_evidence["provider_request_id"] = None
+                    raise _InvalidUsageReceipt("AI Tunnel completion identity is unconfirmed")
+                if upstream.headers.get("x-aitunnel-cost-pending", "").strip().lower() == "true":
+                    raise _InvalidUsageReceipt("AI Tunnel usage has not settled")
             usage = _native_usage(upstream_data.get("usage"), strict_cache=True)
             if usage["input_tokens"] + usage["output_tokens"] <= 0:
                 raise _InvalidUsageReceipt("Missing positive Kimi token usage")

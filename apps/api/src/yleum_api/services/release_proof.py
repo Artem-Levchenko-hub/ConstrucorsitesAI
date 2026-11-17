@@ -83,19 +83,33 @@ async def run_release_proof(
     if require_max_data and proof is None:
         try:
             from yleum_api.services.max_runtime_probe import probe_max_cell_runtime
-            from yleum_api.services.max_runtime_routes import resolve_max_runtime_probe_paths
+            from yleum_api.services.max_runtime_routes import (
+                resolve_max_business_probe_path,
+                resolve_max_runtime_probe_paths,
+            )
 
             if cell_preview is None:
                 cell_preview = await project_cell_handle.create_preview_session()
-            probe_path = "/"
-            fallback_paths: tuple[str, ...] = ()
             snapshot_files = getattr(project_cell_handle, "snapshot_files", None)
-            if callable(snapshot_files):
-                probe_path, fallback_paths = resolve_max_runtime_probe_paths(
-                    await snapshot_files(), requested_path="/",
+            files = await snapshot_files() if callable(snapshot_files) else {}
+            probe_path, fallback_paths = resolve_max_runtime_probe_paths(files)
+            business_path = resolve_max_business_probe_path(files)
+            is_portable = (
+                business_path is not None
+                and getattr(project_cell_handle, "is_portable", lambda: False)()
+            )
+            expected_epoch = None
+            if is_portable:
+                adaptation = project_cell_handle.restoration_adaptation_workspace
+                expected_epoch = (
+                    adaptation.candidate_fencing_epoch if adaptation is not None
+                    else project_cell_handle.control_fencing_epoch
                 )
             max_probe = await probe_max_cell_runtime(
                 cell_preview, path=probe_path, fallback_paths=fallback_paths,
+                business_path=business_path,
+                portable_project_id=project_id if is_portable else None,
+                expected_epoch=expected_epoch,
             )
             checks.append(Check("max_data_plane", max_probe.ok, max_probe.detail[:240]))
         except Exception as exc:

@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from yleum_api.services import build_plan as build_plan_service
 from yleum_api.services.max_generation_contract import (
     build_max_product_contract,
     max_completion_gap,
@@ -109,6 +111,73 @@ def test_portable_next_draft_with_helpers_but_no_root_screen_is_incomplete() -> 
     assert max_source_completion_gap("Покажи историю заявок.", files, portable=True) is None
 
 
+@pytest.mark.parametrize(("path", "source"), [
+    ("src/components/Scratch.tsx", "export const scratch = 'Unwired product search';"),
+    ("src/app/page.tsx", "// Search will be implemented in a later change."),
+    ("src/app/page.tsx", "/* Search will be implemented in a later change. */"),
+    ("src/app/page.tsx", "import type { Search } from '../components/SearchSchema';"),
+    ("src/app/page.tsx", "import { Search } from '../components/SearchSchema';"),
+    ("src/app/api/products/route.ts", "export const GET = () => Response.json({search: []});"),
+])
+def test_portable_ui_capability_requires_reachable_source(path: str, source: str) -> None:
+    files = {
+        ".omnia/cell.json": _portable_crm_files()[".omnia/cell.json"],
+        "src/app/page.tsx": "export default function Page() { return <main>Products</main>; }",
+        "src/components/SearchSchema.ts": "export const Search = 'unused runtime search';",
+    }
+    files[path] = files.get(path, "") + "\n" + source
+
+    gap = max_source_completion_gap("Add product search.", files, portable=True)
+
+    assert gap is not None and "поиск" in gap
+
+
+def test_portable_ui_capability_can_be_implemented_through_an_alias_and_barrel() -> None:
+    files = {
+        ".omnia/cell.json": _portable_crm_files()[".omnia/cell.json"],
+        "src/app/(product)/page.tsx": (
+            'import { Products } from "@/features/products";\n'
+            "export default function Page() { return <Products />; }"
+        ),
+        "src/features/products/index.ts": 'export { Products } from "./Products";',
+        "src/features/products/Products.tsx": (
+            "'use client';\nimport { useState } from 'react';\n"
+            "export function Products() {\n"
+            "const [query, setQuery] = useState('');\n"
+            "const shown = ['Bags', 'Rings'].filter(item => item.toLowerCase().includes(query));\n"
+            "return <section><input aria-label='Поиск' value={query} "
+            "onChange={event => setQuery(event.target.value)} />{shown.join(', ')}</section>; }"
+        ),
+    }
+
+    assert max_source_completion_gap("Add product search.", files, portable=True) is None
+
+
+def test_portable_unreachable_managed_sdk_call_does_not_prove_history() -> None:
+    files = _portable_crm_files()
+    files["src/app/page.tsx"] = "export default function Page() { return <main>CRM</main>; }"
+
+    gap = max_source_completion_gap("Покажи историю заявок.", files, portable=True)
+
+    assert gap is not None and "история действий" in gap
+
+
+def test_portable_direct_python_service_checks_its_entrypoint_for_capabilities() -> None:
+    manifest = json.loads(_portable_crm_files()[".omnia/cell.json"])
+    manifest["services"][0]["argv"] = ["python3", "server.py"]
+    files = {
+        ".omnia/cell.json": json.dumps(manifest),
+        "server.py": '# search page planned\nfrom http.server import HTTPServer\n',
+        "unused.py": 'SEARCH_LABEL = "The product search control is in another module"',
+    }
+
+    assert "поиск" in str(max_source_completion_gap("Add search.", files, portable=True))
+    files["server.py"] += 'from screens import page\n'
+    files["screens.py"] = 'page = \'<input type="search" aria-label="Search">\'\n'
+
+    assert max_source_completion_gap("Add search.", files, portable=True) is None
+
+
 @pytest.mark.parametrize("portable", [False, True])
 def test_api_only_source_requires_actual_endpoint_and_accepts_technical_root(portable):
     files = {
@@ -125,6 +194,84 @@ def test_api_only_source_requires_actual_endpoint_and_accepts_technical_root(por
         "return actor ? Response.json({ total: 0 }) : new Response(null, {status: 401}); }"
     )
     assert max_source_completion_gap(request, files, portable=portable) is None
+
+
+@pytest.mark.parametrize("portable", [False, True])
+def test_max_build_plan_checks_the_requested_api_path_and_method(portable: bool) -> None:
+    files = {
+        ".omnia/cell.json": _portable_crm_files()[".omnia/cell.json"],
+        "src/app/page.tsx": (
+            "export default function Page() { return <main>Currency rates</main>; }"
+        ),
+        "src/app/api/revisions/route.ts": "export const GET = () => Response.json({items: []});",
+        "src/app/(product)/api/exchange-rates/[id]/route.ts": (
+            "// export function PATCH() {}\n"
+            "export const GET = () => Response.json({rate: null});"
+        ),
+    }
+    request = (
+        "API-only: implement GET /api/exchange-rates and PATCH /api/exchange-rates/[id]. "
+        "Do not add POST /api/billing."
+    )
+
+    gap = max_source_completion_gap(request, files, portable=portable)
+
+    assert gap is not None and "GET /api/exchange-rates" in gap
+    assert "PATCH /api/exchange-rates/[id]" in gap
+    assert "POST /api/billing" not in gap
+    files["src/app/api/exchange-rates/route.ts"] = (
+        "export const GET = () => Response.json({items: []});"
+    )
+    files["src/app/(product)/api/exchange-rates/[id]/route.ts"] += (
+        "\nasync function updateRate() { return Response.json({ok: true}); }\n"
+        "export { updateRate as PATCH };"
+    )
+
+    assert max_source_completion_gap(request, files, portable=portable) is None
+
+
+def test_max_build_plan_does_not_turn_analysis_into_an_edit() -> None:
+    files = {
+        ".omnia/cell.json": _portable_crm_files()[".omnia/cell.json"],
+        "src/app/page.tsx": (
+            "export default function Page() { return <main>Currency rates</main>; }"
+        ),
+    }
+
+    assert max_source_completion_gap(
+        "Review GET /api/exchange-rates. Do not change anything.", files, portable=True,
+    ) is None
+
+
+def test_max_build_plan_does_not_require_a_reviewed_endpoint_in_a_mixed_edit() -> None:
+    files = {
+        ".omnia/cell.json": _portable_crm_files()[".omnia/cell.json"],
+        "app/page.jsx": "export default function Page() { return <main>Rates</main>; }",
+        "app/api/exchange-rates.json/route.js": (
+            "export function GET() { return Response.json({rates: []}); }"
+        ),
+    }
+    request = "Review POST /api/archive and implement GET /api/exchange-rates.json."
+
+    assert max_source_completion_gap(request, files, portable=True) is None
+    del files["app/api/exchange-rates.json/route.js"]
+    gap = max_source_completion_gap(request, files, portable=True)
+    assert gap is not None and "GET /api/exchange-rates.json" in gap
+    assert "POST /api/archive" not in gap
+
+
+def test_max_build_plan_option_disables_the_source_gate(monkeypatch) -> None:
+    monkeypatch.setattr(
+        build_plan_service, "get_settings", lambda: SimpleNamespace(use_build_plan=False),
+    )
+    files = {
+        ".omnia/cell.json": _portable_crm_files()[".omnia/cell.json"],
+        "src/app/page.tsx": "export default function Page() { return <main>Rates</main>; }",
+    }
+
+    assert max_source_completion_gap(
+        "Implement GET /api/exchange-rates.", files, portable=True,
+    ) is None
 
 
 def _portable_coffee_files() -> dict[str, str]:

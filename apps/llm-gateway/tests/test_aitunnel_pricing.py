@@ -79,3 +79,49 @@ async def test_ai_only_exact_verified_sonnet_55(model):
     with pytest.raises(ModelNotFoundError):
         await pricing.resolve_request_cost(model, tokens_in=1, tokens_out=1,
                                           provider_scope="aitunnel")
+
+
+@pytest.mark.parametrize("usage", [
+    {"cost": "2.79"},
+    {"cost_usd": "2.79"},
+    {"cost_rub": 0},
+    {"cost_rub": "0.000001"},
+    {"cost_rub": "-2.79"},
+    {"cost_rub": True},
+    {"cost_rub": "NaN"},
+    {"cost_rub": "1e99"},
+])
+async def test_ai_kimi_unusable_rub_receipt_cannot_fall_back_to_a_tariff(usage):
+    reported = pricing.read_reported_cost(
+        {"usage": usage, "metadata": {"cost_rub": "2.79"}},
+        {"x-cost-rub": "2.79", "x-llmgw-cost-rub": "2.79"}, provider_scope="aitunnel",
+    )
+    with pytest.raises(ValueError, match="receipt"):
+        await pricing.resolve_request_cost(
+            "kimi-k3.1-pro", tokens_in=1000, tokens_out=1, reported=reported,
+            provider_scope="aitunnel",
+        )
+
+
+async def test_ai_kimi_exact_receipt_has_no_invented_tariff_and_rejects_forged_proof():
+    reported = pricing.read_reported_cost(
+        {"usage": {"cost_rub": "2.7912345"}}, {}, provider_scope="aitunnel",
+    )
+    cost, proof = await pricing.resolve_request_cost(
+        "kimi-k3.1-pro", tokens_in=1000, tokens_out=1, cache_write_tokens=100,
+        reported=reported, provider_scope="aitunnel",
+    )
+    assert cost == Decimal("2.7912345")
+    assert proof["schema_version"] == 2 and proof["provider_scope"] == "aitunnel"
+    assert proof["tariff_source"] == "aitunnel-kimi-k3.1-pro-usage-cost-rub"
+    assert proof["tariff"] is proof["tariff_revision"] is proof["calculated_cost_rub"] is None
+    assert pricing.validate_cost_provenance(proof, cost_rub=cost) == proof
+    for overrides in (
+        {"rub_source": "header:x-cost-rub"},
+        {"tariff_revision": "0" * 64},
+        {"tariff": {}},
+        {"calculated_cost_rub": "2.7912345"},
+        {"reported_cost_rub": "0", "effective_cost_rub": "0"},
+    ):
+        with pytest.raises(ValueError):
+            pricing.validate_cost_provenance({**proof, **overrides})

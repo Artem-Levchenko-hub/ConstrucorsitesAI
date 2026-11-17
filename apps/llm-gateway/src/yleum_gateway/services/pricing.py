@@ -67,6 +67,7 @@ def _finite_cost(value: Any) -> Decimal | None:
 _RUB_SOURCES = ("header:x-llmgw-cost-rub", "header:x-cost-rub", "usage:cost_rub", "metadata:cost_rub")
 _USD_SOURCES = ("usage:cost_usd", "usage:cost", "metadata:cost_usd", "header:x-cost-usd")
 _AITUNNEL_TARIFF_SOURCE = "aitunnel-public-catalog-2026-10-23"
+_AITUNNEL_KIMI_RECEIPT_SOURCE = "aitunnel-kimi-k3.1-pro-usage-cost-rub"
 _AITUNNEL_PRICE = ModelPrice(Decimal("0.4"), Decimal("2.0"), Decimal("0.1"))
 
 # Frozen model-specific estimate. Reported RUB still takes precedence.
@@ -81,6 +82,16 @@ _KIMI_LLMGW_PRICE = ModelPrice(
 def _validate_provider_scope(provider_scope: str) -> None:
     if provider_scope not in ("llmgw", "aitunnel"):
         raise ValueError("Unknown provider scope")
+
+
+def _aitunnel_kimi_rub(value: Any) -> Decimal | None:
+    amount = _finite_cost(value)
+    # Keep the exact receipt in provenance. Its NUMERIC(12,4) usage projection
+    # must also remain positive and must fit the column after rounding.
+    half_quantum = _QUANT / 2
+    if amount is None or not half_quantum <= amount < Decimal("100000000") - half_quantum:
+        return None
+    return amount
 
 
 def read_reported_cost(
@@ -188,8 +199,19 @@ def validate_cost_provenance(
         keys |= {"provider_scope", "tariff_source"}
     if set(evidence) != keys or type(version) is not int or version not in {1, 2}:
         raise ValueError("Invalid cost provenance shape")
+    aitunnel_kimi = False
     if version == 2:
         identity = (evidence["provider_scope"], evidence["tariff_source"])
+        aitunnel_kimi = identity == ("aitunnel", _AITUNNEL_KIMI_RECEIPT_SOURCE)
+        kimi_receipt = (
+            aitunnel_kimi and evidence["basis"] == "provider_reported_rub"
+            and evidence["rub_source"] == "usage:cost_rub"
+            and evidence["usd_source"] in (None, "usage:cost_usd")
+            and _aitunnel_kimi_rub(evidence["reported_cost_rub"]) is not None
+            and all(evidence[key] is None for key in (
+                "calculated_cost_rub", "tariff", "tariff_revision",
+            ))
+        )
         aitunnel = (identity == ("aitunnel", _AITUNNEL_TARIFF_SOURCE)
                     and evidence["rub_source"] in (None, "usage:cost_rub")
                     and evidence["usd_source"] in (None, "usage:cost_usd"))
@@ -198,7 +220,7 @@ def validate_cost_provenance(
                 and evidence["calculated_cost_rub"] is None
                 and type(evidence["cache_write_tokens"]) is int and evidence["cache_write_tokens"] > 0
                 and (_finite_cost(evidence["reported_cost_rub"]) or Decimal(0)) > 0)
-        if not (aitunnel or kimi):
+        if not (aitunnel or kimi or kimi_receipt):
             raise ValueError("Invalid provider cost provenance")
     if evidence["basis"] not in {"provider_reported_rub", "token_tariff", "local_token_estimate", "provider_catalog_estimate"}:
         raise ValueError("Invalid cost provenance basis")
@@ -224,16 +246,19 @@ def validate_cost_provenance(
     for key in ("tokens_in", "tokens_out", "cache_read_tokens", "cache_write_tokens"):
         if type(evidence[key]) is not int or evidence[key] < 0:
             raise ValueError("Invalid cost provenance tokens")
-    tariff = evidence["tariff"]
-    if not isinstance(tariff, dict) or set(tariff) != tariff_keys or any(
-        (not isinstance(v, str) or len(v) > 80 or _finite_cost(v) is None)
-        and not (version == 2 and k == "cache_write_factor" and v is None)
-        for k, v in tariff.items()
-    ):
-        raise ValueError("Invalid cost provenance tariff")
-    revision = evidence["tariff_revision"]
-    if not isinstance(revision, str) or len(revision) != 64 or any(c not in "0123456789abcdef" for c in revision):
-        raise ValueError("Invalid cost provenance revision")
+    if not aitunnel_kimi:
+        tariff = evidence["tariff"]
+        if not isinstance(tariff, dict) or set(tariff) != tariff_keys or any(
+            (not isinstance(v, str) or len(v) > 80 or _finite_cost(v) is None)
+            and not (version == 2 and k == "cache_write_factor" and v is None)
+            for k, v in tariff.items()
+        ):
+            raise ValueError("Invalid cost provenance tariff")
+        revision = evidence["tariff_revision"]
+        if not isinstance(revision, str) or len(revision) != 64 or any(
+            c not in "0123456789abcdef" for c in revision
+        ):
+            raise ValueError("Invalid cost provenance revision")
     # JSON roundtrip detaches mutable callers and bounds the persisted payload.
     serialized = json.dumps(evidence, sort_keys=True, separators=(",", ":"))
     if len(serialized) > 4096:
@@ -411,44 +436,56 @@ def _aitunnel_request_cost(
     model_id: str, *, tokens_in: int, tokens_out: int, cache_read_tokens: int,
     cache_write_tokens: int, reported: ReportedCost | None, estimated_tokens: bool,
 ) -> tuple[Decimal, dict[str, Any]]:
-    """Snapshot of AI Tunnel's verified RUB catalog; no foreign catalog or FX."""
-    if model_id != "claude-sonnet-5.5":
+    """Use Kimi's reported charge and Sonnet's established tariff fallback."""
+    if model_id not in {"claude-sonnet-5.5", KIMI_MODEL}:
         raise ModelNotFoundError("Unsupported AI Tunnel text model")
     if any(type(v) is not int or v < 0 for v in
            (tokens_in, tokens_out, cache_read_tokens, cache_write_tokens)):
         raise ValueError("token counts must be non-negative integers")
     reported = reported or ReportedCost()
+    provider_rub = reported.cost_rub
     local = None
-    if cache_write_tokens:
-        if reported.cost_rub is None:
-            raise ValueError("AI Tunnel cache write tariff is unverified")
+    tariff: dict[str, str | None] | None = None
+    tariff_revision = None
+    if model_id == KIMI_MODEL:
+        provider_rub = _aitunnel_kimi_rub(provider_rub)
+        if provider_rub is None or reported.rub_source != "usage:cost_rub":
+            raise ValueError("AI Tunnel Kimi requires a positive usage.cost_rub receipt")
+        tariff_source = _AITUNNEL_KIMI_RECEIPT_SOURCE
     else:
-        local = _calculate_with_price(_AITUNNEL_PRICE, tokens_in, tokens_out,
-                                      cache_read_tokens, 0, cache_write_factor=Decimal(0))
-    effective = reported.cost_rub if reported.cost_rub is not None else local
+        if cache_write_tokens:
+            if provider_rub is None:
+                raise ValueError("AI Tunnel cache write tariff is unverified")
+        else:
+            local = _calculate_with_price(_AITUNNEL_PRICE, tokens_in, tokens_out,
+                                          cache_read_tokens, 0, cache_write_factor=Decimal(0))
+        tariff_source = _AITUNNEL_TARIFF_SOURCE
+        tariff = {
+            "rub_per_1k_in": str(_AITUNNEL_PRICE.rub_per_1k_in),
+            "rub_per_1k_out": str(_AITUNNEL_PRICE.rub_per_1k_out),
+            "cache_read_factor": str(_AITUNNEL_PRICE.cache_read_factor),
+            "cache_write_factor": None,
+            "quantum_rub": str(_QUANT),
+        }
+        revision = {"source": tariff_source, "provider_scope": "aitunnel",
+                    "model": model_id, "tariff": tariff}
+        tariff_revision = hashlib.sha256(json.dumps(
+            revision, sort_keys=True, separators=(",", ":"),
+        ).encode()).hexdigest()
+    effective = provider_rub if provider_rub is not None else local
     if effective is None:
         raise ValueError("AI Tunnel cost is unavailable")
-    tariff = {
-        "rub_per_1k_in": str(_AITUNNEL_PRICE.rub_per_1k_in),
-        "rub_per_1k_out": str(_AITUNNEL_PRICE.rub_per_1k_out),
-        "cache_read_factor": str(_AITUNNEL_PRICE.cache_read_factor),
-        "cache_write_factor": None,
-        "quantum_rub": str(_QUANT),
-    }
-    revision = {"source": _AITUNNEL_TARIFF_SOURCE, "provider_scope": "aitunnel",
-                "model": model_id, "tariff": tariff}
     evidence = {
         "schema_version": 2, "provider_scope": "aitunnel",
-        "tariff_source": _AITUNNEL_TARIFF_SOURCE,
-        "basis": "provider_reported_rub" if reported.cost_rub is not None else
+        "tariff_source": tariff_source,
+        "basis": "provider_reported_rub" if provider_rub is not None else
                  "local_token_estimate" if estimated_tokens else "provider_catalog_estimate",
         "effective_cost_rub": str(effective),
         "calculated_cost_rub": str(local) if local is not None else None,
-        "reported_cost_rub": str(reported.cost_rub) if reported.cost_rub is not None else None,
+        "reported_cost_rub": str(provider_rub) if provider_rub is not None else None,
         "provider_cost_usd": str(reported.cost_usd) if reported.cost_usd is not None else None,
         "rub_source": reported.rub_source, "usd_source": reported.usd_source,
-        "tariff_revision": hashlib.sha256(json.dumps(revision, sort_keys=True,
-            separators=(",", ":")).encode()).hexdigest(), "tariff": tariff,
+        "tariff_revision": tariff_revision, "tariff": tariff,
         "tokens_in": tokens_in, "tokens_out": tokens_out,
         "cache_read_tokens": cache_read_tokens, "cache_write_tokens": cache_write_tokens,
     }

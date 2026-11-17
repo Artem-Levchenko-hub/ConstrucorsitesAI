@@ -62,8 +62,9 @@ class Settings(BaseSettings):
     generation_provider_attempts_enabled: bool = False
     # At most two explicit projects can use signed, retained Kimi turns.
     max_kimi_pilot_project_ids: Annotated[tuple[UUID, ...], NoDecode] = Field(default=(), validate_default=False)
+    max_kimi_repair_project_ids: Annotated[tuple[UUID, ...], NoDecode] = Field(default=(), validate_default=False)
 
-    @field_validator("max_kimi_pilot_project_ids", mode="before")
+    @field_validator("max_kimi_pilot_project_ids", "max_kimi_repair_project_ids", mode="before")
     @classmethod
     def parse_kimi_pilot_project_ids(cls, value: object) -> tuple[UUID, ...]:
         if not isinstance(value, str):

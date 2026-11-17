@@ -626,6 +626,12 @@ class SourceRepairEntry(BaseModel):
     targeted: bool
     response_budget: IncompleteResponseBudget
     result: dict[str, Any] | None = None
+    repair_model: Literal["kimi-k3.1-pro"] | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        # Preserve the existing receipt shape on ordinary runs.
+        excluded = {"repair_model"} if self.repair_model is None else None
+        return self.model_dump(mode="json", exclude=excluded)
 
     @field_validator("edit_deadline")
     @classmethod
@@ -763,6 +769,7 @@ async def prepare_source_repair(
     edit_deadline: datetime | None,
     targeted: bool,
     response_budget: IncompleteResponseBudget,
+    repair_model: Literal["kimi-k3.1-pro"] | None = None,
 ) -> SourceRepairEntry:
     from yleum_api.services.generation.expired_native_finalization import (
         _TRANSIENT_CHECKPOINT_ERRORS,
@@ -777,11 +784,12 @@ async def prepare_source_repair(
         edit_deadline=edit_deadline,
         targeted=targeted,
         response_budget=response_budget,
+        repair_model=repair_model,
     )
     budget = driver.state.execution.budget
     completed = {
         **driver.context["completed"],
-        "source_repair": entry.model_dump(mode="json"),
+        "source_repair": entry.to_json(),
     }
     completed.pop(_NATIVE_REPAIR_LAST_REJECTION, None)
     try:
@@ -841,7 +849,7 @@ def _completed_source_repair_context(
         "active_tool": None,
         "completed": {
             **driver.context["completed"],
-            "source_repair": saved.model_dump(mode="json"),
+            "source_repair": saved.to_json(),
             "response_budget": response_budget.model_dump(mode="json"),
         },
     }

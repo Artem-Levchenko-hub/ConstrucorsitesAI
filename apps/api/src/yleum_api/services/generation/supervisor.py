@@ -24,6 +24,7 @@ from yleum_api.services.generation.completion_release import GenerationReleasePe
 from yleum_api.services.generation.lightweight_turns import (
     _run_async_onboarding,
     _run_clarify,
+    _run_readonly_source_turn,
     _run_text_turn,
 )
 from yleum_api.services.generation.recovery_execution import (
@@ -541,6 +542,31 @@ def _spawn_text_turn(
         project_id=project_id,
         assistant_message_id=assistant_message_id,
         label="_run_text_turn",
+    )
+
+
+def _spawn_readonly_source_turn(
+    project_id: UUID,
+    assistant_message_id: UUID,
+    *,
+    run_id: UUID,
+    user_id: UUID,
+    commit_sha: str | None,
+    prompt: str,
+    model_id: str,
+    is_free: bool,
+    language: str,
+) -> None:
+    _spawn_tracked_prompt(
+        _run_readonly_source_turn(
+            project_id, assistant_message_id, run_id=run_id, user_id=user_id,
+            commit_sha=commit_sha, prompt=prompt, model_id=model_id, is_free=is_free,
+            language=language,
+        ),
+        run_id=run_id,
+        project_id=project_id,
+        assistant_message_id=assistant_message_id,
+        label="_run_readonly_source_turn",
     )
 
 

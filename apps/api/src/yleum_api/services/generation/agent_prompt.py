@@ -11,7 +11,7 @@ from yleum_api.core.config import (
     model_for_role,
 )
 from yleum_api.services import agent_builder
-from yleum_api.services.build_plan import BuildPlan
+from yleum_api.services.build_plan import BuildPlan, max_request_build_plan, max_request_checklist
 from yleum_api.services.generation.agent_messages import _agent_step_budget
 from yleum_api.services.generation.contracts import (
     AgentPromptPlan,
@@ -46,7 +46,6 @@ async def prepare_agent_prompt(
         _seed_block = existing_typography_context(
             _seed_block, await runtime.handle.snapshot_files(),
         )
-    _build_plan = None
     coordinator_handoff = MAX_COORDINATOR_HANDOFF in stack.system
     if _is_continue:
         continuation_context = (
@@ -171,6 +170,7 @@ async def prepare_agent_prompt(
         _agent_system = stack.system
         _agent_steps = min(30, get_settings().agent_builder_max_steps)
     if project_info.template == "max_miniapp":
+        _agent_user += max_request_checklist(max_request_build_plan(prompt_text))
         _agent_user += (
             "\n\n<product_delivery>\n"
             "Complete the requested product or edit before handing it off; do not stop "
@@ -290,4 +290,6 @@ async def prepare_agent_prompt(
         skills=stack.skills,
         bare_stack=stack.bare_stack,
     )
-    return _prompt_plan, _build_plan
+    # Keep the legacy probe slot empty. MAX checks the same request-derived plan
+    # at source completion, including durable continuations and coordinator proof.
+    return _prompt_plan, None

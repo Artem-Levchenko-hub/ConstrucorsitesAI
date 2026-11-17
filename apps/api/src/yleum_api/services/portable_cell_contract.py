@@ -5,6 +5,8 @@ import re
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Protocol
 
+from yleum_api.services.portable_product_source import is_product_file, reachable_product_source
+
 RequestedCapability = tuple[str, str, tuple[str, ...]]
 _NEXT_HOME = re.compile(
     r"(?:src/)?(?:app/(?:\([^/]+\)/)*page|pages/index)\.(?:tsx|ts|jsx|js)"
@@ -247,7 +249,7 @@ async def machine_stack_guide_from_executor(
 
 def portable_source_gap(
     files: Mapping[str, str], capabilities: list[RequestedCapability],
-    *, implemented_capabilities: frozenset[str] = frozenset(),
+    *, implemented_capabilities: Callable[[Mapping[str, str]], frozenset[str]] | None = None,
 ) -> str | None:
     try:
         manifest = json.loads(files.get(".omnia/cell.json", ""))
@@ -276,30 +278,27 @@ def portable_source_gap(
 
     if any(_NEXT_LAYOUT.fullmatch(path) for path in files) and not has_next_home(files):
         return "MAX Next.js product has no home page. Create src/app/page.tsx."
-    source = {
-        path: content
-        for path, content in files.items()
-        if not path.startswith(
-            (
-                ".omnia/",
-                "src/lib/max/",
-                "src/lib/omnia/",
-                "src/lib/db/",
-                "src/app/api/max/",
-                "src/app/api/omnia/",
-            )
-        )
+    if not any(
+        is_product_file(path)
         and path not in {"package.json", "pnpm-lock.yaml", "package-lock.json", "SYSTEM_PROMPT.md"}
         and not path.endswith((".md", ".lock", ".json"))
         and len(content.strip()) >= 40
-    }
-    if not source:
+        for path, content in files.items()
+    ):
         return "Portable manifest is present but actual product implementation is missing."
-    corpus = "\n".join(source.values()).lower()
+    if not capabilities:
+        return None
+    source = reachable_product_source(files, manifest)
+    if source is None:
+        # An opaque custom service still needs its declared product tests and
+        # runtime proof. It cannot use unrelated files as static evidence.
+        return None
+    modules, corpus = source
+    implemented = implemented_capabilities(modules) if implemented_capabilities else frozenset()
     missing = [
         label
         for key, label, needles in capabilities
-        if key not in implemented_capabilities and not any(word in corpus for word in needles)
+        if key not in implemented and not any(word in corpus for word in needles)
     ]
     return (
         "Explicit brief capabilities are still missing: " + ", ".join(missing) if missing else None

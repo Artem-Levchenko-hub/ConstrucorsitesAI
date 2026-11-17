@@ -133,6 +133,30 @@ async def test_kimi_initial_qa_requires_the_owned_attempt_and_current_private_pl
     assert not await allowed(free=False)
     assert not await allowed(replace(identity, request_sha256="c" * 64))
 
+    async def repair_allowed(message):
+        return await billing.precheck_kimi_pilot(
+            identity, "source_repair", model, requested_free=True, message_id=message,
+        )
+
+    assert not await repair_allowed(messages[0])
+    repair_state = {
+        "dispatch": {**dispatch, "force_model": "claude-sonnet-5.5"},
+        "recovery_v1": {"execution": {"stage": "finalization", "budget": {"repair_calls": 2}}},
+    }
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE generation_runs SET agent_state=$2::jsonb,response_mode='edit' WHERE id=$1",
+            run, json.dumps(repair_state),
+        )
+    assert await repair_allowed(messages[0])
+    assert not await repair_allowed(None)
+    assert not await repair_allowed(messages[1])
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE generation_runs SET agent_state=$2::jsonb,response_mode='build' WHERE id=$1",
+            run, json.dumps({"dispatch": dispatch}),
+        )
+
     receipt = "qa-kimi-" + str(run)
     cost = Decimal("0.03")
     usage_input = dict(
@@ -154,6 +178,70 @@ async def test_kimi_initial_qa_requires_the_owned_attempt_and_current_private_pl
         ) == 1
         await conn.execute("UPDATE subscriptions SET status='paused' WHERE id=$1", subscription)
     assert not await allowed()
+
+
+async def test_kimi_repair_routing_uses_only_a_closed_zero_cost_primary_parent(pool, database_url, monkeypatch):
+    from yleum_gateway.core.errors import ModelUnavailableError
+    from yleum_gateway.services import text_failover
+    from yleum_gateway.services.generation_identity import GenerationProviderIdentity
+
+    user, project, _, run = await _run(pool, database_url)
+    root = GenerationProviderIdentity(run, project, user, uuid4(), "a" * 64, "b" * 64)
+    child = replace(root, attempt_id=uuid4())
+    call_id = uuid4()
+    monkeypatch.setattr(text_failover, "enabled", lambda model: model == text_failover.MODEL)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO generation_provider_attempts "
+            "(attempt_id,run_id,project_id,user_id,prompt_hash,request_sha256,dispatch_token) "
+            "VALUES($1,$2,$3,$4,$5,$6,$7)",
+            root.attempt_id, run, project, user, root.prompt_hash, root.request_sha256, uuid4(),
+        )
+    assert await text_failover.select_kimi_repair_scope(root) == "llmgw"
+    with pytest.raises(ModelUnavailableError):
+        await text_failover.select_kimi_repair_scope(child)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO provider_calls (id,provider_scope,route,requested_model,expense_owner,"
+            "user_id,project_id,run_id,stage,free,status,receipt_hash,finished_at) "
+            "VALUES($1,'llmgw','/v1/messages','kimi-k3.1-pro','user',$2,$3,$4,"
+            "'source_repair',false,'failed',$5,now())",
+            call_id, user, project, run, "d" * 64,
+        )
+        await conn.execute(
+            "UPDATE generation_provider_attempts SET phase='closed',terminal_reason='preconnect',"
+            "provider_call_id=$2 WHERE attempt_id=$1", root.attempt_id, call_id,
+        )
+        await conn.execute(
+            "INSERT INTO generation_provider_attempts (attempt_id,run_id,project_id,user_id,"
+            "prompt_hash,request_sha256,dispatch_token,parent_attempt_id) "
+            "VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+            child.attempt_id, run, project, user, child.prompt_hash, child.request_sha256,
+            uuid4(), root.attempt_id,
+        )
+    assert await text_failover.select_kimi_repair_scope(child) == "aitunnel"
+    with pytest.raises(ModelUnavailableError):
+        await text_failover.select_kimi_repair_scope(replace(child, request_sha256="e" * 64))
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE provider_calls SET provider_cost_rub=0.12 WHERE id=$1", call_id)
+    with pytest.raises(ModelUnavailableError):
+        await text_failover.select_kimi_repair_scope(child)
+    reset = replace(root, attempt_id=uuid4(), request_sha256="f" * 64)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO provider_calls (id,provider_scope,route,requested_model,actual_model,"
+            "expense_owner,user_id,project_id,run_id,stage,free,status,receipt_hash,finished_at,usage_id) "
+            "VALUES($1,'aitunnel','/v1/messages','kimi-k3.1-pro','kimi-k3.1-pro','user',$2,$3,$4,"
+            "'source_repair',false,'completed',$5,now(),$6)",
+            uuid4(), user, project, run, "e" * 64, uuid4(),
+        )
+        await conn.execute(
+            "INSERT INTO generation_provider_attempts "
+            "(attempt_id,run_id,project_id,user_id,prompt_hash,request_sha256,dispatch_token) "
+            "VALUES($1,$2,$3,$4,$5,$6,$7)",
+            reset.attempt_id, run, project, user, reset.prompt_hash, reset.request_sha256, uuid4(),
+        )
+    assert await text_failover.select_kimi_repair_scope(reset) == "aitunnel"
 
 
 async def _provider(user, project, messages, run, key, amount="2", free=False):

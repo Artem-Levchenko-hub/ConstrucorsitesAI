@@ -2429,19 +2429,26 @@ async def test_cell_migration_failure_cannot_be_reported_as_ready(
     assert harness.legacy_actions == []
 
 
+@pytest.mark.parametrize("declares_readiness", [False, True])
 async def test_cell_runtime_check_uses_workspace_session_not_legacy(
     monkeypatch,
     db_session,
     test_engine,
+    declares_readiness,
 ) -> None:
     from yleum_api.services import max_runtime_probe
 
-    harness = await _prepare_executor(monkeypatch, db_session, test_engine)
+    handler = "export async function GET() { return await readProductData(); }"
+    files = {"src/app/api/custom/route.ts": handler}
+    if declares_readiness:
+        files["src/app/api/yleum-readiness/route.ts"] = handler
+    harness = await _prepare_executor(monkeypatch, db_session, test_engine, snapshot_files=files)
 
-    async def fake_probe(preview, *, path, management_resources=()):
+    async def fake_probe(preview, *, path, management_resources=(), business_path=None):
         assert management_resources == ()
         assert preview.workspace_id == harness.workspace_id
         assert path == "/products"
+        assert business_path == ("/api/yleum-readiness" if declares_readiness else None)
         return max_runtime_probe.MaxRuntimeProbe(True, "cell database verified")
 
     monkeypatch.setattr(max_runtime_probe, "probe_max_cell_runtime", fake_probe)
@@ -2476,8 +2483,10 @@ async def test_portable_cell_runtime_check_falls_back_when_home_page_is_missing(
         portable_project_id=None,
         expected_epoch=None,
         management_resources=(),
+        business_path=None,
     ):
         assert management_resources == ()
+        assert business_path is None
         assert preview.workspace_id == harness.workspace_id
         assert path == "/"
         assert fallback_paths == ("/support",)

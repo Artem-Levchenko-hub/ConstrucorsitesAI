@@ -895,17 +895,21 @@ def _directed_feedback(value: str | list[dict[str, Any]]) -> str:
     return bounded_recovery_diagnostic(text, max_bytes=2000)
 
 
-def _source_repair_tools(read_paths: list[str]) -> list[dict[str, Any]]:
-    if not read_paths:
+def _source_repair_tools(read_paths: list[str], *, verify: bool = False) -> list[dict[str, Any]]:
+    if not read_paths and not verify:
         return _SOURCE_REPAIR_TOOLS_CACHED
-    return _cache_toolset([
-        *[tool for tool in _TOOLS if tool["name"] in {"write_file", "edit_file"}],
-        _tool(
+    allowed = {"write_file", "edit_file"}
+    if verify:
+        allowed.update({"build", "done"})
+    inventory = _MAX_COORDINATOR_TOOLS_CACHED if verify else _TOOLS
+    tools = [tool for tool in inventory if tool["name"] in allowed]
+    if read_paths:
+        tools.append(_tool(
             "read_file", "Inspect ONE unread existing source, then apply the targeted repair. "
             "Reading is not implementation progress and does not extend the repair budget.",
             {"path": {"type": "string", "enum": read_paths}}, ["path"],
-        ),
-    ])
+        ))
+    return _cache_toolset(tools)
 
 
 def _system_blocks(system: str) -> list[dict[str, Any]]:
@@ -1799,6 +1803,8 @@ async def _run_native_segment(
     edit_deadline: datetime | None = None,
     source_repair: bool = False,
     bounded_repair: bool = False,
+    kimi_repair: bool = False,
+    kimi_repair_paths: tuple[str, ...] = (),
     edit_source_changed: Callable[[], bool] | None = None,
     response_recovery: ResponseRecovery | None = None,
     take_verified_progress: ProgressReader | None = None,
@@ -1881,6 +1887,7 @@ async def _run_native_segment(
     contract = hashlib.sha256(json.dumps({
         "model": model, "system": system, "task": task, "max_steps": effective_max_steps,
         "source_repair": source_repair, "portable_cell": portable_cell,
+        **({"kimi_repair": True} if kimi_repair else {}),
         "allow_max_bash": allow_max_bash,
         "edit_deadline": contract_deadline(continuation, edit_deadline),
     }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest() if continuation else ""
@@ -1954,7 +1961,8 @@ async def _run_native_segment(
     def _remaining_repair_reads() -> list[str]:
         if repair_targeted_read_used:
             return []
-        return sorted(repair_read_paths - repair_read_attempts)
+        available = repair_read_paths - repair_read_attempts
+        return sorted(available.intersection(kimi_repair_paths) if kimi_repair else available)
 
     def _record_turn_progress(product_progress: bool) -> None:
         nonlocal no_write_turns
@@ -2324,7 +2332,7 @@ async def _run_native_segment(
             text_repair = directed and strategy != "tool"
             narrow_turn = active_recovery is not None and not directed
             limited_output = is_sonnet55_model(model) and (source_repair or bounded_repair)
-            call_stage = "source_repair" if limited_output else (
+            call_stage = "source_repair" if limited_output or kimi_repair else (
                 "build_plan"
                 if step == 0
                 else "verification"
@@ -2337,7 +2345,9 @@ async def _run_native_segment(
                     request: dict[str, Any] = dict(
                         convo=convo, system=system, model=model, stage=call_stage,
                         tools=(
-                            _SOURCE_REPAIR_TOOLS_CACHED
+                            _source_repair_tools(_remaining_repair_reads(), verify=True)
+                            if kimi_repair
+                            else _SOURCE_REPAIR_TOOLS_CACHED
                             if edit_write_required
                             else _source_repair_tools(_remaining_repair_reads())
                             if repair_write_required
@@ -2462,8 +2472,13 @@ async def _run_native_segment(
                             ])
                         # A single new user message is valid for every gateway adapter.
                         # Drop old tool pairs together, retaining the effects in the workspace.
+                        recovery_source = (
+                            {path: current_source[path] for path in kimi_repair_paths
+                             if path in current_source}
+                            if kimi_repair else current_source
+                        )
                         convo = [{"role": "user", "content": user_content(recovery_message(
-                            active_recovery, task=task, files=current_source,
+                            active_recovery, task=task, files=recovery_source,
                             focus=focus, objective=objective, diagnostic=diagnostic,
                         ), reference_images, native=True)}]
                         request["convo"] = convo
@@ -3616,6 +3631,8 @@ async def run_native_build(
     edit_deadline: datetime | None = None,
     source_repair: bool = False,
     bounded_repair: bool = False,
+    kimi_repair: bool = False,
+    kimi_repair_paths: tuple[str, ...] = (),
     edit_source_changed: Callable[[], bool] | None = None,
     response_recovery: ResponseRecovery | None = None,
     take_verified_progress: ProgressReader | None = None,
@@ -3666,6 +3683,8 @@ async def run_native_build(
             edit_deadline=edit_deadline,
             source_repair=source_repair,
             bounded_repair=bounded_repair,
+            kimi_repair=kimi_repair,
+            kimi_repair_paths=kimi_repair_paths,
             edit_source_changed=edit_source_changed,
             response_recovery=response_recovery, take_verified_progress=take_verified_progress,
             pure_check=pure_check, continuation=continuation,

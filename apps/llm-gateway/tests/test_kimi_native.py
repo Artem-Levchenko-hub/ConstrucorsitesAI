@@ -29,7 +29,7 @@ def _response(provider_scope, *, finish="tool_calls"):
         {"reasoning": "reasoning-is-private", "reasoning_details": [{"text": "содержимое", "index": 0}]}
     )
     return {
-        "id": "chatcmpl-example",
+        "id": "chat-" + "a" * 22 if provider_scope == "aitunnel" else "chatcmpl-example",
         "model": actual,
         "choices": [{
             "finish_reason": finish,
@@ -55,6 +55,18 @@ def _history(content):
             "type": "tool_result", "tool_use_id": "call_1", "content": "ok",
         }]},
     ]}
+
+
+@pytest.mark.parametrize("absent", ["reasoning", "reasoning_details"])
+def test_aitunnel_history_preserves_supported_reasoning_representation(session, absent):
+    session = replace(session, provider_scope="aitunnel")
+    upstream = _response("aitunnel")
+    message = upstream["choices"][0]["message"]
+    del message[absent]
+    answer = _anthropic_response(upstream, "kimi-k3.1-pro", kimi=session)
+    restored = _openai_messages(_history(answer["content"]), kimi=session)[1]
+    assert absent not in restored
+    assert all(restored[key] == message[key] for key in {"reasoning", "reasoning_details"} - {absent})
 
 
 @pytest.mark.parametrize("scope", ["llmgw", "aitunnel"])
@@ -166,13 +178,27 @@ async def test_kimi_llmgw_catalog_estimate_and_reported_cost_are_distinct():
 
 @pytest.mark.asyncio
 async def test_kimi_accounting_rejects_unverified_provider_tariff_and_cache_writes():
-    from yleum_gateway.core.errors import ModelNotFoundError
     from yleum_gateway.services.pricing import resolve_request_cost
 
-    with pytest.raises(ModelNotFoundError):
+    with pytest.raises(ValueError, match="receipt"):
         await resolve_request_cost("kimi-k3.1-pro", tokens_in=10, tokens_out=8, provider_scope="aitunnel")
     with pytest.raises(ValueError, match="tariff"):
         await resolve_request_cost("kimi-k3.1-pro", tokens_in=10, tokens_out=8, cache_write_tokens=3)
+
+
+@pytest.mark.asyncio
+async def test_kimi_aitunnel_charges_only_the_provider_rub_receipt():
+    from decimal import Decimal
+
+    from yleum_gateway.services.pricing import read_reported_cost, resolve_request_cost
+
+    usage = {"tokens_in": 2000, "tokens_out": 1000, "cache_read_tokens": 500}
+    reported = read_reported_cost({"usage": {"cost_rub": 2.79, "cost": 2.79}}, {}, provider_scope="aitunnel")
+    cost, receipt = await resolve_request_cost("kimi-k3.1-pro", **usage, reported=reported, provider_scope="aitunnel")
+    assert cost == Decimal("2.79")
+    assert receipt["basis"] == "provider_reported_rub"
+    assert receipt["rub_source"] == "usage:cost_rub"
+    assert receipt["calculated_cost_rub"] is receipt["tariff"] is None
 
 
 def test_legacy_native_usage_keeps_cache_clamping_policy():
@@ -201,6 +227,8 @@ def test_legacy_native_usage_keeps_cache_clamping_policy():
     "qa_missing_attempt", "qa_forged_signature", "qa_conflicting_hold",
     "qa_unit_policy", "qa_wrong_stage", "qa_metadata_spoof",
     "unit_message", "qa_message", "unit_foreign_message", "qa_foreign_message", "unit_invalid_message",
+    "repair_scoped", "repair_wrong_window", "repair_missing_message", "repair_backup", "repair_ambiguous",
+    "repair_backup_pending", "repair_backup_bad_id",
 
 ])
 def test_kimi_native_route_requires_configured_owned_billing_policy(monkeypatch, owner, gate):
@@ -220,6 +248,8 @@ def test_kimi_native_route_requires_configured_owned_billing_policy(monkeypatch,
     from yleum_gateway.services.generation_identity import request_digest
 
     message_ids = {"user": uuid4(), "assistant": uuid4(), "foreign": uuid4()}
+    repair = gate.startswith("repair_")
+    backup = gate.startswith("repair_backup")
     supplied_message = {
         "unit_message": str(message_ids["assistant"]),
         "qa_message": str(message_ids["user"]),
@@ -227,10 +257,15 @@ def test_kimi_native_route_requires_configured_owned_billing_policy(monkeypatch,
         "qa_foreign_message": str(message_ids["foreign"]),
         "unit_invalid_message": "invalid",
     }.get(gate)
+    if repair and gate != "repair_missing_message":
+        supplied_message = str(message_ids["assistant"])
     qa_request = gate.startswith("qa_")
     qa_policy = qa_request and gate != "qa_unit_policy"
     allowed = uuid4() if gate == "foreign_project" else owner.project_id
     monkeypatch.setenv("MAX_KIMI_PILOT_PROJECT_IDS", "" if gate == "off" else str(allowed))
+    monkeypatch.setenv("MAX_KIMI_REPAIR_PROJECT_IDS", str(allowed) if repair else "")
+    monkeypatch.setenv("AITUNNEL_TEXT_FALLBACK_ENABLED", "true" if repair else "false")
+    monkeypatch.setenv("AITUNNEL_TEXT_API_KEY", "test-backup")
     monkeypatch.setenv("GENERATION_PROVIDER_ATTEMPTS_ENABLED", "true")
     monkeypatch.setenv("GENERATION_RESPONSE_RETENTION_ENABLED", "true")
     monkeypatch.setenv("GENERATION_RESPONSE_SIGNING_SECRET", "x"*64)
@@ -268,6 +303,7 @@ def test_kimi_native_route_requires_configured_owned_billing_policy(monkeypatch,
                     "state": None if qa_policy else "held", "units": None if qa_policy else 1,
                     "allocations": [{"grant_id": str(owner.run_id), "units": 1}],
                     "response_mode": "edit" if gate == "signed_edit" else "build",
+                    "repair_window": repair and gate != "repair_wrong_window",
                     "assistant_message_id": message_ids["assistant"], "user_message_id": message_ids["user"],
                     "project_template": "max_miniapp", "run_prompt_hash": owner.prompt_hash,
                     "frozen_model": "claude-sonnet-5.5" if gate == "wrong_frozen_model" else "kimi-k3.1-pro",
@@ -279,6 +315,19 @@ def test_kimi_native_route_requires_configured_owned_billing_policy(monkeypatch,
                 if gate == "qa_missing_attempt":
                     return None
                 return {"request_sha256": submitted[-1].request_sha256, "prompt_hash": owner.prompt_hash}
+            if "SELECT a.parent_attempt_id" in query:
+                assert repair and args[0] == submitted[-1].attempt_id
+                if backup and len(submitted) == 2:
+                    assert submitted[0].request_sha256 == submitted[1].request_sha256
+                    assert finish.await_args.kwargs["reason"] == "preconnect"
+                    return {
+                        "parent_attempt_id": submitted[0].attempt_id,
+                        "backup_allowed": True, "settled_scope": None,
+                    }
+                return {
+                    "parent_attempt_id": None, "backup_allowed": False,
+                    "settled_scope": "aitunnel" if backup and len(submitted) == 4 else None,
+                }
             if query.startswith("SELECT u.role"):
                 assert args == (owner.user_id,)
                 if gate == "qa_no_plan":
@@ -296,6 +345,9 @@ def test_kimi_native_route_requires_configured_owned_billing_policy(monkeypatch,
             return {"bucket": "edit" if gate == "edit_hold" else "initial", "units": 1}
 
         async def fetchval(self, query, *args):
+            if "WITH RECURSIVE chain" in query:
+                assert repair and args[7] == "kimi-k3.1-pro"
+                return False
             assert query.startswith("SELECT personal_user_id")
             return owner.user_id
 
@@ -306,6 +358,7 @@ def test_kimi_native_route_requires_configured_owned_billing_policy(monkeypatch,
 
     submitted = []
     monkeypatch.setattr(messages_native.billing, "get_pool", Pool)
+    monkeypatch.setattr(messages_native.text_failover, "get_pool", Pool)
     monkeypatch.setattr(messages_native.billing, "charge", charge)
     wallet = AsyncMock(side_effect=AssertionError("Kimi cannot use a wallet precheck"))
     monkeypatch.setattr(messages_native.billing, "precheck_balance", wallet)
@@ -313,7 +366,8 @@ def test_kimi_native_route_requires_configured_owned_billing_policy(monkeypatch,
     posts = []
 
     @asynccontextmanager
-    async def timed_transport(url, payload, headers, *, deadline, evidence, provider_scope):
+    async def timed_transport(url, payload, headers, *, deadline, evidence, provider_scope, read_until_deadline=False):
+        assert read_until_deadline is repair
         assert provider_scope == "llmgw"
         assert url == "https://llmgw.example.invalid/v1/chat/completions"
         assert payload["model"] == "moonshotai/kimi-k3.1-pro"
@@ -321,9 +375,13 @@ def test_kimi_native_route_requires_configured_owned_billing_policy(monkeypatch,
         assert all("cache_control" not in item for item in [*payload["messages"], *payload["tools"]])
         assert payload["messages"][0] == {"role": "system", "content": "instructions"}
         posts.append(payload)
-        if gate == "unknown_upstream":
+        if gate in {"unknown_upstream", "repair_ambiguous"}:
             evidence["transport_stage"] = "body"
             raise httpx.ReadTimeout("modeled upstream body timeout")
+        if backup:
+            assert len(posts) == 1
+            evidence["transport_stage"] = "connect"
+            raise httpx.ConnectError("modeled failure before sending request")
         data = _response("aitunnel" if gate == "provider_mismatch" else "llmgw")
         if gate in {"valid_prose", "reasoning_only"}:
             data["choices"][0]["finish_reason"] = "stop"
@@ -358,6 +416,23 @@ def test_kimi_native_route_requires_configured_owned_billing_policy(monkeypatch,
     monkeypatch.setattr(messages_native, "open_timed_response", timed_transport)
     monkeypatch.setattr(messages_native, "_post_llmgw", lambda *args, **kwargs: pytest.fail("untimed POST"))
 
+    @asynccontextmanager
+    async def backup_transport(url, payload, headers, *, deadline, evidence):
+        assert backup
+        assert url == "https://api.aitunnel.ru/v1/chat/completions"
+        assert payload["model"] == "kimi-k3.1-pro"
+        posts.append(payload)
+        data = _response("aitunnel")
+        data["id"] = f"chat-{len(posts):022d}"
+        data["usage"]["cost_rub"] = 0.46
+        headers = {
+            "repair_backup_pending": {"x-aitunnel-cost-pending": "true"},
+            "repair_backup_bad_id": {"x-request-id": "foreign-request"},
+        }.get(gate, {"x-request-id": data["id"]})
+        yield httpx.Response(200, json=data, headers=headers)
+
+    monkeypatch.setattr(messages_native, "open_aitunnel_response", backup_transport)
+
     cache_control = {"type": "ephemeral", "ttl": "5m"}
     body = {"model": "moonshotai/kimi-k3.1-pro",
             "system": [{"type": "text", "text": "instructions", "cache_control": cache_control}],
@@ -365,7 +440,7 @@ def test_kimi_native_route_requires_configured_owned_billing_policy(monkeypatch,
             "tools": [{"name": "inspect", "cache_control": cache_control}],
             "metadata": {"user_id": str(owner.user_id), "project_id": str(owner.project_id),
                          "run_id": str(owner.run_id),
-                         "stage": "director" if gate == "qa_wrong_stage" else "build_plan",
+                         "stage": "source_repair" if repair else "director" if gate == "qa_wrong_stage" else "build_plan",
                          "free": "true" if gate == "qa_metadata_spoof" else qa_request}}
 
     def submit(client, body):
@@ -403,7 +478,25 @@ def test_kimi_native_route_requires_configured_owned_billing_policy(monkeypatch,
                 body["messages"][1]["content"][-1]["token"] = "invalid history"
             result = submit(client, body)
             assert result.status_code == (400 if gate == "tampered_history" else 200), result.json()
-        elif gate in {"qa_valid", "unit_message", "qa_message"}:
+        elif backup:
+            assert result.status_code == 502, result.json()
+            assert result.json()["error"]["details"]["retry_safe"] is True
+            result = submit(client, body)
+            if gate == "repair_backup":
+                assert result.status_code == 200, result.json()
+                answer = result.json()
+                assert answer["metadata"]["cost_provenance"]["rub_source"] == "usage:cost_rub"
+                body["messages"] = _history(answer["content"])["messages"]
+                result = submit(client, body)
+                assert result.status_code == 200, result.json()
+                prior = next(item for item in posts[2]["messages"] if item["role"] == "assistant")
+                assert "reasoning_content" not in prior and prior["reasoning_details"]
+                body["messages"] = [{"role": "user", "content": "Continue on the same draft"}]
+                assert submit(client, body).status_code == 200
+            else:
+                assert result.status_code == 503, result.json()
+                assert finish.await_args.kwargs["status"] == "ambiguous"
+        elif gate in {"qa_valid", "unit_message", "qa_message", "repair_scoped"}:
             assert result.status_code == 200, result.json()
             assert result.json()["metadata"]["cost_provenance"]["basis"] == "provider_catalog_estimate"
         elif gate == "paid_cache_write":
@@ -430,14 +523,23 @@ def test_kimi_native_route_requires_configured_owned_billing_policy(monkeypatch,
                 "qa_wrong_stage": 409, "qa_metadata_spoof": 409, "qa_wrong_plan": 409,
                 "qa_paused": 409, "qa_conflicting_hold": 409,
                 "unit_foreign_message": 409, "qa_foreign_message": 409, "unit_invalid_message": 409,
+                "repair_wrong_window": 409, "repair_missing_message": 409, "repair_ambiguous": 503,
             }[gate], result.json()
 
     wallet.assert_not_awaited()
-    if gate in {"valid", "valid_prose"}:
+    if gate == "repair_backup":
+        assert len(posts) == dispatch.await_count == finish.await_count == 4
+        assert charge.await_count == 3
+        assert len({call.kwargs["provider_request_id"] for call in charge.await_args_list}) == 3
+        assert all(call.kwargs["provider_scope"] == "aitunnel" for call in charge.await_args_list)
+    elif backup:
+        assert len(posts) == dispatch.await_count == finish.await_count == 2
+        charge.assert_not_awaited()
+    elif gate in {"valid", "valid_prose"}:
         assert len(posts) == dispatch.await_count == finish.await_count == charge.await_count == 2
         prior = next(item for item in posts[1]["messages"] if item["role"] == "assistant")
         assert prior["reasoning_content"] == "reasoning-is-private"
-    elif gate in {"qa_valid", "unit_message", "qa_message"}:
+    elif gate in {"qa_valid", "unit_message", "qa_message", "repair_scoped"}:
         assert len(posts) == dispatch.await_count == finish.await_count == charge.await_count == 1
         assert dispatch.await_args.kwargs["free"] is qa_request
         assert charge.await_args.kwargs["free"] is qa_request
@@ -465,7 +567,7 @@ def test_kimi_native_route_requires_configured_owned_billing_policy(monkeypatch,
             "version": 1, "format": "json", "status": 502,
             "body": result.json(), "identity": submitted[-1].to_wire(),
         }
-    elif gate in {"provider_mismatch", "unknown_upstream", "missing_usage", "zero_usage",
+    elif gate in {"provider_mismatch", "unknown_upstream", "repair_ambiguous", "missing_usage", "zero_usage",
                   "zero_cost", "unknown_cache_write", "cache_read_exceeds_input",
                   "cache_writes_clipped_to_zero", "cache_alias_conflict", "malformed_cache"}:
         assert len(posts) == dispatch.await_count == finish.await_count == 1

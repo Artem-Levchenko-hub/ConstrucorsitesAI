@@ -30,6 +30,18 @@ def test_business_readiness_uses_only_the_reserved_product_read_route():
     assert resolve({}) is None
 
 
+@pytest.mark.parametrize("placeholder", [
+    "/*\nexport async function GET() { return await readProductData(); }\n*/",
+    "const template = `\nexport const GET = readProductData;\n`;",
+])
+def test_business_readiness_requires_an_actual_export(placeholder: str) -> None:
+    from yleum_api.services.max_runtime_routes import resolve_max_business_probe_path
+
+    assert resolve_max_business_probe_path(
+        {"src/app/api/yleum-readiness/route.ts": placeholder},
+    ) is None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("unauthenticated_status", [401, 200, 502])
 async def test_portable_runtime_requires_negative_auth_and_trusted_identity(

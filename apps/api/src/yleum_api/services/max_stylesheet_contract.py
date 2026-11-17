@@ -1,14 +1,17 @@
 """Detect a proven home-route component whose CSS styles a different class family."""
 from __future__ import annotations
 
-import posixpath
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from functools import cache
 
-import tree_sitter_typescript
-from tree_sitter import Language, Node, Parser
+from tree_sitter import Node, Parser
+
+from yleum_api.services.max_typescript_source import language as _language
+from yleum_api.services.max_typescript_source import node_text as _text
+from yleum_api.services.max_typescript_source import resolve_local_import as _resolve
+from yleum_api.services.max_typescript_source import static_imports as _imports
+from yleum_api.services.max_typescript_source import string_literal as _literal
 
 _HOME = "src/app/page.tsx"
 _ROOT_LAYOUT = "src/app/layout.tsx"
@@ -43,54 +46,6 @@ _TYPE_SELECTOR = re.compile(r"(?:\A|[\s,>+~(])([a-z][a-z0-9]*)(?=$|[\s.#:[,>+~)]
 _CLASS_ATTRIBUTE = re.compile(r"\[\s*+class\b", re.IGNORECASE)
 _CSS_IMPORT = re.compile(r"""@import\s++(?:url\(\s*+)?["']([^"']++)["']""")
 _CSS_UTILITY = re.compile(r"@utility\s+([\w-]+\*?)\Z")
-
-
-@cache
-def _language(jsx: bool) -> Language:
-    return Language(
-        tree_sitter_typescript.language_tsx()
-        if jsx else tree_sitter_typescript.language_typescript()
-    )
-
-
-def _text(node: Node | None) -> str:
-    return (node.text or b"").decode() if node is not None else ""
-
-
-def _literal(node: Node | None) -> str:
-    if node is not None and node.type == "jsx_expression" and node.named_child_count == 1:
-        node = node.named_children[0]
-    if node is None or node.type != "string" or node.named_child_count != 1:
-        return ""
-    fragment = node.named_children[0]
-    return _text(fragment) if fragment.type == "string_fragment" else ""
-
-
-def _imports(root: Node) -> Iterator[tuple[str, Node]]:
-    for statement in root.named_children:
-        if statement.type in {"import_statement", "export_statement"} and not any(
-            child.type == "type" for child in statement.children
-        ):
-            if source := _literal(statement.child_by_field_name("source")):
-                yield source, statement
-
-
-def _resolve(path: str, source: str, files: Mapping[str, str]) -> str | None:
-    if source.startswith("@/"):
-        base = posixpath.normpath("src/" + source[2:])
-    elif source.startswith(("./", "../")):
-        base = posixpath.normpath(posixpath.join(posixpath.dirname(path), source))
-    else:
-        return None
-    if base in files:
-        return base
-    return next(
-        (
-            stem + suffix for stem in (base, f"{base}/index")
-            for suffix in _SCRIPT_SUFFIXES if stem + suffix in files
-        ),
-        None,
-    )
 
 
 def _exported_body(root: Node, name: str) -> Node | None:

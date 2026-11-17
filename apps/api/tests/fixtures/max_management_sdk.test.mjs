@@ -41,6 +41,7 @@ function runtime(overrides = {}, transport, browser, initialActor = "42") {
     );
     let source = stripTypeScriptTypes(
       readFileSync(resolve(base, "src", path), "utf8"),
+      { mode: "transform" },
     );
     source = source
       .replace(
@@ -794,6 +795,76 @@ async function portableManagementDatabase(t) {
   );
   return { engine, pool };
 }
+
+test("managed and amoCRM lead paths in one app each keep one own receipt",
+  { skip: !pgliteModule && !nativePgUrl }, async t => {
+    const { pool } = await portableManagementDatabase(t);
+    const crmOrigin = "https://fixture-platform.invalid";
+    const upstream = `/api/runtime/projects/${ids[0]}`;
+    const crmWrites = [];
+    let actor = "42";
+    const crmLead = { name: "CRM request", idempotency_key: ids[1] };
+    const crmReceipt = { provider: "amocrm", id: "123", details_status: "recorded", warning: null };
+    const app = runtime({
+      OMNIA_PROJECT_ID: ids[0],
+      OMNIA_PLATFORM_API_URL: crmOrigin,
+      MAX_BOT_TOKEN: "fixture-bot-token",
+    }, (url, options) => {
+      const request = new Request(new URL(url, "https://one.app.test"), options);
+      const path = new URL(request.url).pathname;
+      if (path === "/api/max/session") return Response.json({ user: { id: actor } });
+      if (path === "/api/omnia/business/leads") {
+        return app.load("app/api/omnia/business/[resource]/route.ts")[request.method](
+          request, { params: Promise.resolve({ resource: "leads" }) },
+        );
+      }
+      if (path.startsWith("/api/omnia/integrations/")) {
+        return app.load("app/api/omnia/integrations/[...path]/route.ts").POST(request, {
+          params: Promise.resolve({ path: [path.split("/").at(-1)] }),
+        });
+      }
+      assert.equal(new URL(request.url).origin, crmOrigin);
+      assert.ok(request.headers.has("X-Omnia-Integration-Assertion"));
+      if (path === upstream + "/integrations") {
+        assert.equal(request.method, "GET");
+        return Response.json({ providers: ["amocrm"], capabilities: ["leads"] });
+      }
+      assert.equal(path, upstream + "/leads");
+      if (request.method === "POST") {
+        crmWrites.push(JSON.parse(options.body));
+        return Response.json(crmReceipt);
+      }
+      assert.equal(request.method, "GET");
+      return Response.json({
+        items: actor === "42" && crmWrites.length ? [crmReceipt] : [],
+        has_more: false,
+      });
+    }, intentBrowser());
+    app.dependencies.set("@/lib/db", { pool });
+    app.dependencies.set("next/server", { NextResponse: Response });
+    app.dependencies.set("@/lib/max/session", { getMaxUser: async () => ({ id: actor }) });
+    app.dependencies.set("@/lib/max/bridge", { getMaxWebApp: () => undefined });
+    app.dependencies.set("@/lib/omnia/management-config", { getManagementContract: async () => fixture });
+    app.dependencies.set("@/lib/omnia/analytics", { forwardMaxAnalytics: async () => {} });
+
+    const managed = app.load("lib/omnia/business-client.ts");
+    const crm = app.load("lib/omnia/integration-client.ts");
+    assert.deepEqual((await crm.getYleumIntegrations()).providers, ["amocrm"]);
+    const local = await managed.createManagedLead(lead);
+    assert.equal((await managed.createManagedLead(lead)).id, local.id);
+    assert.deepEqual(crmWrites, []);
+    assert.deepEqual(await crm.createYleumLead(crmLead), crmReceipt);
+    assert.deepEqual(crmWrites, [crmLead]);
+    assert.deepEqual((await managed.getManagedRecords("leads")).records.map(row => row.id), [local.id]);
+    assert.deepEqual((await crm.getYleumLeads()).items, [crmReceipt]);
+    assert.equal(app.calls.some(({ url }) => url.startsWith("/api/omnia/actions")), false);
+
+    actor = "43";
+    app.setActor(actor);
+    assert.equal((await managed.getManagedRecords("leads")).records.length, 0);
+    assert.equal((await crm.getYleumLeads()).items.length, 0);
+    assert.deepEqual(crmWrites, [crmLead]);
+  });
 
 test("signed exact read isolates the record, project, resource and full MAX actor ID",
   { skip: !pgliteModule && !nativePgUrl }, async t => {

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
+
+import tree_sitter_typescript
+from tree_sitter import Language, Node, Parser
 
 _MAX_HOME_PAGE = "src/app/page.tsx"
 MAX_PRODUCT_READINESS_PATH = "/api/yleum-readiness"
-_READ_HANDLER = re.compile(r"(?m)^\s*export\s+(?:(?:async\s+)?function|const)\s+GET\b")
+_ROUTE_LANGUAGE = Language(tree_sitter_typescript.language_typescript())
 _PORTABLE_ROOT_FALLBACKS: tuple[tuple[str, str], ...] = (
     ("/support", "src/app/support/page.tsx"),
     ("/legal/privacy", "src/app/legal/privacy/page.tsx"),
@@ -15,12 +17,40 @@ _PORTABLE_ROOT_FALLBACKS: tuple[tuple[str, str], ...] = (
 )
 
 
+def _exports_get(statement: Node) -> bool:
+    if statement.type != "export_statement" or statement.has_error:
+        return False
+    declaration = statement.child_by_field_name("declaration")
+    if declaration is None or any(child.type == "default" for child in statement.children):
+        return False
+    handlers: tuple[Node, ...]
+    if declaration.type == "function_declaration":
+        handlers = (declaration,)
+    elif declaration.type == "lexical_declaration" and declaration.children[0].type == "const":
+        handlers = tuple(
+            child for child in declaration.named_children
+            if child.type == "variable_declarator"
+            and child.child_by_field_name("value") is not None
+        )
+    else:
+        return False
+    return any(
+        (name := handler.child_by_field_name("name")) is not None
+        and name.type == "identifier" and name.text == b"GET"
+        for handler in handlers
+    )
+
+
 def resolve_max_business_probe_path(files: Mapping[str, str]) -> str | None:
     """Opt in via the reserved, read-only product endpoint, without guessing API paths."""
     for extension in ("ts", "js"):
-        source = files.get(f"src/app{MAX_PRODUCT_READINESS_PATH}/route.{extension}", "")
-        if _READ_HANDLER.search(source):
+        source = files.get(f"src/app{MAX_PRODUCT_READINESS_PATH}/route.{extension}")
+        if source is None:
+            continue
+        module = Parser(_ROUTE_LANGUAGE).parse(source.encode("utf-8")).root_node
+        if any(_exports_get(statement) for statement in module.named_children):
             return MAX_PRODUCT_READINESS_PATH
+        break
     return None
 
 

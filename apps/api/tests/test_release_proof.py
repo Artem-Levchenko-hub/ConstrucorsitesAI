@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from yleum_api.core.config import get_settings
@@ -44,10 +45,11 @@ async def test_release_proof_uses_only_selected_project_cell_runtime(monkeypatch
     async def forbidden(*_args, **_kwargs):
         raise AssertionError("legacy orchestrator path must not be used")
 
-    async def cell_probe(session, *, path, fallback_paths=()):
+    async def cell_probe(session, *, path, fallback_paths=(), **proof_options):
         assert session is preview
         assert path == "/"
         assert fallback_paths == ()
+        assert set(proof_options.values()) == {None}
         calls.append("max_cell_probe")
         return MaxRuntimeProbe(True, "cell protected data verified")
 
@@ -110,10 +112,11 @@ async def test_release_proof_uses_fallback_probe_route_when_home_page_is_missing
     async def forbidden(*_args, **_kwargs):
         raise AssertionError("legacy orchestrator path must not be used")
 
-    async def cell_probe(session, *, path, fallback_paths=()):
+    async def cell_probe(session, *, path, fallback_paths=(), **proof_options):
         assert session is preview
         assert path == "/"
         assert fallback_paths == ("/support",)
+        assert set(proof_options.values()) == {None}
         calls.append("max_cell_probe")
         return MaxRuntimeProbe(True, "cell protected data verified via /support")
 
@@ -136,6 +139,93 @@ async def test_release_proof_uses_fallback_probe_route_when_home_page_is_missing
 
     assert verdict.passed
     assert calls == ["build", "runtime_check", "preview_session", "max_cell_probe"]
+
+
+@pytest.mark.parametrize("declares_readiness", [True, False])
+@pytest.mark.parametrize("portable", [True, False])
+async def test_proofless_release_reads_only_declared_product_readiness(
+    monkeypatch: pytest.MonkeyPatch, declares_readiness: bool, portable: bool,
+) -> None:
+    origin = "https://audit-dev.preview.example"
+    project_id = uuid4()
+    preview = SimpleNamespace(
+        preview_url=origin,
+        bootstrap_url=f"{origin}/api/omnia/preview-session",
+    )
+    requested = []
+    client_type = httpx.AsyncClient
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        requested.append(request.url.path)
+        if request.url.path == "/api/omnia/preview-session":
+            return httpx.Response(200, headers={"Set-Cookie": "preview=fixture; Path=/; Secure"})
+        if request.url.path == "/__omnia/identity":
+            if request.headers.get("cookie") != "preview=fixture":
+                return httpx.Response(401)
+            return httpx.Response(200, json={
+                "project_id": str(project_id), "user_id": "preview", "epoch": 7,
+            })
+        assert request.headers.get("cookie") == "preview=fixture"
+        if request.url.path == "/api/omnia/actions":
+            return httpx.Response(200, json={"actions": []})
+        if request.url.path == "/":
+            return httpx.Response(200)
+        assert request.url.path == "/api/yleum-readiness"
+        return httpx.Response(500, json={"error": "synthetic DB query failure"})
+
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kwargs: client_type(
+            transport=httpx.MockTransport(serve), **kwargs,
+        ),
+    )
+    settings = get_settings().model_copy(update={"use_security_gate": False})
+    monkeypatch.setattr(release_proof, "get_settings", lambda: settings)
+
+    async def execute(action):
+        assert action.name in {"build", "runtime_check"}
+        return {"ok": True}
+
+    async def create_preview_session():
+        return preview
+
+    async def snapshot_files():
+        product_handler = "export async function GET() { return await readProductData(); }"
+        files = {
+            "src/app/page.tsx": "export default function Page() { return null; }",
+            "src/app/api/custom/route.ts": product_handler,
+        }
+        if declares_readiness:
+            files["src/app/api/yleum-readiness/route.ts"] = product_handler
+        return files
+
+    verdict = await release_proof.run_release_proof(
+        project_id,
+        "max-app",
+        require_max_data=True,
+        project_cell_handle=SimpleNamespace(
+            execute=execute,
+            create_preview_session=create_preview_session,
+            snapshot_files=snapshot_files,
+            is_portable=lambda: portable,
+            control_fencing_epoch=7,
+            restoration_adaptation_workspace=None,
+        ),
+    )
+
+    assert verdict.passed is (not declares_readiness)
+    expected_paths = ["/api/omnia/preview-session", "/", "/api/omnia/actions"]
+    if portable and declares_readiness:
+        identity_path = "/__omnia/identity"
+        expected_paths = [identity_path, identity_path, *expected_paths, identity_path]
+    if declares_readiness:
+        expected_paths.append("/api/yleum-readiness")
+        assert Check(
+            "max_data_plane", False,
+            "signed_business_route_failed: GET /api/yleum-readiness (HTTP 500)",
+        ) in verdict.checks
+        assert "synthetic DB query failure" not in verdict.summary
+    assert requested == expected_paths
 
 
 async def test_release_proof_preserves_cell_runtime_failure_detail(monkeypatch) -> None:

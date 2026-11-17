@@ -18,7 +18,10 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 
+from yleum_api.services.build_plan import max_request_build_plan
+from yleum_api.services.max_api_source_contract import max_api_source_gap, next_api_sources
 from yleum_api.services.max_stylesheet_contract import disconnected_component_styles_gap
+from yleum_api.services.max_typescript_source import next_router_roots
 
 _WIZARD_INFRASTRUCTURE = (
     "Используй готовую обвязку MAX Bridge, серверную проверку initData, "
@@ -373,15 +376,18 @@ def _product_request_text(prompt: str) -> str:
     return _WIZARD_OWNER_MANAGEMENT_RE.sub("", prompt.replace(_WIZARD_INFRASTRUCTURE, ""))
 
 
-def positive_request_scope(prompt: str) -> str:
-    """Keep requested clauses and trim explicit exclusions at their lexical boundary."""
+def positive_request_clauses(prompt: str) -> tuple[str, ...]:
     text = _without_excluded_lists(_product_request_text(prompt))
-    clauses = _REQUEST_CLAUSE_SEPARATOR.split(text)
-    return " ".join(
+    return tuple(
         re.split(_EXCLUSION_PREFIX, clause, maxsplit=1, flags=re.IGNORECASE)[0]
-        for clause in clauses
+        for clause in _REQUEST_CLAUSE_SEPARATOR.split(text)
         if not _KEEP_UNCHANGED.search(clause)
     )
+
+
+def positive_request_scope(prompt: str) -> str:
+    """Keep requested clauses and trim explicit exclusions at their lexical boundary."""
+    return " ".join(positive_request_clauses(prompt))
 
 
 def _without_excluded_lists(prompt: str) -> str:
@@ -443,9 +449,6 @@ def requested_max_capabilities(prompt: str) -> list[tuple[str, str, tuple[str, .
 _API_ONLY_RE = re.compile(
     r"\b(?:api[- ]only|backend[- ]only|only\s+api|api\s+only|только\s+api)\b",
     re.IGNORECASE,
-)
-_NEXT_API_ROUTE_RE = re.compile(
-    r"(?:src/)?(?:app/api/(?!yleum-readiness/).+/route|pages/api/.+)\.(?:tsx|ts|jsx|js)"
 )
 
 
@@ -645,29 +648,27 @@ def max_source_completion_gap(
         if visible_filter_gap:
             return visible_filter_gap
 
-    if api_only and (
-        not portable or any(path.startswith(("src/app/", "app/", "src/pages/")) for path in files)
-    ) and not any(
-        _NEXT_API_ROUTE_RE.fullmatch(path) and _is_product_source(path) and content.strip()
-        for path, content in files.items()
-    ):
+    build_plan = max_request_build_plan(prompt)
+    api_sources = next_api_sources(files) if api_only or not build_plan.is_empty else ()
+    plan_gap = max_api_source_gap(files, api_sources, build_plan)
+    if plan_gap:
+        return plan_gap
+    if api_only and (not portable or next_router_roots(files)) and not api_sources:
         return "Implement the requested product API route before done."
 
     if portable:
         from yleum_api.services.portable_cell_contract import portable_source_gap
 
-        managed_history = any(
-            "getYleumLeads" in _managed_lead_calls(content)
-            for path, content in files.items()
-            if _is_product_source(path)
-        )
-        managed_capabilities = management_implemented_capabilities(files)
+        def implemented_capabilities(modules: Mapping[str, str]) -> frozenset[str]:
+            managed_capabilities = management_implemented_capabilities(files)
+            if any("getYleumLeads" in _managed_lead_calls(content) for content in modules.values()):
+                return managed_capabilities | {"history"}
+            return managed_capabilities
+
         return portable_source_gap(
             files,
             capabilities,
-            implemented_capabilities=managed_capabilities | (
-                frozenset({"history"}) if managed_history else frozenset()
-            ),
+            implemented_capabilities=implemented_capabilities,
         )
     page = files.get("src/app/page.tsx", "")
     if not page:

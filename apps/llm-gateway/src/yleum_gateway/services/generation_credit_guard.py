@@ -8,6 +8,7 @@ from yleum_gateway.core.errors import BillingReconciliationRequiredError
 from yleum_gateway.services.generation_identity import GenerationProviderIdentity
 
 KIMI_PILOT_STAGES = frozenset({"build_plan", "native_agent", "verification"})
+KIMI_REPAIR_STAGE = "source_repair"
 
 _STAGES = {
     None,
@@ -37,7 +38,9 @@ async def _read_coverage(conn: Any, run_id: UUID, *, initial_build: bool) -> Any
         r.agent_state #>> '{dispatch,user_id}' AS dispatch_user,
         r.agent_state #>> '{dispatch,project_id}' AS dispatch_project,
         (r.agent_state #> '{dispatch,schema_version}' = '1'::jsonb
-         AND r.agent_state #> '{dispatch,is_free}' = to_jsonb(p.is_free)) AS dispatch_policy_eligible
+         AND r.agent_state #> '{dispatch,is_free}' = to_jsonb(p.is_free)) AS dispatch_policy_eligible,
+        (r.agent_state #>> '{recovery_v1,execution,stage}' = 'finalization'
+         AND r.agent_state #> '{recovery_v1,execution,budget,repair_calls}' = '2'::jsonb) AS repair_window
     """ if initial_build else ""
     return await conn.fetchrow(
         "SELECT p.version,p.is_free,r.user_id,r.project_id,pr.owner_id AS project_owner,"
@@ -55,11 +58,17 @@ def _initial_build_matches(
 ) -> bool:
     return (
         row["response_mode"] == "build"
-        and row["project_template"] == "max_miniapp"
-        and row["user_id"] == row["project_owner"] == identity.user_id
-        and row["project_id"] == identity.project_id
+        and _max_dispatch_matches(row, identity)
         and (message_id is None or message_id in {row["user_message_id"], row["assistant_message_id"]})
         and row["frozen_model"] == model
+    )
+
+
+def _max_dispatch_matches(row: Any, identity: GenerationProviderIdentity) -> bool:
+    return (
+        row["project_template"] == "max_miniapp"
+        and row["user_id"] == row["project_owner"] == identity.user_id
+        and row["project_id"] == identity.project_id
         and row["run_prompt_hash"] == identity.prompt_hash
         and row["dispatch_user"] == str(identity.user_id)
         and row["dispatch_project"] == str(identity.project_id)
@@ -105,6 +114,22 @@ async def kimi_pilot_allowed(
     conn: Any, identity: GenerationProviderIdentity, stage: str, model: str,
     *, requested_free: bool, message_id: UUID | None = None,
 ) -> bool:
+    if stage == KIMI_REPAIR_STAGE:
+        row = await _read_coverage(conn, identity.run_id, initial_build=True)
+        if (
+            not row or row["status"] != "running" or row["response_mode"] not in {"build", "edit"}
+            or row["repair_window"] is not True
+            or message_id is None or row["assistant_message_id"] != message_id
+            or row["is_free"] is not requested_free or not _max_dispatch_matches(row, identity)
+        ):
+            return False
+        if requested_free:
+            return bool(
+                row["version"] == "accepted-build-v1" and row["kind"] is None
+                and await _attempt_matches(conn, identity)
+                and await _has_active_qa_plan(conn, identity.user_id)
+            )
+        return await covered(conn, identity.user_id, identity.project_id, identity.run_id, stage, identity)
     if stage not in KIMI_PILOT_STAGES:
         return False
     if not requested_free:

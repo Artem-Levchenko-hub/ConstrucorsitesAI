@@ -1,8 +1,11 @@
-"""Pure source-change requirements shared by both agent loops and finalization."""
+"""Source-change requirements and analysis-only intent shared across generation."""
 
 from __future__ import annotations
 
 import re
+from typing import Literal
+
+READONLY_SOURCE_TURN_KEY = "readonly_source_turn"
 
 
 def _unquoted_request(prompt: str) -> str:
@@ -43,8 +46,9 @@ def requested_source_edit(prompt: str) -> bool:
             return False
     commands = re.compile(
         r"\b(?:добавь|исправь|измени|поменяй|замени|удали|убери|устрани|реализуй|"
-        r"сделай|обнови|доработай|"
-        r"fix|add|change|modify|edit|replace|remove|delete|implement|update)\b"
+        r"сделай|обнови|доработай|почини|создай|собери|пересобери|разверни|опубликуй|"
+        r"fix|add|change|modify|edit|replace|remove|delete|implement|update|"
+        r"repair|create|build|rebuild|deploy|publish)\b"
     )
     # Nominal requests ("Нужно поле даты", "Нужна сортировка") are ordinary
     # change requests too. Keep their entire clause so commas/colons do not
@@ -93,16 +97,25 @@ def requested_source_edit(prompt: str) -> bool:
         # Only a separate imperative ("inspect ... and fix ...") exits that scope.
         if re.match(
             r"\s*(?:please\s+)?(?:review|inspect|continue|explain|investigate|check|"
-            r"analy[sz]e|проверь|объясни|расскажи|исследуй|проанализируй|продолжи)\b",
+            r"analy[sz]e|проверь|объясни|расскажи|исследуй|проанализируй|продолжи|"
+            r"как|почему|how|why)\b",
             clause,
         ):
             edit_clause = re.search(r"\b(?:and|и)\s+(?=" + commands.pattern + ")", clause)
-            if edit_clause is None or re.match(
-                r"\s*(?:please\s+)?(?:explain|объясни|расскажи)\b",
-                clause,
+            if edit_clause is None:
+                continue
+            scope = clause[:edit_clause.start()]
+            clause = clause[edit_clause.end() :]
+            # English infinitives and UI labels can be coordinated inside the question.
+            if re.search(
+                r"\b(?:(?:how|when|whether)\s+to|(?:how|why|whether|if)\s+"
+                r"(?:i|you|we|they)\s+(?:can|could|should|would|must|might|may))\b",
+                scope,
+            ) or (
+                re.search(r"\b(?:the|these|those)\s+" + commands.pattern + r"\s+$", scope)
+                and re.match(commands.pattern + r"\s+(?:actions?|buttons?|controls?)\b", clause)
             ):
                 continue
-            clause = clause[edit_clause.end() :]
         for match in commands.finditer(clause):
             prefix = clause[: match.start()]
             # English verbs are also nouns: require an actual leading imperative,
@@ -132,41 +145,32 @@ def explicitly_readonly_request(prompt: str) -> bool:
     )
 
 
-def source_change_required(prompt: str) -> bool:
-    """One existing-product contract for early progress and final acceptance.
+def _source_intent(prompt: str) -> Literal["edit", "readonly", "optional"]:
+    """Classify one owner turn without turning a continuation into an analysis."""
 
-    Builder admission already selected a product turn. Unknown wording therefore
-    cannot turn a clean old build into a successful modification. Explicit
-    analysis/read-only requests remain non-writing; a real change command in a
-    mixed request keeps its existing precedence.
-    """
     text = _without_polite_prefix(_unquoted_request(prompt))
-    # Preserving business data restricts side effects, not application edits.
-    # Remove only that whole scoped instruction before classifying the rest.
-    clauses = [
-        _without_polite_prefix(clause)
-        for clause in re.split(r"[.!;\n]", text)
-        if clause.strip()
-    ]
-    clauses = [
-        re.sub(
-            r"^(ничего\s+не\s+(?:меняй|изменяй|трогай)),\s*"
-            r"(?:только\s+)?(?:объясни|расскажи)\b.*$",
-            r"\1", clause,
-        )
-        for clause in clauses
-    ]
-    clauses = [
-        clause for clause in clauses
-        if not (explicitly_readonly_request(clause) and clause.endswith(" в данных"))
-    ]
+    clauses = []
+    for sentence in re.split(r"[.!;\n]", text):
+        clause = _without_polite_prefix(sentence)
+        prefix, _, explanation = clause.partition(",")
+        if explicitly_readonly_request(prefix):
+            # Preserving business data does not rule out application edits.
+            if prefix.endswith(" в данных"):
+                clause = _without_polite_prefix(explanation)
+            elif re.match(
+                r"(?:(?:только|просто|just|only)\s+)?(?:объясни|расскажи|explain)\b",
+                explanation.strip(),
+            ):
+                clause = prefix
+        if clause:
+            clauses.append(clause)
     if not clauses:
-        return False
+        return "optional"
     text = ". ".join(clauses)
     # A bare continuation is not a new modification request. The established
     # product/checkpoint completion contract still governs what it may finish.
     if text.rstrip("!?") in {"продолжи", "продолжай", "continue"}:
-        return False
+        return "optional"
     # A whole later instruction can revoke an earlier change. A preservation
     # clause about data must not erase a separate request to change the UI.
     directive: bool | None = None
@@ -176,8 +180,9 @@ def source_change_required(prompt: str) -> bool:
         elif requested_source_edit(clause):
             directive = True
     if directive is not None:
-        return directive
+        return "edit" if directive else "readonly"
     analysis = re.match(
+        r"(?:(?:только|просто|just|only)\s+)?"
         r"(?:объясни|расскажи|проверь|исследуй|проанализируй|"
         r"review|inspect|explain|investigate|check|analy[sz]e)\b|"
         r"(?:сделай|выполни|дай)\s+(?:(?:краткий|подробный)\s+)?"
@@ -190,4 +195,15 @@ def source_change_required(prompt: str) -> bool:
         r"this\s+is\s+(?:a\s+)?read-only\s+(?:review|analysis|inspection)\b",
         text,
     )
-    return analysis is None
+    question = text.endswith("?") and re.match(r"(?:как|почему|how|why)\b", text)
+    return "readonly" if analysis or question else "edit"
+
+
+def source_change_required(prompt: str) -> bool:
+    """Require builder proof unless the owner asked for analysis or continuation."""
+    return _source_intent(prompt) == "edit"
+
+
+def readonly_source_request(prompt: str) -> bool:
+    """Identify requests that can go directly to a source-only answer."""
+    return _source_intent(prompt) == "readonly"

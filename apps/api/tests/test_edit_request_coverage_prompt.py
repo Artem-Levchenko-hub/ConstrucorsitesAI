@@ -3,6 +3,8 @@ from uuid import uuid4
 
 import pytest
 
+from yleum_api.core.config import get_settings
+from yleum_api.services import build_plan as build_plan_service
 from yleum_api.services.generation.agent_prompt import prepare_agent_prompt
 from yleum_api.services.generation.contracts import (
     GenerationIds,
@@ -85,4 +87,45 @@ async def test_prompt_preserves_all_requested_clauses_without_expanding_scope(
     assert all(field not in delivery for field in ("qty", "idempotencyKey", "totalRub"))
     assert plan.steps == ((30 if portable else 18) if mode == "edit" else 40)
     assert build_plan is None
+    factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_max_build_plan_carries_explicit_endpoint_contracts_without_a_model(
+    monkeypatch, enabled,
+):
+    settings = get_settings().model_copy(update={"use_build_plan": enabled})
+    monkeypatch.setattr(build_plan_service, "get_settings", lambda: settings)
+    provider = AsyncMock(side_effect=AssertionError("MAX planning must stay deterministic"))
+    monkeypatch.setattr(build_plan_service, "complete_chat", provider)
+    factory = Mock(side_effect=AssertionError("MAX planning must not access the database"))
+    request = (
+        "API-only: implement `GET /api/exchange-rates` and `PATCH /api/exchange-rates/[id]`. "
+        "Do not add POST /api/billing."
+    )
+
+    prompt, _ = await prepare_agent_prompt(
+        stack=StackPrompt("existing context", "max-miniapp-nextjs", "guide", None, "system", False),
+        factory=factory,
+        ids=GenerationIds(*(uuid4() for _ in range(5))),
+        project_info=ProjectGenerationFacts(
+            "max_miniapp", "qa", "QA", None, None, False, "en", False, "", "",
+        ),
+        prompt_text=request,
+        runtime=GenerationRuntime(),
+        orchestrate=True,
+        selected_elements=None,
+        _is_edit=False,
+        _is_continue=False,
+        force_model=None,
+    )
+
+    assert ("<max_build_plan>" in prompt.user) is enabled
+    if enabled:
+        checklist = prompt.user.split("<max_build_plan>", 1)[1].split("</max_build_plan>", 1)[0]
+        assert "GET /api/exchange-rates\n" in checklist
+        assert "PATCH /api/exchange-rates/[id]\n" in checklist
+        assert "POST /api/billing" not in checklist
+    provider.assert_not_awaited()
     factory.assert_not_called()

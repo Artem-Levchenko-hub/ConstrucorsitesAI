@@ -517,6 +517,56 @@ async def test_context_never_expands_to_protected_or_secret_files(monkeypatch, u
     assert all(content not in task for content in unsafe.values())
 
 
+@pytest.mark.parametrize("previous_repairs, eligible, expected", [
+    (0, True, "claude-sonnet-5.5"),
+    (1, False, "claude-sonnet-5.5"),
+    (1, True, "kimi-k3.1-pro"),
+    (2, True, "claude-sonnet-5.5"),
+])
+async def test_pilot_uses_kimi_only_for_one_targeted_repair_after_sonnet(
+    monkeypatch, previous_repairs, eligible, expected,
+):
+    from yleum_api.services.generation.recovery_contract import (
+        CheckpointRef,
+        ExecutionBudget,
+        ExecutionCursor,
+    )
+    from yleum_api.services.generation.source_error_classification import SourceFailure
+
+    project_id = uuid4()
+    cursor = ExecutionCursor(
+        stage="finalization", substep="checkpoint_ready", physical_state="active",
+        budget=ExecutionBudget(repair_calls=previous_repairs),
+        execution_context_ref=CheckpointRef(object_key="owned/context", sha256="a" * 64),
+    )
+    driver = SimpleNamespace(
+        context={"completed": {}}, state=SimpleNamespace(execution=cursor),
+        soft_edit_deadline=lambda deadline: deadline,
+    )
+
+    async def save(execution, *, context, **_):
+        driver.state.execution, driver.context = execution, context
+
+    driver.save = save
+    files = managed_files("export default () => <main>Draft</main>;")
+    args = repair_arguments(files, continuation=driver)
+    args["ids"].project_id = project_id
+    args["plan"].model = "claude-sonnet-5.5"
+    args["source_failure"] = SourceFailure("type_error", ENTRY, (ENTRY,))
+    monkeypatch.setattr(agent_finalization, "get_settings", lambda: SimpleNamespace(
+        max_kimi_repair_project_ids=str(project_id if eligible else uuid4()),
+    ))
+    native = AsyncMock(return_value=AgentResult(True, "candidate", {}, 1))
+    monkeypatch.setattr(agent_native, "run_native_build", native)
+
+    await agent_finalization.run_native_source_repair(**args)
+
+    assert native.await_args.kwargs["model"] == expected
+    if expected == "kimi-k3.1-pro":
+        assert native.await_args.kwargs["kimi_repair"] is True
+        assert driver.context["completed"]["source_repair"]["repair_model"] == expected
+
+
 @pytest.mark.parametrize("source", [
     'const leaked = "sk-0123456789abcdefghijklmnop";',
     "-----BEGIN PRIVATE KEY-----\nNEVER_INCLUDE\n-----END PRIVATE KEY-----",

@@ -21,6 +21,7 @@ from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.project import Project
 from yleum_api.models.project_memory import ProjectMemoryRevision
+from yleum_api.services.generation.source_intent import READONLY_SOURCE_TURN_KEY
 from yleum_api.services.secret_safety import redact_provider_secrets
 
 SCHEMA_VERSION = 1
@@ -196,6 +197,9 @@ async def compile_project_memory_revision(
     """Create exactly one corrected full memory revision for a terminal run."""
 
     if run.status not in {"completed", "failed", "cancelled"}:
+        return None
+    # A restriction on this answer must not become a rule for later edits.
+    if isinstance(run.agent_state, dict) and run.agent_state.get(READONLY_SOURCE_TURN_KEY) is True:
         return None
     existing = (
         await session.execute(

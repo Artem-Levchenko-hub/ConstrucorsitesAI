@@ -2663,6 +2663,7 @@ async def maybe_create_project_cell_executor(
                         )
                         from yleum_api.services.max_runtime_probe import probe_max_cell_runtime
                         from yleum_api.services.max_runtime_routes import (
+                            resolve_max_business_probe_path,
                             resolve_max_runtime_probe_paths,
                         )
 
@@ -2683,6 +2684,7 @@ async def maybe_create_project_cell_executor(
                         proof = await probe_max_cell_runtime(
                             preview,
                             path=runtime_path,
+                            business_path=resolve_max_business_probe_path(workspace_files),
                             management_resources=management_probe_resources(workspace_files),
                             **proof_kwargs,
                         )

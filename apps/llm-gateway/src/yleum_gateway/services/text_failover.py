@@ -7,7 +7,7 @@ import json
 import math
 import re
 from http import HTTPStatus
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 import httpx
@@ -22,6 +22,7 @@ from yleum_gateway.core.errors import (
 )
 from yleum_gateway.providers.rate_limit import POLICY as KEY_RATE_LIMIT_POLICY
 from yleum_gateway.services.generation_identity import GenerationProviderIdentity
+from yleum_gateway.services.kimi_native import KIMI_MODEL
 from yleum_gateway.services.provider_calls import LLMGW_BALANCE_REFUSED
 
 PRIMARY_URL = "https://api.llmgw.ru/v1/chat/completions"
@@ -82,9 +83,11 @@ def next_retry_scope(
     return alternate_scope(model, scope, reason, set(attempts))
 
 
-def preconnect_proof(scope: str, model: str, stage: str | None) -> dict[str, Any]:
+def preconnect_proof(
+    scope: str, model: str, stage: str | None, *, kimi_repair: bool = False,
+) -> dict[str, Any]:
     """Publish retry permission for the exact local failure after its receipt commits."""
-    failover = enabled(model)
+    failover = enabled(MODEL if kimi_repair else model)
     if (scope == "aitunnel" or failover) and stage != "connect":
         return {}
     proof: dict[str, Any] = {
@@ -178,6 +181,7 @@ async def _wait_for_primary_cooldown(delay: object, deadline: float | None) -> N
 
 async def confirmed_chain_exhausted(
     identity: GenerationProviderIdentity, call_id: UUID, *, route: str, user_id: UUID | None,
+    model: str = MODEL,
 ) -> bool:
     """Confirm both provider refusals in the exact closed chain, starting at this call."""
     async with get_pool().acquire() as conn:
@@ -214,7 +218,7 @@ async def confirmed_chain_exhausted(
             FROM chain LEFT JOIN provider_calls c ON c.id=chain.provider_call_id
             """,
             identity.attempt_id, identity.run_id, identity.project_id, identity.user_id,
-            identity.prompt_hash, identity.request_sha256, call_id, MODEL, route, user_id,
+            identity.prompt_hash, identity.request_sha256, call_id, model, route, user_id,
         )
     return confirmed is True
 
@@ -318,7 +322,9 @@ def _canonical_refusal_document(text: str, status: int) -> bool:
     return False
 
 
-def primary_refusal_candidate(response: httpx.Response, model: str) -> dict[str, Any] | None:
+def primary_refusal_candidate(
+    response: httpx.Response, model: str, *, kimi_repair: bool = False,
+) -> dict[str, Any] | None:
     """Identify a complete, uncharged HTTP refusal from the primary provider.
 
     LLMGW support states that non-200 responses are not charged. Require a
@@ -326,7 +332,7 @@ def primary_refusal_candidate(response: httpx.Response, model: str) -> dict[str,
 
     Routers must commit the failed receipt BEFORE publishing this candidate.
     """
-    if not enabled(model):
+    if not enabled(MODEL if kimi_repair else model):
         return None
     try:
         request, raw = response.request, response.content
@@ -388,6 +394,54 @@ def primary_balance_refused(response: httpx.Response, category: str | None) -> b
     # contradict itself. Only a bare HTTP Payment Required is sufficient.
     text = response.content.decode("utf-8").strip()
     return not text or _canonical_refusal_document(text, response.status_code)
+
+
+async def select_kimi_repair_scope(
+    identity: GenerationProviderIdentity,
+) -> Literal["llmgw", "aitunnel"]:
+    """Keep the settled gateway after a transcript reset, or allow one safe switch."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT a.parent_attempt_id, (
+                SELECT call.provider_scope FROM provider_calls call
+                WHERE call.run_id=a.run_id AND call.project_id=a.project_id AND call.user_id=a.user_id
+                    AND call.route='/v1/messages' AND call.stage='source_repair' AND call.requested_model=$7
+                    AND call.actual_model=$7 AND call.status='completed'
+                    AND call.receipt_hash IS NOT NULL AND call.usage_id IS NOT NULL
+                ORDER BY call.finished_at DESC, call.id DESC LIMIT 1
+            ) AS settled_scope, (
+                p.parent_attempt_id IS NULL AND p.phase='closed'
+                AND p.terminal_reason IN ('preconnect', 'upstream_refused', 'rate_limit_refused')
+                AND c.status='failed' AND c.receipt_hash IS NOT NULL AND c.provider_scope='llmgw'
+                AND c.requested_model=$7 AND c.stage='source_repair' AND c.route='/v1/messages'
+                AND c.run_id=a.run_id AND c.project_id=a.project_id AND c.user_id=a.user_id
+                AND c.usage_id IS NULL AND c.tokens_in IS NULL AND c.tokens_out IS NULL
+                AND c.cache_read_tokens IS NULL AND c.cache_write_tokens IS NULL
+                AND c.provider_cost_rub IS NULL AND c.provider_cost_usd IS NULL
+                AND c.calculated_cost_rub IS NULL AND c.cost_provenance IS NULL
+            ) AS backup_allowed
+            FROM generation_provider_attempts a
+            LEFT JOIN generation_provider_attempts p ON p.attempt_id=a.parent_attempt_id
+                AND p.run_id=a.run_id AND p.project_id=a.project_id AND p.user_id=a.user_id
+                AND p.prompt_hash=a.prompt_hash AND p.request_sha256=a.request_sha256
+            LEFT JOIN provider_calls c ON c.id=p.provider_call_id
+            WHERE a.attempt_id=$1 AND a.run_id=$2 AND a.project_id=$3 AND a.user_id=$4
+                AND a.prompt_hash=$5 AND a.request_sha256=$6
+            """,
+            identity.attempt_id, identity.run_id, identity.project_id, identity.user_id,
+            identity.prompt_hash, identity.request_sha256, KIMI_MODEL,
+        )
+    if row is not None:
+        settled = row["settled_scope"]
+        if row["parent_attempt_id"] is None:
+            if settled in (None, "llmgw"):
+                return "llmgw"
+            if settled == "aitunnel" and enabled(MODEL):
+                return "aitunnel"
+        elif settled is None and row["backup_allowed"] is True and enabled(MODEL):
+            return "aitunnel"
+    raise ModelUnavailableError("Kimi repair backup has no confirmed uncharged request")
 
 
 async def select_scope(
