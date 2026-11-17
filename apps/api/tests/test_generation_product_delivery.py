@@ -1,5 +1,5 @@
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
@@ -51,10 +51,9 @@ async def test_max_build_edit_and_resume_receive_readability_and_completion_cont
     ],
 )
 async def test_max_design_advice_preserves_scope_with_separate_optional_preparation(
-    owner_request, monkeypatch,
+    owner_request,
 ):
-    prepare = AsyncMock(return_value="Совет по иерархии под задачу клиента")
-    monkeypatch.setattr("yleum_api.services.prompt_preparation.prepare_prompt_brief", prepare)
+    brief = "" if owner_request.startswith("API-only") else "Совет по иерархии под задачу клиента"
     factory = Mock(side_effect=AssertionError("Design advice must not add database work"))
     plan, _ = await prepare_agent_prompt(
         stack=StackPrompt("accepted design context", "guide", None, None, "seed", False),
@@ -70,6 +69,7 @@ async def test_max_design_advice_preserves_scope_with_separate_optional_preparat
         _is_edit=False,
         _is_continue=False,
         force_model="no-provider-call",
+        prepared_brief=brief,
     )
 
     assert owner_request in plan.user
@@ -81,12 +81,9 @@ async def test_max_design_advice_preserves_scope_with_separate_optional_preparat
     assert "existing style, working features and existing business records" in plan.user
     assert "Honor API-only and read-only requests" in plan.user
     assert "accepted design context" in plan.user
-    if owner_request.startswith("API-only"):
-        prepare.assert_not_awaited()
-    else:
-        assert prepare.await_count == 1
-        assert "Совет по иерархии под задачу клиента" in plan.user
-        assert "Совет по иерархии под задачу клиента" not in plan.system
+    if brief:
+        assert brief in plan.user
+        assert brief not in plan.system
     factory.assert_not_called()
 
 

@@ -24,7 +24,12 @@ from yleum_api.models.message import Message
 from yleum_api.models.project import Project
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.services.generation.agent_messages import _is_continue_request, _is_retry_request
-from yleum_api.services.generation.contracts import GenerationIds, SourceBaseline
+from yleum_api.services.generation.contracts import (
+    AgentTurnClassification,
+    GenerationIds,
+    ProjectGenerationFacts,
+    SourceBaseline,
+)
 from yleum_api.services.generation.retry_request import resolve_request_source
 from yleum_api.services.max_generation_contract import is_api_only_request
 
@@ -335,6 +340,27 @@ async def prepare_prompt_brief(
     except Exception as exc:
         log.info("prompt_preparation unavailable: %s", type(exc).__name__)
         return ""
+
+
+async def prepare_initial_prompt_brief(
+    factory: async_sessionmaker[AsyncSession],
+    ids: GenerationIds,
+    project_info: ProjectGenerationFacts,
+    turn: AgentTurnClassification,
+    selected_elements: list[dict[str, Any]] | None,
+) -> str:
+    """Keep optional expense in execution, outside the prompt-text builder."""
+    if (
+        project_info.template != "max_miniapp"
+        or turn.is_edit
+        or turn.is_continue
+        or turn.has_generated_snapshot
+        or project_info.restoration_context
+        or selected_elements
+        or is_api_only_request(turn.prompt)
+    ):
+        return ""
+    return await prepare_prompt_brief(factory, ids)
 
 
 def render_prepared_brief(brief: str) -> str:

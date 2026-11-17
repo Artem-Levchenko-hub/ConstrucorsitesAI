@@ -361,3 +361,54 @@ async def test_technical_snapshot_does_not_readmit_existing_product(
     call = AsyncMock(side_effect=AssertionError("existing product"))
     assert await prep.prepare_prompt_brief(factory, ids, complete=call) == ""
     call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "fresh",
+        "edit",
+        "continue",
+        "generated",
+        "restoration",
+        "selected",
+        "api",
+        "nonmax",
+    ],
+)
+async def test_execution_scope_keeps_optional_preparation_out_of_other_modes(monkeypatch, case):
+    from yleum_api.services.generation.contracts import (
+        AgentTurnClassification,
+        ProjectGenerationFacts,
+    )
+
+    call = AsyncMock(return_value="Сохранённая заметка")
+    monkeypatch.setattr(prep, "prepare_prompt_brief", call)
+    info = ProjectGenerationFacts(
+        "web" if case == "nonmax" else "max_miniapp",
+        "qa",
+        "QA",
+        None,
+        None,
+        False,
+        "ru",
+        False,
+        "PRIVATE MEMORY",
+        "historical source" if case == "restoration" else "",
+    )
+    turn = AgentTurnClassification(
+        "API-only: no UI" if case == "api" else "Описание клиента",
+        case == "continue",
+        case == "edit",
+        case == "generated",
+    )
+    ids = GenerationIds(*(uuid4() for _ in range(5)))
+    selected = [{"html": "PRIVATE HTML"}] if case == "selected" else None
+    result = await prep.prepare_initial_prompt_brief(None, ids, info, turn, selected)
+    if case == "fresh":
+        call.assert_awaited_once_with(None, ids)
+        assert result == "Сохранённая заметка"
+    else:
+        call.assert_not_awaited()
+        assert result == ""

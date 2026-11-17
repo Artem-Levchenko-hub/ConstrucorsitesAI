@@ -22,6 +22,7 @@ from yleum_api.services import (
     agent_builder,
     app_errors,
 )
+from yleum_api.services.build_plan import BuildPlan
 from yleum_api.services.generation.agent_finalization import (
     NativeSourceRepairFiltered,
     completed_filtered_source_repair,
@@ -70,6 +71,7 @@ from yleum_api.services.generation.agent_verification import (
 )
 from yleum_api.services.generation.contracts import (
     AgentOperations,
+    AgentPromptPlan,
     GenerationIds,
     GenerationRuntime,
     ProjectGenerationFacts,
@@ -685,20 +687,26 @@ async def run_agent_generation(
     if prepared_entry is not None:
         _prompt_plan, _build_plan = prepared_entry.prompt_plan, None
     else:
+        async def prepare_prompt_plan() -> tuple[AgentPromptPlan, BuildPlan | None]:
+            from yleum_api.services.generation.contracts import AgentTurnClassification
+            from yleum_api.services.prompt_preparation import prepare_initial_prompt_brief
+
+            brief = await prepare_initial_prompt_brief(
+                factory, ids, project_info,
+                AgentTurnClassification(
+                    prompt_text, _is_continue, _is_edit, _max_has_generated_snapshot,
+                ), selected_elements,
+            )
+            return await prepare_agent_prompt(
+                stack=_stack, factory=factory, ids=ids, project_info=project_info,
+                runtime=runtime, orchestrate=orchestrate, prompt_text=prompt_text,
+                selected_elements=selected_elements, _is_edit=_is_edit,
+                _is_continue=_is_continue, force_model=force_model, prepared_brief=brief,
+            )
+
         _prompt_plan, _build_plan = await run_bootstrap_stage(
-            continuation, "prompt_prepare", lambda: prepare_agent_prompt(
-            stack=_stack,
-            factory=factory,
-            ids=ids,
-            project_info=project_info,
-            runtime=runtime,
-            orchestrate=orchestrate,
-            prompt_text=prompt_text,
-            selected_elements=selected_elements,
-            _is_edit=_is_edit,
-            _is_continue=_is_continue,
-            force_model=force_model,
-        ), handle=runtime.handle)
+            continuation, "prompt_prepare", prepare_prompt_plan, handle=runtime.handle,
+        )
 
     _render_current_max_starter_files = partial(
         render_current_max_starter,
