@@ -375,6 +375,7 @@ async def test_technical_snapshot_does_not_readmit_existing_product(
         "selected",
         "api",
         "nonmax",
+        "legacy",
     ],
 )
 async def test_execution_scope_keeps_optional_preparation_out_of_other_modes(monkeypatch, case):
@@ -403,6 +404,8 @@ async def test_execution_scope_keeps_optional_preparation_out_of_other_modes(mon
         case == "edit",
         case == "generated",
     )
+    if case == "legacy":
+        info = SimpleNamespace(template="max_miniapp")
     ids = GenerationIds(*(uuid4() for _ in range(5)))
     selected = [{"html": "PRIVATE HTML"}] if case == "selected" else None
     result = await prep.prepare_initial_prompt_brief(None, ids, info, turn, selected)

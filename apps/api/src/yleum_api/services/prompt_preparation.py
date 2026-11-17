@@ -350,6 +350,11 @@ async def prepare_initial_prompt_brief(
     selected_elements: list[dict[str, Any]] | None,
 ) -> str:
     """Keep optional expense in execution, outside the prompt-text builder."""
+    if not isinstance(project_info, ProjectGenerationFacts) or not isinstance(
+        turn,
+        AgentTurnClassification,
+    ):
+        return ""  # An incomplete legacy/test context never grants optional expense.
     if (
         project_info.template != "max_miniapp"
         or turn.is_edit
