@@ -1365,6 +1365,53 @@ def test_template_status_label_can_control_another_display_label():
     assert management_source_gap(connection_files(source, ("leads",))) is None
 
 
+def optional_lead_note_page(expression):
+    return LEAD_STATUS_PAGE.replace(
+        "await createManagedLead({operationKey: 'fixture-operation', customerName: 'Fixture'});",
+        "const service = status ? `Service: ${status}` : '';\n"
+        "const note = status.trim();\n"
+        "const text = service && note ? `${service}. ${note}` : service || note;\n"
+        "await createManagedLead({operationKey: 'fixture-operation', customerName: 'Fixture', "
+        f"comment: {expression}}});",
+    )
+
+
+@pytest.mark.parametrize("expression", [
+    "text || undefined", "text ?? undefined", "text ? text : undefined",
+    "text || null", "text ?? null", "text ? text : null",
+])
+def test_optional_display_note_is_not_an_unproved_execution_guard(expression):
+    source = optional_lead_note_page(expression)
+    assert management_source_gap(connection_files(source, ("leads",))) is None
+
+
+@pytest.mark.parametrize("expression", [
+    "text || leads.splice(0)", "text ?? opaque(leads)",
+    "text ? text : <main>{profile?.app_name}</main>",
+])
+def test_optional_display_note_does_not_admit_effectful_or_jsx_fallback(expression):
+    source = optional_lead_note_page(expression)
+    assert management_source_gap(connection_files(source, ("leads",))) is not None
+
+
+@pytest.mark.parametrize("control", [
+    "if (text || undefined) return;",
+    "if (text ?? null) return;",
+])
+def test_optional_display_note_cannot_prove_a_managed_execution_branch(control):
+    source = optional_lead_note_page("text || undefined").replace(
+        "await createManagedLead(", control + "\nawait createManagedLead(",
+    )
+    assert management_source_gap(connection_files(source, ("leads",))) is not None
+
+
+def test_optional_display_note_does_not_admit_a_shadowed_undefined():
+    source = optional_lead_note_page("text || undefined").replace(
+        "const service =", "const undefined = leads;\nconst service =",
+    )
+    assert management_source_gap(connection_files(source, ("leads",))) is not None
+
+
 @pytest.mark.parametrize("operator", ["||", "??"])
 def test_nonempty_template_does_not_render_unreachable_profile(operator):
     source = LEAD_STATUS_PAGE.replace(

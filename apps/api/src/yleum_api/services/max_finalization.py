@@ -84,6 +84,7 @@ from yleum_api.services.orchestrator_client import (
     OrchestratorMachineInventoryUnavailable,
     OrchestratorUnavailable,
     ProjectCellAgentOperationStatus,
+    ProjectCellWorkspaceIdentity,
     RestorationAdaptationProof,
     RestorationAdaptationWorkspace,
 )
@@ -94,6 +95,7 @@ from yleum_api.services.project_cell_activity import (
     ProjectCellActivityConflict,
     finish_activity,
     heartbeat_activity,
+    reconcile_activity,
     run_with_activity_lease,
     start_activity,
 )
@@ -142,6 +144,7 @@ _FULL_BUILD_DETAIL_PREFIX = f"[build-contract:{MAX_FULL_BUILD_CONTRACT_VERSION}]
 _FAST_CHECK_DEPENDENCY = "[fast-check-dependency]"
 _RUNTIME_SOURCE_FAILURE = "[runtime-source-failure]\n"
 _VERIFICATION_RETRY_DELAYS = (0.0, 1.0, 3.0)
+_REPAIR_SETTLEMENT_SECONDS = 5.0
 _RELEASE_DEPENDENCY_CHECKS = frozenset({
     "signed_preview_session", "security gate executed", "transport_security",
     "signed preview transport unavailable",
@@ -184,10 +187,12 @@ class MaxFinalizationConflict(RuntimeError):
 class MaxVerificationUnavailable(ProjectCellInfrastructureError):
     """A check could not produce a verdict for the current candidate."""
 
-    def __init__(self, phase: GenerationPhase, detail: str) -> None:
+    def __init__(
+        self, phase: GenerationPhase, detail: str, *, operation_id: UUID | None = None,
+    ) -> None:
         self.phase = phase
         self.detail = bounded_redacted_diagnostic(detail, max_bytes=1024)
-        super().__init__("MAX_VERIFICATION_UNAVAILABLE")
+        super().__init__("MAX_VERIFICATION_UNAVAILABLE", operation_id)
 
     def __str__(self) -> str:
         return f"{self.code}: {self.phase.value}: {self.detail}"
@@ -1218,9 +1223,108 @@ class MaxFinalizationCoordinator:
                     return await repair_source(detail, failure) is True
                 return await repair(detail) is True
         except TimeoutError as exc:
+            await self._settle_timed_out_source_repair()
             if continuation is not None and retired is None:
                 await continuation.soft_boundary(exhausted=True)
             raise TimeoutError("generation deadline exceeded during source repair") from exc
+
+    async def _settle_timed_out_source_repair(self) -> None:
+        """A cancelled HTTP await does not stop the controller's compiler.
+
+        Consume only its existing terminal observation before allowing rollback.
+        An unknown or still-running writer preserves the draft and its lease;
+        this path never executes a command or grants a green compiler proof.
+        """
+        def owned_workspace(
+            workspace: ProjectCellWorkspace | None, run: GenerationRun, *, fence: int | None = None,
+        ) -> ProjectCellWorkspace:
+            if (
+                workspace is None or workspace.project_id != self.project_id
+                or workspace.owner_id != run.user_id or workspace.generation_run_id != run.id
+                or workspace.deleted_at is not None
+                or (fence is not None and workspace.fencing_epoch != fence)
+            ):
+                raise MaxFinalizationConflict("repair settlement workspace changed")
+            return workspace
+
+        phase = GenerationPhase.FAST_CHECK
+        operation_id: UUID | None = None
+        try:
+            async with asyncio.timeout(_REPAIR_SETTLEMENT_SECONDS):
+                async with self.session_factory() as session:
+                    run = await self._locked_run(session)
+                    workspace = owned_workspace(
+                        await session.get(ProjectCellWorkspace, self.executor.workspace_id), run,
+                    )
+                    fence = workspace.fencing_epoch
+                    leases = (await session.scalars(select(ProjectCellActivityLease).where(
+                        ProjectCellActivityLease.workspace_id == workspace.id,
+                        ProjectCellActivityLease.kind == ActivityKind.COMMAND.value,
+                        ProjectCellActivityLease.state == ActivityState.ACTIVE.value,
+                    ))).all()
+                    pending: list[ActivityStart] = []
+                    for activity in leases:
+                        if (
+                            activity.generation_run_id != run.id or activity.fencing_epoch != fence
+                            or activity.proof_key is None
+                        ):
+                            raise MaxFinalizationConflict("repair settlement activity changed")
+                        pending.append(ActivityStart(
+                            operation_id=activity.operation_id, workspace_id=activity.workspace_id,
+                            generation_run_id=activity.generation_run_id, kind=ActivityKind.COMMAND,
+                            fencing_epoch=activity.fencing_epoch, deadline_at=activity.deadline_at,
+                            proof_key=activity.proof_key, phase=activity.phase,
+                        ))
+                for lease in pending:
+                    operation_id = lease.operation_id
+                    poll = self.executor.operation_status
+                    assert poll is not None
+                    status = await poll(lease.operation_id)
+                    response = status.terminal_response
+                    if (
+                        status.operation_id != lease.operation_id
+                        or status.state not in {"completed", "failed", "timed_out", "cancelled"}
+                        or response is None or response.operation_id != lease.operation_id
+                    ):
+                        raise MaxFinalizationConflict("repair command outcome remains pending")
+                    identity = await self._identity()
+                    expected = ProjectCellWorkspaceIdentity(
+                        workspace_revision=identity.workspace_revision,
+                        dependency_digest=identity.dependency_digest,
+                        schema_data_digest=identity.schema_data_digest,
+                        cell_manifest_digest=identity.cell_manifest_digest,
+                        environment_digest=identity.base_image_digest,
+                        build_config_digest=identity.build_config_digest,
+                    )
+                    if (
+                        identity.fencing_epoch != lease.fencing_epoch
+                        or identity.proof_key != lease.proof_key
+                        or response.before_identity != expected
+                        or response.after_identity != expected
+                    ):
+                        raise MaxFinalizationConflict("repair command source identity changed")
+                    async with self.session_factory() as session:
+                        run = await self._locked_run(session)
+                        owned_workspace(
+                            await session.get(ProjectCellWorkspace, lease.workspace_id),
+                            run, fence=fence,
+                        )
+
+                    async def observed_status(
+                        _operation_id: UUID, observed: ProjectCellAgentOperationStatus = status,
+                    ) -> ProjectCellAgentOperationStatus:
+                        return observed
+
+                    await reconcile_activity(
+                        session_factory=self.session_factory, workspace_id=lease.workspace_id,
+                        operation_id=lease.operation_id, poll_status=observed_status,
+                        expected_lease=lease,
+                    )
+        except Exception as exc:
+            raise MaxVerificationUnavailable(
+                phase, "source repair stopped; existing command settlement remains unconfirmed",
+                operation_id=operation_id,
+            ) from exc
 
     async def revalidate_pending_repair(self, *, targeted: bool) -> SourceFailure | None:
         """Obtain current compiler authority without acceptance or promotion."""

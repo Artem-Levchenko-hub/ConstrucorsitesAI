@@ -2493,8 +2493,10 @@ class _Connections:
         self, control: Node, condition: _Value, branches: tuple[Node | None, ...],
         env: dict[str, _Value], path: str,
     ) -> _Value:
-        # Keep this exception for passive labels. JSX, function calls and
-        # mutations must still use the regular, proven condition paths.
+        # Passive text may use null/undefined to omit an optional SDK field.
+        # Retain its input provenance and unknown truth/nullability; this does
+        # not prove an execution branch. JSX, calls and mutations still require
+        # the regular condition paths, and a shadowed undefined is not a literal.
         pending = list(branches)
         inputs = {id(value): value for value in condition.display_inputs}
         while pending:
@@ -2502,7 +2504,9 @@ class _Connections:
             self.steps += 1
             if node is None or node.has_error or self.steps > 4000:
                 break
-            if node.type == "string":
+            if node.type in {"string", "null"} or (
+                node.type == "undefined" and "undefined" not in env
+            ):
                 continue
             if node.type in {"identifier", "template_string"}:
                 value = self.value(node, env, path)
