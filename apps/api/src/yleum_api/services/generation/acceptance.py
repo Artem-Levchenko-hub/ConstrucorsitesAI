@@ -786,6 +786,13 @@ class PromptAcceptance:
         self.generation_run.assistant_message_id = self.assistant_msg.id
         self.generation_run.user_message_id = self.user_msg.id
         self.generation_run.response_mode = self.turn_mode
+        if (self.turn_mode == "build" and self.is_first_build
+            and self.project.template == "max_miniapp"
+            and getattr(self.settings, "prompt_preparation_enabled", False)
+            and self.payload.restoration_adaptation is None):
+            from yleum_api.services.prompt_preparation import admit_prompt_preparation
+
+            await admit_prompt_preparation(self.session, self.generation_run, self.payload.prompt)
         if self.readonly_source:
             self.generation_run.agent_state = {
                 **(self.generation_run.agent_state or {}),

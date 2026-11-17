@@ -17,7 +17,7 @@ from yleum_gateway.services.pricing import validate_cost_provenance
 
 _ROUTES = {"/v1/chat/completions", "/v1/messages", "/v1/project-cell/messages"}
 _STAGES = {"build_plan", "native_agent", "verification", "source_repair", "runtime_ai",
-           "product_advisor", "unknown"}
+           "product_advisor", "prompt_preparation", "unknown"}
 LLMGW_BALANCE_REFUSED = "LLMGWBalanceRefused"
 
 

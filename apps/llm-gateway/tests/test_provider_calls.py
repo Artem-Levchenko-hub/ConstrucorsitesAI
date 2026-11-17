@@ -325,6 +325,16 @@ async def test_platform_receipt_zero_and_unknown_cost_stay_distinct(connection):
     )
 
 
+async def test_included_prompt_preparation_retains_stage_and_owner_attribution(connection):
+    owner, project = uuid4(), uuid4()
+    call_id = await start(stage="prompt_preparation", free=True, user_id=owner, project_id=project)
+    row = connection.rows[call_id]
+    assert row["stage"] == "prompt_preparation"
+    assert row["user_id"] == owner and row["project_id"] == project
+    assert row["free"] is True
+    assert row["run_id"] is None and row["message_id"] is None
+
+
 async def test_user_attribution_does_not_charge_and_replay_is_idempotent(connection):
     user, run = uuid4(), uuid4()
     call_id = await start(user_id=user, run_id=run)

@@ -738,6 +738,8 @@ class Settings(BaseSettings):
     # It adds no model call, phase or completion loop. USE_DESIGN_INTELLIGENCE_PLUGIN=0
     # restores the legacy design-mood-only path immediately.
     use_design_intelligence_plugin: bool = Field(default=True)
+    # One included, cached brief-only call. No screenshots or repair loop.
+    prompt_preparation_enabled: bool = Field(default=True)
 
     # Ship-green-on-abort (2026-06-27, harness-hardening). A loop-guard abort
     # (cycle / repeat / explore / budget) used to ALWAYS return done=False →
@@ -1192,6 +1194,7 @@ ROLE_MODEL_MAP: dict[str, str] = {
     "discovery_plan": PRIMARY_LLM_MODEL,
     "result_type": PRIMARY_LLM_MODEL,
     "planner": PRIMARY_LLM_MODEL,
+    "prompt_prepare": PRIMARY_LLM_MODEL,  # one short, cached owner-led brief
     "exe_doctor": PRIMARY_LLM_MODEL,  # self-heal failed executable builds
     "app_doctor": PRIMARY_LLM_MODEL,  # app self-repair (verify->fix)
 }

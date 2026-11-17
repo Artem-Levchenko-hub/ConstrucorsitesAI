@@ -263,6 +263,15 @@ async def prepare_agent_prompt(
     # The orchestration registry selects planning, implementation and recovery.
     # Operators
     # can still retune a role through ROLE_MODELS without a code deploy.
+    if (project_info.template == "max_miniapp" and not _is_edit and not _is_continue
+        and not project_info.restoration_context and not selected_elements
+        and not is_api_only_request(prompt_text)):
+        from yleum_api.services.prompt_preparation import (
+            prepare_prompt_brief,
+            render_prepared_brief,
+        )
+
+        _agent_user += render_prepared_brief(await prepare_prompt_brief(factory, ids))
     _agent_model = model_for_role("agent", override=force_model)
     # Stall recovery resolves through the same role registry.
     _escalate_model = model_for_role("agent_escalation", override=force_model)

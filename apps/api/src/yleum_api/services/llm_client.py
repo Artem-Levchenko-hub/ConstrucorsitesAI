@@ -1366,6 +1366,30 @@ async def complete_chat(
     return content or ""
 
 
+async def complete_prompt_brief(
+    messages: list[dict[str, str]], *, user_id: str, project_id: str,
+) -> str:
+    """Included optional service expense, not another paid generation action.
+
+    Owner/project attribution remains; no run/message id may be inferred into
+    accepted-unit billing or the coding agent's retained provider cursor. The
+    caller durably claims this optional request before HTTP, never repeats an
+    unknown POST, and can continue coding from the original request on failure.
+    """
+    from yleum_api.core.config import model_for_role
+
+    token = _generation_billing_context.set(None)
+    try:
+        async with asyncio.timeout(30.0):
+            return await complete_chat(
+                messages, model_for_role("prompt_prepare"), user_id=user_id,
+                project_id=project_id, stage="prompt_preparation", free=True,
+                max_tokens=900, temperature=0.2, timeout_seconds=30.0,
+            )
+    finally:
+        _generation_billing_context.reset(token)
+
+
 async def _mock_stream(messages: list[dict[str, str]]) -> AsyncIterator[dict[str, Any]]:
     user_text = next(
         (m["content"] for m in reversed(messages) if m.get("role") == "user"),
