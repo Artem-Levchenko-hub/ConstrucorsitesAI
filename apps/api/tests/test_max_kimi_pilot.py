@@ -236,6 +236,51 @@ async def test_frozen_kimi_uses_native_without_changing_default(monkeypatch):
     legacy.assert_not_called()
 
 
+async def test_kimi_after_a_green_recheck_hands_off_without_new_provider_or_tool(monkeypatch):
+    provider = AsyncMock(side_effect=AssertionError("Kimi source authority is gone"))
+    execute = AsyncMock()
+    monkeypatch.setattr(agent_native, "_call_messages", provider)
+    result = await agent_native._run_native_segment(
+        model=KIMI, system="MAX VERIFICATION OVERRIDE", task="Fix saved draft", execute=execute,
+        source_repair=True, kimi_repair=True, kimi_repair_paths=(),
+    )
+    assert result.needs_finalization and not result.done
+    provider.assert_not_awaited()
+    execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize("stored", [False, True])
+async def test_kimi_lost_source_authority_reads_only_the_owned_receipt(monkeypatch, stored):
+    identity = GenerationProviderIdentity(uuid4(), uuid4(), uuid4(), uuid4(), "a" * 64, "b" * 64)
+    monkeypatch.setattr(recovery_reconciliation, "provider_reconciliation_requested", lambda: True)
+    monkeypatch.setattr(
+        provider_attempts, "prepare_generation_attempt", AsyncMock(return_value=identity),
+    )
+    resume = AsyncMock()
+    monkeypatch.setattr(provider_attempts, "resume_generation_wire", resume)
+    body = {"stop_reason": "end_turn", "content": [{"type": "text", "text": "Saved"}]}
+    retained = (
+        AsyncMock(return_value=body) if stored else AsyncMock(side_effect=llm_client.LLMError(
+            "No stored response yet", code="generation_response_pending", retry_safe=True,
+        ))
+    )
+    monkeypatch.setattr(llm_client, "require_recovered_response", retained)
+    client = SimpleNamespace(stream=AsyncMock(side_effect=AssertionError("Paid POST is forbidden")))
+    request = dict(model=KIMI, stage="source_repair", retained_only=True)
+    if stored:
+        assert await agent_native._call_messages(
+            client, "https://gateway.test/v1/messages", [], "system", **request,
+        ) == body
+    else:
+        with pytest.raises(llm_client.LLMError, match="No stored response"):
+            await agent_native._call_messages(
+                client, "https://gateway.test/v1/messages", [], "system", **request,
+            )
+    retained.assert_awaited_once_with(identity, kimi_native=True)
+    resume.assert_not_awaited()
+    client.stream.assert_not_called()
+
+
 @pytest.mark.parametrize("warm,receipt", [
     (warm, receipt)
     for warm in (False, True) for receipt in ("settled", "foreign", "different_error", "pending")

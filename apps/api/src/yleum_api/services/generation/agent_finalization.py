@@ -367,7 +367,9 @@ async def run_native_source_repair(
         task, model_baseline, edit_deadline = entry.task, entry.baseline, entry.edit_deadline
         kimi_repair = entry.repair_model == KIMI_PILOT_MODEL
         if kimi_repair and not kimi_source_proven:
-            raise RecoveryContractError("Kimi repair lost its confirmed source diagnostic")
+            # A cold worker may see green after an already applied write. The
+            # old cursor can reconcile its receipts without getting new source authority.
+            source_failure = SourceFailure()
         edit_deadline = continuation.soft_edit_deadline(edit_deadline)
         from yleum_api.services.generation.expired_native_finalization import (
             retired_finalization_plan,
@@ -487,6 +489,7 @@ async def run_native_source_repair(
         )
         if source_failure is not None and directed_path not in baseline and not guarded_write:
             directed_path = None
+    kimi_repair_paths = source_failure.allowed_paths if kimi_repair and source_failure else ()
     try:
         result = await agent_native.run_native_build(
             continuation=continuation,
@@ -507,14 +510,13 @@ async def run_native_source_repair(
                 if not single_repair and (continuation is not None or not autonomous_repair)
                 and runtime.coordinator is not None
                 and getattr(get_settings(), "agent_progressive_continuation", False)
+                and (not kimi_repair or bool(kimi_repair_paths))
                 else 1
             ),
             snapshot_files=snapshot if callable(snapshot) else None,
             source_repair=True,
             kimi_repair=kimi_repair,
-            kimi_repair_paths=(
-                source_failure.allowed_paths if kimi_repair and source_failure else ()
-            ),
+            kimi_repair_paths=kimi_repair_paths,
             directed_path=directed_path,
             allow_max_bash=shell_enabled and not kimi_repair,
             portable_cell=True, coordinator_handoff=True,

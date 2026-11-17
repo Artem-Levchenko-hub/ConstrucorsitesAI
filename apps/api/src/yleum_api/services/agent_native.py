@@ -1385,6 +1385,7 @@ async def _call_messages(
     auth_factory: NativeMessagesAuthFactory | None = None,
     edit_deadline: datetime | None = None,
     max_tokens: int | None = None,
+    retained_only: bool = False,
 ) -> dict[str, Any]:
     """One native /v1/messages call with proven safe refusal retries. Returns the parsed
     Anthropic response dict, or raises the last error."""
@@ -1435,7 +1436,10 @@ async def _call_messages(
     from yleum_api.services.generation.recovery_reconciliation import (
         begin_provider_dispatch,
         provider_dispatch_remaining,
+        provider_reconciliation_requested,
     )
+    if retained_only and not provider_reconciliation_requested():
+        raise RecoveryContractError("saved Kimi receipt has no reconciliation cursor")
     sonnet_source_repair = stage == "source_repair" and is_sonnet55_model(model)
     retry_window = _SONNET_SOURCE_REPAIR_WINDOW_S if sonnet_source_repair else _CALL_RETRY_WINDOW_S
     initial_window = retry_window
@@ -1484,10 +1488,6 @@ async def _call_messages(
         generation_attempt = await prepare_generation_attempt(
             payload, generation_route, existing=generation_attempt, parent=retry_parent,
         )
-        from yleum_api.services.generation.recovery_reconciliation import (
-            provider_reconciliation_requested,
-        )
-
         if provider_reconciliation_requested():
             from yleum_api.services.llm_client import require_recovered_response
             try:
@@ -1498,6 +1498,8 @@ async def _call_messages(
             except (NativeTranscriptRefusal, ProviderChainExhausted, SettledKimiOutputInvalid):
                 raise  # Neither terminal receipt permits a replay of this request.
             except LLMError as failure:
+                if retained_only:
+                    raise
                 resumed = await resume_generation_wire(
                     generation_attempt, allow_provider_refusal=(
                         failure.retry_safe is True and failure.provider_charge_ambiguous is False
@@ -2239,9 +2241,16 @@ async def _run_native_segment(
             evidence=_evidence(),
         )
 
+    retained_only = kimi_repair and not kimi_repair_paths
     async with httpx.AsyncClient() as client:
         for step in range(start_step, effective_max_steps):
             restoring = saved_frame is not None and step == start_step
+            if retained_only and not restoring:
+                return AgentResult(
+                    done=False, summary="Проверяю сохранённый черновик.",
+                    files=written, steps=step, transcript=convo,
+                    stop_reason="repair_receipt_reconciled", needs_finalization=True,
+                )
             remaining = (
                 (edit_deadline - datetime.now(UTC)).total_seconds()
                 if edit_deadline is not None else None
@@ -2537,6 +2546,7 @@ async def _run_native_segment(
                             message_id=str(message_id) if message_id else None, free=free,
                             headers=messages_headers, auth_factory=messages_auth_factory,
                             edit_deadline=edit_deadline,
+                            retained_only=retained_only,
                             **({"max_tokens": repair_budget} if repair_budget is not None else {}),
                         )
                     if continuation is None:
