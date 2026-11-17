@@ -85,6 +85,7 @@ async def test_exhausted_zero_wallet_admission_uses_only_trusted_qa_or_existing_
     monkeypatch, qa, global_unlimited,
 ):
     from yleum_api.core.errors import ApiError
+    from yleum_api.schemas.message import PromptRequest
     from yleum_api.services.generation import acceptance
 
     owner, context = qa_context()
@@ -105,7 +106,7 @@ async def test_exhausted_zero_wallet_admission_uses_only_trusted_qa_or_existing_
     turn = acceptance.PromptAcceptance(
         project_id=uuid4(), project=SimpleNamespace(current_snapshot_id=uuid4()),
         current_user=owner, session=session,
-        payload=SimpleNamespace(prompt="Add a product page", max_config_version=None),
+        payload=PromptRequest(prompt="Add a product page"),
     )
     if qa or global_unlimited:
         await turn.check_admission()
