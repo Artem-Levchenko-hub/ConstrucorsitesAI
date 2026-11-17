@@ -1371,6 +1371,7 @@ async def complete_prompt_brief(
 ) -> str:
     """Included optional service expense, not another paid generation action.
 
+    A complete prepared prompt has output headroom, without a brevity target.
     Owner/project attribution remains; no run/message id may be inferred into
     accepted-unit billing or the coding agent's retained provider cursor. The
     caller durably claims this optional request before HTTP, never repeats an
@@ -1380,11 +1381,11 @@ async def complete_prompt_brief(
 
     token = _generation_billing_context.set(None)
     try:
-        async with asyncio.timeout(30.0):
+        async with asyncio.timeout(120.0):
             return await complete_chat(
                 messages, model_for_role("prompt_prepare"), user_id=user_id,
                 project_id=project_id, stage="prompt_preparation", free=True,
-                max_tokens=900, temperature=0.2, timeout_seconds=30.0,
+                max_tokens=8192, temperature=0.2, timeout_seconds=120.0,
             )
     finally:
         _generation_billing_context.reset(token)

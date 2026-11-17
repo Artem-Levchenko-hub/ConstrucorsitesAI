@@ -1,4 +1,4 @@
-# Short MAX brief preparation
+# MAX prompt preparation
 
 New initial MAX builds can make one optional, non-streaming brief-preparation
 request before coding. `PROMPT_PREPARATION_ENABLED=false` disables it. Eligibility
@@ -17,8 +17,10 @@ image contents/URLs or font assets are loaded into this request. Resolving a
 manual retry identifies its single original owner request; it does not send the
 intervening conversation.
 
-The instruction asks for a short task-specific advisory note: goal, explicitly
-requested behavior, audience and visual direction. It borrows owner-first
+The instruction asks for a complete structured working prompt: goal, audience,
+all essential requested functions and their connections, user flow and visual
+direction. Detail follows the task rather than a fixed point or character count.
+It borrows owner-first
 hierarchy, typography, spacing, useful states and plain copy principles from
 frontend-design and Impeccable. It supplies no industry-to-screen mappings,
 template catalog, fixed navigation count, palette recipe, screenshot audit or
@@ -32,8 +34,13 @@ edits, continuations and restoration adaptations create no preparation request.
 ## Expense and limits
 
 The `prompt_prepare` model role defaults to the existing primary model and can
-be configured through `ROLE_MODELS`. Output is capped at 900 tokens, with a
-30-second overall wall-clock limit. There is no response-refinement call.
+be configured through `ROLE_MODELS`. The technical output ceiling is 8,192 tokens,
+with a 120-second overall wall-clock limit. There is no response-refinement call.
+The ceiling leaves headroom for completing the prompt; it is not a target output
+length. This replaces the 900-token ceiling that the complex A1 control exhausted.
+The cache accepts up to 64,000 characters instead of the previous 4,800-character
+note. Truncated responses still fall back safely; raising these bounds does not
+weaken the shared completion validation or retry a paid call.
 
 This optional service is included in generation pricing: it does not debit
 another generation unit or separately debit the customer's wallet. The client

@@ -88,9 +88,9 @@ async def test_platform_wrapper_has_no_run_or_message_and_restores_context(monke
             "project_id": real[2],
             "stage": "prompt_preparation",
             "free": True,
-            "max_tokens": 900,
+            "max_tokens": 8192,
             "temperature": 0.2,
-            "timeout_seconds": 30.0,
+            "timeout_seconds": 120.0,
         }
     ]
 
@@ -299,7 +299,7 @@ async def test_wire_payload_has_attribution_but_no_generation_identity(monkeypat
 
     async def post(payload, url, budget):
         seen.append(payload)
-        assert budget == 30.0
+        assert budget == 120.0
         return httpx.Response(
             200,
             json={
@@ -329,6 +329,50 @@ async def test_wire_payload_has_attribution_but_no_generation_identity(monkeypat
         "stage": "prompt_preparation",
         "free": True,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_reason", ["stop", "length"])
+async def test_native_output_headroom_is_saved_once_without_accepting_truncation(
+    client, db_session, test_engine, monkeypatch, finish_reason,
+):
+    import httpx
+
+    from yleum_api.core.config import get_settings
+
+    factory, ids = await _accepted(client, db_session, test_engine, monkeypatch)
+    settings = get_settings().model_copy(update={"mock_llm": False})
+    monkeypatch.setattr(llm_client, "get_settings", lambda: settings)
+    note = "Функции и дизайн:\n" + (
+        "Сохрани требования клиента, связи между действиями и подходящую продукту иерархию.\n"
+    ) * 70
+    assert len(note) > 4800  # A complete prompt also exceeds the former cache-note ceiling.
+    requests = []
+
+    async def post(payload, url, budget):
+        requests.append(payload)
+        assert payload["max_tokens"] == 8192 and budget == 120.0
+        instruction = payload["messages"][0]["content"]
+        assert "полноценный рабочий промпт" in instruction
+        assert "Не ужимай" in instruction
+        return httpx.Response(200, json={
+            "choices": [{"finish_reason": finish_reason, "message": {"content": note}}],
+            # A confirmed response above the former ceiling must be usable.
+            "usage": {"completion_tokens": 2400 if finish_reason == "stop" else 8192},
+        })
+
+    monkeypatch.setattr(llm_client, "_chat_post", post)
+    result = await prep.prepare_prompt_brief(factory, ids)
+    expected = note.strip() if finish_reason == "stop" else ""
+    assert result == expected
+    assert await prep.prepare_prompt_brief(factory, ids) == expected
+    assert len(requests) == 1
+    async with factory() as session:
+        run = await session.get(GenerationRun, ids.run_id)
+        assert run.agent_state[prep.KEY]["state"] == (
+            "ready" if finish_reason == "stop" else "fallback"
+        )
+        assert run.agent_state[prep.KEY]["result"] == expected
 
 
 @pytest.mark.asyncio
