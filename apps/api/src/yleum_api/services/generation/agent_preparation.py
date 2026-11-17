@@ -250,15 +250,19 @@ async def prepare_stack_prompt(
         _seed_block = _seed_block + "\n\n" + project_info.memory_context
     if project_info.restoration_context:
         _seed_block += project_info.restoration_context
-    # Per-project DESIGN MOOD — make every app look UNIQUE instead of the
-    # baked dark zinc/indigo template («дизайн всегда одинаковый»). Seeded
-    # curated palette + font + density fed into the BUILD prompt so the
-    # agent writes distinct UI; works even on the hardcoded realtime
-    # template where CSS-token injection is inert. Build only (orchestrate),
-    # not surgical edits — a follow-up must not re-theme. Flag-gated, fail-soft.
+    from yleum_api.services.max_generation_contract import is_api_only_request
+
+    if project_info.template == "max_miniapp" and not is_api_only_request(prompt_text):
+        from yleum_api.services.owner_design import load_owner_palette_context
+
+        _seed_block += await load_owner_palette_context(factory, ids)
+    # MAX uses owner-led composition even when the optional design helper is
+    # disabled. Never revive legacy seeded palettes/recipes through fallback.
+    # Other stacks retain their current design-mood behavior.
     if _design_contract:
         _seed_block = _seed_block + "\n\n" + _design_contract.prompt_block
-    elif orchestrate and get_settings().use_design_mood:
+    elif (project_info.template != "max_miniapp" and orchestrate
+          and get_settings().use_design_mood):
         try:
             from yleum_api.services.design_dna import design_mood_directive
 

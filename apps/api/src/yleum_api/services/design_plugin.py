@@ -6,10 +6,9 @@ It does not start another model, add an
 acceptance phase, or own completion; the proven single-pass agent loop remains
 the only loop.
 
-The shape follows searchable design-intelligence skills: classify first, inject
-only matched guidance. It reuses Yleum's vendored, version-pinned UI/UX Pro Max
-tables through the narrow ``skill_library`` loader plus Yleum's own presets and
-Design DNA. Upstream scripts are never executed and generation adds no network.
+MAX uses owner-led craft guidance without inferred screen or style recipes.
+Other stacks retain their matched, locally vendored UI/UX guidance and legacy
+presets. Upstream scripts are never executed and generation adds no network.
 """
 
 from __future__ import annotations
@@ -22,7 +21,6 @@ from dataclasses import asdict, dataclass, replace
 from yleum_api.services import skill_library
 from yleum_api.services.design_dna import design_mood_directive
 from yleum_api.services.design_presets import PRESETS
-from yleum_api.services.design_tokens import DesignTokens, tokens_for_project
 from yleum_api.services.preset_classifier import classify_preset_sync
 from yleum_api.services.typography import TypographyDecision, choose_typography, seed_typography
 
@@ -155,7 +153,7 @@ _SKILL_TERMS = {
 
 @dataclass(frozen=True)
 class DesignContract:
-    """Versioned output consumed by both author and visual reviewer."""
+    """Versioned author guidance; stored metadata grants no acceptance authority."""
 
     plugin_id: str
     version: str
@@ -167,59 +165,13 @@ class DesignContract:
     design_markdown: str
 
 
-def _max_token_directive(tokens: DesignTokens) -> str:
-    """A coherent product palette for MAX without overriding MAX UI internals."""
-    palette = tokens.palette
-    return f"""
-• Палитра продукта «{palette.name}» ({palette.vibe}):
-  --app-bg: {palette.bg}; --app-surface: {palette.surface};
-  --app-text: {palette.text}; --app-muted: {palette.muted};
-  --app-border: {palette.border}; --app-brand: {palette.primary};
-  --app-accent: {palette.accent}.
-• Типографика продукта: display — {tokens.display_font}; body — {tokens.body_font}.
-  Подключение: локальный `src/app/typography.css`, зависимости закреплены в lockfile.
-• В `globals.css` объяви эти `--app-*` переменные и используй их для продуктовых
-  композиций. Не переопределяй внутренние semantic tokens MAX UI и не добавляй
-  `@theme`: контролы уже получают тему от существующего `MaxAppProvider`.
-""".strip()
-
-
 def _render_design_markdown(
     *,
     pattern: _ProductPattern,
     preset_name: str,
     nav_rule: str,
-    tokens: DesignTokens | None,
 ) -> str:
-    """Persistent, secret-free design memory shipped inside the generated app."""
-    token_lines = ""
-    max_ui_lines = ""
-    if tokens is not None:
-        palette = tokens.palette
-        token_lines = f"""
-| Token | Value |
-|---|---|
-| `--app-bg` | `{palette.bg}` |
-| `--app-surface` | `{palette.surface}` |
-| `--app-text` | `{palette.text}` |
-| `--app-muted` | `{palette.muted}` |
-| `--app-border` | `{palette.border}` |
-| `--app-brand` | `{palette.primary}` |
-| `--app-accent` | `{palette.accent}` |
-| Display font | `{tokens.display_font}` |
-| Body font | `{tokens.body_font}` |
-| Font source | `typography.json` / `src/app/typography.css` |
-""".strip()
-        max_ui_lines = """
-## MAX UI
-
-- Keep the existing `MaxAppProvider` and global MAX UI stylesheet.
-- Use public `@maxhub/max-ui@0.2.0` controls for native interactions.
-- Use `lucide-react` for missing icons; never emoji or hand-drawn SVG icons.
-- Product layout uses the `--app-*` variables above. Do not override MAX UI's
-  internal semantic variables.
-""".strip()
-
+    """Keep the legacy non-MAX design memory unchanged."""
     return (
         f"""# Product design contract
 
@@ -236,7 +188,7 @@ This file is persistent project memory. Keep it aligned when the product UI chan
 
 ## Foundations
 
-{token_lines or "Use the project design tokens already present in the application."}
+Use the project design tokens already present in the application.
 
 ## Quality floor
 
@@ -246,9 +198,71 @@ This file is persistent project memory. Keep it aligned when the product UI chan
 - At 360–390px: no horizontal or nested scrolling; safe areas remain usable.
 - Real Russian copy and data; no dead decorative controls, emoji icons or generic hero.
 
-{max_ui_lines}
 """.strip()
         + "\n"
+    )
+
+
+_MAX_DESIGN_PRINCIPLES = """
+• Начни с задачи, аудитории и главного действия из полного запроса владельца.
+  Композицию, навигацию и нужные экраны выбери по этому запросу и текущему продукту.
+• Выстрой иерархию размером, расстояниями, типографикой и уместным акцентом.
+  Согласуй роли цвета и текста; используй существующие токены там, где они уже есть.
+• Группируй связанные поля; различай подпись, значение, единицы и подсказку.
+  Для числовых сводок сохрани понятные интервалы и читаемое выравнивание.
+• loading, empty, error, success помогают выполнить действие и расположены рядом с ним.
+  Названия действий и интерфейсный текст понятны аудитории продукта.
+• На мобильном сохрани читаемость, safe-area, видимый focus и touch target ≥44px.
+  Контент и доступные действия остаются видимыми при длинном тексте и открытой клавиатуре.
+• Сохрани существующие MaxAppProvider и @maxhub/max-ui@0.2.0, его публичные API
+  и внутренние semantic tokens. Продуктовые стили организуй согласованно с этим ядром.
+""".strip()
+
+
+def _max_design_contract(
+    *, project_id: str, brief: str, preset_id: str | None,
+) -> DesignContract:
+    """Owner-led advice without an inferred product, palette or screen scheme."""
+    typography = choose_typography(
+        project_id, brief=brief, preset_id=None, infer_defaults=False,
+    )
+    typography_context = typography.prompt()
+    # Unknown font names are arbitrary owner text. Keep that request in the
+    # original task, not in persisted/public design memory or source metadata.
+    memory_typography = replace(typography, custom_request=None)
+    priorities = (
+        "Полный запрос владельца и явно выбранное им оформление имеют приоритет. "
+        "При обычной правке или продолжении сохрани сложившийся дизайн, функции и данные; "
+        "меняй их в пределах запроса."
+    )
+    prompt_block = (
+        f"OMNIA DESIGN PRO · {PLUGIN_VERSION} — рекомендации оформления MAX Mini App.\n"
+        f"{priorities}\n\n{_MAX_DESIGN_PRINCIPLES}\n\n{typography_context}"
+    )
+    design_markdown = (
+        f"# Product design contract\n\n"
+        f"Managed by `{PLUGIN_ID}` `{PLUGIN_VERSION}` from `{KNOWLEDGE_SOURCE}`.\n"
+        "Guidance mode: owner-led MAX product.\n\n"
+        f"{priorities}\n\n## Working principles\n\n{_MAX_DESIGN_PRINCIPLES}\n\n"
+        f"## Typography decision\n\n{memory_typography.prompt()}\n\n"
+        "<!-- typography-decision-v1\n"
+        + json.dumps(asdict(memory_typography), ensure_ascii=False)
+        + "\n-->\n"
+    )
+    return DesignContract(
+        plugin_id=PLUGIN_ID,
+        version=PLUGIN_VERSION,
+        knowledge_source=KNOWLEDGE_SOURCE,
+        archetype="owner-led",
+        # Preserve a supplied legacy value as inert metadata, never as advice.
+        preset_id=str(preset_id) if preset_id in PRESETS else "",
+        prompt_block=prompt_block,
+        vision_context=(
+            f"{PLUGIN_ID} {PLUGIN_VERSION}; owner-led MAX guidance; "
+            "owner request and existing product take priority; "
+            "task, hierarchy, typography and useful states."
+        ),
+        design_markdown=design_markdown,
     )
 
 
@@ -351,6 +365,12 @@ def build_design_contract(
     """Build one compact contract for a UI container; non-UI stacks opt out."""
     if template not in _UI_TEMPLATES:
         return None
+    if template == "max_miniapp":
+        from yleum_api.services.max_generation_contract import is_api_only_request
+
+        if is_api_only_request(brief):
+            return None
+        return _max_design_contract(project_id=project_id, brief=brief, preset_id=preset_id)
 
     pattern = _pick_pattern(brief)
     selected_preset_id = _pick_preset(
@@ -360,51 +380,20 @@ def build_design_contract(
         preset_id=preset_id,
     )
     preset = PRESETS[selected_preset_id]
-    mobile = template == "max_miniapp"
-    nav_rule = (
-        "mobile-first: 3–5 нижних вкладок, safe-area, главный CTA достижим большим пальцем"
-        if mobile
-        else "адаптивная навигация: desktop sidebar/header, на 390px без горизонтального скролла"
-    )
+    nav_rule = "адаптивная навигация: desktop sidebar/header, на 390px без горизонтального скролла"
     matched_skill_brief = _matched_skill_brief(
         project_id=project_id,
         pattern=pattern,
-        mobile=mobile,
+        mobile=False,
         brief=brief,
     )
-    typography = choose_typography(project_id, brief=brief, preset_id=preset_id) if mobile else None
-    tokens = tokens_for_project(project_id, industry_hint=brief) if mobile else None
-    if tokens is not None and typography is not None:
-        tokens = replace(
-            tokens, display_font=typography.heading, body_font=typography.body, google_fonts_url=""
-        )
-    mood = (
-        _max_token_directive(tokens)
-        if tokens is not None
-        else design_mood_directive(project_id, industry_hint=brief)
-    )
+    mood = design_mood_directive(project_id, industry_hint=brief)
     design_markdown = _render_design_markdown(
         pattern=pattern,
         preset_name=preset.name,
         nav_rule=nav_rule,
-        tokens=tokens,
     )
-    if typography is not None:
-        mood += "\n" + typography.prompt()
-        design_markdown += "\n\n## Typography decision\n\n" + typography.prompt()
-        # Preserve the existing durable DesignContract wire shape. The versioned
-        # decision travels inside source memory, including cold continuations.
-        design_markdown += (
-            "\n\n<!-- typography-decision-v1\n"
-            + json.dumps(asdict(typography), ensure_ascii=False)
-            + "\n-->\n"
-        )
-    visual_direction = (
-        f"{preset.name}. Это направление, а не второй набор токенов: точная палитра "
-        "ниже и постоянный `DESIGN.md` имеют приоритет."
-        if mobile
-        else f"{preset.name} — {preset.one_liner}"
-    )
+    visual_direction = f"{preset.name} — {preset.one_liner}"
     prompt_block = f"""
 
 OMNIA DESIGN PRO · {PLUGIN_VERSION} — обязательный дизайн-контракт первого билда.

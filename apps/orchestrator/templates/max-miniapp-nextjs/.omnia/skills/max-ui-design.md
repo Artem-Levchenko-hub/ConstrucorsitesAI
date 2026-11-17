@@ -1,7 +1,10 @@
 # MAX UI product design — exact template contract
 
 This template pins `@maxhub/max-ui@0.2.0` with React 18. Build the product as a
-MAX Mini App, not as a generic website, Telegram/VK app or marketing landing.
+MAX Mini App, not as a generic website or Telegram/VK app. The owner's explicit
+product and visual brief determines screens, colors, fonts and style; general
+craft advice must not replace it with an industry recipe. Platform security,
+SDK contracts and verified component APIs remain required.
 
 ## Existing platform shell
 
@@ -11,8 +14,9 @@ MAX Mini App, not as a generic website, Telegram/VK app or marketing landing.
   `colorScheme="light" | "dark"`.
 - Reuse that provider. Do not add a second `MaxUI`, bridge bootstrap or global
   MAX UI stylesheet import.
-- Read and preserve the root `DESIGN.md`. Its `--app-*` tokens own product
-  surfaces and composition; MAX UI owns its internal semantic control tokens.
+- Read the actual source and root `DESIGN.md`; ordinary edits preserve the incumbent
+  design. An explicit owner redesign may update them together. Product `--app-*`
+  tokens own surfaces and composition; MAX UI owns its internal control tokens.
 
 ## Verified public imports
 
@@ -41,15 +45,18 @@ Read the relevant declaration and continue with the requested main screen.
   `compact | normal`.
 
 Do not import `Panel`, `Grid`, `Container`, `Flex` or `TabBar`: they are not
-public exports in `0.2.0`. Build layout with semantic HTML/CSS. Build bottom
-navigation with accessible buttons/links and `lucide-react` icons. Avoid new
-usage of deprecated `Switch` and `ToolButton`.
+public exports in `0.2.0`. Build layout with semantic HTML/CSS. If the requested
+journeys need bottom navigation, use accessible buttons/links and `lucide-react`
+icons. Avoid new usage of deprecated `Switch` and `ToolButton`.
 
 ## Product quality floor
 
 - Start with the requested main screen and primary journey before auxiliary
-  files. Use 3–5 bottom destinations only when the information architecture
-  needs them.
+  files. Navigation is optional and follows those journeys. Do not infer screens,
+  a cart, history, profile or a tab count from the industry or project name.
+- For new UI or an explicit redesign, choose a brief-specific composition,
+  typography and palette within the current implementation. This advice adds
+  no separate design stage, visual acceptance gate or refinement loop.
 - One visually dominant action per screen. Use hierarchy, spacing and type
   scale instead of wrapping every item in the same card.
 - Every data surface has useful loading, empty, error and success states.
@@ -57,6 +64,6 @@ usage of deprecated `Switch` and `ToolButton`.
   performs an action or is clearly disabled with an explanation.
 - At 360–390px: no horizontal/nested scroll; touch targets are at least 44px;
   safe areas and the keyboard do not cover the active control or CTA.
-- Use one consistent `lucide-react` stroke style for icons. Never use emoji as
-  interface icons or hand-drawn SVG replacements.
+- Prefer one consistent icon style, using `lucide-react` when the owner has not
+  requested a different treatment. Avoid arbitrary decorative icons.
 - Use the active generation mode's completion checks and repair concrete errors.

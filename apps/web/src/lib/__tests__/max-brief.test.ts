@@ -42,6 +42,24 @@ describe("buildMaxProjectPrompt", () => {
     expect(prompt).toContain("определи главное действие пользователя");
     expect(prompt).toContain("подбери уместную палитру");
   });
+
+  it.each([
+    "Один экран каталога без корзины, истории, профиля и вкладок.",
+    "Магазин с корзиной, оплатой, заказами и профилем.",
+  ])("keeps the owner's journeys instead of imposing navigation: %s", idea => {
+    const prompt = buildMaxProjectPrompt({
+      name: "Свой продукт", idea: `${idea} Шрифт Lora.`, appType: "custom", audience: "", primaryAction: "",
+      features: [], style: "brand", brandColors: "#7c3aed",
+    });
+
+    expect(prompt).toContain(idea);
+    expect(prompt).toContain("Шрифт Lora.");
+    expect(prompt).toContain("Цвета бренда: #7c3aed");
+    expect(prompt).toContain("Экраны и навигацию добавляй по запросу владельца");
+    expect(prompt).not.toContain("мобильную навигацию, все основные экраны");
+    expect(prompt).toContain("Используй только модули из .omnia/management.json");
+    expect(prompt).toContain("серверную проверку initData");
+  });
 });
 
 const longBrief = {

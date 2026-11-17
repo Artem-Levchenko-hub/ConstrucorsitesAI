@@ -207,7 +207,13 @@ def choose_typography(
     *,
     brief: str,
     preset_id: str | None = None,
+    infer_defaults: bool = True,
 ) -> TypographyDecision:
+    """Resolve owner choices before optional legacy niche/preset defaults.
+
+    Free MAX composition uses a stable readable base when no font/style was
+    requested. Other callers retain their existing deterministic recipes.
+    """
     positive = _positive_text(brief)
     negative = " ".join(m[0] for m in _NEGATION.finditer(brief)).lower()
     fonts = font_catalogue()["fonts"]
@@ -319,6 +325,11 @@ def choose_typography(
         return resolve(
             "owner-custom-pending" if custom else "owner-font", heading, body, custom, extras=extras
         )
+    if not infer_defaults:
+        # The coding author receives the full owner visual request. Do not turn
+        # subject words such as "warm floor" or "craft directory" into a font
+        # recipe; only explicit family/role choices are materialized here.
+        return resolve("owner-led", safe, safe)
     # Style exclusions constrain inference, but never overrule a named owner font.
     excluded.update(heading for style, _, heading, _ in _STYLES if style in excluded_styles)
     if re.search(r"без\s+засечек|sans[- ]serif", brief, re.I):

@@ -5,6 +5,28 @@ import pytest
 from yleum_api.services.typography import choose_typography, seed_typography
 
 
+@pytest.mark.parametrize("brief", [
+    "Кафе и каталог", "Фитнес и спорт", "Медицинский кабинет",
+    "Каталог ремесленников", "Каталог индустрии музыки", "Управление тёплым полом",
+])
+def test_free_max_typography_has_no_niche_or_project_seed(brief):
+    first = choose_typography(
+        "first", brief=brief, preset_id="editorial-luxury", infer_defaults=False,
+    )
+    second = choose_typography("second", brief=brief, infer_defaults=False)
+    assert first == second
+    assert (first.heading, first.body, first.style) == ("Onest", "Onest", "owner-led")
+
+
+def test_free_typography_preserves_explicit_roles_and_exclusions():
+    decision = choose_typography(
+        "p", brief="Body Manrope, heading Lora", infer_defaults=False,
+    )
+    assert (decision.heading, decision.body) == ("Lora", "Manrope")
+    excluded = choose_typography("p", brief="Каталог без Onest", infer_defaults=False)
+    assert "Onest" not in (excluded.heading, excluded.body)
+
+
 def test_explicit_scandi_beats_fitness_and_cafe():
     for niche in ("фитнес", "кафе"):
         d = choose_typography("project", brief=f"{niche}, скандинавский минимализм, не брутализм")
@@ -124,7 +146,7 @@ def test_contract_wire_shape_and_frozen_design_preserved():
         "design_markdown",
     }
     assert "fonts.googleapis.com" not in contract.prompt_block
-    assert "Manrope" in contract.prompt_block
+    assert "heading — Onest; body — Onest" in contract.prompt_block
     existing = {"DESIGN.md": "Owner typography", "package.json": "{}"}
     assert seed_design_memory(existing, contract) == existing
 

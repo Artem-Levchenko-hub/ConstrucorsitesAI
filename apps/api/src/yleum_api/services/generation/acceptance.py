@@ -488,7 +488,10 @@ class PromptAcceptance:
             from yleum_api.services.design_presets import PRESETS as _PRESETS
 
             if self.payload.design_preset_id in _PRESETS:
+                from yleum_api.services.owner_design import record_owner_palette
+
                 self.project.design_preset_id = self.payload.design_preset_id
+                record_owner_palette(self.generation_run, self.payload.design_preset_id)
 
     async def prepare_model_pilot(self) -> None:
         if not self.is_first_build or str(self.project_id) not in (

@@ -93,13 +93,30 @@ def test_max_native_prompt_disables_incompatible_generic_proof_tools() -> None:
     assert "run runtime_check after the final write" in prompt
     assert "signed MAX preview session" in prompt
     assert "DESIGN.md" in prompt
-    assert "утилитарный mobile product" in prompt
-    assert "НЕ landing page" in prompt
-    assert "Awwwards-риторику" in prompt
+    assert "MAX Mini App" in prompt
     assert "ОРКЕСТРАЦИЯ МОДЕЛЕЙ" not in prompt
     assert "МЕДИА (картинки + КИНО-ВИДЕО)" not in prompt
     assert "ЖИВЫЕ МИКРО-ВЗАИМОДЕЙСТВИЯ" not in prompt
     assert "картинка «летит» при прокрутке" not in prompt
+
+
+def test_max_native_design_respects_owner_and_incumbent_without_product_recipes() -> None:
+    owner_guide = (
+        "MAX PLATFORM CORE CONTRACT\n"
+        "Одноэкранный каталог без корзины, профиля и вкладок. Цвет #7c3aed, шрифт Lora."
+    )
+    prompt = agent_native.native_system_prompt(owner_guide)
+
+    assert owner_guide in prompt
+    assert "Текущий явный запрос владельца" in prompt
+    assert "цвета, шрифты и исключения" in prompt
+    assert "сохрани существующие исходники и DESIGN.md" in prompt
+    assert "Не назначай по отрасли" in prompt
+    assert "Навигацию добавляй только" in prompt
+    assert "не отдельный этап или критерий остановки" in prompt
+    assert "3–5" not in prompt
+    assert "safe-area" in prompt
+    assert "4.5:1" in prompt
 
 
 @pytest.mark.asyncio
