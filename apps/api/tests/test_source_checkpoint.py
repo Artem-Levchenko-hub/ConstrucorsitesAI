@@ -64,6 +64,34 @@ def _mark_failed(history_fixture, run):
     history_fixture.session.expire_all()
 
 
+@pytest.mark.parametrize(
+    "owner_prompt", ["Продолжи", "continue building", "Сделай другое приложение"],
+)
+async def test_owner_can_explicitly_continue_a_cancelled_saved_draft(
+    history, checkpoints, owner_prompt,  # noqa: F811 - pytest consumes imported fixture
+):
+    from datetime import UTC, datetime
+
+    save, resume = checkpoints
+    original = history.add('Original product with orders', status='running')
+    await save(original)
+    original.status = 'cancelled'
+    original.finished_at = datetime.now(UTC)
+    history.session.commit()
+    original_state = dict(original.agent_state)
+
+    current = history.add(owner_prompt, status='running')
+    restored = await resume(current)
+    if owner_prompt == "Сделай другое приложение":
+        assert restored is None
+    else:
+        assert restored == (
+            {'files': {'src/app/page.tsx': 'saved feature', 'src/app/empty.ts': ''},
+             'deleted_paths': ['src/app/old.ts']}, 'Original product with orders',
+        )
+    assert original.status == 'cancelled' and original.agent_state == original_state
+
+
 async def test_repeated_resume_failures_before_private_copy_keep_exact_saved_source(
     history, checkpoints,  # noqa: F811 - pytest consumes imported fixture
 ):

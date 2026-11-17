@@ -16,8 +16,7 @@ import {
   Info,
   Sparkles,
   Check,
-  AlertTriangle,
-  Wrench,
+  Pause,
 } from "lucide-react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import type { Message } from "@/lib/api/types";
@@ -529,9 +528,8 @@ const CATEGORY_LABEL: Record<AppErrorCategory, string> = {
   incomplete: "Не завершено",
 };
 
-/** A build/compile/schema/runtime failure of the generated app, surfaced as a
- *  red card. Detail collapses behind a chevron; «Починить» fires a follow-up
- *  fix prompt that routes through the normal edit pipeline. */
+/** A calm next action with the exact app diagnostic behind disclosure.
+ *  Both continuation and repair use the normal prompt admission pipeline. */
 function AppErrorCard({
   part,
   onFix,
@@ -541,10 +539,9 @@ function AppErrorCard({
 }) {
   const [open, setOpen] = useState(false);
   const detail = part.body.trim();
-  const hasDetail = detail.length > 0;
-  // "incomplete" is a resumable partial build, not a failure — render it as a
-  // neutral amber card whose action CONTINUES the build («продолжи») rather than
-  // a red «Починить» fix.
+  const diagnostic = [part.title, part.file ? `Файл: ${part.file}` : "", detail]
+    .filter(Boolean).join("\n\n");
+  const hasDetail = diagnostic.length > 0;
   const isIncomplete = part.category === "incomplete";
 
   const handleFix = () => {
@@ -552,7 +549,7 @@ function AppErrorCard({
     const label = CATEGORY_LABEL[part.category] ?? "приложение";
     const lines = [`Исправь ошибку в приложении (${label}): ${part.title}.`];
     if (part.file) lines.push(`Файл: ${part.file}.`);
-    if (hasDetail) lines.push("", detail);
+    if (detail) lines.push("", detail);
     onFix(lines.join("\n"));
   };
 
@@ -561,76 +558,36 @@ function AppErrorCard({
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25, ease: EASE_OUT }}
-      className={cn(
-        "overflow-hidden rounded-xl border",
-        isIncomplete
-          ? "border-blue-500/30 bg-blue-500/5"
-          : "border-red-500/30 bg-red-500/5",
-      )}
+      role="status"
+      className="overflow-hidden rounded-xl border border-border-default bg-surface-raised"
     >
       <div className="flex items-start gap-3 px-3 py-2.5">
         <span
-          className={cn(
-            "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full",
-            isIncomplete ? "bg-blue-500/15" : "bg-red-500/15",
-          )}
+          className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center text-fg-secondary"
         >
-          <AlertTriangle
-            className={cn(
-              "h-3.5 w-3.5",
-              isIncomplete ? "text-blue-400" : "text-red-400",
-            )}
-          />
+          <Pause aria-hidden="true" className="h-4 w-4" />
         </span>
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[13px] font-semibold text-fg-primary">
-              {part.title}
-            </span>
-            <span
-              className={cn(
-                "rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
-                isIncomplete
-                  ? "bg-blue-500/15 text-blue-300"
-                  : "bg-red-500/15 text-red-300",
-              )}
-            >
-              {CATEGORY_LABEL[part.category] ?? part.category}
+              Продолжим подготовку
             </span>
           </div>
-          {part.file && (
-            <div className="truncate font-mono text-[11px] text-fg-tertiary">
-              {part.file}
-            </div>
-          )}
           <div className="flex items-center gap-2 pt-0.5">
             {part.fixable && onFix && (
               <button
                 type="button"
                 onClick={() => (isIncomplete ? onFix("продолжи") : handleFix())}
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors",
-                  isIncomplete
-                    ? "border-blue-500/30 bg-blue-500/10 text-blue-200 hover:bg-blue-500/20"
-                    : "border-red-500/30 bg-red-500/10 text-red-200 hover:bg-red-500/20",
-                )}
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-border-default px-3 text-sm font-medium text-fg-primary transition-colors hover:bg-surface-overlay"
               >
-                {isIncomplete ? (
-                  <>
-                    <ChevronRight className="h-3 w-3" />
-                    Продолжить
-                  </>
-                ) : (
-                  <>
-                    <Wrench className="h-3 w-3" />
-                    Починить
-                  </>
-                )}
+                <ChevronRight aria-hidden="true" className="h-3 w-3" />
+                {isIncomplete ? "Продолжить сборку" : "Продолжить подготовку"}
               </button>
             )}
             {hasDetail && (
               <button
                 type="button"
+                aria-expanded={open}
                 onClick={() => setOpen((o) => !o)}
                 className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-fg-tertiary transition-colors hover:text-fg-secondary"
               >
@@ -654,13 +611,10 @@ function AppErrorCard({
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.2, ease: EASE_OUT }}
-            className={cn(
-              "overflow-hidden border-t",
-              isIncomplete ? "border-blue-500/20" : "border-red-500/20",
-            )}
+            className="overflow-hidden border-t border-border-subtle"
           >
             <pre className="scrollbar-elegant max-h-64 overflow-auto bg-surface-base/60 p-3 text-[11px] font-mono leading-relaxed text-fg-secondary">
-              {detail}
+              {diagnostic}
             </pre>
           </motion.div>
         )}

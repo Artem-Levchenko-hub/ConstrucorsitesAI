@@ -26,6 +26,9 @@ from yleum_api.schemas.max_management import ManagementContract
 from yleum_api.services.max_management_contract import parse_management_contract
 
 _MANIFEST = ".omnia/management.json"
+_INVALID_MANAGEMENT_CONTRACT = (
+    "Invalid .omnia/management.json: use the canonical managed contract and hash."
+)
 PARKED_THROW_DIAGNOSTIC_PREFIX = (
     "Managed source connection analysis cannot prove call or binding effects. "
     "Simplify the identified source shape to a passive expression or explicit "
@@ -3101,10 +3104,7 @@ def _admission(files: Mapping[str, str]) -> tuple[str | None, frozenset[str]]:
     try:
         contract = _contract(files)
     except ValueError:
-        return (
-            "Invalid .omnia/management.json: use the canonical managed contract and hash.",
-            frozenset(),
-        )
+        return _INVALID_MANAGEMENT_CONTRACT, frozenset()
     if contract is None:
         return None, frozenset()
     connections = _Connections(files)
@@ -3269,7 +3269,8 @@ def _source_repair_guidance(diagnostic: str) -> str:
     )
 
 
-def management_source_gap(files: Mapping[str, str]) -> ManagedSourceGap | None:
+def management_source_advisory(files: Mapping[str, str]) -> ManagedSourceGap | None:
+    """Optional bounded source diagnostic, never generation acceptance evidence."""
     gap = _admission(files)[0]
     if gap is None:
         return None
@@ -3296,5 +3297,25 @@ def management_source_gap(files: Mapping[str, str]) -> ManagedSourceGap | None:
     return trusted_gap.with_diagnostic(diagnostic)
 
 
-def management_implemented_capabilities(files: Mapping[str, str]) -> frozenset[str]:
+def management_advisory_capabilities(files: Mapping[str, str]) -> frozenset[str]:
+    """Capabilities recognized by the optional, limited source interpreter."""
     return _admission(files)[1]
+
+
+def management_source_gap(files: Mapping[str, str]) -> ManagedSourceGap | None:
+    """Keep the server-owned contract valid without interpreting product code.
+
+    An unrecognized React/TypeScript expression is not a compiler or runtime
+    failure. It must not block finalization or purchase another model repair.
+    Actual build, runtime, ownership and data proofs remain separate gates.
+    """
+    try:
+        _contract(files)
+    except ValueError:
+        return ManagedSourceGap(_INVALID_MANAGEMENT_CONTRACT)
+    return None
+
+
+def management_implemented_capabilities(files: Mapping[str, str]) -> frozenset[str]:
+    """Source syntax and selected manifest modules grant no implementation proof."""
+    return frozenset()

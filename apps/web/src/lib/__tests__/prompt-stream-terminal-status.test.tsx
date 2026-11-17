@@ -352,7 +352,9 @@ it("dismisses only a superseded generation toast after accepted replacement, pre
   const socket = TestSocket.instances.at(-1)!;
   await act(async () => socket.emit({ type: "app.error", data: { message_id: "message-1", title: "Ошибка провайдера", category: "provider", detail: "Сохранённая ошибка" } } as WsEvent));
   await act(async () => socket.emit({ type: "llm.error", data: { message_id: "message-1", error: "failed" } }));
-  expect(toast.error).toHaveBeenCalledWith("Генерация прервалась", expect.objectContaining({ id: "generation-error:project-1:message-1" }));
+  expect(toast.info).toHaveBeenCalledWith("Продолжим работу над приложением", expect.anything());
+  expect(toast.error).not.toHaveBeenCalled();
+  expect(toast.info).toHaveBeenCalledWith("Подготовка на паузе", expect.objectContaining({ id: "generation-error:project-1:message-1" }));
   const historicalFailure = message();
   vi.mocked(sendPrompt).mockRejectedValueOnce(new Error("Admission unavailable"));
   await act(async () => { await stream.submit("Новое пожелание", "model"); });

@@ -648,9 +648,9 @@ export function usePromptStream(projectId: string, projectSlug: string, ownerId?
         // single source of truth = the DB row, no cache surgery here. The card
         // can land after llm.done, so this is independent of streaming state.
         qc.invalidateQueries({ queryKey: ["messages", projectId] });
-        toast.error(event.data.title, {
-          description: "Подробности — в карточке ошибки в чате.",
-          duration: 7_000,
+        toast.info("Продолжим работу над приложением", {
+          description: "Доступные действия — в чате приложения.",
+          duration: 5_000,
         });
         return;
       }
@@ -672,15 +672,13 @@ export function usePromptStream(projectId: string, projectSlug: string, ownerId?
         qc.removeQueries({
           queryKey: ["passes", projectId, event.data.message_id],
         });
-        // Loud surface so the user notices: silent inline-error in the chat
-        // tab was getting overlooked while the preview placeholder kept
-        // shimmering — they thought generation was still in progress.
+        // Keep the paused state visible while its durable details load in chat.
         const toastId = `generation-error:${projectId}:${event.data.message_id}`;
         generationErrorToastsRef.current.set(toastId, event.data.message_id);
-        toast.error("Генерация прервалась", {
+        toast.info("Подготовка на паузе", {
           id: toastId,
-          description: "Подробности и доступные действия появятся в сообщении генерации.",
-          duration: 8_000,
+          description: "Продолжить работу можно в чате приложения.",
+          duration: 5_000,
         });
         delete streamMetaRef.current[event.data.message_id];
         silenceNoticeRef.current.delete(event.data.message_id);
@@ -994,7 +992,7 @@ export function usePromptStream(projectId: string, projectSlug: string, ownerId?
         cancelRef.current = null;
         const toastId = `generation-error:${projectId}:${tempAssistantId}`;
         generationErrorToastsRef.current.set(toastId, tempAssistantId);
-        toast.error("Генерация не запустилась", {
+        toast.info("Продолжим подготовку", {
           id: toastId,
           description: reason,
           duration: 10_000,

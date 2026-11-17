@@ -106,7 +106,7 @@ it.each([
   await mount();
   await act(async () => { expect(await stream.submit("Добавь поле", "model")).toBe(false); });
   expect(toast.info).not.toHaveBeenCalledWith("Генерация уже запущена", expect.anything());
-  expect(toast.error).toHaveBeenCalledWith("Генерация не запустилась", expect.objectContaining({
+  expect(toast.info).toHaveBeenCalledWith("Продолжим подготовку", expect.objectContaining({
     description: expect.stringContaining(shown),
   }));
   expect(getLatestGeneration).not.toHaveBeenCalled();
@@ -188,7 +188,7 @@ it("keeps a restoration adaptation out of the follow-the-build branch", async ()
     idempotencyKey: "restoration-adapt:op", skipClarify: true };
   await act(async () => { expect(await stream.submit("Adapt", "model", [], adaptation)).toBe(false); });
   expect(toast.info).not.toHaveBeenCalledWith("Генерация уже запущена", expect.anything());
-  expect(toast.error).toHaveBeenCalledWith("Генерация не запустилась", expect.objectContaining({
+  expect(toast.info).toHaveBeenCalledWith("Продолжим подготовку", expect.objectContaining({
     description: expect.stringContaining("идёт другая сборка"),
   }));
 });
@@ -201,12 +201,12 @@ it.each(["unauthorized", "internal_error", "generation_active", "project_busy", 
     } as ConstructorParameters<typeof ApiError>[1]));
     await mount();
     await act(async () => { expect(await stream.submit("Добавь поле", "model")).toBe(false); });
-    expect(toast.error).toHaveBeenCalledWith("Генерация не запустилась", expect.objectContaining({
+    expect(toast.info).toHaveBeenCalledWith("Продолжим подготовку", expect.objectContaining({
       description: "Сессия завершилась. Войдите в аккаунт снова и отправьте запрос ещё раз.",
     }));
     expect(getLatestGeneration).not.toHaveBeenCalled();
-    expect(toast.info).not.toHaveBeenCalled();
-    expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).not.toContain("NEVER_PUBLISH");
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(JSON.stringify(vi.mocked(toast.info).mock.calls)).not.toContain("NEVER_PUBLISH");
     const rows = optimisticRows();
     expect(rows.find((m) => m.role === "user")?.content).toBe("Добавь поле");
     expect(rows.find((m) => m.role === "assistant")?.content).toContain("Сессия завершилась");
@@ -242,7 +242,7 @@ it("keeps the generic safe network error message for non401 transport failures",
   vi.mocked(sendPrompt).mockRejectedValueOnce(new Error("private network token=NEVER_PUBLISH"));
   await mount();
   await act(async () => { expect(await stream.submit("Добавь поле", "model")).toBe(false); });
-  expect(toast.error).toHaveBeenCalledWith("Генерация не запустилась", expect.objectContaining({
+  expect(toast.info).toHaveBeenCalledWith("Продолжим подготовку", expect.objectContaining({
     description: "Не удалось отправить запрос. Проверьте соединение и попробуйте ещё раз.",
   }));
   expect(getLatestGeneration).not.toHaveBeenCalled();
@@ -264,7 +264,7 @@ it("Free entitlement402 keeps draft unaccepted, reports upgrade and does not aut
  client.setQueryData(OWNER_PROFILE_QUERY_KEY,{id:"owner",user_chat_messages_limit:1,user_chat_messages_remaining:0});
  vi.mocked(sendPrompt).mockRejectedValue(new ApiError(402,{code:"entitlement_exceeded",message:"Выберите тариф",details:{entitlement:"free_chat_messages",plan_code:"free",limit:1,used:1}}));
  await mount();await act(async()=>{expect(await stream.submit("Второе пожелание","model")).toBe(false);});
- expect(toast.error).toHaveBeenCalledWith("Генерация не запустилась",expect.objectContaining({description:expect.stringContaining("одно сообщение на весь аккаунт")}));
+ expect(toast.info).toHaveBeenCalledWith("Продолжим подготовку",expect.objectContaining({description:expect.stringContaining("одно сообщение на весь аккаунт")}));
  expect(toast.info).not.toHaveBeenCalledWith("Генерация уже запущена",expect.anything());
  await act(async()=>vi.advanceTimersByTime(60000));expect(sendPrompt).toHaveBeenCalledOnce();
 });

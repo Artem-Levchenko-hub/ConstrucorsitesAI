@@ -67,7 +67,7 @@ it("a provider rejection requires an explicit click and uses the unchanged norma
   mocks.submit.mockImplementation(() => new Promise<boolean>(resolve => { finish = resolve; }));
   await render();
   const input = await draft("Мой несохранённый черновик");
-  const retry = button("Повторить запрос")!;
+  const retry = button("Продолжить сборку")!;
   expect(retry).toBeDefined();
   expect(mocks.submit).not.toHaveBeenCalled();
   expect(fetch).not.toHaveBeenCalled();
@@ -76,7 +76,7 @@ it("a provider rejection requires an explicit click and uses the unchanged norma
   expect(mocks.submit).toHaveBeenCalledWith("Попробуй ещё раз", "topmix-v1", [], undefined);
   expect(retry.disabled).toBe(true);
   await act(async () => finish(false));
-  expect(container.textContent).toContain("Не удалось запустить генерацию");
+  expect(container.textContent).toContain("Запрос пока не принят");
   expect(retry.disabled).toBe(false);
   expect(input.value).toBe("Мой несохранённый черновик");
   expect(fetch).not.toHaveBeenCalled();
@@ -89,8 +89,7 @@ it("a recovery-required failure returns focus without sending or changing the dr
   await render();
   const input = await draft("Сохрани мой текст");
   const back = button("Вернуться к запросу")!;
-  expect(button("Повторить запрос")).toBeUndefined();
-  expect(button("Повторить генерацию")).toBeUndefined();
+  expect(button("Продолжить сборку")).toBeUndefined();
   await act(async () => { back.focus(); back.click(); });
   expect(document.activeElement).toBe(input);
   expect(input.value).toBe("Сохрани мой текст");
@@ -107,7 +106,7 @@ it.each(["quota", "queued", "active"])("does not expose a new retry while %s blo
     started_at: "2026-11-06T04:01:00Z", finished_at: null,
   });
   await render();
-  expect(button("Повторить запрос")).toBeUndefined();
+  expect(button("Продолжить сборку")).toBeUndefined();
   expect(mocks.submit).not.toHaveBeenCalled();
   expect(fetch).not.toHaveBeenCalled();
 });
@@ -115,7 +114,7 @@ it.each(["quota", "queued", "active"])("does not expose a new retry while %s blo
 it("an older failure never retries a different last message", async () => {
   mocks.history.mockResolvedValue([failure, { ...failure, id: "completed-message", content: "Новая версия готова", generation_status: "completed", generation_failure: null }]);
   await render();
-  expect(button("Повторить запрос")).toBeUndefined();
+  expect(button("Продолжить сборку")).toBeUndefined();
   expect(button("Вернуться к запросу")).toBeUndefined();
   expect(mocks.submit).not.toHaveBeenCalled();
 });

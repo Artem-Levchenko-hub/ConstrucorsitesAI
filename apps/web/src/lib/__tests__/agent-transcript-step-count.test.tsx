@@ -109,7 +109,7 @@ describe("per-message action count across live events and history", () => {
 
     expect(liveHtml.match(/48 шаг\./g)).toHaveLength(2);
     expect(reloadedHtml.match(/48 шаг\./g)).toHaveLength(2);
-    expect(reloadedHtml.match(/Сборка не завершена/g)).toHaveLength(2);
+    expect(reloadedHtml.match(/Подготовка на паузе/g)).toHaveLength(2);
     expect(snapshot.at(-1)?.kind).toBe("provider_error");
   });
 

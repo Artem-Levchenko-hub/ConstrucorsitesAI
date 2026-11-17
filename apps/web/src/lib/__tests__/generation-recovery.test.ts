@@ -16,7 +16,7 @@ describe("durable recovery display", () => {
     expect(title(true, "running", false, { ...waiting, phase: "needs_input" })).toBe("Нужно ваше решение");
   });
   it("keeps confirmed cancellation ahead of an older wait", () => {
-    expect(title(false, "cancelled", false, waiting)).toBe("Сборка отменена");
+    expect(title(false, "cancelled", false, waiting)).toBe("Работа остановлена");
   });
   it("keeps a stop request pending instead of showing a stale waiting label", () => {
     expect(title(true, "cancel_requested", false, waiting)).toBe("Останавливаю работу");

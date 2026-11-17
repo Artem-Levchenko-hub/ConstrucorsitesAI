@@ -46,11 +46,11 @@ async def test_managed_rejection_hands_off_only_for_current_checked_source(
         " reason unproven_statistic_callback; fingerprint aaaaaaaaaaaaaaaa."
     )
     if kind == "structural":
-        from yleum_api.services.max_management_generation import management_source_gap
+        from yleum_api.services.max_management_generation import management_source_advisory
 
         from .test_max_management_generation import MISSING_SELECTION_PAGE, connection_files
 
-        gap = management_source_gap(connection_files(MISSING_SELECTION_PAGE, ("catalog",)))
+        gap = management_source_advisory(connection_files(MISSING_SELECTION_PAGE, ("catalog",)))
         assert gap is not None
 
     async def provider(*args, **kwargs):

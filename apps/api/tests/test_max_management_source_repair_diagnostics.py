@@ -24,7 +24,7 @@ export default function Page(){
 
 def source_gap(extra: str, *, prefix: str = "", **files: str):
     source = prefix + BASE.replace("EXTRA", extra)
-    return source, management.management_source_gap({
+    return source, management.management_source_advisory({
         ".omnia/management.json": build_management_contract(["catalog"]).model_dump_json(),
         "src/app/page.tsx": source,
         **files,
@@ -256,7 +256,7 @@ export async function redeem(receipt: string) {
             "} syncReceipt(selectedOrder);",
         )
     )
-    gap = management.management_source_gap(files)
+    gap = management.management_source_advisory(files)
     if case in {"canonical", "stylesheet_and_import_type"}:
         assert gap is None
         connections = management._Connections(files, inspect_checkout=True)
@@ -647,7 +647,7 @@ packages:
     accepted = case in {
         "canonical", "ordinary_package_imports", "canonical_pnpm_lock", "evolved_pnpm_lock",
     }
-    gap = management.management_source_gap(files)
+    gap = management.management_source_advisory(files)
     assert (gap is None, management.linked_checkout_connected(files)) == (accepted, accepted)
     if case in {"package_imports_alias", "unresolved_package_imports_alias", "uri_import"}:
         assert location(gap)[4] == "unproven_checkout_package_import"
@@ -677,7 +677,7 @@ export function sendFixture(value: unknown) {
         + BASE.replace("EXTRA", "sendFixture(unknownPayload());"),
         path: helper,
     }
-    gap = management.management_source_gap(files)
+    gap = management.management_source_advisory(files)
     assert gap
     assert location(gap) == (path, 3, 55, "call_expression", "unproven_json_stringify")
     plain, _, guidance = gap.partition("\n")
@@ -685,7 +685,7 @@ export function sendFixture(value: unknown) {
     assert "Build the JSON.stringify input from explicit typed state" in guidance
     assert "unknownPayload" not in gap and "/api/fixture" not in gap
     assert gap.rejection_key() == management.ManagedSourceGap(plain).rejection_key()
-    assert management.management_implemented_capabilities(files) == frozenset()
+    assert management.management_advisory_capabilities(files) == frozenset()
     if editable:
         assert gap.obligation is not None and gap.obligation.value == "json_stringify"
         assert gap.repair_path == path
@@ -698,8 +698,8 @@ export function sendFixture(value: unknown) {
 
     # Real proof still requires a source correction for the exact rejected call.
     files[path] = helper.replace("JSON.stringify(value)", "JSON.stringify({quantity: 1})")
-    assert management.management_source_gap(files) is None
-    assert "catalog" in management.management_implemented_capabilities(files)
+    assert management.management_source_advisory(files) is None
+    assert "catalog" in management.management_advisory_capabilities(files)
 
 
 def test_explicit_hydrated_local_json_writes_keep_managed_connections_proven():
@@ -781,7 +781,7 @@ def test_guidance_does_not_grant_derived_dto_sdk_render_identity():
         "catalog.items.map(item=><p key={item.id}>{item.title}</p>)",
         "cartRows.map(row=><p key={row.id}>{row.title}</p>)",
     )
-    gap = management.management_source_gap({
+    gap = management.management_source_advisory({
         ".omnia/management.json": build_management_contract(["catalog"]).model_dump_json(),
         "src/app/page.tsx": source,
     })

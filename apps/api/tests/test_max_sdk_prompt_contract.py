@@ -12,7 +12,7 @@ import pytest
 from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.services import agent_builder, agent_native
 from yleum_api.services.max_data_evolution import build_max_agent_guide
-from yleum_api.services.max_management_generation import management_source_gap
+from yleum_api.services.max_management_generation import management_source_advisory
 from yleum_api.services.max_project_kit import (
     MAX_MANAGED_SDK_GUIDANCE,
     MAX_MODEL_DIRECTIVE,
@@ -160,10 +160,10 @@ def test_max_ui_form_recipe_connects_both_managed_submit_handlers():
         "const orderSubmitDisabled = !inputs.orders.customerName;\n"
         "const leadSubmitDisabled = !inputs.leads.customerName;\nreturn <main>",
     )
-    assert management_source_gap(connection_files(source, modules)) is None
+    assert management_source_advisory(connection_files(source, modules)) is None
     handlers = (("submitOrder", "createManagedOrder"), ("submitLead", "createManagedLead"))
     for handler, method in handlers:
         removed_form_event = source.replace(f"onSubmit={{{handler}}}", "")
-        gap = management_source_gap(connection_files(removed_form_event, modules))
+        gap = management_source_advisory(connection_files(removed_form_event, modules))
         assert gap and f"Connect {method}" in gap and "Missing mounted create event" in gap
         assert "@maxhub/max-ui" in gap and 'type="submit"' in gap

@@ -3,7 +3,7 @@
 import pytest
 
 from yleum_api.services.max_management_contract import build_management_contract
-from yleum_api.services.max_management_generation import management_source_gap
+from yleum_api.services.max_management_generation import management_source_advisory
 
 
 def source_gap(statements: str, *, rendered: str | None = None):
@@ -22,7 +22,7 @@ export default function Page(){
   return <main><h1>{profile?.app_name}</h1>{OUTPUT}</main>;
 }
 """.replace("STATEMENTS", statements).replace("OUTPUT", output)
-    return management_source_gap({
+    return management_source_advisory({
         ".omnia/management.json": build_management_contract(["catalog"]).model_dump_json(),
         "src/app/page.tsx": source,
     })

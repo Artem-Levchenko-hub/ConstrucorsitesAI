@@ -17,8 +17,8 @@ from yleum_api.services.max_management_generation import (
     ManagedSourceGap,
     ManagedSourceObligation,
     linked_checkout_connected,
-    management_implemented_capabilities,
-    management_source_gap,
+    management_advisory_capabilities,
+    management_source_advisory,
 )
 from yleum_api.services.max_project_kit import (
     MAX_SECURITY_LOCKED_FILES,
@@ -314,30 +314,30 @@ export default function Page() {
 
 def test_structural_managed_gap_is_stable_across_unrelated_changes_and_feedback_redaction():
     files = connection_files(MISSING_SELECTION_PAGE, ("catalog",))
-    gap = management_source_gap(files)
+    gap = management_source_advisory(files)
     assert gap is not None and gap.startswith("Connect useYleumCatalogSelection")
     key = gap.rejection_key()
     assert key is not None
-    changed = management_source_gap({
+    changed = management_source_advisory({
         **files, "src/app/globals.css": "main { color: red; }",
         "src/app/page.tsx": "\n// an unrelated edit\n" + MISSING_SELECTION_PAGE,
     })
     assert changed is not None and changed.rejection_key() == key
     assert gap.with_diagnostic("bounded safe feedback").rejection_key() == key
-    assert management_implemented_capabilities(files) == frozenset()  # Still rejected.
+    assert management_advisory_capabilities(files) == frozenset()  # Still rejected.
     fixed = connection_files(connection_example(("catalog",)), ("catalog",))
-    assert management_source_gap(fixed) is None
+    assert management_source_advisory(fixed) is None
 
 
 def test_structural_managed_keys_distinguish_obligations_and_contracts():
-    selection = management_source_gap(connection_files(MISSING_SELECTION_PAGE, ("catalog",)))
-    profile = management_source_gap(connection_files(
+    selection = management_source_advisory(connection_files(MISSING_SELECTION_PAGE, ("catalog",)))
+    profile = management_source_advisory(connection_files(
         MISSING_SELECTION_PAGE.replace("{profile?.app_name}", "Fixed name"), ("catalog",),
     ))
-    catalog = management_source_gap(connection_files(
+    catalog = management_source_advisory(connection_files(
         MISSING_SELECTION_PAGE.replace("{item.title}", "Fixed row"), ("catalog",),
     ))
-    other_contract = management_source_gap(connection_files(
+    other_contract = management_source_advisory(connection_files(
         MISSING_SELECTION_PAGE, ("catalog", "leads"),
     ))
     gaps = [selection, profile, catalog, other_contract]
@@ -351,7 +351,7 @@ def test_missing_create_history_obligations_remain_distinct_under_the_same_contr
     keys = set()
     for name in CREATE_METHOD:
         rejected = source.replace(f"<form onSubmit={{submit_{name}}}", "<form")
-        gap = management_source_gap(connection_files(rejected, modules))
+        gap = management_source_advisory(connection_files(rejected, modules))
         assert gap is not None and CREATE_METHOD[name] in gap
         keys.add(gap.rejection_key())
     assert None not in keys and len(keys) == 3
@@ -397,8 +397,8 @@ export default function Page() {
 
 def test_read_only_category_find_index_keeps_later_live_catalog_rendering():
     files = connection_files(CATALOG_CATEGORY_PAGE, ("catalog",))
-    assert management_source_gap(files) is None
-    assert management_implemented_capabilities(files) == frozenset({"catalog"})
+    assert management_source_advisory(files) is None
+    assert management_advisory_capabilities(files) == frozenset({"catalog"})
 
 
 CATALOG_ID_LOOKUP_PAGE = """
@@ -426,8 +426,8 @@ export default function Page() {
 
 def test_read_only_catalog_id_lookup_keeps_later_live_catalog_rendering():
     files = connection_files(CATALOG_ID_LOOKUP_PAGE, ("catalog",))
-    assert management_source_gap(files) is None
-    assert management_implemented_capabilities(files) == frozenset({"catalog"})
+    assert management_source_advisory(files) is None
+    assert management_advisory_capabilities(files) == frozenset({"catalog"})
 
 
 @pytest.mark.parametrize("suffix,inner_lookup", [
@@ -447,8 +447,8 @@ def test_read_only_active_catalog_lookup_with_null_fallback_keeps_live_rendering
         "item.id === selectedId);", f"item.id === selectedId{suffix};", 1,
     ).replace("  const option =", inner_lookup + "  const option =")
     files = connection_files(source, ("catalog",))
-    assert management_source_gap(files) is None
-    assert management_implemented_capabilities(files) == frozenset({"catalog"})
+    assert management_source_advisory(files) is None
+    assert management_advisory_capabilities(files) == frozenset({"catalog"})
 
 
 def test_nullable_catalog_lookup_keeps_selected_booking_form_reachable():
@@ -463,8 +463,8 @@ def test_nullable_catalog_lookup_keeps_selected_booking_form_reachable():
         "{selected && <form onSubmit={submit_bookings}><button>Send bookings</button></form>}",
     )
     files = connection_files(source, ("catalog", "bookings"))
-    assert management_source_gap(files) is None
-    assert {"catalog", "booking"} <= management_implemented_capabilities(files)
+    assert management_source_advisory(files) is None
+    assert {"catalog", "booking"} <= management_advisory_capabilities(files)
 
 
 def test_catalog_lookup_rejection_identifies_the_cause_across_unrelated_edits():
@@ -472,16 +472,16 @@ def test_catalog_lookup_rejection_identifies_the_cause_across_unrelated_edits():
         "item.id === selectedId", "item.id === selectedId && opaque(item)", 1,
     )
     files = connection_files(source, ("catalog",))
-    first = management_source_gap(files)
+    first = management_source_advisory(files)
     assert first is not None and first.rejection_key() is not None
     assert "unproven_catalog_id_lookup" in first
 
-    reformatted = management_source_gap({
+    reformatted = management_source_advisory({
         **files,
         "src/app/page.tsx": "\n" + source.replace("opaque(item)", "opaque( item )"),
         "src/app/globals.css": "main { color: red; }",
     })
-    different = management_source_gap({
+    different = management_source_advisory({
         **files,
         "src/app/page.tsx": source.replace("opaque(item)", "opaque(item.options)"),
     })
@@ -497,7 +497,7 @@ def test_catalog_lookup_rejection_locates_use_in_caller_of_imported_predicate():
         **connection_files(source, ("catalog",)),
         "src/app/same.ts": "export const same = item => item.id === 'first';",
     }
-    gap = management_source_gap(files)
+    gap = management_source_advisory(files)
     assert gap is not None and "unproven_catalog_lookup_use" in gap
     assert "Source location: src/app/page.tsx:" in gap
 
@@ -507,11 +507,11 @@ def test_catalog_lookup_rejection_distinguishes_repairs_to_imported_predicate():
         "catalog.items.find(item => item.id === selectedId)", "catalog.items.find(same)",
     )
     files = connection_files(source, ("catalog",))
-    first = management_source_gap({
+    first = management_source_advisory({
         **files,
         "src/app/same.ts": "export const same = item => item.id === 'first' && !item.active;",
     })
-    second = management_source_gap({
+    second = management_source_advisory({
         **files,
         "src/app/same.ts": "export const same = item => item.id === 'first' && opaque(item);",
     })
@@ -529,9 +529,9 @@ def test_catalog_lookup_rejection_does_not_key_unrelated_catalog_progress(decora
         "  const unused = separate.items.find(item => item.id === selectedId && !item.active);\n"
         "  const selected =", 1,
     ).replace("  return <main>", f"  return <main>\n    {decoration}")
-    assert management_source_gap(connection_files(source, ("catalog",))) is None
+    assert management_source_advisory(connection_files(source, ("catalog",))) is None
     no_fields = source.replace("key={item.id}>{item.title}", "key={item.id}>No fields")
-    gap = management_source_gap(connection_files(no_fields, ("catalog",)))
+    gap = management_source_advisory(connection_files(no_fields, ("catalog",)))
     assert gap is not None and gap.rejection_key() is not None
 
 
@@ -539,7 +539,7 @@ def test_catalog_id_lookup_alone_is_not_a_rendered_catalog():
     source = CATALOG_ID_LOOKUP_PAGE.replace(
         "{catalog.items.map(item => <article key={item.id}>{item.title}</article>)}", "",
     )
-    gap = management_source_gap(connection_files(source, ("catalog",)))
+    gap = management_source_advisory(connection_files(source, ("catalog",)))
     assert gap is not None and gap.startswith("Connect useYleumCatalog items")
 
 
@@ -558,7 +558,7 @@ def test_catalog_id_lookup_alone_is_not_a_rendered_catalog():
 ])
 def test_catalog_id_lookup_does_not_hide_mutation_through_the_returned_row(statement):
     source = CATALOG_ID_LOOKUP_PAGE.replace("  return <main>", f"  {statement}\n  return <main>")
-    assert management_source_gap(connection_files(source, ("catalog",))) is not None
+    assert management_source_advisory(connection_files(source, ("catalog",))) is not None
 
 
 @pytest.mark.parametrize("predicate", [
@@ -570,7 +570,7 @@ def test_catalog_id_lookup_does_not_hide_mutation_through_the_returned_row(state
 ])
 def test_catalog_id_lookup_keeps_unproven_predicates_fail_closed(predicate):
     source = CATALOG_ID_LOOKUP_PAGE.replace("item => item.id === selectedId", predicate)
-    assert management_source_gap(connection_files(source, ("catalog",))) is not None
+    assert management_source_advisory(connection_files(source, ("catalog",))) is not None
 
 
 def test_catalog_id_lookup_requires_id_to_be_initialized_before_lookup():
@@ -581,7 +581,7 @@ def test_catalog_id_lookup_requires_id_to_be_initialized_before_lookup():
         "  const selected = catalog.items.find(item => item.id === selectedId);\n"
         "  const selectedId = 'first';",
     )
-    assert management_source_gap(connection_files(source, ("catalog",))) is not None
+    assert management_source_advisory(connection_files(source, ("catalog",))) is not None
 
 
 def test_catalog_id_lookup_does_not_borrow_a_binding_from_the_callers_scope():
@@ -592,7 +592,7 @@ def test_catalog_id_lookup_does_not_borrow_a_binding_from_the_callers_scope():
     ).replace("find(item => item.id === selectedId)", "find(compare)").replace(
         "  </main>;\n}", "  </main>;\n  }\n  const selectedId = 'outer';\n}",
     )
-    assert management_source_gap(connection_files(source, ("catalog",))) is not None
+    assert management_source_advisory(connection_files(source, ("catalog",))) is not None
 
 
 def test_managed_rejection_key_distinguishes_components_and_ignores_layout():
@@ -602,11 +602,11 @@ function Header() { const heading = {...loadHeading()}; return <h1>{heading.titl
 function Footer() { const heading = {...loadHeading()}; return <p>{heading.title}</p>; }
 export default function Page() { return <main><Header/><Footer/></main>; }
 """
-    initial = management_source_gap(connection_files(source, ("catalog",)))
-    formatted = management_source_gap(connection_files(
+    initial = management_source_advisory(connection_files(source, ("catalog",)))
+    formatted = management_source_advisory(connection_files(
         "\n" + source.replace("heading = ", "heading  = "), ("catalog",),
     ))
-    first_fixed = management_source_gap(connection_files(source.replace(
+    first_fixed = management_source_advisory(connection_files(source.replace(
         "const heading = {...loadHeading()};", "const heading = {title: 'fixed'};", 1,
     ), ("catalog",)))
     assert initial is not None and formatted is not None and first_fixed is not None
@@ -628,7 +628,7 @@ export default function Page() {
 """
     keys = []
     for _ in range(3):
-        gap = management_source_gap(connection_files(source, ("catalog",)))
+        gap = management_source_advisory(connection_files(source, ("catalog",)))
         assert gap is not None and "unproven_object_spread" in gap
         key = gap.rejection_key()
         assert key is not None
@@ -642,7 +642,7 @@ def test_catalog_id_lookup_rejects_deferred_mutation_after_catalog_render():
         "  </main>;", "    <button onClick={() => { selected.title = 'local'; }}>Edit</button>\n"
         "  </main>;",
     )
-    assert management_source_gap(connection_files(source, ("catalog",))) is not None
+    assert management_source_advisory(connection_files(source, ("catalog",))) is not None
 
 
 def test_passive_catalog_selection_destructuring_keeps_locked_category_field():
@@ -650,7 +650,7 @@ def test_passive_catalog_selection_destructuring_keeps_locked_category_field():
         "const selection = useYleumCatalogSelection(items);",
         "const {category, setCategory, getOption, selectOption} = useYleumCatalogSelection(items);",
     ).replace("selection.setCategory", "setCategory")
-    assert management_source_gap(connection_files(source, ("catalog",))) is None
+    assert management_source_advisory(connection_files(source, ("catalog",))) is None
 
 
 def test_find_index_preserves_proven_collection_alias_and_local_predicate():
@@ -665,7 +665,7 @@ def test_find_index_preserves_proven_collection_alias_and_local_predicate():
         "      return item.active && item.category && alias.findIndex(sameCategory) === index ?",
     ).replace("</button> : null)}", "</button> : null; })}")
     assert source != CATALOG_CATEGORY_PAGE
-    assert management_source_gap(connection_files(source, ("catalog",))) is None
+    assert management_source_advisory(connection_files(source, ("catalog",))) is None
 
 
 def test_find_index_numeric_result_is_not_rendered_catalog_evidence():
@@ -679,7 +679,7 @@ def test_find_index_numeric_result_is_not_rendered_catalog_evidence():
         "",
     )
     assert source != CATALOG_CATEGORY_PAGE
-    gap = management_source_gap(connection_files(source, ("catalog",)))
+    gap = management_source_advisory(connection_files(source, ("catalog",)))
     assert gap is not None and gap.startswith("Connect useYleumCatalog items")
 
 
@@ -706,7 +706,7 @@ def test_find_index_keeps_unproven_or_mutating_callbacks_fail_closed(predicate):
         "(candidate) => candidate.category === item.category", predicate,
     )
     assert source != CATALOG_CATEGORY_PAGE
-    gap = management_source_gap(connection_files(source, ("catalog",)))
+    gap = management_source_advisory(connection_files(source, ("catalog",)))
     assert gap is not None and gap.startswith("Connect useYleumCatalog items")
 
 
@@ -719,7 +719,7 @@ def test_find_index_keeps_unproven_or_mutating_callbacks_fail_closed(predicate):
 ])
 def test_find_index_cannot_recreate_trust_after_aliased_catalog_mutation(mutation):
     source = CATALOG_CATEGORY_PAGE.replace("  return <main>", "  " + mutation + "\n  return <main>")
-    assert management_source_gap(connection_files(source, ("catalog",)))
+    assert management_source_advisory(connection_files(source, ("catalog",)))
 
 
 @pytest.mark.parametrize("operation", [
@@ -732,7 +732,7 @@ def test_find_index_does_not_admit_other_collection_methods_or_overloads(operati
     source = CATALOG_CATEGORY_PAGE.replace(
         "findIndex((candidate) => candidate.category === item.category)", operation,
     )
-    assert management_source_gap(connection_files(source, ("catalog",)))
+    assert management_source_advisory(connection_files(source, ("catalog",)))
 
 
 def test_find_index_does_not_turn_static_rows_into_sdk_catalog():
@@ -740,7 +740,7 @@ def test_find_index_does_not_turn_static_rows_into_sdk_catalog():
         "const {items} = useYleumCatalog();",
         "const items = [{id: 'fixed', title: 'Fixed', category: 'fake'}];",
     )
-    assert management_source_gap(connection_files(source, ("catalog",)))
+    assert management_source_advisory(connection_files(source, ("catalog",)))
 
 
 def test_find_index_retains_ast_budget_fail_closed():
@@ -748,7 +748,7 @@ def test_find_index_retains_ast_budget_fail_closed():
         "  return <main>",
         "  " + "".join(f"const unused{index} = 0;" for index in range(4500)) + "\n  return <main>",
     )
-    assert management_source_gap(connection_files(source, ("catalog",))) == (
+    assert management_source_advisory(connection_files(source, ("catalog",))) == (
         "Managed source connection analysis exceeded its bounded AST budget."
     )
 
@@ -782,8 +782,8 @@ export default function Page() {
 def test_status_comparison_does_not_hide_live_form_creation(guard):
     source = LEAD_STATUS_PAGE.replace("status === 'pending'", guard)
     files = connection_files(source, ("leads",))
-    assert management_source_gap(files) is None
-    assert management_implemented_capabilities(files) == frozenset({"history"})
+    assert management_source_advisory(files) is None
+    assert management_advisory_capabilities(files) == frozenset({"history"})
 
 
 @pytest.mark.parametrize("guard", [
@@ -794,7 +794,7 @@ def test_status_comparison_does_not_hide_live_form_creation(guard):
 ])
 def test_known_true_comparison_guards_keep_unreachable_create_rejected(guard):
     source = LEAD_STATUS_PAGE.replace("status === 'pending'", guard)
-    assert management_source_gap(connection_files(source, ("leads",)))
+    assert management_source_advisory(connection_files(source, ("leads",)))
 
 
 @pytest.mark.parametrize("guard", [
@@ -805,7 +805,7 @@ def test_known_true_comparison_guards_keep_unreachable_create_rejected(guard):
 ])
 def test_false_or_unknown_comparison_guards_keep_potential_creation(guard):
     source = LEAD_STATUS_PAGE.replace("status === 'pending'", guard)
-    assert management_source_gap(connection_files(source, ("leads",))) is None
+    assert management_source_advisory(connection_files(source, ("leads",))) is None
 
 
 @pytest.mark.parametrize("disconnect", ["create", "history"])
@@ -815,7 +815,7 @@ def test_status_comparison_still_requires_actual_create_and_history(disconnect):
         else "setLeads((await getManagedRecords('leads')).records)",
         "await Promise.resolve(" if disconnect == "create" else "setLeads([])",
     )
-    assert management_source_gap(connection_files(source, ("leads",)))
+    assert management_source_advisory(connection_files(source, ("leads",)))
 
 
 @pytest.mark.parametrize("field", ["profile", "catalog", "history"])
@@ -840,14 +840,14 @@ def test_comparison_boolean_is_not_rendered_managed_data(field, operator, revers
             "{" + comparison("record.customer_name") + "}",
         )
     assert source != connection_example(("catalog", "leads"))
-    assert management_source_gap(connection_files(source, ("catalog", "leads")))
+    assert management_source_advisory(connection_files(source, ("catalog", "leads")))
 
 
 def test_comparison_cannot_forward_sdk_field_into_visible_input_value():
     source = LEAD_STATUS_PAGE.replace(
         "<h1>{profile?.app_name}</h1>", '<input value={"fixed" === profile?.app_name} />',
     )
-    gap = management_source_gap(connection_files(source, ("leads",)))
+    gap = management_source_advisory(connection_files(source, ("leads",)))
     assert gap is not None and gap.startswith("Connect useYleumAppProfile")
 
 
@@ -861,7 +861,7 @@ def test_comparison_still_visits_opaque_or_async_mutation_before_guard(condition
     source = LEAD_STATUS_PAGE.replace("status === 'pending'", condition).replace(
         "    await refresh();", "",
     )
-    assert management_source_gap(connection_files(source, ("leads",)))
+    assert management_source_advisory(connection_files(source, ("leads",)))
 
 
 @pytest.mark.parametrize("condition", [
@@ -887,7 +887,7 @@ def test_comparison_does_not_hide_parameter_or_binding_initializer_effects(condi
     )
     files = connection_files(source, ("leads",))
     assert not _Connections(files).programs["src/app/page.tsx"].has_error
-    assert management_source_gap(files)
+    assert management_source_advisory(files)
 
 
 @pytest.mark.parametrize("probe", [
@@ -911,7 +911,7 @@ def test_hoisted_probe_cannot_hide_default_or_binding_effects_from_later_compari
     ).replace("    await refresh();", "")
     files = connection_files(source, ("leads",))
     assert not _Connections(files).programs["src/app/page.tsx"].has_error
-    assert management_source_gap(files)
+    assert management_source_advisory(files)
 
 
 @pytest.mark.parametrize("condition", [
@@ -925,7 +925,7 @@ def test_hoisted_probe_cannot_hide_default_or_binding_effects_from_later_compari
 ])
 def test_comparison_keeps_plain_async_or_typed_parameter_calls_supported(condition):
     source = LEAD_STATUS_PAGE.replace("status === 'pending'", condition)
-    assert management_source_gap(connection_files(source, ("leads",))) is None
+    assert management_source_advisory(connection_files(source, ("leads",))) is None
 
 
 @pytest.mark.parametrize("statements", [
@@ -955,7 +955,7 @@ def test_comparison_cannot_drop_unproven_object_or_class_construction_effects(st
     )
     files = connection_files(source, ("leads",))
     assert not _Connections(files).programs["src/app/page.tsx"].has_error
-    assert management_source_gap(files)
+    assert management_source_advisory(files)
 
 
 @pytest.mark.parametrize("statements", [
@@ -971,14 +971,14 @@ def test_passive_object_spreads_and_type_only_declarations_remain_supported(stat
     source = LEAD_STATUS_PAGE.replace(
         "status === 'pending'", "(() => { " + statements + " return false; })() === true",
     )
-    assert management_source_gap(connection_files(source, ("leads",))) is None
+    assert management_source_advisory(connection_files(source, ("leads",))) is None
 
 
 def test_opaque_callback_receiver_cannot_keep_later_input_spread_passive():
     source = connection_example(("catalog", "leads")).replace(
         "const onChoose = inputs.onChoose;", "",
     ).replace("onChoose(item,", "inputs.onChoose(item,")
-    gap = management_source_gap(connection_files(source, ("catalog", "leads")))
+    gap = management_source_advisory(connection_files(source, ("catalog", "leads")))
     assert gap is not None and "cannot prove call or binding effects" in gap
 
 
@@ -989,7 +989,7 @@ def test_unproven_prototype_initializer_cannot_forge_passive_data(key):
         "(() => { const copy = {" + key + ": unknownSource()}; "
         "const {value} = copy; return false; })() === true",
     )
-    assert management_source_gap(connection_files(source, ("leads",)))
+    assert management_source_advisory(connection_files(source, ("leads",)))
 
 
 @pytest.mark.parametrize("probe", [
@@ -998,7 +998,7 @@ def test_unproven_prototype_initializer_cannot_forge_passive_data(key):
 ])
 def test_spread_passivity_does_not_prove_missing_destructured_properties(probe):
     source = LEAD_STATUS_PAGE.replace("status === 'pending'", probe + " === true")
-    assert management_source_gap(connection_files(source, ("leads",)))
+    assert management_source_advisory(connection_files(source, ("leads",)))
 
 
 @pytest.mark.parametrize("statistics", [
@@ -1015,8 +1015,8 @@ def test_read_only_statistics_preserve_original_live_collection_connections(stat
     modules = ("catalog", "orders", "leads")
     source = connection_example(modules).replace("return <main>", statistics + "\nreturn <main>")
     files = connection_files(source, modules)
-    assert management_source_gap(files) is None
-    assert management_implemented_capabilities(files) == frozenset({"catalog", "history"})
+    assert management_source_advisory(files) is None
+    assert management_advisory_capabilities(files) == frozenset({"catalog", "history"})
 
 
 def test_catalog_status_helper_with_a_single_return_preserves_live_records():
@@ -1033,8 +1033,8 @@ function countByStatus(records: ManagedRecord[], status: string): number {
         "return <main>", "const count = countByStatus(orders, 'completed');\nreturn <main>",
     )
     files = connection_files(source, modules)
-    assert management_source_gap(files) is None
-    assert management_implemented_capabilities(files) == frozenset({"catalog", "history"})
+    assert management_source_advisory(files) is None
+    assert management_advisory_capabilities(files) == frozenset({"catalog", "history"})
 
 
 @pytest.mark.parametrize("statistics", [
@@ -1059,7 +1059,7 @@ def test_statistics_do_not_silently_skip_opaque_or_mutating_callback_effects(sta
     source = connection_example(modules).replace(
         "return <main>", "const statistic = " + statistics + ";\nreturn <main>",
     )
-    assert management_source_gap(connection_files(source, modules))
+    assert management_source_advisory(connection_files(source, modules))
 
 
 @pytest.mark.parametrize("expression", [
@@ -1076,7 +1076,7 @@ def test_read_only_statistics_do_not_become_rendered_record_identity(expression)
     assert original in source
     source = source.replace("return <main>", "const statistic = " + expression + ";\nreturn <main>")
     source = source.replace(original, "<span>{statistic}</span>")
-    gap = management_source_gap(connection_files(source, modules))
+    gap = management_source_advisory(connection_files(source, modules))
     assert gap is not None and gap.startswith("Connect createManagedOrder")
 
 
@@ -1087,7 +1087,7 @@ def test_pure_statistics_cannot_restore_a_previously_escaped_collection():
         "const alias = orders; opaque(alias); "
         "const count = orders.filter(row => row.status === 'new').length;\nreturn <main>",
     )
-    assert management_source_gap(connection_files(source, modules))
+    assert management_source_advisory(connection_files(source, modules))
 
 
 def test_active_category_deduplication_preserves_the_live_catalog():
@@ -1096,8 +1096,8 @@ def test_active_category_deduplication_preserves_the_live_catalog():
         "candidate.active && candidate.category === item.category",
     )
     files = connection_files(source, ("catalog",))
-    assert management_source_gap(files) is None
-    assert management_implemented_capabilities(files) == frozenset({"catalog"})
+    assert management_source_advisory(files) is None
+    assert management_advisory_capabilities(files) == frozenset({"catalog"})
 
 
 @pytest.mark.parametrize("predicate", [
@@ -1108,7 +1108,7 @@ def test_active_category_deduplication_preserves_the_live_catalog():
 ])
 def test_active_category_lookup_still_rejects_unproven_shapes(predicate):
     source = CATALOG_CATEGORY_PAGE.replace("candidate.category === item.category", predicate)
-    gap = management_source_gap(connection_files(source, ("catalog",)))
+    gap = management_source_advisory(connection_files(source, ("catalog",)))
     assert gap is not None and gap.startswith("Connect useYleumCatalog items")
 
 
@@ -1120,7 +1120,7 @@ def test_jsx_comments_are_not_unproven_executable_effects(comments):
     source = LEAD_STATUS_PAGE.replace(
         "<h1>{profile?.app_name}</h1>", "<h1>{profile?.app_name}" + comments + "</h1>",
     )
-    assert management_source_gap(connection_files(source, ("leads",))) is None
+    assert management_source_advisory(connection_files(source, ("leads",))) is None
 
 
 def test_unsupported_effect_diagnostic_names_actual_ast_location_without_source_values():
@@ -1129,7 +1129,7 @@ def test_unsupported_effect_diagnostic_names_actual_ast_location_without_source_
         "  const label = (() => { switch (status) { case 'DO-NOT-ECHO-THIS-VALUE': "
         "return false; default: return true; } })();\n  return <main>",
     )
-    gap = management_source_gap(connection_files(source, ("leads",)))
+    gap = management_source_advisory(connection_files(source, ("leads",)))
     assert gap is not None and "Source location: src/app/page.tsx:" in gap
     assert gap.obligation is None
     assert "AST switch_statement; reason unsupported_statement" in gap
@@ -1144,14 +1144,14 @@ def test_located_throw_is_a_typed_repair_obligation_without_connection_authority
         "catch (error) { setStatus('failed'); return; }",
     )
     files = connection_files(source, ("leads",))
-    gap = management_source_gap(files)
+    gap = management_source_advisory(files)
     assert gap is not None
     assert gap.obligation is ManagedSourceObligation.THROW_STATEMENT
     assert "AST throw_statement; reason unsupported_statement" in gap
     assert "format(response.status)" not in gap
-    assert management_implemented_capabilities(files) == frozenset()
+    assert management_advisory_capabilities(files) == frozenset()
 
-    shifted = management_source_gap(connection_files("\n" + source, ("leads",)))
+    shifted = management_source_advisory(connection_files("\n" + source, ("leads",)))
     assert shifted is not None and shifted.rejection_key() == gap.rejection_key()
     assert ManagedSourceGap(str(gap)).obligation is None
 
@@ -1161,7 +1161,7 @@ def test_throw_in_unsupported_loop_does_not_get_statement_repair_authority():
         "if (status === 'pending') return;",
         "for (const value of [1]) { throw new Error('stop'); }",
     )
-    gap = management_source_gap(connection_files(source, ("leads",)))
+    gap = management_source_advisory(connection_files(source, ("leads",)))
     assert gap is not None and gap.obligation is None
     assert "AST throw_statement; reason unsupported_loop_control" in gap
 
@@ -1174,7 +1174,7 @@ def test_throw_outside_app_source_does_not_get_statement_repair_authority():
         ("leads",),
     )
     files["src/components/reject.ts"] = "export function reject() { throw new Error('stop'); }"
-    gap = management_source_gap(files)
+    gap = management_source_advisory(files)
     assert gap is not None and gap.obligation is None
     assert "Source location: src/components/reject.ts:" in gap
     assert "AST throw_statement; reason unsupported_statement" in gap
@@ -1187,7 +1187,7 @@ def parked_throw_checkpoint():
         "try { if (status === 'ожидание') throw new Error(format(response.status)); } "
         "catch (error) { setStatus('failed'); return; }",
     )
-    gap = management_source_gap(connection_files(source, ("leads",)))
+    gap = management_source_advisory(connection_files(source, ("leads",)))
     assert gap is not None and gap.obligation is ManagedSourceObligation.THROW_STATEMENT
     return str(gap), {"src/app/page.tsx": source}
 
@@ -1249,7 +1249,7 @@ def test_passive_local_array_loop_can_construct_local_request_rows(initial):
         "const row = {catalogId: line.id, quantity: line.quantity}; "
         "if (line.option) { row.option = line.option; } rows.push(row); }\nreturn <main>",
     )
-    assert management_source_gap(connection_files(source, modules)) is None
+    assert management_source_advisory(connection_files(source, modules)) is None
 
 
 @pytest.mark.parametrize("statement", [
@@ -1281,7 +1281,7 @@ def test_passive_loop_keeps_captured_effects_and_unproven_control_fail_closed(st
     )
     files = connection_files(source, modules)
     assert not _Connections(files).programs["src/app/page.tsx"].has_error
-    assert management_source_gap(files)
+    assert management_source_advisory(files)
 
 
 @pytest.mark.parametrize("loop", [
@@ -1297,7 +1297,7 @@ def test_loop_admission_requires_a_local_passive_array_and_plain_scoped_binding(
     source = connection_example(("catalog", "orders")).replace(
         "return <main>", loop + "\nreturn <main>",
     )
-    assert management_source_gap(connection_files(source, ("catalog", "orders")))
+    assert management_source_advisory(connection_files(source, ("catalog", "orders")))
 
 
 def test_loop_let_shadow_does_not_invalidate_outer_sdk_collection():
@@ -1305,7 +1305,7 @@ def test_loop_let_shadow_does_not_invalidate_outer_sdk_collection():
         "return <main>",
         "for (const orders of []) { const row = {id: orders.id}; }\nreturn <main>",
     )
-    assert management_source_gap(connection_files(source, ("catalog", "orders"))) is None
+    assert management_source_advisory(connection_files(source, ("catalog", "orders"))) is None
 
 
 @pytest.mark.parametrize("operation", [
@@ -1328,7 +1328,7 @@ def test_empty_local_collections_do_not_skip_captured_sdk_effects(operation, ini
     source = connection_example(modules).replace(
         "return <main>", initializer + " const computed = " + operation + ";\nreturn <main>",
     )
-    assert management_source_gap(connection_files(source, modules))
+    assert management_source_advisory(connection_files(source, modules))
 
 
 @pytest.mark.parametrize("expression", [
@@ -1341,7 +1341,7 @@ def test_statistic_results_retain_sdk_alias_invalidation_without_render_witnesse
     source = connection_example(modules).replace(
         "return <main>", "const derived = " + expression + "; opaque(derived);\nreturn <main>",
     )
-    assert management_source_gap(connection_files(source, modules))
+    assert management_source_advisory(connection_files(source, modules))
 
 
 def test_nested_empty_pure_statistics_remain_supported():
@@ -1351,7 +1351,7 @@ def test_nested_empty_pure_statistics_remain_supported():
         "const counts = [1].map(key => ({key, count: "
         "[].filter(row => row.status === 'new').length}));\nreturn <main>",
     )
-    assert management_source_gap(connection_files(source, modules)) is None
+    assert management_source_advisory(connection_files(source, modules)) is None
 
 
 def test_template_status_label_can_control_another_display_label():
@@ -1362,7 +1362,7 @@ def test_template_status_label_can_control_another_display_label():
         "const detail = label && trimmed ? `${label} / ${trimmed}` : label || trimmed;\n"
         "return <main><p>{detail}</p>",
     )
-    assert management_source_gap(connection_files(source, ("leads",))) is None
+    assert management_source_advisory(connection_files(source, ("leads",))) is None
 
 
 def optional_lead_note_page(expression):
@@ -1382,7 +1382,7 @@ def optional_lead_note_page(expression):
 ])
 def test_optional_display_note_is_not_an_unproved_execution_guard(expression):
     source = optional_lead_note_page(expression)
-    assert management_source_gap(connection_files(source, ("leads",))) is None
+    assert management_source_advisory(connection_files(source, ("leads",))) is None
 
 
 @pytest.mark.parametrize("expression", [
@@ -1391,7 +1391,7 @@ def test_optional_display_note_is_not_an_unproved_execution_guard(expression):
 ])
 def test_optional_display_note_does_not_admit_effectful_or_jsx_fallback(expression):
     source = optional_lead_note_page(expression)
-    assert management_source_gap(connection_files(source, ("leads",))) is not None
+    assert management_source_advisory(connection_files(source, ("leads",))) is not None
 
 
 @pytest.mark.parametrize("control", [
@@ -1402,14 +1402,14 @@ def test_optional_display_note_cannot_prove_a_managed_execution_branch(control):
     source = optional_lead_note_page("text || undefined").replace(
         "await createManagedLead(", control + "\nawait createManagedLead(",
     )
-    assert management_source_gap(connection_files(source, ("leads",))) is not None
+    assert management_source_advisory(connection_files(source, ("leads",))) is not None
 
 
 def test_optional_display_note_does_not_admit_a_shadowed_undefined():
     source = optional_lead_note_page("text || undefined").replace(
         "const service =", "const undefined = leads;\nconst service =",
     )
-    assert management_source_gap(connection_files(source, ("leads",))) is not None
+    assert management_source_advisory(connection_files(source, ("leads",))) is not None
 
 
 @pytest.mark.parametrize("operator", ["||", "??"])
@@ -1418,7 +1418,7 @@ def test_nonempty_template_does_not_render_unreachable_profile(operator):
         "<h1>{profile?.app_name}</h1>",
         "{`Status: ${status}` " + operator + " <h1>{profile?.app_name}</h1>}",
     )
-    gap = management_source_gap(connection_files(source, ("leads",)))
+    gap = management_source_advisory(connection_files(source, ("leads",)))
     assert gap is not None and gap.startswith("Connect useYleumAppProfile")
 
 
@@ -1429,7 +1429,7 @@ def test_interpolated_statement_control_cannot_hide_all_managed_ui(guard):
         "const label = status ? `Status: ${status}` : '';\n"
         f"if ({guard}) return <main />;\nreturn <main>",
     )
-    assert management_source_gap(connection_files(source, ("leads",))) is not None
+    assert management_source_advisory(connection_files(source, ("leads",))) is not None
 
 
 @pytest.mark.parametrize("operator", ["&&", "?"])
@@ -1439,7 +1439,7 @@ def test_interpolated_display_control_does_not_prove_a_managed_view(operator):
         "{`Status: ${status}` " + operator + " <h1>{profile?.app_name}</h1>"
         + (" : null}" if operator == "?" else "}"),
     )
-    assert management_source_gap(connection_files(source, ("leads",))) is not None
+    assert management_source_advisory(connection_files(source, ("leads",))) is not None
 
 
 @pytest.mark.parametrize(("fallback", "expression"), [
@@ -1454,7 +1454,7 @@ def test_interpolation_join_does_not_skip_possible_mutation(fallback, expression
         "const label = status === 'unset' ? `Status: ${status}` : preferred;\n"
         f"{expression};\nreturn <main>",
     )
-    assert management_source_gap(connection_files(source, ("leads",))) is not None
+    assert management_source_advisory(connection_files(source, ("leads",))) is not None
 
 
 @pytest.mark.parametrize("expression", [
@@ -1466,7 +1466,7 @@ def test_interpolated_control_cannot_hide_component_effects(expression):
         "export default function Page()",
         "function Child() { throw new Error('broken'); }\nexport default function Page()",
     ).replace("return <main>", f"return <main>{{{expression}}}")
-    assert management_source_gap(connection_files(source, ("leads",))) is not None
+    assert management_source_advisory(connection_files(source, ("leads",))) is not None
 
 
 @pytest.mark.parametrize("expression", [
@@ -1480,7 +1480,7 @@ def test_interpolated_control_checks_template_branch_coercion(expression):
         "const brokenLabel = {toString: () => { throw new Error('broken'); }};\n"
         f"const detail = {expression};\nreturn <main><p>{{detail}}</p>",
     )
-    assert management_source_gap(connection_files(source, ("leads",))) is not None
+    assert management_source_advisory(connection_files(source, ("leads",))) is not None
 
 
 def test_interpolated_control_does_not_admit_jsx_through_an_alias():
@@ -1492,7 +1492,7 @@ def test_interpolated_control_does_not_admit_jsx_through_an_alias():
         "const alias = <Child />;\n"
         "return <main>{`Status: ${status}` && alias}",
     )
-    assert management_source_gap(connection_files(source, ("leads",))) is not None
+    assert management_source_advisory(connection_files(source, ("leads",))) is not None
 
 
 @pytest.mark.parametrize(("returned", "operator"), [("''", "||"), ("null", "??")])
@@ -1503,7 +1503,7 @@ def test_function_join_cannot_hide_a_mutation_after_template_return(returned, op
         "return `Status: ${status}`; }\n"
         f"label() {operator} leads.splice(0);\nreturn <main>",
     )
-    assert management_source_gap(connection_files(source, ("leads",))) is not None
+    assert management_source_advisory(connection_files(source, ("leads",))) is not None
 
 
 @pytest.mark.parametrize("binding", [
@@ -1517,7 +1517,7 @@ def test_interpolated_branch_requires_proven_text_substitutions(binding):
         binding.replace("BAD_OBJECT", "{toString: () => { throw new Error('broken'); }}")
         + "\nconst detail = `Status: ${status}` && `Text: ${value}`;\nreturn <main><p>{detail}</p>",
     )
-    assert management_source_gap(connection_files(source, ("leads",))) is not None
+    assert management_source_advisory(connection_files(source, ("leads",))) is not None
 
 
 def test_template_condition_still_checks_substitution_effects():
@@ -1525,7 +1525,7 @@ def test_template_condition_still_checks_substitution_effects():
         "<h1>{profile?.app_name}</h1>",
         "{`Status: ${opaque(leads)}` && <h1>{profile?.app_name}</h1>}",
     )
-    assert management_source_gap(connection_files(source, ("leads",))) is not None
+    assert management_source_advisory(connection_files(source, ("leads",))) is not None
 
 
 def test_template_visibility_control_does_not_supply_connection_evidence():
@@ -1533,7 +1533,7 @@ def test_template_visibility_control_does_not_supply_connection_evidence():
         "<h1>{profile?.app_name}</h1>",
         "<h1 hidden={`Status: ${status}`}>{profile?.app_name}</h1>",
     )
-    assert management_source_gap(connection_files(source, ("leads",))) is not None
+    assert management_source_advisory(connection_files(source, ("leads",))) is not None
 
 
 @pytest.mark.parametrize("condition", [
@@ -1541,7 +1541,7 @@ def test_template_visibility_control_does_not_supply_connection_evidence():
 ])
 def test_known_unsupported_comparison_control_fails_closed(condition):
     source = LEAD_STATUS_PAGE.replace("status === 'pending'", condition)
-    gap = management_source_gap(connection_files(source, ("leads",)))
+    gap = management_source_advisory(connection_files(source, ("leads",)))
     assert gap is not None
     assert gap.startswith(
         "Managed source connection analysis cannot prove unsupported constant control.",
@@ -1560,7 +1560,7 @@ def test_known_unsupported_comparison_control_fails_closed(condition):
 ])
 def test_comparison_short_circuit_does_not_render_unreachable_sdk_jsx(expression):
     source = LEAD_STATUS_PAGE.replace("<h1>{profile?.app_name}</h1>", "{" + expression + "}")
-    gap = management_source_gap(connection_files(source, ("leads",)))
+    gap = management_source_advisory(connection_files(source, ("leads",)))
     assert gap is not None and gap.startswith("Connect useYleumAppProfile")
 
 
@@ -1570,7 +1570,7 @@ def test_comparing_collection_map_to_something_is_not_history_rendering(reverse)
     expression = f"something === ({original})" if reverse else f"({original}) === something"
     source = LEAD_STATUS_PAGE.replace("{" + original + "}", "{" + expression + "}")
     assert source != LEAD_STATUS_PAGE
-    assert management_source_gap(connection_files(source, ("leads",)))
+    assert management_source_advisory(connection_files(source, ("leads",)))
 
 
 def test_comparison_map_operand_keeps_mutation_effects_before_later_history():
@@ -1580,7 +1580,7 @@ def test_comparison_map_operand_keeps_mutation_effects_before_later_history():
         "    {leads.map(record =>",
     )
     assert source != LEAD_STATUS_PAGE
-    assert management_source_gap(connection_files(source, ("leads",)))
+    assert management_source_advisory(connection_files(source, ("leads",)))
 
 
 def test_comparison_unmounted_form_does_not_activate_its_create_handler():
@@ -1589,7 +1589,7 @@ def test_comparison_unmounted_form_does_not_activate_its_create_handler():
         form, "{(" + form + ") === something}",
     ).replace("status === 'pending'", "'pending' === status")
     assert source != LEAD_STATUS_PAGE
-    assert management_source_gap(connection_files(source, ("leads",)))
+    assert management_source_advisory(connection_files(source, ("leads",)))
 
 
 def test_comparison_unmounted_jsx_still_evaluates_child_expression_effects():
@@ -1597,7 +1597,7 @@ def test_comparison_unmounted_jsx_still_evaluates_child_expression_effects():
         "    {leads.map(record =>",
         "    {(<div>{opaque(leads)}</div>) === something}\n    {leads.map(record =>",
     )
-    assert management_source_gap(connection_files(source, ("leads",)))
+    assert management_source_advisory(connection_files(source, ("leads",)))
 
 
 def test_comparison_unmounted_component_cannot_load_history_through_effect_hook():
@@ -1608,7 +1608,7 @@ def test_comparison_unmounted_component_cannot_load_history_through_effect_hook(
         "    {leads.map(record =>",
         "    {(<HiddenHistory />) === something}\n    {leads.map(record =>",
     )
-    assert management_source_gap(connection_files(source, ("leads",)))
+    assert management_source_advisory(connection_files(source, ("leads",)))
 
 
 @pytest.mark.parametrize("modules", CONNECTION_MODULES)
@@ -1621,8 +1621,8 @@ def test_supported_direct_jsx_connections_cover_every_valid_module_combination(m
         expected.add("history")
     if "bookings" in modules:
         expected.add("booking")
-    assert management_source_gap(files) is None
-    assert management_implemented_capabilities(files) == frozenset(expected)
+    assert management_source_advisory(files) is None
+    assert management_advisory_capabilities(files) == frozenset(expected)
 
 
 @pytest.mark.parametrize("before,after", [
@@ -1635,11 +1635,11 @@ def test_supported_direct_jsx_connections_cover_every_valid_module_combination(m
 def test_disconnected_connections_keep_original_reason_and_explain_supported_shape(before, after):
     modules = ("catalog", "orders")
     source = connection_example(modules).replace(before, after)
-    gap = management_source_gap(connection_files(source, modules))
+    gap = management_source_advisory(connection_files(source, modules))
     assert gap is not None and gap.startswith("Connect ")
     assert "cannot prove" in gap
     assert "direct JSX" in gap and "useMemo" in gap
-    assert not management_implemented_capabilities(connection_files(source, modules))
+    assert not management_advisory_capabilities(connection_files(source, modules))
 
 
 @pytest.mark.parametrize("resource,method", CREATE_METHOD.items())
@@ -1651,7 +1651,7 @@ def test_each_business_module_rejects_disconnected_form_or_history(resource, met
         source = source.replace(f"await {method}(", "await Promise.resolve(")
     else:
         source = source.replace(f"set_{resource}(response.records)", f"set_{resource}([])")
-    gap = management_source_gap(connection_files(source, modules))
+    gap = management_source_advisory(connection_files(source, modules))
     assert gap is not None and gap.startswith(f"Connect {method}")
     assert "cannot prove" in gap
 
@@ -1667,12 +1667,12 @@ def unsupported_memo_example():
 
 
 def test_valid_but_unsupported_memo_keeps_the_fail_closed_subset():
-    gap = management_source_gap(connection_files(unsupported_memo_example(), ("catalog",)))
+    gap = management_source_advisory(connection_files(unsupported_memo_example(), ("catalog",)))
     assert gap is not None and gap.startswith("Connect useYleumCatalog")
     assert "cannot prove" in gap and "useMemo" in gap
-    assert management_source_gap({"src/app/page.tsx": "export default () => <div/>"}) is None
+    assert management_source_advisory({"src/app/page.tsx": "export default () => <div/>"}) is None
     invalid = {"src/app/page.tsx": "", ".omnia/management.json": "invalid"}
-    assert management_source_gap(invalid).startswith("Invalid .omnia/management.json:")
+    assert management_source_advisory(invalid).startswith("Invalid .omnia/management.json:")
 
 
 def test_connection_examples_typecheck_against_real_sdk(tmp_path):

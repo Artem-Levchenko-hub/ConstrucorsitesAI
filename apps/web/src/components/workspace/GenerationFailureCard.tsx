@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { AlertCircle, ArrowLeft, Loader2, RotateCcw } from "lucide-react";
+import { ArrowLeft, ArrowRight, Loader2, Pause } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Message } from "@/lib/api/types";
 
@@ -34,18 +34,24 @@ export function GenerationFailureCard({ failure, onRetry, onReturnToPrompt }: {
       if (!accepted) { submitting.current = false; setPending(false); }
     }
   };
-  return <div role="alert" className="generation-failure-card rounded-xl border border-danger/25 bg-danger/5 p-4 space-y-3">
-    <p className="flex items-center gap-2 font-semibold text-danger-fg"><AlertCircle aria-hidden="true" className="size-5 shrink-0" />Генерация не завершена</p>
-    <p>{failure.message}</p>
-    {error && <p className="text-sm text-danger-fg">Не удалось запустить генерацию. Проверьте уведомление и попробуйте ещё раз.</p>}
+  return <div role="status" className="generation-failure-card rounded-xl border border-border-default bg-surface-raised p-4 space-y-3">
+    <p className="flex items-center gap-2 font-medium text-fg-primary"><Pause aria-hidden="true" className="size-5 shrink-0 text-fg-secondary" />Продолжим сборку</p>
+    <p className="text-sm text-fg-secondary">{canRetry
+      ? "Работу над приложением можно продолжить, когда будете готовы."
+      : "Можно вернуться к запросу и уточнить следующий шаг."}</p>
+    {error && <p className="text-sm text-fg-secondary">Запрос пока не принят. Попробуйте продолжить чуть позже.</p>}
     {canRetry ? <div className="space-y-2">
-      {manualProviderRequest && <p className="text-sm">Повтор будет новым запросом и может использовать лимит генераций или правок.</p>}
+      {manualProviderRequest && <p className="text-sm text-fg-secondary">Продолжение отправляется как новый запрос и использует лимит генераций или правок.</p>}
       <Button type="button" disabled={pending} onClick={() => { void retry(); }} className="generation-failure-action gap-2">
-        {pending ? <Loader2 aria-hidden="true" className="size-4 animate-spin" /> : <RotateCcw aria-hidden="true" className="size-4" />}
-        {pending ? "Запускаю…" : manualProviderRequest ? "Повторить запрос" : "Повторить генерацию"}
+        {pending ? <Loader2 aria-hidden="true" className="size-4 animate-spin" /> : <ArrowRight aria-hidden="true" className="size-4" />}
+        {pending ? "Продолжаю…" : "Продолжить сборку"}
       </Button>
     </div> : onReturnToPrompt && <Button type="button" variant="outline" onClick={onReturnToPrompt} className="generation-failure-action gap-2">
       <ArrowLeft aria-hidden="true" className="size-4" />Вернуться к запросу
     </Button>}
+    <details className="text-sm text-fg-secondary">
+      <summary className="cursor-pointer">Подробнее</summary>
+      <p className="mt-2">{failure.message}</p>
+    </details>
   </div>;
 }

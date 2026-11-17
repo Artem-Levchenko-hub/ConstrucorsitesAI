@@ -350,6 +350,7 @@ async def test_source_repair_done_checks_the_current_tree_after_shell_deletion(
 ):
     from tests.test_max_generation_contract import _portable_crm_files
     from tests.test_max_management_generation import connection_example
+    from yleum_api.services import max_generation_contract as contract
     from yleum_api.services.max_generation_contract import max_source_completion_gap
 
     before_page = (
@@ -370,10 +371,20 @@ async def test_source_repair_done_checks_the_current_tree_after_shell_deletion(
         ENTRY: before_page,
         removed: 'export function prepare() { throw new Error("retired source"); }',
     }
-    brief = "Preserve the product"
+    brief = "Remove the obsolete src/app/shared.tsx and preserve the product"
+
+    def completion_gap(prompt, current, *, portable=False):
+        gap = max_source_completion_gap(prompt, current, portable=portable)
+        if gap:
+            return gap
+        # An explicit removal requirement remains independent of the optional
+        # SDK interpreter. This test exercises current-tree reconciliation.
+        return f"Remove obsolete {removed}" if removed in current else None
+
+    monkeypatch.setattr(contract, "max_source_completion_gap", completion_gap)
     assert max_source_completion_gap(brief, clean, portable=True) is None
-    ghost_gap = max_source_completion_gap(brief, files, portable=True)
-    assert ghost_gap and removed in ghost_gap and "throw_statement" in ghost_gap
+    ghost_gap = completion_gap(brief, files, portable=True)
+    assert ghost_gap and removed in ghost_gap
 
     calls = []
     commands = []
@@ -579,8 +590,8 @@ async def test_secret_in_entry_is_not_redacted_into_an_inexact_edit(monkeypatch,
     native.assert_not_called()
 
 
-@pytest.mark.parametrize("diagnostic", ["managed", "compiler", "inconclusive"])
-async def test_known_managed_repair_skips_compiler_until_source_gap_is_fixed(
+@pytest.mark.parametrize("diagnostic", ["advisory", "compiler"])
+async def test_repair_reaches_compiler_even_with_a_previous_source_advisory(
     monkeypatch, isolated_repair, diagnostic,
 ):
     from yleum_api.services import max_management_generation as management
@@ -592,22 +603,17 @@ async def test_known_managed_repair_skips_compiler_until_source_gap_is_fixed(
     source = connection_example(modules)
     before = connection_files(source.replace("{profile?.app_name}", "Рацион"), modules)
     after = connection_files(source, modules)
-    analyze = management.management_source_gap
+    analyze = management.management_source_advisory
     initial_gap = analyze(before)
     assert initial_gap is not None and "useYleumAppProfile" in initial_gap
     assert analyze(after) is None
     files = dict(before)
     physical = []
-    analyses = 0
+    def unavailable_interpreter(*_args, **_kwargs):
+        raise AssertionError("generation must not invoke the optional AST interpreter")
 
-    def check_source(source):
-        nonlocal analyses
-        analyses += 1
-        if diagnostic == "inconclusive" and analyses == 2:
-            raise RecursionError("syntax tree exceeds the preflight bound")
-        return analyze(source)
-
-    monkeypatch.setattr(management, "management_source_gap", check_source)
+    monkeypatch.setattr(management, "_Connections", unavailable_interpreter)
+    compiler_failure = {"ok": False, "detail": "TS2300 duplicate identifier"}
 
     async def snapshot():
         return dict(files)
@@ -616,17 +622,15 @@ async def test_known_managed_repair_skips_compiler_until_source_gap_is_fixed(
         physical.append(action.name)
         if action.name == "write_file":
             files[ENTRY] = action.args["content"]
+        if action.name == "build" and files[ENTRY] == before[ENTRY]:
+            return compiler_failure
         return {"ok": True, "detail": "physical check"}
 
     async def native(**request):
         assert request["run_id"] == "r"
         build = Action("build", {}, "")
         first = await request["execute"](build)
-        if diagnostic == "managed":
-            assert first["ok"] is False and "useYleumAppProfile" in first["detail"]
-            assert (await request["execute"](build))["ok"] is False
-        else:
-            assert first == {"ok": True, "detail": "physical check"}
+        assert first == compiler_failure
         await request["execute"](Action("write_file", {"path": ENTRY, "content": source}))
         assert await request["execute"](build) == {"ok": True, "detail": "physical check"}
         return AgentResult(False, "candidate still needs physical finalization", {ENTRY: source}, 3)
@@ -639,8 +643,7 @@ async def test_known_managed_repair_skips_compiler_until_source_gap_is_fixed(
     feedback = "TS2300 duplicate identifier" if diagnostic == "compiler" else str(initial_gap)
     result = await agent_finalization.run_native_source_repair(**args, feedback=feedback)
     assert result.files == {ENTRY: source}
-    expected = [] if diagnostic == "managed" else ["build"]
-    assert physical == [*expected, "write_file", "build"]
+    assert physical == ["build", "write_file", "build"]
 
 
 async def test_legacy_repair_request_is_unchanged(monkeypatch):

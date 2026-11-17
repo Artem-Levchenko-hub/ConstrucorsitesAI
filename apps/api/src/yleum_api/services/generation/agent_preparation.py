@@ -31,7 +31,7 @@ from yleum_api.services.generation.source_checkpoint import (
     _adjacent_run,
     _admitted_checkpoint_baseline,
     _ambiguous_run_order,
-    _owned_failed_source,
+    _owned_checkpoint_source,
 )
 
 _log = logging.getLogger("yleum_api.routers.messages")
@@ -55,9 +55,9 @@ async def _can_continue_generation(
         or previous.user_message_id is None or await _ambiguous_run_order(session, previous)
     ):
         return False
-    failed = _owned_failed_source(previous, ids)
+    stopped_source = _owned_checkpoint_source(previous, ids)
     same_base = _admitted_checkpoint_baseline(previous, baseline)
-    if failed and same_base:
+    if stopped_source and same_base:
         return True
     if previous.assistant_message_id is None:
         return False
@@ -67,7 +67,7 @@ async def _can_continue_generation(
     legacy_partial = (
         previous.status == "completed" and app_errors.has_continue_card(assistant.content)
     )
-    return (failed or legacy_partial) and (
+    return (stopped_source or legacy_partial) and (
         same_base or assistant.snapshot_id == baseline.snapshot_id
     )
 

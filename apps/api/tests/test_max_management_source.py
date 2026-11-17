@@ -6,9 +6,9 @@ import pytest
 
 from yleum_api.services.max_management_contract import build_management_contract
 from yleum_api.services.max_management_generation import (
-    management_implemented_capabilities,
+    management_advisory_capabilities,
     management_probe_resources,
-    management_source_gap,
+    management_source_advisory,
 )
 
 
@@ -55,14 +55,14 @@ export default function Page() {
 ])
 def test_catalog_selection_requires_a_live_hook_bound_to_the_real_catalog(replacement):
     source = PAGE.replace("const selection = useSelection(items);", replacement)
-    assert management_source_gap(files(source))
+    assert management_source_advisory(files(source))
 
 
 def test_live_aliases_effect_state_history_and_typed_submit_are_connected():
     source = files(PAGE)
-    assert management_source_gap(source) is None
+    assert management_source_advisory(source) is None
     assert management_probe_resources(source) == ("orders",)
-    assert management_implemented_capabilities(source) == frozenset({"catalog", "history"})
+    assert management_advisory_capabilities(source) == frozenset({"catalog", "history"})
 
 
 def test_real_child_consumes_parent_handler_prop():
@@ -77,15 +77,15 @@ def test_real_child_consumes_parent_handler_prop():
         "export default function Form({onSave}: {onSave: any}) "
         "{return <button onClick={onSave}>Send</button>}"
     )
-    assert management_source_gap(files(source, **{"src/components/Form.tsx": child})) is None
+    assert management_source_advisory(files(source, **{"src/components/Form.tsx": child})) is None
     child = "export default function Form({onSave}: {onSave: any}) {return <button>Send</button>}"
-    assert management_source_gap(files(source, **{"src/components/Form.tsx": child}))
+    assert management_source_advisory(files(source, **{"src/components/Form.tsx": child}))
 
 
 def test_invented_intrinsic_event_does_not_connect_write():
     source = files(PAGE.replace("onSubmit={submit}", "onNotARealEvent={submit}"))
-    assert management_source_gap(source)
-    assert not management_implemented_capabilities(source)
+    assert management_source_advisory(source)
+    assert not management_advisory_capabilities(source)
 
 
 @pytest.mark.parametrize(
@@ -104,8 +104,8 @@ def test_invented_intrinsic_event_does_not_connect_write():
 )
 def test_metadata_attributes_do_not_claim_visible_output(before, after):
     source = files(PAGE.replace(before, after))
-    assert management_source_gap(source)
-    assert not management_implemented_capabilities(source)
+    assert management_source_advisory(source)
+    assert not management_advisory_capabilities(source)
 
 
 def test_visible_form_value_and_image_alt_are_supported_output():
@@ -113,7 +113,7 @@ def test_visible_form_value_and_image_alt_are_supported_output():
     source = source.replace(
         "<article key={item.id}>{item.title}</article>", "<img key={item.id} alt={item.title} />"
     )
-    assert management_source_gap(files(source)) is None
+    assert management_source_advisory(files(source)) is None
 
 
 @pytest.mark.parametrize(
@@ -153,8 +153,8 @@ def test_visible_form_value_and_image_alt_are_supported_output():
 )
 def test_disconnected_or_forged_consumers_cannot_pass(before, after):
     source = files(PAGE.replace(before, after))
-    assert management_source_gap(source)
-    assert management_implemented_capabilities(source) != frozenset({"catalog", "history"})
+    assert management_source_advisory(source)
+    assert management_advisory_capabilities(source) != frozenset({"catalog", "history"})
 
 
 def test_strings_comments_and_managed_files_are_not_product_consumers():
@@ -162,8 +162,8 @@ def test_strings_comments_and_managed_files_are_not_product_consumers():
     source["src/lib/omnia/fake.tsx"] = PAGE
     source["src/components/Dead.tsx"] = PAGE
     source["src/app/page.tsx"] += "\n// " + PAGE.replace("\n", " ")
-    assert management_source_gap(source)
-    assert not management_implemented_capabilities(source)
+    assert management_source_advisory(source)
+    assert not management_advisory_capabilities(source)
 
 
 @pytest.mark.parametrize(
@@ -176,19 +176,19 @@ def test_strings_comments_and_managed_files_are_not_product_consumers():
 def test_other_business_resources_use_actual_sdk_names(resource, method, capability):
     source = PAGE.replace("createManagedOrder", method).replace("'orders'", repr(resource))
     source = files(source, ("catalog", resource) if resource == "bookings" else (resource,))
-    assert management_source_gap(source) is None
+    assert management_source_advisory(source) is None
     assert management_probe_resources(source) == (resource,)
-    assert capability in management_implemented_capabilities(source)
+    assert capability in management_advisory_capabilities(source)
 
 
 def test_empty_new_selection_still_requires_rendered_profile():
-    assert management_source_gap(files(PAGE, ())) is None
-    assert management_source_gap(files("export default function Page(){return <div/>}", ()))
+    assert management_source_advisory(files(PAGE, ())) is None
+    assert management_source_advisory(files("export default function Page(){return <div/>}", ()))
 
 
 def test_actual_profile_support_field_is_a_settings_consumer():
     assert (
-        management_source_gap(
+        management_source_advisory(
             files(PAGE.replace("profile?.app_name", "profile?.support.email"), ())
         )
         is None
@@ -201,7 +201,7 @@ def test_create_call_outside_customer_event_cannot_claim_a_form():
         "const {profile} = useProfile();",
         "const {profile} = useProfile(); createOrder({customerName: 'probe'});",
     )
-    assert management_source_gap(files(source))
+    assert management_source_advisory(files(source))
 
 
 def test_shadowed_local_sdk_and_unused_import_do_not_grant_creation():
@@ -209,7 +209,7 @@ def test_shadowed_local_sdk_and_unused_import_do_not_grant_creation():
         "async function submit(event: any)",
         "function createOrder(input: any) {} async function submit(event: any)",
     )
-    assert management_source_gap(files(source))
+    assert management_source_advisory(files(source))
 
 
 def test_arrow_root_and_promise_destructuring_state_connection():
@@ -219,14 +219,14 @@ def test_arrow_root_and_promise_destructuring_state_connection():
         "const response = await readRecords('orders'); setRecords(response.records);",
         "await readRecords('orders').then(({records}) => setRecords(records));",
     )
-    assert management_source_gap(files(source)) is None
+    assert management_source_advisory(files(source)) is None
 
 
 def test_legacy_missing_manifest_is_unchanged():
     source = {"src/app/page.tsx": PAGE}
-    assert management_source_gap(source) is None
+    assert management_source_advisory(source) is None
     assert management_probe_resources(source) == ()
-    assert not management_implemented_capabilities(source)
+    assert not management_advisory_capabilities(source)
 
 
 @pytest.mark.parametrize("mutation", ["hash", "field", "json"])
@@ -238,8 +238,8 @@ def test_invalid_manifest_fails_closed(mutation):
     elif mutation == "field":
         contract["resources"][0]["table"] = "secret"
     source[".omnia/management.json"] = "broken" if mutation == "json" else json.dumps(contract)
-    assert management_source_gap(source)
-    assert not management_implemented_capabilities(source)
+    assert management_source_advisory(source)
+    assert not management_advisory_capabilities(source)
     with pytest.raises(ValueError):
         management_probe_resources(source)
 
@@ -282,8 +282,8 @@ def aggregate_files(source):
 
 def test_literal_resource_tuple_async_projection_flat_sort_state_and_visible_history():
     source = aggregate_files(AGGREGATE_PAGE)
-    assert management_source_gap(source) is None
-    assert management_implemented_capabilities(source) == frozenset(
+    assert management_source_advisory(source) is None
+    assert management_advisory_capabilities(source) == frozenset(
         {"catalog", "history", "booking"}
     )
 
@@ -300,7 +300,7 @@ def test_finite_identity_projection_and_promise_tuple_destructuring(load):
         "const response = await readRecords('orders'); setRecords(response.records);",
         load,
     )
-    assert management_source_gap(files(source)) is None
+    assert management_source_advisory(files(source)) is None
 
 
 @pytest.mark.parametrize(
@@ -366,13 +366,13 @@ def test_finite_identity_projection_and_promise_tuple_destructuring(load):
 def test_aggregate_history_requires_visible_untransformed_trusted_records(before, after):
     # Reject typo/no-op mutations so every negative exercises a distinct source.
     assert before in AGGREGATE_PAGE and before != after
-    assert management_source_gap(aggregate_files(AGGREGATE_PAGE.replace(before, after)))
+    assert management_source_advisory(aggregate_files(AGGREGATE_PAGE.replace(before, after)))
 
 
 def test_resource_tuple_cardinality_is_bounded():
     oversized = "[" + ",".join(["'orders'"] * 17) + "]"
     source = AGGREGATE_PAGE.replace("['orders', 'leads', 'bookings']", oversized)
-    assert management_source_gap(files(source))
+    assert management_source_advisory(files(source))
 
 
 @pytest.mark.parametrize(
@@ -388,21 +388,21 @@ def test_opaque_global_promise_mutation_cannot_preserve_trust(mutation):
     source = AGGREGATE_PAGE.replace(
         "const parts = await Promise.all(", mutation + "const parts = await Promise.all("
     )
-    assert management_source_gap(aggregate_files(source))
+    assert management_source_advisory(aggregate_files(source))
 
 
 def test_mutating_response_records_cannot_recreate_history_by_rereading_property():
     source = PAGE.replace(
         "setRecords(response.records);", "response.records.splice(0); setRecords(response.records);"
     )
-    assert management_source_gap(files(source))
+    assert management_source_advisory(files(source))
 
 
 def test_late_shadowed_promise_is_not_the_global_builtin():
     source = AGGREGATE_PAGE.replace(
         "setRecords(parts.flat()", "const Promise = {all: opaque}; setRecords(parts.flat()"
     )
-    assert management_source_gap(aggregate_files(source))
+    assert management_source_advisory(aggregate_files(source))
 
 
 def test_empty_state_replacement_erases_previous_collection_evidence():
@@ -414,13 +414,13 @@ def test_empty_state_replacement_erases_previous_collection_evidence():
         "b.record.created_at.localeCompare(a.record.created_at)));",
         "setRecords(parts.flat()); setRecords([]);",
     )
-    assert management_source_gap(aggregate_files(source))
+    assert management_source_advisory(aggregate_files(source))
 
 
 def test_supported_collection_size_boundary():
     at_limit = "[" + ",".join(["'orders'"] * 16) + "]"
     assert (
-        management_source_gap(
+        management_source_advisory(
             files(AGGREGATE_PAGE.replace("['orders', 'leads', 'bookings']", at_limit))
         )
         is None
@@ -439,7 +439,7 @@ def test_collection_callback_steps_exhaustion_fails_closed():
     connections = _Connections(files(source))
     connections.analyze()
     assert connections.steps > 4000
-    assert "budget" in management_source_gap(files(source))
+    assert "budget" in management_source_advisory(files(source))
 
 
 def test_sparse_tuple_cannot_shift_record_response_into_an_empty_position():
@@ -447,7 +447,7 @@ def test_sparse_tuple_cannot_shift_record_response_into_an_empty_position():
         "const response = await readRecords('orders'); setRecords(response.records);",
         "await Promise.all([,readRecords('orders')]).then(([r]) => setRecords(r.records));",
     )
-    assert management_source_gap(files(source))
+    assert management_source_advisory(files(source))
 
 
 @pytest.mark.parametrize(
@@ -468,7 +468,7 @@ def test_sparse_tuple_cannot_shift_record_response_into_an_empty_position():
 )
 def test_history_rejects_unresolved_promises_and_overridden_returns(before, after):
     assert before in AGGREGATE_PAGE
-    assert management_source_gap(aggregate_files(AGGREGATE_PAGE.replace(before, after)))
+    assert management_source_advisory(aggregate_files(AGGREGATE_PAGE.replace(before, after)))
 
 
 @pytest.mark.parametrize(
@@ -492,7 +492,7 @@ def test_constructor_and_spread_arguments_cannot_preserve_builtin_authority(invo
     source = source.replace(
         "const parts = await Promise.all(", invocation + "const parts = await Promise.all("
     )
-    assert management_source_gap(aggregate_files(source))
+    assert management_source_advisory(aggregate_files(source))
 
 
 @pytest.mark.parametrize("arguments", ["parts", "...[parts]", "...[[...parts]]"])
@@ -506,7 +506,7 @@ def test_constructor_arguments_cannot_preserve_mutated_record_collection(argumen
     source = source.replace(
         "setRecords(parts.flat()", "new Mutator(" + arguments + "); setRecords(parts.flat()"
     )
-    assert management_source_gap(aggregate_files(source))
+    assert management_source_advisory(aggregate_files(source))
 
 
 def test_constructor_without_shared_provenance_does_not_reject_valid_history():
@@ -514,7 +514,7 @@ def test_constructor_without_shared_provenance_does_not_reject_valid_history():
         "const parts = await Promise.all(",
         "new Date('2026-10-29'); const parts = await Promise.all(",
     )
-    assert management_source_gap(aggregate_files(source)) is None
+    assert management_source_advisory(aggregate_files(source)) is None
 
 
 @pytest.mark.parametrize(
@@ -533,7 +533,7 @@ def test_constructor_without_shared_provenance_does_not_reject_valid_history():
 )
 def test_collection_mutation_roots_survive_wrappers_indices_and_aliases(mutation):
     source = AGGREGATE_PAGE.replace("setRecords(parts.flat()", mutation + "setRecords(parts.flat()")
-    assert management_source_gap(aggregate_files(source))
+    assert management_source_advisory(aggregate_files(source))
 
 
 @pytest.mark.parametrize(
@@ -549,7 +549,7 @@ def test_builtin_mutation_roots_survive_wrappers_and_aliases(mutation):
     source = AGGREGATE_PAGE.replace(
         "const parts = await Promise.all(", mutation + "const parts = await Promise.all("
     )
-    assert management_source_gap(aggregate_files(source))
+    assert management_source_advisory(aggregate_files(source))
 
 
 def test_mutating_unrelated_wrapped_value_preserves_real_collection():
@@ -557,7 +557,7 @@ def test_mutating_unrelated_wrapped_value_preserves_real_collection():
         "setRecords(parts.flat()",
         "const unrelated = {all: 1}; delete (unrelated as any).all; setRecords(parts.flat()",
     )
-    assert management_source_gap(aggregate_files(source)) is None
+    assert management_source_advisory(aggregate_files(source)) is None
 
 
 def test_indexed_collection_alias_has_no_readable_record_provenance():
@@ -566,7 +566,7 @@ def test_indexed_collection_alias_has_no_readable_record_provenance():
         "b.record.created_at.localeCompare(a.record.created_at)));",
         "setRecords(parts[dynamicIndex]);",
     )
-    assert management_source_gap(aggregate_files(source))
+    assert management_source_advisory(aggregate_files(source))
 
 
 @pytest.mark.parametrize("hook,field", [("useCatalog", "items"), ("useProfile", "profile")])
@@ -575,8 +575,8 @@ def test_trusted_hook_refresh_preserves_connected_public_data(hook, field):
         "const {" + field + "} = " + hook + "();",
         "const result = " + hook + "(); result.refresh(); const {" + field + "} = result;",
     )
-    assert management_source_gap(files(source)) is None
+    assert management_source_advisory(files(source)) is None
     source = source.replace(
         "result.refresh();", "(result as any).refresh = opaque; result.refresh();"
     )
-    assert management_source_gap(files(source))
+    assert management_source_advisory(files(source))

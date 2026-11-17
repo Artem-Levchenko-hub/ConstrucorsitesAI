@@ -5,8 +5,8 @@ import pytest
 from tests.test_max_management_generation import connection_example, connection_files
 from yleum_api.services.max_management_generation import (
     ManagedSourceGap,
-    management_implemented_capabilities,
-    management_source_gap,
+    management_advisory_capabilities,
+    management_source_advisory,
 )
 
 RESOURCES = [
@@ -41,10 +41,10 @@ def test_feedback_names_only_the_missing_connection(
     files = disconnected_source(
         resource, mounted_create=mounted_create, rendered_history=rendered_history,
     )
-    gap = management_source_gap(files)
+    gap = management_source_advisory(files)
     if mounted_create and rendered_history:
         assert gap is None
-        assert "history" in management_implemented_capabilities(files)
+        assert "history" in management_advisory_capabilities(files)
         return
     assert isinstance(gap, ManagedSourceGap)
     assert gap.startswith(f"Connect {method}")
@@ -58,12 +58,12 @@ def test_feedback_names_only_the_missing_connection(
         assert "records.map" in gap and "record.customer_name" in gap
         assert "Loading records alone" in gap
     assert "operationKey" in gap
-    assert management_implemented_capabilities(files) == frozenset()
+    assert management_advisory_capabilities(files) == frozenset()
 
 
 @pytest.mark.parametrize("resource,_method", RESOURCES)
 def test_partial_ui_repair_does_not_mint_a_new_obligation_or_budget(resource, _method):
-    gaps = [management_source_gap(disconnected_source(
+    gaps = [management_source_advisory(disconnected_source(
         resource, mounted_create=create, rendered_history=history,
     )) for create, history in [(False, False), (False, True), (True, False)]]
     assert all(isinstance(gap, ManagedSourceGap) for gap in gaps)
@@ -81,8 +81,8 @@ def test_loading_a_different_resource_does_not_satisfy_lead_history():
     files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
         "getManagedRecords('leads'", "getManagedRecords('orders'",
     )
-    gap = management_source_gap(files)
+    gap = management_source_advisory(files)
     assert gap is not None
     assert "Missing rendered leads history." in gap
     assert "Missing mounted create event." not in gap
-    assert management_implemented_capabilities(files) == frozenset()
+    assert management_advisory_capabilities(files) == frozenset()

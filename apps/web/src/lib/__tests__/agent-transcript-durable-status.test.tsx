@@ -27,11 +27,11 @@ it("renders the exact completed run and its durable duration despite a failed to
   const html = render("current-message", completed, true);
   expect(html).toContain("Изменения готовы");
   expect(html).toContain("7м 26с");
-  expect(html).not.toContain("Сборка не завершена");
+  expect(html).not.toContain("Подготовка на паузе");
   expect(html).toContain('data-agent-transcript="idle"');
 });
 it("never transfers latest success onto an older failed message", () => {
-  expect(render("old-message", completed)).toContain("Сборка не завершена");
+  expect(render("old-message", completed)).toContain("Подготовка на паузе");
 });
 it.each(["running", "completed", "failed"] as const)("keeps an older completed request neutral when a newer request is %s", status => {
   const client = new QueryClient();
@@ -47,7 +47,7 @@ it.each(["running", "completed", "failed"] as const)("keeps an older completed r
   expect(html).not.toContain("Изменения готовы");
 });
 it("never transfers a foreign project's lifecycle even when its message id matches", () => {
-  expect(render("current-message", { ...completed, project_id: "foreign" })).toContain("Сборка не завершена");
+  expect(render("current-message", { ...completed, project_id: "foreign" })).toContain("Подготовка на паузе");
 });
 it("keeps a current completed request without its receipt unconfirmed", () => {
   const html = render("current-message", { ...completed, acceptance: null });
@@ -63,7 +63,7 @@ it("can omit projectId without reading an absent latest record", () => {
   client.clear();
 });
 it("keeps a true latest failed run failed even when the chat text describes success", () => {
-  expect(render("current-message", { ...completed, status: "failed" })).toContain("Сборка не завершена");
+  expect(render("current-message", { ...completed, status: "failed" })).toContain("Подготовка на паузе");
 });
 
 it("hydrates exact authoritative completion after reload, while keeping the failed tool detail available", async () => {
@@ -79,7 +79,7 @@ it("hydrates exact authoritative completion after reload, while keeping the fail
     expect(container.textContent).toContain("7м 26с");
     await act(async () => container.querySelector("button")!.click());
     expect(container.textContent).toContain("Не получилось: проверка каталога");
-    expect(container.textContent).not.toContain("Сборка не завершена");
+    expect(container.textContent).not.toContain("Подготовка на паузе");
   } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
 });
 

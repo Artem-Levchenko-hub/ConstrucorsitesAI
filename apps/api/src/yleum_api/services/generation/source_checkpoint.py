@@ -268,7 +268,7 @@ async def adjacent_checkpoint(
             return None
         hops = iter(range(_MAX_PREDECESSOR_HOPS))
         previous = await _checkpoint_predecessor(session, current, ids, baseline, hops)
-        if previous is None or not _owned_failed_source(previous, ids):
+        if previous is None or not _owned_checkpoint_source(previous, ids):
             return None
         if _unmarked_checkpoint_state(previous):
             source = await _legacy_checkpoint_source(
@@ -351,9 +351,9 @@ async def _explicit_checkpoint_source(
     if (
         message is None or message.project_id != ids.project_id or message.role != "user"
         or not checkpoint_resume_request(message.content)
-        or not _owned_failed_source(parent, ids) or parent is None
+        or not _owned_checkpoint_source(parent, ids) or parent is None
         or str(parent.id) != inherited["previous_run_id"]
-        or not _owned_failed_source(source, ids) or source is None
+        or not _owned_checkpoint_source(source, ids) or source is None
         or source.created_at >= previous.created_at or parent.created_at >= previous.created_at
     ):
         return None
@@ -481,7 +481,10 @@ async def _checkpoint_predecessor(
             previous.status == "failed"
             and previous.error == PREVIOUS_CELL_ENSURE_RECONCILIATION_REQUIRED
         )
-        if previous.status != "cancelled" and not reconciliation_failure:
+        saved_stopped_source = previous.status == "cancelled" and _owned_checkpoint_source(
+            previous, ids,
+        )
+        if saved_stopped_source or (previous.status != "cancelled" and not reconciliation_failure):
             if skipped and not _admitted_checkpoint_baseline(previous, baseline):
                 return None
             return previous
@@ -655,7 +658,7 @@ async def _legacy_checkpoint_source(
     candidate: GenerationRun | None = previous
     while candidate is not None:
         if (
-            not _owned_failed_source(candidate, ids)
+            not _owned_checkpoint_source(candidate, ids)
             or not _admitted_checkpoint_baseline(candidate, baseline)
         ):
             return None
@@ -696,9 +699,17 @@ async def _adjacent_run(session: AsyncSession, current: GenerationRun) -> Genera
     ))
 
 
-def _owned_failed_source(run: GenerationRun | None, ids: GenerationIds) -> bool:
+def _owned_checkpoint_source(run: GenerationRun | None, ids: GenerationIds) -> bool:
+    """An explicit owner continuation may resume a fully stopped saved draft."""
+    if run is None:
+        return False
+    state = _checkpoint_state(run) or {}
+    stopped_draft = (
+        run.status == "cancelled" and run.finished_at is not None
+        and isinstance(state.get("source_checkpoint"), dict)
+    )
     return bool(
-        run is not None and run.status == "failed" and run.project_id == ids.project_id
+        (run.status == "failed" or stopped_draft) and run.project_id == ids.project_id
         and run.user_id == ids.user_id and run.response_mode in {"build", "edit"}
         and run.user_message_id is not None
     )

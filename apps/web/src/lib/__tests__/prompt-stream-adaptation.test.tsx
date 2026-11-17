@@ -95,10 +95,10 @@ it("retains the attachment and safe actionable error after a rejected historical
   });
   expect(attachment.attachment?.reference).toEqual(options.restorationAdaptation);
   expect(sendPrompt).toHaveBeenCalledOnce();
-  expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).not.toContain("NEVER_PUBLISH");
+  expect(JSON.stringify(vi.mocked(toast.info).mock.calls)).not.toContain("NEVER_PUBLISH");
   expect(client.getQueryData<Message[]>(["messages", "p"])?.at(-1)?.tokens_out).toBe(0);
   expect(toast.info).not.toHaveBeenCalledWith("Генерация уже запущена", expect.anything());
-  expect(toast.error).toHaveBeenCalledWith("Генерация не запустилась", expect.objectContaining({
+  expect(toast.info).toHaveBeenCalledWith("Продолжим подготовку", expect.objectContaining({
     description: expect.stringContaining("Откройте историю версий"),
   }));
 });

@@ -351,7 +351,7 @@ def test_missing_snapshot_never_uses_model_write_inventory_as_current_source():
 
 def test_context_does_not_accept_missing_managed_selection_until_it_is_wired():
     from yleum_api.services.max_management_contract import build_management_contract
-    from yleum_api.services.max_management_generation import management_source_gap
+    from yleum_api.services.max_management_generation import management_source_advisory
 
     source = """
 import {useYleumAppProfile} from '@/lib/omnia/app-profile-client';
@@ -367,19 +367,19 @@ export default function Page() {
 """
     files = {ENTRY: source, ".omnia/management.json":
              build_management_contract(["catalog"]).model_dump_json()}
-    gap = management_source_gap(files)
+    gap = management_source_advisory(files)
     assert gap and "useYleumCatalogSelection" in gap
     rendered, exact = ab._repair_source_context(ENTRY, files)
     context = json.loads(rendered.split(MARKER, 1)[1])
     assert exact
     assert context["content"] == source
-    assert management_source_gap(files) == gap  # Feedback grants no source/proof witness.
+    assert management_source_advisory(files) == gap  # Feedback grants no source/proof witness.
     wired = source.replace("  return <main>", """
   const selection = useYleumCatalogSelection(items);
   return <main>
     {items.map(item => <button key={item.category}
       onClick={() => selection.setCategory(item.category)}>{item.category}</button>)}""")
-    assert management_source_gap({**files, ENTRY: wired}) is None
+    assert management_source_advisory({**files, ENTRY: wired}) is None
 
 
 def test_cold_resume_preserves_exact_context_call_and_consumed_read_without_extra_progress():

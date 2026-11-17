@@ -7,8 +7,8 @@ import {
 
 describe("agentTranscriptTitle", () => {
   it("never labels a failed or rolled-back run as ready", () => {
-    expect(agentTranscriptTitle(false, "failed")).toBe("Сборка не завершена");
-    expect(agentTranscriptTitle(false, undefined, true)).toBe("Сборка не завершена");
+    expect(agentTranscriptTitle(false, "failed")).toBe("Подготовка на паузе");
+    expect(agentTranscriptTitle(false, undefined, true)).toBe("Подготовка на паузе");
   });
 
   it("keeps running and completed labels distinct", () => {

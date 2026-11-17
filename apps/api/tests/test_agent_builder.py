@@ -1244,7 +1244,7 @@ def test_managed_rejection_limit_survives_writes_and_segment_boundaries(
     repair_on_third_attempt, can_finalize,
 ):
     from yleum_api.services.max_management_contract import build_management_contract
-    from yleum_api.services.max_management_generation import management_source_gap
+    from yleum_api.services.max_management_generation import management_source_advisory
 
     path = "src/app/page.tsx"
     source = """
@@ -1289,7 +1289,7 @@ export default function Page() {
     result = asyncio.run(ab.run_agent_build(
         system_prompt="s", user_prompt="catalog", model="fixture",
         execute=_ok_executor([], state), complete=complete, snapshot_files=snapshot,
-        completion_check=lambda files, _: management_source_gap(files),
+        completion_check=lambda files, _: management_source_advisory(files),
         coordinator_handoff=True, max_steps=3, max_segments=4,
         edit_deadline=datetime.now(UTC) + timedelta(minutes=5) if can_finalize else None,
     ))
@@ -1316,11 +1316,11 @@ def test_legacy_managed_build_feedback_hands_off_only_repeated_current_gap(respo
         " AST call_expression; reason unproven_statistic_callback; fingerprint aaaaaaaaaaaaaaaa."
     )
     if kind == "structural":
-        from yleum_api.services.max_management_generation import management_source_gap
+        from yleum_api.services.max_management_generation import management_source_advisory
 
         from .test_max_management_generation import MISSING_SELECTION_PAGE, connection_files
 
-        gap = management_source_gap(connection_files(MISSING_SELECTION_PAGE, ("catalog",)))
+        gap = management_source_advisory(connection_files(MISSING_SELECTION_PAGE, ("catalog",)))
         assert gap is not None
     state: dict[str, str] = {}
     replies = [_repair_action("write_file", path=path, content="draft"), _repair_action("build")]

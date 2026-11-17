@@ -250,10 +250,12 @@ async def run_until_first_model(case, monkeypatch, *, outcome="admitted", design
 
 
 @pytest.mark.parametrize("initial_status", ["pending", "queued_for_capacity"])
+@pytest.mark.parametrize("previous_status", ["failed", "cancelled"])
 async def test_real_admission_recovers_source_before_first_model(
-    admitted_checkpoint_case, monkeypatch, initial_status,
+    admitted_checkpoint_case, monkeypatch, initial_status, previous_status,
 ):
     case = admitted_checkpoint_case
+    case.previous.status = previous_status
     case.current.status = initial_status
     await case.session.commit()
     run = await run_until_first_model(case, monkeypatch)

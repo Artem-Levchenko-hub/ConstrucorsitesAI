@@ -19,7 +19,7 @@ import {
   Loader2,
   Sparkles,
   Film,
-  CircleAlert,
+  Pause,
   BookOpen,
   Hourglass,
   Lightbulb,
@@ -101,7 +101,7 @@ const TONE_CLASS: Record<StepTone, string> = {
   // песочным часам и пульсации, а не по «предупреждающему» цвету.
   wait: "text-fg-tertiary",
   done: "text-accent",
-  fail: "text-red-400",
+  fail: "text-fg-secondary",
 };
 
 /**
@@ -237,11 +237,11 @@ export function AgentTranscript({
         ) : streaming ? (
           <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" />
         ) : incomplete ? (
-          <CircleAlert className="h-3.5 w-3.5 shrink-0 text-red-500" />
+          <Pause className="h-3.5 w-3.5 shrink-0 text-fg-secondary" />
         ) : (
           <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" />
         )}
-        <span className={cn("text-xs font-medium", incomplete ? "text-red-600" : "text-fg-primary")}>
+        <span className="text-xs font-medium text-fg-primary">
           {agentTranscriptTitle(
             Boolean(streaming),
             generationStatus,

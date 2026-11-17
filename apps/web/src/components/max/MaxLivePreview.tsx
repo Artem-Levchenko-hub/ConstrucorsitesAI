@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BatteryFull,
   Check,
+  Pause,
   CircleAlert,
   ExternalLink,
   Loader2,
@@ -491,7 +492,7 @@ export function MaxLivePreview({
   const currentPreviewReady = !previewDisabled && !snapshotsLoading && runtimeRunning &&
     !runtime.isFetching && !start.isPending && managedKit.isSuccess && !managedKit.isFetching &&
     previewSession.isSuccess && !previewSession.isFetching && Boolean(previewUrl);
-  const connectionLabel = connected ? "Подключено" : firstBuildTerminal ? "Сборка не завершена" : "Запускается";
+  const connectionLabel = connected ? "Подключено" : firstBuildTerminal ? "На паузе" : "Запускается";
   // A cold provision can outlive an earlier start request. Once polling sees
   // the runtime running, that old mutation error is no longer relevant and
   // must not replace the active "preparing" state with a false failure.
@@ -766,7 +767,7 @@ export function MaxLivePreview({
                   ) : (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-raised px-10 text-center">
                       {firstBuildTerminal ? (
-                        <CircleAlert className="size-7 text-fg-secondary" />
+                        <Pause className="size-7 text-fg-secondary" />
                       ) : awaitingFirstBuild ? (
                         <Sparkles className="size-7 text-accent" />
                       ) : preparing ? (
@@ -776,7 +777,7 @@ export function MaxLivePreview({
                       )}
                       <p className="mt-5 text-[15px] font-medium text-fg-primary">
                         {firstBuildTerminal
-                          ? firstBuildTerminal === "cancelled" ? "Первая сборка отменена" : "Первая сборка не завершена"
+                          ? "Подготовка на паузе"
                           : awaitingFirstBuild
                           ? "Превью появится после первой сборки"
                           : showPreviewError
@@ -785,9 +786,7 @@ export function MaxLivePreview({
                       </p>
                       <p className="mt-2 text-[12px] leading-5 text-fg-tertiary">
                         {firstBuildTerminal
-                          ? firstBuildTerminal === "cancelled"
-                            ? "Чтобы продолжить, отправьте запрос в чате ещё раз."
-                            : "Причина — в чате. После исправления отправьте запрос ещё раз."
+                          ? "Продолжите сборку в чате — готовая версия откроется здесь."
                           : awaitingFirstBuild
                           ? "Опишите в чате, что нужно приложению, — готовый экран откроется здесь."
                           : showPreviewError
