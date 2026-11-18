@@ -27,6 +27,50 @@ def test_free_typography_preserves_explicit_roles_and_exclusions():
     assert "Onest" not in (excluded.heading, excluded.body)
 
 
+@pytest.mark.parametrize("brief", ["Body Manrope, heading Lora", 'Шрифт "My Custom Display"'])
+def test_explicit_owner_typography_is_never_presented_as_a_provisional_choice(brief):
+    decision = choose_typography("p", brief=brief, infer_defaults=False)
+    assert decision.style in {"owner-font", "owner-custom-pending"}
+    assert "стартовый fallback" not in decision.prompt()
+    assert "меняй только по просьбе владельца" in decision.prompt()
+    if decision.custom_request:
+        assert not decision.dependencies
+        assert "он НЕ установлен" in decision.prompt()
+
+
+def test_first_build_fallback_is_local_editable_and_does_not_reseed_existing_source():
+    from yleum_api.schemas.max_studio import MaxProjectConfigPayload
+    from yleum_api.services.design_plugin import build_design_contract, seed_design_memory
+    from yleum_api.services.max_project_kit import (
+        MAX_MODEL_LOCKED_FILES,
+        render_max_starter_files,
+    )
+    from yleum_api.services.secret_safety import max_model_write_rejection
+
+    contract = build_design_contract(
+        project_id="p", project_name="Test", template="max_miniapp", brief="Рабочий экран",
+    )
+    starter = render_max_starter_files(
+        MaxProjectConfigPayload(app_name="Test", app_type="custom", summary="Test"),
+    )
+    seeded = seed_design_memory(starter, contract)
+    decision = json.loads(seeded["typography.json"])
+    assert decision["style"] == "owner-led"
+    assert decision["families"] == ["onest"]
+    assert set(decision["packages"]) == {"onest"}
+    assert contract is not None
+    assert "стартовый fallback, а не выбор шрифтов владельцем" in contract.prompt_block
+    assert "уже доступные локальные шрифты" in contract.prompt_block
+    for path in ("typography.json", "src/app/typography.css", "DESIGN.md"):
+        assert path not in MAX_MODEL_LOCKED_FILES
+        assert max_model_write_rejection(path, seeded[path]) is None
+    # A first-build default never becomes permission to replace accepted source
+    # on a later seeding or retry, including when a new brief names other fonts.
+    established = {**seeded, "src/app/typography.css": "/* accepted product roles */"}
+    changed_brief = choose_typography("p", brief="Heading Lora", infer_defaults=False)
+    assert seed_typography(established, changed_brief) is established
+
+
 def test_explicit_scandi_beats_fitness_and_cafe():
     for niche in ("фитнес", "кафе"):
         d = choose_typography("project", brief=f"{niche}, скандинавский минимализм, не брутализм")
@@ -175,17 +219,35 @@ def test_edit_context_uses_restored_choice_not_new_candidate():
     assert existing_typography_context(seed, {}) == seed
 
 
-def test_actual_edit_prompt_binds_accepted_typography(monkeypatch):
+@pytest.mark.parametrize("mode", ["edit", "continue", "restore"])
+@pytest.mark.parametrize("brief", ["Рабочий экран", "Heading Lora, body Manrope"])
+def test_actual_existing_prompt_binds_accepted_typography(monkeypatch, mode, brief):
     import asyncio
     from types import SimpleNamespace
 
+    from yleum_api.schemas.max_studio import MaxProjectConfigPayload
+    from yleum_api.services.design_plugin import build_design_contract, seed_design_memory
     from yleum_api.services.generation import agent_prompt
     from yleum_api.services.generation.contracts import StackPrompt
+    from yleum_api.services.max_project_kit import render_max_starter_files
+
+    accepted = seed_design_memory(
+        render_max_starter_files(
+            MaxProjectConfigPayload(app_name="Test", app_type="custom", summary="Test"),
+        ),
+        build_design_contract(
+            project_id="p", project_name="Test", template="max_miniapp", brief=brief,
+        ),
+    )
+    decision = json.loads(accepted["typography.json"])
 
     async def snapshot():
-        return {"typography.json": json.dumps({"version": 1, "heading": "Lora", "body": "Onest"})}
+        return accepted
 
     monkeypatch.setattr(agent_prompt, "model_for_role", lambda *args, **kwargs: "synthetic")
+    monkeypatch.setattr(
+        agent_prompt, "get_settings", lambda: SimpleNamespace(agent_builder_max_steps=40),
+    )
     stack = StackPrompt(
         "Existing context\n\nOMNIA DESIGN PRO · candidate Unbounded",
         None,
@@ -199,7 +261,10 @@ def test_actual_edit_prompt_binds_accepted_typography(monkeypatch):
             stack=stack,
             factory=None,
             ids=None,
-            project_info=SimpleNamespace(template="max_miniapp", restoration_context=None),
+            project_info=SimpleNamespace(
+                template="max_miniapp",
+                restoration_context="restore" if mode == "restore" else None,
+            ),
             prompt_text="Поменяй текст кнопки",
             runtime=SimpleNamespace(
                 handle=SimpleNamespace(snapshot_files=snapshot, capabilities={}),
@@ -208,12 +273,15 @@ def test_actual_edit_prompt_binds_accepted_typography(monkeypatch):
             orchestrate=True,
             selected_elements=None,
             _is_edit=True,
-            _is_continue=False,
+            _is_continue=mode == "continue",
             force_model=None,
         )
     )
-    assert "Lora" in plan.user and "Onest" in plan.seed_context
+    assert decision["heading"] in plan.user and decision["body"] in plan.seed_context
     assert "Unbounded" not in plan.user
+    assert "осмысленно выбери типографику" not in plan.seed_context
+    assert "не разрешает новый выбор шрифтов" in plan.seed_context
+    assert "Только явная просьба владельца" in plan.seed_context
 
 
 @pytest.mark.parametrize(

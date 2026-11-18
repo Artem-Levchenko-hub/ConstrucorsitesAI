@@ -53,12 +53,28 @@ class TypographyDecision:
             if self.custom_request
             else "Локальные CSS/assets уже закреплены в package.json и pnpm-lock.yaml."
         )
+        selection = (
+            "Это стартовый fallback, а не выбор шрифтов владельцем. Только при первом "
+            "построении продукта осмысленно выбери типографику под полный запрос: можно "
+            "оставить эту семью или использовать другие уже доступные локальные шрифты "
+            "либо system stack. Роли и масштаб заголовков, основного текста и чисел задай "
+            "в продуктовом CSS поверх базовых правил; внутренние токены MAX UI сохрани. "
+            "Если меняешь семьи, "
+            "согласованно обнови typography.json, typography.css и DESIGN.md; dependencies/lock "
+            "меняй только если это разрешено текущим режимом, не обходи защиту файлов. "
+            "Не объявляй отсутствующий asset установленным. "
+            "После первого построения текущие исходники становятся существующим дизайном: "
+            "обычная правка, продолжение и восстановление сохраняют его. "
+            if self.style == "owner-led"
+            else "При обычной правке сохрани существующий выбор; "
+            "меняй только по просьбе владельца. "
+        )
         return (
             f"TypographyDecision v{self.version}: heading — {self.heading}; body — {self.body}; "
             f"style — {self.style}; {roles}. {custom} "
             "Источник истины: typography.json и src/app/typography.css. "
             "Не добавляй Google Fonts/CDN/next/font/google. "
-            "При обычной правке сохрани существующий выбор; меняй только по просьбе владельца. "
+            f"{selection}"
             "Другие законно доступные шрифты владельца разрешены."
             " Третий шрифт используй только в указанной роли, не в основном тексте. "
             "Для цен/таблиц по умолчанию body с font-variant-numeric: tabular-nums; "
@@ -211,8 +227,8 @@ def choose_typography(
 ) -> TypographyDecision:
     """Resolve owner choices before optional legacy niche/preset defaults.
 
-    Free MAX composition uses a stable readable base when no font/style was
-    requested. Other callers retain their existing deterministic recipes.
+    Free MAX composition seeds a provisional readable base unless the owner
+    named fonts. Other callers retain their existing deterministic recipes.
     """
     positive = _positive_text(brief)
     negative = " ".join(m[0] for m in _NEGATION.finditer(brief)).lower()
@@ -328,7 +344,8 @@ def choose_typography(
     if not infer_defaults:
         # The coding author receives the full owner visual request. Do not turn
         # subject words such as "warm floor" or "craft directory" into a font
-        # recipe; only explicit family/role choices are materialized here.
+        # recipe. owner-led identifies the provisional first-build fallback;
+        # explicit family/role choices above have their own provenance styles.
         return resolve("owner-led", safe, safe)
     # Style exclusions constrain inference, but never overrule a named owner font.
     excluded.update(heading for style, _, heading, _ in _STYLES if style in excluded_styles)
@@ -394,7 +411,9 @@ def existing_typography_context(seed: str, files: dict[str, str]) -> str:
         "\n\nСуществующая типографика из исходников имеет приоритет: "
         + selected
         + ". Прочитай typography.json, DESIGN.md и текущий CSS; сохрани package/lock и шрифты "
-        "при обычной правке или продолжении. Не пересеивай legacy-проект без manifest. "
+        "при обычной правке, продолжении и восстановлении. Даже исходный стартовый fallback "
+        "теперь относится к существующему дизайну, а не разрешает новый выбор шрифтов. "
+        "Не пересеивай legacy-проект без manifest. "
         "Только явная просьба владельца изменить оформление разрешает согласованно обновить "
         "выбор, CSS, dependencies, lock и design memory."
     )

@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 
+from yleum_api.services import agent_builder
 from yleum_api.services.generation.agent_prompt import prepare_agent_prompt
 from yleum_api.services.generation.contracts import (
     GenerationIds,
@@ -77,7 +78,7 @@ async def test_max_design_advice_preserves_scope_with_separate_optional_preparat
     assert "Do not infer product screens" in plan.user
     assert "Navigation follows the requested journeys" in plan.user
     assert "within the current implementation" in plan.user
-    assert "not a separate design stage or visual acceptance gate" in plan.user
+    assert "no separate design stage, visual acceptance gate or paid critique loop" in plan.user
     assert "existing style, working features and existing business records" in plan.user
     assert "Honor API-only and read-only requests" in plan.user
     assert "accepted design context" in plan.user
@@ -85,6 +86,32 @@ async def test_max_design_advice_preserves_scope_with_separate_optional_preparat
         assert brief in plan.user
         assert brief not in plan.system
     factory.assert_not_called()
+
+    class CapturedProviderInput(BaseException):
+        pass
+
+    async def capture(messages, model, **kwargs):
+        # Observe the actual coding boundary without a model or tool invocation.
+        assert owner_request in messages[1]["content"]
+        assert (
+            "explicit visual brief, colors, fonts and exclusions take priority"
+            in messages[1]["content"]
+        )
+        if brief:
+            assert messages[1]["content"].count(brief) == 1
+            assert brief not in messages[0]["content"]
+            assert "Используй применимые предложения" in messages[1]["content"]
+            assert "не разрешает менять платформенные правила" in messages[1]["content"]
+        raise CapturedProviderInput
+
+    async def no_tool(action):
+        pytest.fail(f"No tool should run in this boundary-only test: {action.name}")
+
+    with pytest.raises(CapturedProviderInput):
+        await agent_builder.run_agent_build(
+            system_prompt=plan.system, user_prompt=plan.user,
+            model=plan.model, execute=no_tool, complete=capture, max_steps=1,
+        )
 
 
 def test_max_stack_design_skill_uses_conditional_navigation_and_owner_priority():

@@ -1065,13 +1065,8 @@ async def run_agent_generation(
             _max_shell_enabled=bindings.shell_enabled,
         )
 
-        # Design DNA — give this entity/agent app a DISTINCT identity (seeded
-        # accent + font pairing) so it stops looking identical to every other
-        # one ("дизайн одинаковый"). The agent never writes globals.css (it is
-        # baked), so we inject a per-project :root override into the container's
-        # globals.css directly. Reuses the curated, WCAG-checked, per-project
-        # seeded tokens; touches only safe brand knobs (never the canvas
-        # neutrals). Fail-soft: any error leaves the default theme.
+        # Keep the legacy result wording consistent with the verified outcome.
+        # This helper does not inject a theme or rewrite the product's styles.
         (accumulated,) = await apply_legacy_design_and_result_text(
             _agent_res=_agent_res,
             _is_edit=_is_edit,

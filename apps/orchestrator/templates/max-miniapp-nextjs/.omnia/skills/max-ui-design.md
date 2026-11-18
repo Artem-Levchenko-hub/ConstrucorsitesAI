@@ -17,6 +17,12 @@ SDK contracts and verified component APIs remain required.
 - Read the actual source and root `DESIGN.md`; ordinary edits preserve the incumbent
   design. An explicit owner redesign may update them together. Product `--app-*`
   tokens own surfaces and composition; MAX UI owns its internal control tokens.
+- On a first build, an owner-led fallback typeface is a safe starting point, not
+  the owner's final choice. Select available local/system typography for the
+  product when that axis is free; keep typography metadata, CSS and pinned font
+  assets consistent. Change dependencies only when the runtime permits; otherwise
+  use available fonts and retain protected files. Explicit owner choices remain authoritative. On edits,
+  continuations and restoration preserve the established design and typography.
 
 ## Verified public imports
 
@@ -54,13 +60,26 @@ icons. Avoid new usage of deprecated `Switch` and `ToolButton`.
 - Start with the requested main screen and primary journey before auxiliary
   files. Navigation is optional and follows those journeys. Do not infer screens,
   a cart, history, profile or a tab count from the industry or project name.
-- For new UI or an explicit redesign, choose a brief-specific composition,
-  typography and palette within the current implementation. This advice adds
-  no separate design stage, visual acceptance gate or refinement loop.
+- For new UI or an explicit redesign, choose a concrete visual direction from
+  the product's content, audience and use scene. Resolve the first-screen
+  composition, main/secondary action relationship, type roles and scale,
+  surface hierarchy, spacing rhythm and color roles on axes the owner left open.
+  A list of colors or adjectives such as "modern" is not a direction. Choose
+  expression that fits the task; operating UI can have a distinct character.
+- In the same coding turn compare that direction with the implementation and
+  the owner's main journey. Record the actual product choices in `DESIGN.md`,
+  retaining the typography metadata. This adds no separate model request,
+  visual acceptance gate, screenshot critique or refinement loop. Do not report
+  visual verification when the available tools cannot show the rendered result.
 - One visually dominant action per screen. Use hierarchy, spacing and type
   scale instead of wrapping every item in the same card.
 - Every data surface has useful loading, empty, error and success states.
-- Use realistic Russian copy and representative data. Every visible control
+- Design the first visit as deliberately as the populated state. With no data,
+  show the useful next action and a finished composition; do not expand empty
+  graphs or duplicate empty cards just to occupy space. Keep explicitly requested
+  views usable and never fabricate business records, personal metrics or prices.
+- Use concrete copy in the owner's requested language and only supplied or
+  explicitly requested seed data. Every visible control
   performs an action or is clearly disabled with an explanation.
 - At 360–390px: no horizontal/nested scroll; touch targets are at least 44px;
   safe areas and the keyboard do not cover the active control or CTA.
