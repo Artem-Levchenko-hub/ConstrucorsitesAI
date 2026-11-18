@@ -500,16 +500,31 @@ async def test_agent_policy_survives_provider_replacement_and_all_prompt_protoco
         "native": agent_native.native_system_prompt,
     }
     prompt = builders[mode](guide)
+    normalized_prompt = " ".join(prompt.split())
     assert prompt.count(POLICY_HEADER) == 1
     assert prompt.count("MAX MANAGED SDK CONTRACT") == 1
     for required in (
-        "profile?.app_name", "item.title", "{profile,configVersion,status,error,refresh}",
-        "useYleumCatalogSelection(catalog.items)", "createManagedOrder",
+        "useYleumAppProfile()", "profile.app_name", "item.title",
+        "{profile,configVersion,status,error,refresh}", "useYleumCatalog()",
+        "Pass catalog.items to useYleumCatalogSelection", "createManagedOrder",
         "createManagedLead", "createManagedBooking", "loadPendingManagedIntent(resource)",
         "getManagedRecords(resource,{limit,cursor})", "intent_storage_unavailable",
         "quote_changed", "empty cart", "current customer's records",
+        "operationKey (one UUID per deliberate intent)", "frozen input and original operationKey",
+        "require a separate explicit confirmation; never automatically submit again",
+        "user-scoped storage", "Do not invent free slots, capacity or payment",
+        "SDK CONNECTION CONTRACT", "Parameters<typeof createManagedOrder>[0]",
+        "{records,next_cursor}", "preserve all optional form/frozen-intent fields and key",
+        "React component boundaries, shared views, selectors and layout are implementation choices",
     ):
-        assert required in prompt, required
+        assert required in normalized_prompt, required
+    for obsolete in (
+        "SUPPORTED MANAGEMENT CONNECTION SHAPE",
+        "the bounded source verifier is not a general JavaScript interpreter",
+        "rows behind useMemo", "condition INSIDE that JSX map",
+        "direct records.map in visible JSX", "shape can be rejected despite compiling",
+    ):
+        assert obsolete not in normalized_prompt, obsolete
     assert guide.count("MAX UI 0.2.0: Typography is a namespace") == 1
     assert "Typography.Title has no level prop" in prompt
     assert '<Typography.Title variant="small" asChild><h2>' in prompt
