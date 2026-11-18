@@ -235,3 +235,13 @@ it("rejects an empty or unknown multi-selection instead of silently falling back
   sparse.length = 2;
   expect(() => buildMaxProjectPrompt({ ...longBrief, appTypes: sparse })).toThrow();
 });
+
+it.each([0, 2])("keeps the reviewed data decision separate from selected catalog UI: %s", catalogItemCount => {
+  const brief = { ...longBrief, managementModules: [], catalogItemCount };
+  const prompt = buildMaxProjectPrompt(brief);
+  expect(prompt).toContain("Управление в Yleum: не уточнено — используй возможности по задаче.");
+  expect(prompt).toContain(catalogItemCount ? "2 позиций уже сохранены в Yleum" : "Владелец подтвердил пустой начальный каталог");
+  const excluded = buildMaxProjectPrompt({ ...brief, managementModuleOptOuts: ["catalog"] });
+  expect(excluded).not.toContain("Владелец подтвердил начальный каталог");
+  expect(excluded).not.toContain("Владелец подтвердил пустой начальный каталог");
+});

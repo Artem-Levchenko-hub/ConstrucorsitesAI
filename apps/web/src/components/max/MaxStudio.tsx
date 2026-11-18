@@ -57,14 +57,18 @@ function OwnedMaxStudio({ email }: { email: string }) {
   const moduleOptOuts = [...new Set([...managementModuleOptOuts, ...briefManagementModuleOptOuts(safeCatalogIdea)])];
   const modules = newProjectManagementModules(appType, managementModules, appTypes, moduleOptOuts);
   const availableModules = availableManagementModules(moduleOptOuts);
-  const hasCatalog = modules.includes("catalog");
   const proposedCatalog = useMemo(() => {
     const result = extractInitialCatalog(safeCatalogIdea);
     return { ...result, items: result.items.map(item => ({ ...newMaxContentItem(), ...item })) };
   }, [safeCatalogIdea]);
   const initialContent = catalogDraft?.items ?? proposedCatalog.items;
   const tooManyItems = catalogDraft?.tooManyItems ?? proposedCatalog.tooManyItems;
-  const catalogError = hasCatalog ? initialCatalogError(publicInitialCatalog(initialContent), tooManyItems) : null;
+  // Reviewing supplied data does not select a mandatory product catalog screen.
+  // An edited empty draft is an explicit decision and must survive reload.
+  const reviewCatalog = availableModules.includes("catalog") && (
+    modules.includes("catalog") || initialContent.length > 0 || catalogDraft !== null || tooManyItems
+  );
+  const catalogError = reviewCatalog ? initialCatalogError(publicInitialCatalog(initialContent), tooManyItems) : null;
 
   const projects = useQuery({ queryKey: learning ? ["projects", learning.userKey] : ["projects"], queryFn: listProjects });
   const allMaxProjects = useMemo(() => (projects.data ?? []).filter(project => project.template === "max_miniapp"), [projects.data]);
@@ -106,7 +110,7 @@ function OwnedMaxStudio({ email }: { email: string }) {
       const submittedDraftId = draft.id;
       const submittedOwner = email;
       if (quota.initialExhausted) throw new Error(FREE_CHAT_UPGRADE_MESSAGE);
-      const content = hasCatalog ? publicInitialCatalog(initialContent) : [];
+      const content = reviewCatalog ? publicInitialCatalog(initialContent) : [];
       if (catalogError) throw new Error(catalogError);
       const rawPrompt = buildMaxProjectPrompt({
         name,
@@ -119,7 +123,7 @@ function OwnedMaxStudio({ email }: { email: string }) {
         brandColors,
         managementModules: modules,
         managementModuleOptOuts: moduleOptOuts,
-        catalogItemCount: hasCatalog ? content.length : undefined,
+        catalogItemCount: reviewCatalog ? content.length : undefined,
       });
       const hasCredential = containsChatSecret(rawPrompt);
       const safeName = publicMaxBriefText(name);
@@ -138,7 +142,7 @@ function OwnedMaxStudio({ email }: { email: string }) {
         brandColors: safeBrandColors,
         managementModules: modules,
         managementModuleOptOuts: moduleOptOuts,
-        catalogItemCount: hasCatalog ? content.length : undefined,
+        catalogItemCount: reviewCatalog ? content.length : undefined,
       });
       const project = await createProject({
         name: safeName, template: "max_miniapp",
@@ -340,7 +344,7 @@ function OwnedMaxStudio({ email }: { email: string }) {
         pending={create.isPending}
         submitDisabled={quota.initialExhausted || Boolean(catalogError)}
         quotaNotice={<><OwnerChatQuotaNotice {...quota} initialOnly />{draftStorageFailed && <p role="status" className="text-sm text-fg-secondary">Не удалось сохранить черновик в этом браузере. Не закрывайте страницу до создания проекта.</p>}</>}
-        initialCatalog={hasCatalog && <MaxInitialCatalog
+        initialCatalog={reviewCatalog && <MaxInitialCatalog
           items={initialContent}
           pending={create.isPending}
           tooManyItems={tooManyItems}

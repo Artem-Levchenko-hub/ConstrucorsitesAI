@@ -152,15 +152,17 @@ it.each(["Хочу магазин с покупкой и оплатой", "То�
   } finally { await page.dispose(); }
 });
 
-it("an explicit catalog exclusion wins over free text without enabling staff queues", async () => {
+it.each(["Хочу магазин с покупкой и оплатой", "Меню: Латте — 300 ₽; Капучино — 200 ₽"])("an explicit catalog exclusion wins over free text without enabling staff queues: %s", async idea => {
   mocks.create.mockResolvedValue({ id: "excluded" }); const page = await renderStudio();
   try {
-    await initial("Хочу магазин с покупкой и оплатой"); await click("Далее"); await click("Далее");
+    await initial(idea); await click("Далее"); await click("Далее");
     await pickModules("Каталог", "Каталог");
     expect(document.body.textContent).toContain("Исключено вами.");
     await click("Далее"); await create();
     const payload = mocks.create.mock.calls[0][0];
     expect(payload.management_module_opt_outs).toEqual(["catalog"]);
+    expect(payload.max_config.content).toEqual([]);
+    expect(sessionStorage.getItem("omnia:max:starter:excluded")).not.toContain("Владелец подтвердил пустой начальный каталог");
     expect(payload.max_config.management_modules).toEqual(["leads"]);
     expect(payload.staff_settings).toMatchObject({ leads_enabled: false, orders_mode: null });
     expect(sessionStorage.getItem("omnia:max:starter:excluded")).toContain("Явно исключено владельцем: Каталог.");
@@ -314,5 +316,61 @@ it("a conflicting newer stored idea refuses confirmed replacement without changi
     expect(document.querySelector("#max-project-name")).toBeNull();
     expect(mocks.warning).toHaveBeenCalledWith("Не удалось заменить черновик", expect.objectContaining({ description: expect.stringContaining("Текущие ответы не изменены") }));
     expect(mocks.create).not.toHaveBeenCalled();
+  } finally { await page.dispose(); }
+});
+
+it.each([false, true])("reviews and saves explicit menu prices without requiring a catalog checkbox (edited: %s)", async edited => {
+  mocks.create.mockResolvedValue({ id: "priced-menu" }); const page = await renderStudio();
+  try {
+    await initial("Меню: Латте — 300 ₽; Капучино — 200 ₽"); await click("Далее"); await click("Далее");
+    expect(module("Каталог").checked).toBe(false);
+    await click("Далее");
+    const rows = [...document.querySelectorAll(".max-initial-catalog__row")];
+    expect(rows).toHaveLength(2);
+    expect(rows.map(row => row.querySelector<HTMLInputElement>('input[id$="-title"]')!.value)).toEqual(["Латте", "Капучино"]);
+    expect(rows.map(row => row.querySelector<HTMLInputElement>('input[id$="-price"]')!.value)).toEqual(["300 ₽", "200 ₽"]);
+    if (edited) await act(async () => change(rows[0].querySelector<HTMLInputElement>('input[id$="-price"]')!, "325 ₽"));
+    await create();
+    const payload = mocks.create.mock.calls[0][0];
+    expect(payload.max_config.content.map((item: {title:string;price:string}) => [item.title,item.price])).toEqual([["Латте", edited ? "325 ₽" : "300 ₽"], ["Капучино", "200 ₽"]]);
+    expect(payload.management_module_opt_outs).toEqual([]);
+    expect(payload.max_config.features).toEqual([]);
+    const prompt = sessionStorage.getItem("omnia:max:starter:priced-menu")!;
+    expect(prompt).toContain("2 позиций уже сохранены в Yleum");
+    expect(prompt).toContain("Управление в Yleum: не уточнено — используй возможности по задаче.");
+  } finally { await page.dispose(); }
+});
+
+it("retains an explicitly cleared parsed catalog after reload without selecting a module", async () => {
+  mocks.create.mockResolvedValue({ id: "cleared-menu" }); let page = await renderStudio();
+  try {
+    await initial("Меню: Латте — 300 ₽; Капучино — 200 ₽"); await click("Далее"); await click("Далее"); await click("Далее");
+    expect(document.querySelectorAll(".max-initial-catalog__row")).toHaveLength(2);
+    await click("Начать с пустого каталога");
+    expect(readMaxProjectDraft("qa@example.test")?.catalogDraft?.items).toEqual([]);
+    await page.dispose(); page = await renderStudio();
+    await click("Далее"); await click("Далее"); expect(module("Каталог").checked).toBe(false); await click("Далее");
+    expect(document.querySelectorAll(".max-initial-catalog__row")).toHaveLength(0);
+    expect(button("Начать с пустого каталога")).toBeDefined();
+    await create();
+    expect(mocks.create.mock.calls[0][0].max_config.content).toEqual([]);
+    const prompt = sessionStorage.getItem("omnia:max:starter:cleared-menu")!;
+    expect(prompt).toContain("Владелец подтвердил пустой начальный каталог");
+    expect(prompt).toContain("Управление в Yleum: не уточнено — используй возможности по задаче.");
+  } finally { await page.dispose(); }
+});
+
+it("requires an explicit resolution of an overflowing parsed menu without a catalog checkbox", async () => {
+  mocks.create.mockResolvedValue({ id: "overflow-menu" }); const page = await renderStudio();
+  try {
+    await initial("Меню: " + Array.from({ length: 101 }, (_, index) => `Товар ${index + 1} — 300 ₽`).join("; "));
+    await click("Далее"); await click("Далее"); expect(module("Каталог").checked).toBe(false); await click("Далее");
+    expect(document.querySelectorAll(".max-initial-catalog__row")).toHaveLength(100);
+    expect(button("Создать проект").disabled).toBe(true);
+    expect(mocks.create).not.toHaveBeenCalled();
+    await click("Начать с пустого каталога"); expect(button("Создать проект").disabled).toBe(false);
+    await create();
+    expect(mocks.create.mock.calls[0][0].max_config.content).toEqual([]);
+    expect(sessionStorage.getItem("omnia:max:starter:overflow-menu")).toContain("Владелец подтвердил пустой начальный каталог");
   } finally { await page.dispose(); }
 });
