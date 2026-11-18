@@ -92,7 +92,9 @@ it("presents the project identity and main action before a semantic feature and 
     "Оформление",
   ]);
   expect(facts?.textContent).toContain("Каталог");
-  expect(facts?.textContent).toContain("Яркий");
+  expect(facts?.textContent).toContain("По вашему описанию");
+  expect(facts?.textContent).not.toContain("Яркий");
+  expect(facts?.textContent).toContain(values.brandColors);
   expect(facts?.textContent).toContain(values.audience);
 
   // Владелец должен понимать, что произойдёт по кнопке «Создать проект».
@@ -137,6 +139,18 @@ async function selectableWizard(initial: MaxProjectBrief) {
   };
   return { submit, typeButton, click };
 }
+
+it("keeps brand colors editable without offering canned visual styles", async () => {
+  const ui = await selectableWizard(values);
+  await ui.click("Далее");
+  await ui.click("Далее");
+  expect(document.querySelector(".max-wizard-option--style")).toBeNull();
+  expect([...document.querySelectorAll("legend")].map(item => item.textContent)).not.toContain("Стиль");
+  expect(document.querySelector<HTMLInputElement>("#max-brand")?.value).toBe(values.brandColors);
+  expect(document.querySelector('label[for="max-brand"]')?.textContent).toBe("Цвета бренда");
+  expect(document.querySelector("#max-brand-hint")?.textContent).toContain("в описании идеи");
+  expect(ui.submit).not.toHaveBeenCalled();
+});
 
 it("requires ten characters only for the exclusive custom scenario and preserves the text when switching", async () => {
   const ui = await selectableWizard({ ...values, idea: "", appType: "loyalty", appTypes: ["loyalty"] });

@@ -60,6 +60,19 @@ describe("buildMaxProjectPrompt", () => {
     expect(prompt).toContain("Используй только модули из .omnia/management.json");
     expect(prompt).toContain("серверную проверку initData");
   });
+
+  it.each([undefined, "brand", "clean", "bright"] as const)("uses free design wishes instead of the legacy style value: %s", style => {
+    const brief = {
+      name: "Мой помощник", idea: "Один экран. Заголовки Lora, текст Manrope, без карточек.",
+      appType: "custom" as const, audience: "", primaryAction: "", features: [],
+      brandColors: "Белый фон, красные кнопки #b71c1c",
+    };
+    const prompt = buildMaxProjectPrompt({ ...brief, style });
+    expect(prompt).toBe(buildMaxProjectPrompt(brief));
+    expect(prompt).toContain(brief.idea);
+    expect(prompt).toContain(`Цвета бренда: ${brief.brandColors}`);
+    expect(prompt).not.toContain("Визуальное направление:");
+  });
 });
 
 const longBrief = {

@@ -144,17 +144,11 @@ export function MaxProjectSetupSections({ section, projectId, current, showCatal
         )}
       </div>
     </Group>
-    <Group title="Оформление" description="Цвета и визуальный стиль задают направление для ИИ. Чтобы применить их к дизайну экранов, запустите отдельную доработку.">
+    <Group title="Оформление" description="Цвета задают направление для ИИ. Остальные пожелания к оформлению напишите в чате. Чтобы изменить дизайн экранов, запустите отдельную доработку.">
       <div className="max-setup-field">
         <Label htmlFor="max-config-colors">Цвета бренда</Label>
         <Input id="max-config-colors" value={current.brand_colors} placeholder="Например: #1F6F4A, тёплый бежевый"
           onChange={event => onChange({ ...current, brand_colors: event.target.value })} />
-      </div>
-      <div className="max-setup-field">
-        <Label htmlFor="max-config-style">Визуальный стиль</Label>
-        <select id="max-config-style" value={current.style} onChange={event => onChange({ ...current, style: event.target.value as MaxProjectConfigPayload["style"] })}>
-          <option value="brand">В цветах бренда</option><option value="clean">Чистый и спокойный</option><option value="bright">Яркий и акцентный</option>
-        </select>
       </div>
     </Group>
     {showCatalogLink && <Group title="Товары и услуги" description="Позиции, цены, фото и наличие редактируются в каталоге.">

@@ -51,6 +51,42 @@ async function renderStudio() {
   return async () => { await act(async () => root.unmount()); client.clear(); container.remove(); };
 }
 
+it("submits free design wishes and colors without introducing a canned style", async () => {
+  mocks.create.mockResolvedValue({ id: "free-design-qa" });
+  const idea = "Помощник для чтения. Один экран, заголовки Lora, без карточек и градиентов.";
+  const colors = "Белый фон, красные кнопки #b71c1c";
+  const dispose = await renderStudio();
+  try {
+    await click("Создать приложение");
+    await click("Добавить детали");
+    await act(async () => {
+      change(document.querySelector<HTMLInputElement>("#max-project-name")!, "Мой помощник");
+      change(document.querySelector<HTMLTextAreaElement>("#max-project-idea")!, idea);
+    });
+    await click("Далее");
+    await click("Далее");
+    expect(document.querySelector(".max-wizard-option--style")).toBeNull();
+    await act(async () => change(document.querySelector<HTMLInputElement>("#max-brand")!, colors));
+    expect(mocks.create).not.toHaveBeenCalled();
+    await click("Далее");
+    expect(document.querySelector('[aria-label="Сводка проекта"]')?.textContent).toContain(idea);
+    expect(document.querySelector('[aria-label="Сводка проекта"]')?.textContent).toContain(colors);
+    await click("Создать проект");
+    await act(async () => { await vi.waitFor(() => expect(mocks.push).toHaveBeenCalled()); });
+    expect(mocks.create).toHaveBeenCalledOnce();
+    const config = mocks.create.mock.calls[0][0].max_config;
+    expect(config.style).toBe("brand");
+    expect(config.brand_colors).toBe(colors);
+    expect(config.summary).toBe("Мини-приложение для пользователей MAX");
+    const prompt = sessionStorage.getItem("omnia:max:starter:free-design-qa");
+    expect(prompt).toContain(idea);
+    expect(prompt).toContain(`Цвета бренда: ${colors}`);
+    expect(prompt).not.toContain("Визуальное направление:");
+    expect(mocks.save).not.toHaveBeenCalled();
+    expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/max/free-design-qa?starter=1");
+  } finally { await dispose(); }
+});
+
 it("transfers the entire pasted brief from creation to the chat starter", async () => {
   mocks.create.mockResolvedValue({ id: "long-brief-qa" });
   const brief = "я".repeat(19_992) + "КОНЕЦ ТЗ";

@@ -74,6 +74,24 @@ async function mountCanonical() {
   };
 }
 
+it.each(["brand", "clean", "bright"] as const)("preserves the saved legacy style during an unrelated edit: %s", async style => {
+  const saved = { ...record, config: { ...record.config, style } };
+  mocks.get.mockResolvedValue(saved);
+  mocks.save.mockImplementation(async (_project: string, config: MaxProjectConfig["config"]) => ({
+    ...saved, config_version: 2, config,
+  }));
+  const page = await mountCanonical();
+  try {
+    expect(page.container.querySelector("#max-config-style")).toBeNull();
+    expect(page.container.querySelector('label[for="max-config-colors"]')?.textContent).toBe("Цвета бренда");
+    await page.change("max-config-name", "Новое имя");
+    await page.click("Сохранить изменения");
+    await page.expectText("Версия 2");
+    expect(mocks.save).toHaveBeenCalledExactlyOnceWith("qa", { ...saved.config, app_name: "Новое имя" }, 1);
+    expect(mocks.send).not.toHaveBeenCalled();
+  } finally { await page.cleanup(); }
+});
+
 it("moves only the edited profile fields over a fresh version after an explicit conflict rebase", async () => {
   mocks.get.mockResolvedValue(record);
   mocks.save.mockRejectedValueOnce(new ApiError(409, { code: "conflict", message: "Старая версия", details: { reason: "config_version_conflict" } }));
@@ -297,6 +315,8 @@ it.each(["stale", "lost-response"])("keeps failed application review open: %s", 
       expect(document.querySelector('[role="alert"]')?.textContent).toContain("Данные приложения изменились");
     } else {
       expect(mocks.send).toHaveBeenCalledTimes(1);
+      expect(mocks.send.mock.calls[0][1]).toContain("Сохрани сложившееся оформление экранов");
+      expect(mocks.send.mock.calls[0][1]).toContain("поле style из старых настроек само по себе не означает просьбу изменить дизайн");
       await act(async () => launch().click());
       await act(async () => { await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1)); });
       expect(mocks.send).toHaveBeenCalledTimes(2);
@@ -318,7 +338,7 @@ it("groups product and appearance fields and gives content controls visible asso
     const appearance = document.querySelector("#max-config-colors")?.closest("fieldset");
     expect(document.querySelector('[role="tabpanel"]')?.textContent).toContain("Можно заполнить позже");
     expect(appearance?.querySelector("legend")?.textContent).toBe("Оформление");
-    expect(appearance?.contains(document.querySelector("#max-config-style"))).toBe(true);
+    expect(document.querySelector("#max-config-style")).toBeNull();
     expect(appearance?.contains(document.querySelector("#max-config-name"))).toBe(false);
     await act(async () => document.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1].click());
     await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="tabpanel"] button')].find(b => b.textContent?.includes("Добавить"))!.click());

@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { MAX_APP_TYPES, MAX_BRIEF_LENGTH, MAX_FEATURES, MAX_FEATURE_INFO, MAX_MANAGEMENT_MODULES, MAX_STYLES, briefManagementModuleOptOuts, defaultManagementModules, newProjectManagementModules, selectedMaxAppTypes, type MaxAppTypeId, type MaxFeature, type MaxProjectBrief } from "@/lib/max-brief";
+import { MAX_APP_TYPES, MAX_BRIEF_LENGTH, MAX_FEATURES, MAX_FEATURE_INFO, MAX_MANAGEMENT_MODULES, briefManagementModuleOptOuts, defaultManagementModules, newProjectManagementModules, selectedMaxAppTypes, type MaxAppTypeId, type MaxFeature, type MaxProjectBrief } from "@/lib/max-brief";
 import { MaxFeaturePreview } from "./MaxFeaturePreview";
 import { MaxProjectReview } from "./MaxProjectReview";
 import "./max-studio.css";
@@ -230,8 +230,13 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
                 </div>
                 <MaxFeaturePreview feature={previewedFeature} />
               </fieldset>
-              <fieldset><legend className="text-sm font-medium">Стиль</legend><div className="mt-3 grid gap-2 sm:grid-cols-3">{MAX_STYLES.map(item => <button key={item.id} type="button" aria-pressed={values.style === item.id} className="max-wizard-option max-wizard-option--style" onClick={() => onChange({ style: item.id })}><span className="text-sm font-medium">{item.label}</span><span className="mt-1 block text-xs leading-5 text-fg-secondary">{item.description}</span></button>)}</div></fieldset>
-              <div className="space-y-2"><Label htmlFor="max-brand">Цвета бренда</Label><Input id="max-brand" value={values.brandColors} onChange={event => onChange({ brandColors: event.target.value })} placeholder="#0062ee, графит, молочный" /></div>
+              <div className="space-y-2">
+                <Label htmlFor="max-brand">Цвета бренда</Label>
+                <Input id="max-brand" value={values.brandColors}
+                  onChange={event => onChange({ brandColors: event.target.value })}
+                  placeholder="#0062ee, графит, молочный" aria-describedby="max-brand-hint" />
+                <p id="max-brand-hint" className="max-wizard-note">Другие пожелания к оформлению можно написать в описании идеи.</p>
+              </div>
             </>}
             {step === 3 && <>{initialCatalog}<MaxProjectReview {...values} /></>}
           </div>

@@ -14,7 +14,7 @@ import { describeApiError } from "@/lib/api/errors";
 import { saveLandingPrompt, takeLandingPrompt } from "@/lib/landing-prompt";
 import { createProject, listProjects } from "@/lib/api/projects";
 import type { ManagementModule, MaxContentItem } from "@/lib/api/types";
-import { MAX_DEFAULT_SUMMARY, briefManagementModuleOptOuts, buildMaxProjectPrompt, defaultManagementModules, newProjectManagementModules, selectedMaxAppTypes, serializeMaxProjectFeatures, type MaxAppTypeId, type MaxFeature, type MaxProjectBrief, type MaxStyleId } from "@/lib/max-brief";
+import { MAX_DEFAULT_SUMMARY, briefManagementModuleOptOuts, buildMaxProjectPrompt, defaultManagementModules, newProjectManagementModules, selectedMaxAppTypes, serializeMaxProjectFeatures, type MaxAppTypeId, type MaxFeature, type MaxProjectBrief } from "@/lib/max-brief";
 import { containsChatSecret, resolveChatCredential } from "@/lib/max-chat-credentials";
 import { extractInitialCatalog } from "@/lib/max-catalog-brief";
 import { newMaxContentItem } from "@/lib/max-catalog";
@@ -49,7 +49,6 @@ export function MaxStudio({ email }: { email: string }) {
   const [audience, setAudience] = useState("");
   const [primaryAction, setPrimaryAction] = useState("");
   const [features, setFeatures] = useState<MaxFeature[]>(STARTER_FEATURES);
-  const [style, setStyle] = useState<MaxStyleId>("brand");
   const [brandColors, setBrandColors] = useState("");
   const [managementModules, setManagementModules] = useState<ManagementModule[]>(() => defaultManagementModules("loyalty"));
   const [managementModuleOptOuts, setManagementModuleOptOuts] = useState<ManagementModule[]>([]);
@@ -101,7 +100,6 @@ export function MaxStudio({ email }: { email: string }) {
         audience,
         primaryAction,
         features,
-        style,
         brandColors,
         managementModules: modules,
         managementModuleOptOuts: moduleOptOuts,
@@ -121,7 +119,6 @@ export function MaxStudio({ email }: { email: string }) {
         audience: safeAudience,
         primaryAction: safePrimaryAction,
         features,
-        style,
         brandColors: safeBrandColors,
         managementModules: modules,
         managementModuleOptOuts: moduleOptOuts,
@@ -139,7 +136,8 @@ export function MaxStudio({ email }: { email: string }) {
           audience: safeAudience,
           primary_action: safePrimaryAction,
           features: serializeMaxProjectFeatures({ appType, appTypes, features }),
-          style,
+          // Retain the deployed config contract without imposing a visual preset.
+          style: "brand",
           brand_colors: safeBrandColors,
           content,
           operator: { legal_name: "" },
@@ -233,7 +231,6 @@ export function MaxStudio({ email }: { email: string }) {
     if (patch.audience !== undefined) setAudience(patch.audience);
     if (patch.primaryAction !== undefined) setPrimaryAction(patch.primaryAction);
     if (patch.features !== undefined) setFeatures(patch.features);
-    if (patch.style !== undefined) setStyle(patch.style);
     if (patch.brandColors !== undefined) setBrandColors(patch.brandColors);
     if (patch.managementModuleOptOuts !== undefined) {
       setManagementModuleOptOuts([...patch.managementModuleOptOuts]);
@@ -324,7 +321,7 @@ export function MaxStudio({ email }: { email: string }) {
           onChange={(items) => setCatalogDraft({ source: safeCatalogIdea, items, tooManyItems: tooManyItems && items.length > 0 })}
           onReset={() => setCatalogDraft(null)}
         />}
-        values={{ name, idea, appType, appTypes, audience, primaryAction, features, style, brandColors, managementModules, managementModuleOptOuts }}
+        values={{ name, idea, appType, appTypes, audience, primaryAction, features, brandColors, managementModules, managementModuleOptOuts }}
         onChange={updateBrief}
         onSubmit={() => create.mutateAsync()}
       />

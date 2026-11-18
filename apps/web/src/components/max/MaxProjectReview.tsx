@@ -2,7 +2,6 @@ import { LayoutGrid, MousePointerClick, Palette, Users } from "lucide-react";
 import {
   MAX_APP_TYPES,
   MAX_FEATURE_INFO,
-  MAX_STYLES,
   selectedMaxAppTypes,
   type MaxProjectBrief,
 } from "@/lib/max-brief";
@@ -28,13 +27,11 @@ export function MaxProjectReview({
   audience,
   primaryAction,
   features,
-  style,
   brandColors,
 }: MaxProjectReviewProps) {
   const description = idea.trim();
   const appTypeOptions = selectedMaxAppTypes(appType, appTypes)
     .map(type => MAX_APP_TYPES.find(item => item.id === type));
-  const styleOption = MAX_STYLES.find(item => item.id === style);
 
   return (
     <section className="max-project-review" aria-label="Сводка проекта">
@@ -102,7 +99,7 @@ export function MaxProjectReview({
         <section>
           <span className="max-project-review__fact-icon" aria-hidden="true"><Palette /></span>
           <h4>Оформление</h4>
-          <p>{styleOption?.label}</p>
+          <p>По вашему описанию</p>
           <small>{brandColors ? `Цвета: ${brandColors}` : "Цвета подберём автоматически"}</small>
         </section>
       </div>

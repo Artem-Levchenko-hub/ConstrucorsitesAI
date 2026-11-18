@@ -1,4 +1,4 @@
-import type { ManagementModule } from "./api/types";
+import type { ManagementModule, MaxProjectConfigPayload } from "./api/types";
 
 export const MAX_BRIEF_LENGTH = 20_000;
 export const MAX_PROMPT_LENGTH = 30_000;
@@ -48,26 +48,7 @@ export const MAX_FEATURES = [
   "История действий",
 ] as const;
 
-export const MAX_STYLES = [
-  {
-    id: "brand",
-    label: "В стиле бренда",
-    description: "Акцент на ваших цветах и характере",
-  },
-  {
-    id: "clean",
-    label: "Чистый",
-    description: "Спокойный интерфейс, максимум ясности",
-  },
-  {
-    id: "bright",
-    label: "Яркий",
-    description: "Энергичные акценты и промо-подача",
-  },
-] as const;
-
 export type MaxAppTypeId = (typeof MAX_APP_TYPES)[number]["id"];
-export type MaxStyleId = (typeof MAX_STYLES)[number]["id"];
 export type MaxFeature = (typeof MAX_FEATURES)[number];
 
 /** Keep the selection order: the first scenario is the compatible primary. */
@@ -141,7 +122,8 @@ export type MaxProjectBrief = {
   audience: string;
   primaryAction: string;
   features: MaxFeature[];
-  style: MaxStyleId;
+  /** @deprecated Accepted from older clients; never supplies visual instructions. */
+  style?: MaxProjectConfigPayload["style"];
   brandColors: string;
   managementModules?: ManagementModule[];
   managementModuleOptOuts?: readonly ManagementModule[];
@@ -205,7 +187,6 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
     ...(apiOnly ? [] : [
       `Главное действие пользователя: ${primaryAction}.`,
       `Нужные возможности: ${features}.`,
-      `Визуальное направление: ${optionLabel(MAX_STYLES, brief.style)}.`,
       `Цвета бренда: ${colors}.`,
     ]),
     `Управление в Yleum: ${MAX_MANAGEMENT_MODULES.filter(item => managementModules.includes(item.id)).map(item => item.label).join(", ") || "бизнес-модули не выбраны"}. Используй только модули из .omnia/management.json. Личные данные пользователей не превращай в общий реестр владельца.`,
