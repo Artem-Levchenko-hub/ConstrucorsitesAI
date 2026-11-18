@@ -8,7 +8,7 @@ const source = (relative: string) =>
 const appLayout = source("src/app/(app)/layout.tsx");
 const workspace = source("src/components/max/MaxEditorLayout.tsx");
 const styles = source("src/components/max/max-editor.css");
-const chatMessage = source("src/components/workspace/ChatMessage.tsx");
+const userMessage = source("src/components/workspace/UserMessageContent.tsx");
 
 describe("MAX workspace responsive contract", () => {
   it("pins the editor to one viewport with internal scrolling", () => {
@@ -28,8 +28,8 @@ describe("MAX workspace responsive contract", () => {
   });
 
   it("collapses oversized user prompts instead of filling the workspace", () => {
-    expect(chatMessage).toContain("max-h-[240px]");
-    expect(chatMessage).toContain("Показать полностью");
-    expect(chatMessage).toContain("Свернуть");
+    expect(userMessage).toContain("max-h-[240px]");
+    expect(userMessage).toContain("Показать полностью");
+    expect(userMessage).toContain("Свернуть");
   });
 });

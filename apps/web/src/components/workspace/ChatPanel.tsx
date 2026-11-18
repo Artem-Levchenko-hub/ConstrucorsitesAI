@@ -438,6 +438,10 @@ export function ChatPanel({
       <div
         ref={scrollRef}
         onScroll={chatScroll.onScroll}
+        onClickCapture={(event) => {
+          const summary = event.target instanceof Element ? event.target.closest("summary") : null;
+          if (summary?.parentElement instanceof HTMLDetailsElement) chatScroll.pauseFollowing();
+        }}
         className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-elegant"
       >
         <div ref={scrollContentRef} className="flow-root">

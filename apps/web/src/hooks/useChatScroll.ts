@@ -30,6 +30,11 @@ export function useChatScroll(
     followRef.current = atBottom;
     setFollowing(atBottom);
   }, [ref]);
+  const pauseFollowing = useCallback(() => {
+    // Reading intent precedes layout growth and any already queued frame.
+    followRef.current = false;
+    setFollowing(false);
+  }, []);
   const scrollToLatest = useCallback(() => {
     followRef.current = true;
     setFollowing(true);
@@ -65,5 +70,5 @@ export function useChatScroll(
 
   // Retain the message-text fallback for initial content and older browsers.
   useLayoutEffect(() => { scheduleFollowRef.current?.(); }, [content]);
-  return { onScroll, scrollToLatest, following };
+  return { onScroll, pauseFollowing, scrollToLatest, following };
 }

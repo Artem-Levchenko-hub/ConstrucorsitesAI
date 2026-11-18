@@ -26,6 +26,7 @@ function Harness({ content = "one", scopeKey = "p" }: { content?: string; scopeK
   return <div ref={ref} onScroll={scroll.onScroll} data-following={scroll.following}>
     <div ref={contentRef}>{content}</div>
     <button onClick={scroll.scrollToLatest}>Последнее сообщение</button>
+    <button data-pause-follow onClick={scroll.pauseFollowing}>Читать блок</button>
   </div>;
 }
 
@@ -138,4 +139,20 @@ it("retains the text-token fallback when ResizeObserver is unavailable", () => {
   userScroll(pane, 100);
   resize(1200); act(() => root.render(<Harness content="three" />));
   flushFrame(); expect(pane.scrollTop).toBe(100);
+});
+
+it("pauses a queued follow synchronously and preserves jump and project reset", () => {
+  act(() => root.render(<Harness />));
+  const { pane, resize } = metrics(); flushFrame();
+  resize(1200); observers[0].notify();
+  act(() => container.querySelector<HTMLButtonElement>("[data-pause-follow]")!.click());
+  expect(pane.dataset.following).toBe("false");
+  resize(1300); observers[0].notify(); flushFrame();
+  expect(pane.scrollTop).toBe(1000);
+  act(() => container.querySelector("button")!.click());
+  expect(pane.dataset.following).toBe("true"); expect(pane.scrollTop).toBe(1300);
+  act(() => container.querySelector<HTMLButtonElement>("[data-pause-follow]")!.click());
+  act(() => root.render(<Harness scopeKey="another-project" />));
+  expect(pane.dataset.following).toBe("true");
+  resize(1400); observers[1].notify(); flushFrame(); expect(pane.scrollTop).toBe(1400);
 });
