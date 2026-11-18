@@ -449,7 +449,7 @@ def requested_max_capabilities(prompt: str) -> list[tuple[str, str, tuple[str, .
 _API_MODE = r"(?:api[- ]only|backend[- ]only|only\s+api|api\s+only|только\s+api)"
 _API_REQUEST_VERB = (
     r"(?:(?:мне\s+)?(?:нужен|нужно|нужна|создай|сделай|реализуй|разработай|"
-    r"implement|build|create|i\s+need)\s+(?:an?\s+)?)"
+    r"implement|build|create|sort|i\s+need)\s+(?:an?\s+)?)"
 )
 _API_ONLY_RE = re.compile(r"^(?:" + _API_REQUEST_VERB + r")?" + _API_MODE + r"\b", re.I)
 _QUOTED_API_REQUEST = re.compile(

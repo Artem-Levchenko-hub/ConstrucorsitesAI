@@ -245,3 +245,15 @@ it.each([0, 2])("keeps the reviewed data decision separate from selected catalog
   expect(excluded).not.toContain("Владелец подтвердил начальный каталог");
   expect(excluded).not.toContain("Владелец подтвердил пустой начальный каталог");
 });
+
+
+it.each([
+  ["Sort only API results, catalog UI unchanged.", true],
+  ["Sort `only API` results, catalog UI unchanged.", true],
+  ["Don't sort only API results; build the interface.", false],
+  ["Sort not only API results; include the interface.", false],
+  ['Sort buttons named "only API" in the interface.', false],
+] as const)("preserves explicit sorting scope without treating copy as a mode: %s", (idea, expected) => {
+  expect(maxBrief.isExplicitApiOnlyBrief(idea)).toBe(expected);
+  expect(buildMaxProjectPrompt({ ...longBrief, idea })).toContain(idea);
+});

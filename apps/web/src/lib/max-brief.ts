@@ -144,12 +144,12 @@ function unquotedRequest(value: string): string {
 export function isExplicitApiOnlyBrief(idea: string): boolean {
   // Quotes around the requested scope do not negate an explicit command;
   // quoted examples/names without that command remain ordinary mention data.
-  const requested = idea.replace(/(^|[.!?;\n]\s*)((?:мне\s+)?(?:нужен|нужно|нужна|создай|сделай|реализуй|разработай|implement|build|create|i\s+need)\s+(?:an?\s+)?)["«“'‘`](api[- ]only|backend[- ]only|only\s+api|api\s+only|только\s+api)["»”'’`]/giu, "$1$2$3");
+  const requested = idea.replace(/(^|[.!?;\n]\s*)((?:мне\s+)?(?:нужен|нужно|нужна|создай|сделай|реализуй|разработай|implement|build|create|sort|i\s+need)\s+(?:an?\s+)?)["«“'‘`](api[- ]only|backend[- ]only|only\s+api|api\s+only|только\s+api)["»”'’`]/giu, "$1$2$3");
   const text = unquotedRequest(requested);
   if (/(?:не\s+только\s+api|not\s+only\s+api)/iu.test(text)) return false;
   return text.split(/[.!?;\n]/u).some(clause => {
     const value = clause.trim();
-    const scope = /^(?:(?:мне\s+)?(?:нужен|нужно|нужна|создай|сделай|реализуй|разработай|implement|build|create|i\s+need)\s+(?:an?\s+)?)?(?:api[- ]only|backend[- ]only|only\s+api|api\s+only|только\s+api)\b/iu.exec(value);
+    const scope = /^(?:(?:мне\s+)?(?:нужен|нужно|нужна|создай|сделай|реализуй|разработай|implement|build|create|sort|i\s+need)\s+(?:an?\s+)?)?(?:api[- ]only|backend[- ]only|only\s+api|api\s+only|только\s+api)\b/iu.exec(value);
     if (!scope) return false;
     return !/^\s*(?:[—–:-]\s*)?(?:не\s+(?:нужен|нужна|нужны|нужно|хочу|требуется)|is\s+not\s+(?:needed|required)|not\s+(?:needed|required))(?:\s+(?:совсем|вообще))?\s*(?=[:,;]|$)/iu.test(value.slice(scope[0].length));
   });

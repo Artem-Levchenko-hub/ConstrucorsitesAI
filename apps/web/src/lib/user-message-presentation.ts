@@ -21,6 +21,7 @@ const MVP_SUFFIXES = [
 ] as const;
 const EMPTY_CATALOG_SUFFIX = "Владелец подтвердил пустой начальный каталог. Не добавляй позиции из описания или примеров. Покажи честное пустое состояние и читай каталог через штатный SDK Yleum.";
 const SAVED_CATALOG_SUFFIX = /^Владелец подтвердил начальный каталог: (?:[1-9]\d?|100) позиций уже сохранены в Yleum\. Названия, цены и дальнейшие изменения читай из штатного SDK каталога\. Этот сохранённый список имеет приоритет перед примерами в описании; не вшивай позиции в код и не создавай вторую копию данных\.$/;
+const API_SCOPE_GUARD = "Режим только API не требует продуктового интерфейса. Явные функциональные пожелания выше сохраняются; пожелания к оформлению применимы только если интерфейс запрошен отдельно.";
 const QUIZ_MARKER = "— Бриф из опроса —";
 
 function knownWizardSuffix(lines: string[], apiOnly: boolean): boolean {
@@ -36,6 +37,49 @@ function field(line: string | undefined, prefix: string): string | null {
   if (!line?.startsWith(prefix) || !line.endsWith(".")) return null;
   // Remove only the envelope's final period, retaining the owner's punctuation.
   return line.slice(prefix.length, -1);
+}
+
+type WizardParameters = {
+  fields: UserMessageField[];
+  design: UserMessageField[];
+  management: string;
+  legacyOrder: boolean;
+};
+
+/** Consume only complete, ordered parameters of a known envelope version. */
+function wizardParameters(lines: string[], apiOnly: boolean): WizardParameters | null {
+  const remaining = lines.slice();
+  const fields: UserMessageField[] = [];
+  const design: UserMessageField[] = [];
+  function take(prefix: string, label: string, destination: UserMessageField[], optional = false): boolean {
+    if (optional && !remaining[0]?.startsWith(prefix)) return true;
+    const value = field(remaining.shift(), prefix);
+    if (value === null) return false;
+    destination.push({ label, value });
+    return true;
+  }
+  let management: string | undefined;
+  let legacyOrder = false;
+  if (apiOnly) {
+    if (!take("Главное действие пользователя: ", "Главное действие", fields, true)
+      || !take("Нужные возможности: ", "Возможности", fields, true)
+      || !take("Цвета бренда: ", "Цвета", design, true)) return null;
+    if (remaining[0] === API_SCOPE_GUARD) remaining.shift();
+    // Historical API envelopes had no optional parameters or scope guard.
+    // A partial current envelope must remain visible as unparsed source.
+    else if (fields.length || design.length) return null;
+  } else {
+    if (!take("Главное действие пользователя: ", "Главное действие", fields)
+      || !take("Нужные возможности: ", "Возможности", fields)) return null;
+    legacyOrder = remaining[0]?.startsWith("Управление в Yleum: ") ?? false;
+    if (legacyOrder) management = remaining.shift();
+    // Historical visual labels remain parameters, never applied product styles.
+    if (!take("Визуальное направление: ", "Визуальное направление", design, true)
+      || !take("Цвета бренда: ", "Цвета", design)) return null;
+  }
+  management ??= remaining.shift();
+  if (remaining.length || !management?.startsWith("Управление в Yleum: ")) return null;
+  return { fields, design, management, legacyOrder };
 }
 
 function parseWizard(source: string): UserMessagePresentation | null {
@@ -57,31 +101,12 @@ function parseWizard(source: string): UserMessagePresentation | null {
   if (taskLines.at(-1) === PUBLIC_DESCRIPTION_GUARD) taskLines.pop();
   const task = field(taskLines.join("\n"), "Что должно делать приложение: ");
   if (!task) return null;
-  const fields: UserMessageField[] = [{ label: "Сценарий", value: scenario }, { label: "Аудитория", value: audience }];
-  const design: UserMessageField[] = [];
-  const remaining = lines.slice(audienceIndex + 1, parametersEnd);
-  let management: string | undefined;
-  let legacyOrder = false;
-  if (lines[0] === WIZARD_HEADERS[0]) {
-    const action = field(remaining.shift(), "Главное действие пользователя: ");
-    const features = field(remaining.shift(), "Нужные возможности: ");
-    if (action === null || features === null) return null;
-    fields.push({ label: "Главное действие", value: action }, { label: "Возможности", value: features });
-    legacyOrder = remaining[0]?.startsWith("Управление в Yleum: ") ?? false;
-    if (legacyOrder) management = remaining.shift();
-    // Older stored envelopes included a canned-style label. Preserve its words
-    // as historical parameters; presentation does not apply it to the product.
-    if (remaining[0]?.startsWith("Визуальное направление: ")) {
-      const style = field(remaining.shift(), "Визуальное направление: ");
-      if (style === null) return null;
-      design.push({ label: "Визуальное направление", value: style });
-    }
-    const colors = field(remaining.shift(), "Цвета бренда: ");
-    if (colors === null) return null;
-    design.push({ label: "Цвета", value: colors });
-  }
-  management ??= remaining.shift();
-  if (remaining.length || !management?.startsWith("Управление в Yleum: ")) return null;
+  const parameters = wizardParameters(lines.slice(audienceIndex + 1, parametersEnd), lines[0] === WIZARD_HEADERS[1]);
+  if (!parameters) return null;
+  const { design, management, legacyOrder } = parameters;
+  const fields: UserMessageField[] = [
+    { label: "Сценарий", value: scenario }, { label: "Аудитория", value: audience }, ...parameters.fields,
+  ];
   const title = field(lines[3], "Название продукта: ") ?? (legacyOrder && lines[3]?.startsWith("Название продукта: ")
     ? lines[3].slice("Название продукта: ".length) : null);
   if (!title) return null;

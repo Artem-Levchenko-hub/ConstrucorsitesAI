@@ -21,11 +21,59 @@ describe("known user-message envelopes", () => {
     expect(source).toBe(buildMaxProjectPrompt(brief));
   });
 
-  it("supports API-only envelopes without inventing UI parameters", () => {
+  it("supports the current API-only envelope and preserves its explicit parameters", () => {
     const view = userMessagePresentation(buildMaxProjectPrompt({ ...brief, idea: "API-only. Только чтение списка." }))!;
+    expect(view.task).toBe("API-only. Только чтение списка.");
+    expect(view.groups.map(group => group.title)).toEqual(["Сценарий и функции", "Оформление", "Управление"]);
+    expect(view.groups.flatMap(group => group.fields)).toEqual(expect.arrayContaining([
+      { label: "Главное действие", value: brief.primaryAction },
+      { label: "Возможности", value: brief.features.join(", ") },
+      { label: "Цвета", value: brief.brandColors },
+    ]));
+  });
+
+  it.each(Array.from({ length: 8 }, (_, mask) => mask))("presents only explicitly supplied API parameters (mask %i)", mask => {
+    const input = { ...brief, idea: "API-only. Только чтение списка.",
+      primaryAction: mask & 1 ? brief.primaryAction : "",
+      features: mask & 2 ? brief.features : [], brandColors: mask & 4 ? brief.brandColors : "" };
+    const source = buildMaxProjectPrompt(input);
+    const view = userMessagePresentation(source)!;
+    expect(view.task).toBe(input.idea);
+    expect(view.groups.flatMap(group => group.fields).map(item => item.label)).toEqual([
+      "Сценарий", "Аудитория", ...(mask & 1 ? ["Главное действие"] : []),
+      ...(mask & 2 ? ["Возможности"] : []), ...(mask & 4 ? ["Цвета"] : []), "Данные приложения",
+    ]);
+    expect(source).toBe(buildMaxProjectPrompt(input));
+  });
+
+  it("retains the historical API envelope without optional parameters or the later scope guard", () => {
+    const source = buildMaxProjectPrompt({ ...brief, idea: "API-only. Только чтение списка.", primaryAction: "", features: [], brandColors: "" })
+      .replace(/^Режим только API[^\n]+\n/m, "");
+    const view = userMessagePresentation(source)!;
     expect(view.task).toBe("API-only. Только чтение списка.");
     expect(view.groups.map(group => group.title)).toEqual(["Сценарий и функции", "Управление"]);
     expect(view.groups.flatMap(group => group.fields).map(item => item.label)).toEqual(["Сценарий", "Аудитория", "Данные приложения"]);
+  });
+
+  it.each(["unknown-field", "unknown-scope", "missing-scope", "malformed-field", "reordered-fields"] as const)("keeps an unrecognized or incomplete API parameter block intact: %s", mode => {
+    let source = buildMaxProjectPrompt({ ...brief, idea: "API-only. Только чтение списка." });
+    if (mode === "unknown-field") source = source.replace("Нужные возможности:", "Другое пожелание:");
+    if (mode === "unknown-scope") source = source.replace("Режим только API не требует", "НЕ ТЕРЯТЬ: режим только API требует");
+    if (mode === "missing-scope") source = source.replace(/^Режим только API[^\n]+\n/m, "");
+    if (mode === "malformed-field") source = source.replace("Главное действие пользователя: Заказать кофе.", "Главное действие пользователя: Заказать кофе");
+    if (mode === "reordered-fields") source = source.replace("Главное действие пользователя: Заказать кофе.\nНужные возможности: Профиль пользователя.", "Нужные возможности: Профиль пользователя.\nГлавное действие пользователя: Заказать кофе.");
+    expect(userMessagePresentation(source)).toBeNull();
+    expect(userMessageLayers(source)).toEqual([]);
+  });
+
+  it("preserves a complete wizard nested inside a current API task", () => {
+    const nested = buildMaxProjectPrompt(brief);
+    const idea = `API-only.\n${nested}`;
+    const source = buildMaxProjectPrompt({ ...brief, idea });
+    const view = userMessagePresentation(source)!;
+    expect(view.task).toBe(idea);
+    expect(view.groups.flatMap(group => group.fields)).toContainEqual({ label: "Цвета", value: brief.brandColors });
+    expect(source).toContain(nested);
   });
 
   it("retains historical style parameters and a legacy task without the later public-description guard", () => {
