@@ -32,7 +32,7 @@ function render(steps: AgentStep[]) {
 }
 
 describe("лента работы агента", () => {
-  it("десять одинаковых ожиданий — одна пульсирующая строка со счётчиком", () => {
+  it("десять одинаковых ожиданий — одна тихая строка со счётчиком в подробностях", () => {
     // Владелец 26.09 прислал скриншот: десять одинаковых строк подряд читаются
     // как поломка. Повтор должен выглядеть как продолжающееся действие.
     const html = render(Array.from({ length: 10 }, (_, index) => waiting(index + 1)));
@@ -42,7 +42,9 @@ describe("лента работы агента", () => {
     expect(html.split("<li").length - 1).toBe(1);
     expect(html).toContain(CAPACITY_WAITING_COPY.title);
     expect(html).toContain("×10");
-    expect(html).toContain("agent-step-pulse");
+    expect(html).not.toContain("agent-step-pulse");
+    expect(html).toContain('data-generation-phase="queued"');
+    expect(html).not.toContain("<details open");
     expect(html).toContain("1 этап.");
     expect(html).not.toContain("шаг.");
   });

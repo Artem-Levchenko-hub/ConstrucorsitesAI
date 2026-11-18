@@ -3,8 +3,8 @@
 import { useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
-import { ArrowUpRight, ChevronDown, PanelRightOpen, Plug, SlidersHorizontal, X } from "lucide-react";
-import { BrandMark } from "@/components/marketing/BrandMark";
+import { ArrowUpRight, PanelRightOpen, Plug, SlidersHorizontal, X } from "lucide-react";
+import { MaxProjectHeader } from "./MaxProjectHeader";
 import { Button } from "@/components/ui/button";
 import { LearningButton } from "@/components/learning/ProductLearning";
 import type { Project } from "@/lib/api/types";
@@ -20,14 +20,14 @@ function subscribeViewport(onChange: () => void) {
 const isDesktop = () => window.matchMedia?.(desktopQuery).matches ?? true;
 const serverViewport = () => false;
 const titles = {
-  navigation: "Проекты и аккаунт",
   preview: "Предпросмотр приложения",
 };
 
-export function MaxEditorLayout({ project, children, navigation, preview }: {
+export function MaxEditorLayout({ project, email, children, navigation, preview }: {
   project: Project;
+  email?: string;
   children: ReactNode;
-  navigation: ReactNode;
+  navigation?: ReactNode;
   preview: ReactNode | ((onClose?: () => void) => ReactNode);
 }) {
   const [entry, setEntry] = useState<keyof typeof titles | null>(null);
@@ -44,14 +44,8 @@ export function MaxEditorLayout({ project, children, navigation, preview }: {
   }
   return (
     <div data-product-shell data-max-editor className="max-editor">
-      <header className="max-editor-header">
-        <div className="max-editor-project">
-          <div className="max-editor-brand"><BrandMark href="/max" /></div>
-          <button className="max-editor-project-trigger" data-learning="editor-projects" data-testid="max-navigation-open" aria-label="Проекты и аккаунт"
-            onClick={event => open("navigation", event.currentTarget)}>
-            <span><strong>{project.name}</strong><small>Yleum</small></span><ChevronDown className="size-4 shrink-0" />
-          </button>
-        </div>
+      <header className="max-editor-header max-shared-project-header">
+        <MaxProjectHeader projectId={project.id} projectName={project.name} active="editor" email={email} navigation={navigation} />
         <div className="max-editor-header-actions">
           <LearningButton />
           <Button asChild variant="outline" className="max-editor-section-link">
@@ -90,7 +84,6 @@ export function MaxEditorLayout({ project, children, navigation, preview }: {
               <div className="flex items-center gap-2"><LearningButton /><Dialog.Close asChild><Button variant="outline" size="icon" aria-label="Закрыть окно"><X className="size-5" /></Button></Dialog.Close></div>
             </div>
             <div data-learning="editor-panel" className="max-editor-modal-scroll" key={modal}>
-              {modal === "navigation" && <div data-testid="max-navigation-scroll" className="max-editor-drawer-scroll">{navigation}</div>}
               {modal === "preview" && <div className="max-editor-modal-preview-content">{previewContent}</div>}
             </div>
           </Dialog.Content>

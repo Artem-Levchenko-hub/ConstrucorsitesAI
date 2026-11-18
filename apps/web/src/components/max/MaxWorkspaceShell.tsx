@@ -1,22 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { LayoutGrid, Smartphone } from "lucide-react";
-import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { MaxEditorLayout } from "./MaxEditorLayout";
 import { ChatPanel, type ChatPanelAdaptationHandle } from "@/components/workspace/ChatPanel";
-import { listProjects } from "@/lib/api/projects";
 import { rollback as rollbackSnapshot } from "@/lib/api/snapshots";
 import type { Message, Project, Snapshot } from "@/lib/api/types";
 import { isChatMessageStreaming } from "@/lib/chat-message-status";
 import { readMaxLaunch } from "@/lib/max-launch-runner";
 import { upsertSnapshotNewest } from "@/lib/snapshot-history";
 import { MaxLivePreview } from "./MaxLivePreview";
-import { MaxAccountMenu } from "./MaxAccountMenu";
-import { MaxProjectNav } from "./MaxProjectNav";
 import { useMaxRestoration } from "@/lib/use-max-restoration";
 import { MaxRestorationPanel } from "./MaxRestorationPanel";
 import { useMaxAdaptation, type MaxAdaptationAttachment } from "@/lib/use-max-adaptation";
@@ -42,12 +37,7 @@ export function MaxWorkspaceShell({
     projectId: string;
   } | null>(null);
   const queryClient = useQueryClient();
-  const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
   const { currentSnapshotId, versions, historyCurrent, history } = useMaxPreviewHistory(project);
-  const maxProjects = useMemo(
-    () => (projects.data ?? []).filter((item) => item.template === "max_miniapp"),
-    [projects.data],
-  );
   // Selection belongs to the project, never the moving HEAD. Clear during
   // render so switching A → B → A cannot resurrect a stale selection.
   if (versionSelection && versionSelection.projectId !== project.id) setVersionSelection(null);
@@ -213,29 +203,7 @@ export function MaxWorkspaceShell({
     <MaxEditorLayout
       project={project}
       preview={preview}
-      navigation={
-        <>
-          <div className="max-editor-navigation" data-testid="max-navigation-scroll">
-            <Link href="/max" className="max-editor-nav-link">
-              <LayoutGrid className="size-4" /> Все проекты
-            </Link>
-            <p className="max-editor-caption">Ваши приложения</p>
-            <nav className="max-projects-scroll max-h-48 overflow-y-auto" aria-label="Ваши Mini Apps" data-testid="max-projects-scroll">
-              {maxProjects.map((item) => (
-                <Link key={item.id} href={`/max/${item.id}`} className="max-editor-nav-link" aria-current={item.id === project.id ? "page" : undefined}>
-                  <Smartphone className="size-4 shrink-0" />
-                  <span className="truncate">{item.name}</span>
-                </Link>
-              ))}
-            </nav>
-            <p className="max-editor-caption">Текущий проект</p>
-            <MaxProjectNav projectId={project.id} active="editor" showProgress={false} />
-          </div>
-          <div className="max-editor-account">
-            <MaxAccountMenu email={email} />
-          </div>
-        </>
-      }
+      email={email}
     >
       <div className="flex h-full min-h-0 flex-col">
       {MAX_CUSTOMER_VERSIONING && adaptation.attachment && <div className="mx-4 my-2 rounded-lg border p-3 text-sm" role="status">

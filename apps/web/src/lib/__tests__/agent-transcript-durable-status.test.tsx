@@ -137,13 +137,13 @@ it.each([true, false])("hydrates actual preparation and clears its heading after
     await act(async () => root.render(<QueryClientProvider client={client}>
       <AgentTranscript projectId="p" messageId="current-message" initialSteps={[pending]} />
     </QueryClientProvider>));
-    const header = () => container.querySelector("[data-agent-transcript] > button")?.textContent;
+    const header = () => container.querySelector("[data-generation-phase] [role=status]")?.textContent;
     expect(header()).toContain("Подготавливаю промпт");
     await act(async () => {
       client.setQueryData(["agent-steps", "p", "current-message"], [pending, {
         ...pending, ok: ready, action: ready ? "Промпт подготовлен" : "Продолжаю по исходному запросу",
       }]);
-      await vi.waitFor(() => expect(header()).toContain("Собираю приложение"));
+      await vi.waitFor(() => expect(header()).toContain("Создаю приложение"));
     });
     expect(header()).not.toContain("Подготавливаю промпт");
     expect(container.textContent).toContain(ready ? "Промпт подготовлен" : "Продолжаю по исходному запросу");

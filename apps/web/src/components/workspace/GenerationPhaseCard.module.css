@@ -1,0 +1,54 @@
+.phase {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px 16px 16px;
+  color: var(--color-fg-primary);
+}
+
+.mark {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  color: var(--color-accent);
+}
+
+.frame { opacity: .42; }
+.rails { color: var(--color-fg-tertiary); opacity: .7; }
+.cursor { animation: work-cursor 3.6s cubic-bezier(.65, 0, .35, 1) infinite; animation-play-state: paused; }
+.phase[data-motion="running"] .cursor { animation-play-state: running; }
+.phase[data-generation-phase="waiting"] .cursor,
+.phase[data-generation-phase="queued"] .cursor,
+.phase[data-generation-phase="paused"] .cursor,
+.phase[data-generation-phase="stopped"] .cursor,
+.phase[data-generation-phase="history"] .cursor,
+.phase[data-generation-phase="unconfirmed"] .cursor { color: var(--color-fg-secondary); }
+
+.content { min-width: 0; flex: 1; }
+.copy { animation: phase-copy 180ms ease-out; }
+.title { font-size: 15px; line-height: 22px; font-weight: 500; }
+.explanation { margin-top: 4px; max-width: 64ch; color: var(--color-fg-secondary); font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
+.backgroundNotice { margin-top: 12px; max-width: 64ch; color: var(--color-fg-secondary); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+.milestones { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 12px; padding: 0; list-style: none; }
+.milestones li { display: inline-flex; align-items: center; gap: 5px; color: var(--color-fg-secondary); font-size: 11px; line-height: 16px; }
+.milestones svg { flex-shrink: 0; color: var(--color-accent); }
+
+@keyframes work-cursor {
+  0%, 12% { transform: translate(0, 0); opacity: .55; }
+  32% { transform: translate(10px, 0); opacity: 1; }
+  46% { transform: translate(7px, 6px); opacity: .7; }
+  68% { transform: translate(0, 12px); opacity: 1; }
+  88%, 100% { transform: translate(0, 0); opacity: .55; }
+}
+
+@keyframes phase-copy { from { opacity: .5; } to { opacity: 1; } }
+
+@media (max-width: 380px) {
+  .phase { gap: 8px; padding: 14px 12px; }
+  .mark { flex-basis: 36px; width: 36px; height: 36px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cursor { animation: none; opacity: .8; }
+  .copy { animation: none; }
+}

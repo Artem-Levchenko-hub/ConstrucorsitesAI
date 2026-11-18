@@ -1,6 +1,6 @@
 import { CircleHelp, MessageCircle, UserRound } from "lucide-react";
 import Link from "next/link";
-import { YleumMark } from "@/components/brand/YleumMark";
+import { MaxProjectHeader } from "./MaxProjectHeader";
 import { MaxProjectNav, type MaxProjectNavKey } from "@/components/max/MaxProjectNav";
 import { LearningButton } from "@/components/learning/ProductLearning";
 import "@/components/max/max-studio.css";
@@ -21,11 +21,8 @@ export function MaxSectionShell({ projectId, projectName, active, title, lead, c
   const projectHref = `/max/${projectId}`;
   return (
     <div data-product-shell data-max-studio className={`max-project-workspace ${className}`}>
-      <header className="max-project-header">
-        <div className="max-project-header-identity">
-          <Link href="/max" aria-label="Yleum — все проекты" className="max-project-brand"><YleumMark className="max-project-brand-mark" />Yleum</Link>
-          <span className="max-project-header-name" title={projectName}>{projectName}</span>
-        </div>
+      <header className="max-project-header max-shared-project-header">
+        <MaxProjectHeader projectId={projectId} projectName={projectName} active={active} />
         <div className="max-project-header-actions" data-learning-context={learningContext}>
           {active !== "editor" && <Link href={projectHref} className="max-project-chat"><MessageCircle aria-hidden="true" className="size-4" />К чату</Link>}
           <LearningButton />

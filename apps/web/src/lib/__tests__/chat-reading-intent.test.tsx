@@ -124,3 +124,31 @@ it("leaves unrelated chat actions and ordinary growth following alone", async ()
     expect(api.submit).not.toHaveBeenCalled();
   } finally { await ui.dispose(); }
 });
+
+it.each(["pointer", "Enter", "Space"])("keeps native generation details reading with %s while real cache updates continue", async activation => {
+  const ui = await mountChat();
+  try {
+    await act(async () => { await vi.waitFor(() => expect(ui.container.querySelector("[data-agent-transcript] summary")).not.toBeNull()); });
+    const initialTop = ui.pane.scrollTop;
+    const summary = ui.container.querySelector<HTMLElement>("[data-agent-transcript] summary")!;
+    expect(summary.textContent).toBe("Подробности работы");
+    expect(summary.closest("details")!.open).toBe(false);
+    ui.resize(1000); // A queued follow must not win the user's disclosure click.
+    await act(async () => {
+      summary.focus();
+      if (activation === "pointer") summary.click();
+      else {
+        summary.dispatchEvent(new KeyboardEvent("keydown", { key: activation === "Space" ? " " : "Enter", bubbles: true }));
+        summary.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 0 }));
+      }
+    });
+    expect(summary.closest("details")!.open).toBe(true);
+    expect(document.activeElement).toBe(summary);
+    ui.resize(1800); ui.flushFrame();
+    expect(ui.pane.scrollTop).toBe(initialTop);
+    await ui.addAgentStep(1); ui.resize(2100); ui.flushFrame();
+    expect(ui.pane.scrollTop).toBe(initialTop);
+    expect(ui.jump()).toBeDefined();
+    expect(api.submit).not.toHaveBeenCalled();
+  } finally { await ui.dispose(); }
+});

@@ -6,7 +6,9 @@ export function useMaxWorkspaceDraftGuard(dirty: boolean, saving = false, scope:
     if (!dirty && !saving) return;
     const chat = scope === "chat";
     // Project navigation is portaled outside the editor header.
-    const linkScope = chat ? ".max-editor-header, .max-editor-modal-navigation" : ".max-project-workspace";
+    const linkScope = chat
+      ? ".max-editor-header, .max-editor-modal-navigation, .max-project-menu"
+      : ".max-project-workspace, .max-project-menu";
 
     const warn = (event: BeforeUnloadEvent) => {
       event.preventDefault();

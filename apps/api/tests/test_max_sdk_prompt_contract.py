@@ -1,7 +1,7 @@
-"""The mandatory MAX SDK contract reaches provider requests and compiles as supplied."""
+"""The SDK contract reaches provider requests without prescribing a JSX layout."""
 
 import json
-import re
+import os
 from pathlib import Path
 from subprocess import run
 from types import SimpleNamespace
@@ -12,15 +12,12 @@ import pytest
 from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.services import agent_builder, agent_native
 from yleum_api.services.max_data_evolution import build_max_agent_guide
-from yleum_api.services.max_management_generation import management_source_advisory
 from yleum_api.services.max_project_kit import (
     MAX_MANAGED_SDK_GUIDANCE,
     MAX_MODEL_DIRECTIVE,
     _template_file,
     render_max_managed_files,
 )
-
-from .test_max_management_generation import connection_example, connection_files
 
 
 class ProviderRequestCaptured(BaseException):
@@ -73,29 +70,45 @@ async def test_provider_request_contains_one_managed_sdk_contract(monkeypatch, m
     prompt = captured[0]
     assert prompt.count("MAX MANAGED SDK CONTRACT") == 1
     for required in (
-        "profile?.app_name", "item.title", "useYleumCatalogSelection(catalog.items)",
+        "profile.app_name", "item.title", "useYleumCatalogSelection",
         "createManagedOrder", "createManagedLead", "createManagedBooking",
         "loadPendingManagedIntent(resource)", "getManagedRecords(resource,{limit,cursor})",
-        "<form onSubmit={submitOrder}>", "<form onSubmit={submitLead}>", '<Button type="submit"',
         "explicit recovery action", "original operationKey", "empty cart",
         "quote_changed", "intent_storage_unavailable", "current customer's records",
     ):
         assert required in prompt, required
 
 
-def test_supplied_sdk_example_typechecks_against_current_template_hooks(tmp_path):
-    modules = (
+def test_real_sdk_field_contract_typechecks_without_a_prescribed_jsx_tree(tmp_path):
+    template_modules = (
         Path(__file__).resolve().parents[2]
         / "orchestrator/templates/max-miniapp-nextjs/node_modules"
     )
-    compiler = modules / "typescript/lib/tsc.js"
-    if not compiler.is_file():
+    candidates = [template_modules, *(Path(item) for item in os.environ.get("NODE_PATH", "").split(
+        os.pathsep,
+    ) if item)]
+    modules = next(
+        (path for path in candidates if (path / "typescript/lib/tsc.js").is_file()), None,
+    )
+    if modules is None:
         pytest.skip("TypeScript compiler is not installed")
+    compiler = modules / "typescript/lib/tsc.js"
+    zod = modules / "zod"
+    if not zod.exists():
+        zod = next(iter(sorted((modules / ".pnpm").glob("zod@*/node_modules/zod"))), zod)
 
-    snippet = re.search(r"```tsx\n(.*?)\n```", MAX_MANAGED_SDK_GUIDANCE, re.DOTALL)
-    assert snippet is not None, "The SDK contract must supply a typed connection example"
+    # A consumer can organize the SDK through a helper; the actual public field
+    # types, rather than a prompt-owned JSX recipe, remain the contract.
+    snippet = """import {useYleumAppProfile} from "@/lib/omnia/app-profile-client";
+import {useYleumCatalog} from "@/lib/omnia/catalog-client";
+export function useProductView() {
+  const {profile} = useYleumAppProfile();
+  const catalog = useYleumCatalog();
+  return {heading: profile?.app_name, rows: catalog.items.map(item => item.title)};
+}
+"""
     probe = tmp_path / "probe.tsx"
-    probe.write_text(snippet[1], encoding="utf-8")
+    probe.write_text(snippet, encoding="utf-8")
     config_path = "src/lib/omnia/max-config.ts"
     files = {
         f"src/lib/omnia/{name}.ts": _template_file(f"src/lib/omnia/{name}.ts")
@@ -117,7 +130,7 @@ def test_supplied_sdk_example_typechecks_against_current_template_hooks(tmp_path
         "baseUrl": str(tmp_path), "paths": {
             "@/*": ["src/*"], "react": [str(modules / "@types/react")],
             "react/jsx-runtime": [str(modules / "@types/react/jsx-runtime")],
-            "zod": [str(modules / "zod")],
+            "zod": [str(zod)],
         },
         "typeRoots": [str(modules / "@types")], "types": ["node", "react"],
     }}), encoding="utf-8")
@@ -132,7 +145,7 @@ def test_supplied_sdk_example_typechecks_against_current_template_hooks(tmp_path
     assert valid.returncode == 0, valid.stdout + valid.stderr
     # The exact observed regression must fail against the real supplied SDK types.
     probe.write_text(
-        snippet[1].replace("profile?.app_name", "profile?.name").replace("item.title", "item.name"),
+        snippet.replace("profile?.app_name", "profile?.name").replace("item.title", "item.name"),
         encoding="utf-8",
     )
     invalid = typecheck()
@@ -142,28 +155,19 @@ def test_supplied_sdk_example_typechecks_against_current_template_hooks(tmp_path
     assert "'name' does not exist on type 'YleumMaxContentItem'" in invalid.stdout
 
 
-def test_max_ui_form_recipe_connects_both_managed_submit_handlers():
-    recipe = re.search(
-        r"```tsx\n(<>\n<form onSubmit=.+?</>)\n```", MAX_MANAGED_SDK_GUIDANCE, re.DOTALL,
-    )
-    assert recipe is not None, "The SDK contract must show the native form and MAX UI button"
-    assert recipe[1].count('<Button type="submit"') == 2
-    modules = ("catalog", "orders", "leads")
-    source = 'import {Button} from "@maxhub/max-ui";\n' + connection_example(modules)
-    source = source.replace(
-        '<form onSubmit={submit_orders}><button>Send orders</button></form>', recipe[1],
-    ).replace(
-        '<form onSubmit={submit_leads}><button>Send leads</button></form>', "",
-    ).replace("submit_orders", "submitOrder").replace("submit_leads", "submitLead")
-    source = source.replace(
-        "return <main>",
-        "const orderSubmitDisabled = !inputs.orders.customerName;\n"
-        "const leadSubmitDisabled = !inputs.leads.customerName;\nreturn <main>",
-    )
-    assert management_source_advisory(connection_files(source, modules)) is None
-    handlers = (("submitOrder", "createManagedOrder"), ("submitLead", "createManagedLead"))
-    for handler, method in handlers:
-        removed_form_event = source.replace(f"onSubmit={{{handler}}}", "")
-        gap = management_source_advisory(connection_files(removed_form_event, modules))
-        assert gap and f"Connect {method}" in gap and "Missing mounted create event" in gap
-        assert "@maxhub/max-ui" in gap and 'type="submit"' in gap
+def test_sdk_guidance_preserves_data_contracts_without_source_shape_or_layout_recipes():
+    for obsolete in (
+        "SUPPORTED MANAGEMENT CONNECTION SHAPE", "source verifier", "direct records.map",
+        "Do not put", "useMemo", "INSIDE that JSX map", "unsupported source", "```tsx",
+        "<form", "<article", "<h1>",
+    ):
+        assert obsolete not in MAX_MANAGED_SDK_GUIDANCE
+    for required in (
+        "operationKey", "customerName", "configVersion", "unitPriceKopecks", "quote_changed",
+        "frozen input", "original operationKey", "current customer's records", "pending_intent",
+        "intent_storage_unavailable", "Without that", "do not invent", "user-scoped storage",
+        "wait for hydration", "getYleumServerAppConfig", "never trust a submitted price/title",
+        "timezone-bearing ISO", "Do not invent free slots, capacity or payment",
+    ):
+        assert required in MAX_MANAGED_SDK_GUIDANCE, required
+    assert "implementation choices" in " ".join(MAX_MANAGED_SDK_GUIDANCE.split())

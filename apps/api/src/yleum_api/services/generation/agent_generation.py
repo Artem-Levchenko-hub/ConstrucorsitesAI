@@ -6,7 +6,7 @@ import posixpath
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from yleum_api.core.config import get_settings
 from yleum_api.schemas.project import orchestrator_template
@@ -32,6 +32,9 @@ from yleum_api.services.generation.source_repair_context import directed_repair_
 from yleum_api.services.project_cell_errors import ProjectCellInfrastructureError
 
 _log = logging.getLogger("yleum_api.routers.messages")
+
+if TYPE_CHECKING:
+    from yleum_api.services.generation.prompt_entry_evidence import EntryRecorder
 
 
 # Bound existing entry source, not the entire project. The observed 62,436-char
@@ -376,6 +379,7 @@ async def execute_agent_turn(
     source_checkpoint: Callable[[agent_builder.AgentResult], Awaitable[None]] | None = None,
     workspace_context_files: dict[str, str] | None = None,
     allow_autonomous_source_repair: bool = False,
+    record_prompt_entry: EntryRecorder | None = None,
 ) -> tuple[agent_builder.AgentResult, str | None]:
     if runtime.coordinator is not None:
         from yleum_api.services.max_behavior_proof import freeze_for_turn
@@ -582,6 +586,13 @@ async def execute_agent_turn(
             )
         portable_cell = runtime.handle is not None and runtime.handle.is_portable()
         coordinator_handoff = runtime.coordinator is not None and portable_cell
+        from yleum_api.services.generation.prompt_entry_evidence import observe_coder_entry
+
+        coder_user = resume_instruction + plan.user + (
+            _native_edit_entry_context(current_source)
+            if edit_source_changed is not None or workspace_context_files is not None else ""
+        )
+        await observe_coder_entry(record_prompt_entry, coder_user, "native")
         try:
             _agent_res = await agent_native.run_native_build(
                 model=plan.model,
@@ -589,11 +600,7 @@ async def execute_agent_turn(
                 system=agent_native.native_system_prompt(
                     plan.stack_guide or "", plan.skills, coordinator_handoff=coordinator_handoff,
                 ),
-                task=resume_instruction + plan.user + (
-                    _native_edit_entry_context(current_source)
-                    if edit_source_changed is not None or workspace_context_files is not None
-                    else ""
-                ),
+                task=coder_user,
                 execute=_native_execute,
                 user_id=str(ids.user_id),
                 project_id=str(ids.project_id),
@@ -637,18 +644,21 @@ async def execute_agent_turn(
         except SourceCheckpointError as exc:
             _agent_res = exc.candidate
     elif _agent_res is None:
+        from yleum_api.services.generation.prompt_entry_evidence import observe_coder_entry
+
+        coder_user = resume_instruction + plan.user + (
+            _legacy_portable_edit_context(current_source)
+            if (_is_edit or workspace_context_files is not None)
+            and project_info.template == "max_miniapp"
+            and runtime.handle is not None
+            and getattr(runtime.handle, "capabilities", {}).get("portable_machine") is True
+            and runtime.handle.is_portable() else ""
+        )
+        await observe_coder_entry(record_prompt_entry, coder_user, "legacy")
         _agent_res = await agent_builder.run_agent_build(
             system_prompt=plan.system,
             reference_images=reference_images,
-            user_prompt=resume_instruction + plan.user + (
-                _legacy_portable_edit_context(current_source)
-                if (_is_edit or workspace_context_files is not None)
-                and project_info.template == "max_miniapp"
-                and runtime.handle is not None
-                and getattr(runtime.handle, "capabilities", {}).get("portable_machine") is True
-                and runtime.handle.is_portable()
-                else ""
-            ),
+            user_prompt=coder_user,
             model=plan.model,
             escalate_model=plan.escalate_model,
             execute=observed_execute,

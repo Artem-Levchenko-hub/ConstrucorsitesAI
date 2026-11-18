@@ -11,8 +11,8 @@ const studioDisclosure = readFileSync(
   resolve(process.cwd(), "src/components/max/MaxStudioAccountDisclosure.tsx"),
   "utf8",
 );
-const workspace = readFileSync(
-  resolve(process.cwd(), "src/components/max/MaxWorkspaceShell.tsx"),
+const projectHeader = readFileSync(
+  resolve(process.cwd(), "src/components/max/MaxProjectHeader.tsx"),
   "utf8",
 );
 const studio = readFileSync(
@@ -34,7 +34,7 @@ describe("MAX account menus", () => {
       expect(accountMenu).toContain(`"${href}"`);
       expect(studioDisclosure).toContain(`"${href}"`);
     }
-    expect(workspace).toContain("<MaxAccountMenu");
+    expect(projectHeader).toContain("<MaxAccountMenu");
     expect(studio).toMatch(/<MaxStudioHeader\b[^>]*\bemail=\{email\}[^>]*\/>/);
   });
 

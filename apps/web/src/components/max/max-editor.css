@@ -42,15 +42,8 @@
 }
 [data-max-editor] :is(button, a, summary):focus-visible { outline: 2px solid #0062ee; outline-offset: 3px; }
 .max-editor { height: 100%; max-height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: #f9f8f6; }
-.max-editor-header { display: flex; height: 72px; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 20px; padding: 0 24px; background: #fff; border-bottom: 1px solid #e3e0dc; }
-.max-editor-project, .max-editor-header-actions { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.max-editor-brand { padding-right: 24px; border-right: 1px solid #e3e0dc; }
-.max-editor-project-trigger { display: flex; align-items: center; gap: 16px; min-height: 44px; min-width: 0; max-width: 340px; padding: 4px 8px; text-align: left; border-radius: 6px; cursor: pointer; }
-.max-editor-project-trigger:hover { background: #f9f8f6; }
-.max-editor-project-trigger > span { min-width: 0; }
-.max-editor-project-trigger strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; }
-.max-editor-project-trigger small { display: block; margin-top: 2px; color: #6d6d77; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.max-editor-header-actions { flex-shrink: 0; gap: 8px; }
+.max-editor-header { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; background: #fff; border-bottom: 1px solid #e3e0dc; }
+.max-editor-header-actions { display: flex; align-items: center; min-width: 0; flex-shrink: 0; gap: 8px; }
 .max-editor-header-actions > button, .max-editor-header-actions > a { min-height: 44px; border-radius: 6px; font-size: 13px; }
 .max-editor-header-actions .max-editor-publish { background: #0062ee; color: #fff; padding-inline: 18px; }
 .max-editor-workspace {
@@ -79,11 +72,6 @@
 .max-editor-drawer-heading { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 12px; min-height: 72px; border-bottom: 1px solid #e3e0dc; padding: 12px 20px; }
 .max-editor-drawer-heading h2 { font-size: 17px; font-weight: 600; }
 .max-editor-drawer-scroll { overflow-y: auto; min-height: 0; padding: 16px; }
-.max-editor-caption { margin: 20px 12px 8px; font-size: 12px; color: #6d6d77; }
-.max-editor-nav-link { display: flex; align-items: center; gap: 10px; padding: 12px; min-height: 44px; font-size: 13px; border-radius: 6px; }
-.max-editor-nav-link:hover { background: #f1f4f9; }
-.max-editor-nav-link[aria-current=page] { background: #eaf0ff; color: #0050c8; }
-.max-editor-account { margin-top: 24px; border-top: 1px solid #e3e0dc; padding-top: 16px; }
 .max-editor-tools-dialog { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 101; width: min(440px, calc(100% - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; overscroll-behavior: contain; border-radius: 10px; background: #fff; padding-bottom: 20px; box-shadow: 0 20px 80px rgb(21 32 51 / .15); }
 .max-editor-tools-dialog > p { color: #6d6d77; padding: 16px 20px 0; }
 .max-editor-tools { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 20px; }
@@ -152,14 +140,8 @@
   .max-editor-workspace { grid-template-columns: minmax(0, 1fr); }
   .max-editor-desktop-preview { display: none; }
   .max-editor-mobile-preview-trigger { display: inline-flex; }
-  .max-editor-header { height: auto; min-height: 72px; flex-wrap: wrap; padding: 8px 16px; gap: 8px; }
-  .max-editor-brand { padding-right: 12px; }
 }
 @media (max-width: 600px) {
-  .max-editor-header { height: auto; min-height: 64px; flex-wrap: wrap; padding: 8px 12px; }
-  .max-editor-brand { display: none; }
-  .max-editor-project-trigger { gap: 6px; padding-inline: 0; }
-  .max-editor-project-trigger strong { max-width: 100px; font-size: 13px; }
   .max-editor-header-actions { gap: 5px; flex-wrap: wrap; max-width: 100%; }
   .max-editor-header-actions > button { width: 36px; }
   .max-editor-header-actions .max-editor-section-link { padding-inline: 10px; font-size: 12px; }

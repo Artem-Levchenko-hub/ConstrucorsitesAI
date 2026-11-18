@@ -479,8 +479,8 @@ MAX_MANAGED_SDK_GUIDANCE = """
 MAX MANAGED SDK CONTRACT
 The owner edits business data in Yleum's Catalog and project settings.
 For a managed UI app, show the public application name in a visible heading
-directly from `useYleumAppProfile()` in `@/lib/omnia/app-profile-client`:
-`<h1>{profile?.app_name}</h1>`. Do this when you first implement the entry page.
+from `useYleumAppProfile()` in `@/lib/omnia/app-profile-client`, using
+profile.app_name. Do this when you first implement the entry page.
 This requirement applies even if the personal Profile screen was left off.
 Add a personal profile or user history screen only when the brief or the managed
 module requires it. Do not use app metadata to invent a user feature.
@@ -522,89 +522,40 @@ If intent_storage_unavailable blocks an attempt, say that attempt was not sent.
 History reads
 getManagedRecords(resource,{limit,cursor}) and renders result.records; show only
 the current customer's records and the server-returned status.
-SUPPORTED MANAGEMENT CONNECTION SHAPE (projects with .omnia/management.json):
-the bounded source verifier is not a general JavaScript interpreter.
-Keep the selected SDK connections direct, even
-when other UI code uses React abstractions. Do not put SDK profile/catalog/history
-rows behind useMemo, a pre-filter, a toDrink/helper projection or a copied constant.
-Render profile fields directly; map current SDK rows directly to visible JSX.
-For catalog categories, keep the condition INSIDE that JSX map:
-```tsx
-"use client";
-
-import {useYleumAppProfile} from "@/lib/omnia/app-profile-client";
-import {useYleumCatalog, useYleumCatalogSelection} from "@/lib/omnia/catalog-client";
-
-export function ManagedCatalog() {
-  const {profile, status: profileStatus, error: profileError} = useYleumAppProfile();
-  const catalog = useYleumCatalog();
-  const selection = useYleumCatalogSelection(catalog.items);
-  const ready = catalog.status === "ready" && catalog.configVersion !== null;
-  return <section aria-busy={profileStatus === "loading" || catalog.status === "loading"}>
-    <h1>{profile?.app_name}</h1>
-    {profileStatus === "loading" || catalog.status === "loading" ? <p>Загрузка…</p> : null}
-    {profileError || catalog.error ? <p role="alert">{profileError || catalog.error}</p> : null}
-    {ready && catalog.items.length === 0 ? <p>Каталог пока пуст</p> : null}
-    {catalog.items.map(item => item.active &&
-      (selection.category === null || item.category === selection.category) ?
-      <article key={item.id}><h2>{item.title}</h2><span>{item.price}</span></article> : null)}
-  </section>;
-}
-```
-This is a connection fragment, not a complete page: implement the real product,
-forms, loading/empty/error states and the intent/quote/retry rules above.
-Disable NEW add-to-cart/order submissions until ready, an in-stock numeric price
-and any required deliberate option selection. Non-numeric prices keep the enquiry
-path, not a guessed checkout price. Keep loading/error messages visible even when
-the cart is empty; never silently ignore an apparently enabled first tap.
-Keep cart/history navigation and recovery of an existing frozen intent available;
-do not make that recovery depend on today's catalog or a nonempty cart.
-For each selected business module use a literal resource, its own state and a
-direct records.map in visible JSX. For example, load orders in a useEffect:
-`const response = await getManagedRecords("orders", {limit: 50});`
-`setOrders(response.records);`
-then render `orders.map(record => <p key={record.id}>{record.customer_name} {record.status}</p>)`.
-With Button from `@maxhub/max-ui`, put each submit handler on its native HTML
-form and use a Button with `type="submit"` inside that form. Include the existing
-fields inside the corresponding form. Reflect lookup, in-flight and recovery
-state in each form's button label and disabled state.
-```tsx
-<>
-<form onSubmit={submitOrder}>
-  <Button type="submit" disabled={orderSubmitDisabled}>Оформить заказ</Button>
-</form>
-<form onSubmit={submitLead}>
-  <Button type="submit" disabled={leadSubmitDisabled}>Отправить заявку</Button>
-</form>
-</>
-```
-Call event.preventDefault() in each handler, then directly await
-`createManagedOrder({...orderInput, operationKey: orderInput.operationKey})` or
-`createManagedLead({...leadInput, operationKey: leadInput.operationKey})`.
-Use the actual form input or the verified frozen input, preserving its optional
-fields and key. Use `Parameters<typeof createManagedOrder>[0]` and the equivalent
-for the other methods. For bookings, connect createManagedBooking the same way
-and render the live getManagedRecords("bookings").records history.
-Use each method's actual Parameters type. With multiple selected modules implement
-EVERY pair separately; with no selected modules in that manifest, the live
-rendered profile is still mandatory. Without that manifest, preserve the existing
-legacy contract/data; do not invent or silently enable owner-managed modules.
-Only implement modules selected by the locked manifest. An unsupported source
-shape can be rejected despite compiling: rewrite its connections into this direct
-form in the SAME run, preserving data/intent state. Follow the active completion checks.
+SDK CONNECTION CONTRACT (projects with .omnia/management.json):
+Use the current exported SDK types and actual method signatures. Each selected
+resource connects its createManaged* method and getManagedRecords history to the
+requested screens. getManagedRecords(resource,{limit,cursor}) returns
+{records,next_cursor}; render the server-returned records and status, not a copied
+constant. Use Parameters<typeof createManagedOrder>[0] and the equivalent types
+for leads and bookings; preserve all optional form/frozen-intent fields and key.
+Visible submit controls must reach their handler once, reflect lookup/in-flight/
+recovery state and prevent duplicate submissions. Implement every selected
+resource's requested create/history flow; do not invent additional modules.
+Keep new add-to-cart/order submissions disabled until catalog status is ready,
+an in-stock numeric price exists and any required option was deliberately selected.
+Non-numeric prices keep an enquiry path, not a guessed checkout total. Loading and
+errors must remain visible even with an empty cart; never silently ignore an
+apparently enabled first tap. Keep cart/history navigation and recovery of an
+existing frozen intent available independently of today's catalog or nonempty cart.
+React component boundaries, shared views, selectors and layout are implementation
+choices: connect the live data to the product's planned screens without imposing
+one JSX tree, form arrangement or visual layout. With no selected modules the
+live public application profile still supplies the product heading. Without that
+manifest preserve existing legacy contracts/data; never silently enable modules.
 Bookings take serviceId and requestedFor (timezone-bearing ISO); they are requests
 until the owner confirms them. Do not invent free slots, capacity or payment.
 Private/personal features outside these selected modules keep their existing
 user-scoped storage and must never become an owner-wide business registry.
 Keep existing browser storage keys, formats and writes for app-owned JSON such
 as cart quantities and favorite IDs. Read and validate the saved values before
-writing, wait for hydration, and serialize the typed local values directly.
+writing, wait for hydration, and serialize the validated typed local values.
 The business SDK alone handles storage for pending managed intents.
 Read `src/lib/omnia/max-config.ts` to understand the saved brief. Product catalog
 screens MUST use `useYleumCatalog()` from `@/lib/omnia/catalog-client`, which
 refreshes on mount/focus from the same mounted public business file as the server.
 It returns {items,configVersion,status,error,refresh}; items are YleumMaxContentItem[].
-Pass catalog.items to useYleumCatalogSelection from the same module, as above.
+Pass catalog.items to useYleumCatalogSelection from the same module.
 Use selection.category/setCategory for category filters (null means All),
 selection.selectOption(id,value) for option inputs, and selection.getOption(item)
 when adding a CURRENT item to the cart. The hook discards removed options and

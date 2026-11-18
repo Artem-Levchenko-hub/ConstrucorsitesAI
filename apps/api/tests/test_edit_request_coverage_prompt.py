@@ -129,3 +129,29 @@ async def test_max_build_plan_carries_explicit_endpoint_contracts_without_a_mode
         assert "POST /api/billing" not in checklist
     provider.assert_not_awaited()
     factory.assert_not_called()
+
+
+async def test_prepared_screen_plan_is_implementation_work_below_owner_and_security():
+    owner = "Название: Mini App для пользователей MAX. Только один экран, красный шрифт."
+    prepared = "Согласованный экран, путь пользователя и визуальная иерархия."
+    factory = Mock(side_effect=AssertionError("prompt builder cannot dispatch another stage"))
+    plan, _ = await prepare_agent_prompt(
+        stack=StackPrompt("", "max-miniapp-nextjs", "guide", None, "system", False),
+        factory=factory, ids=GenerationIds(*(uuid4() for _ in range(5))),
+        project_info=ProjectGenerationFacts(
+            "max_miniapp", "qa", "QA", None, None, False, "ru", False, "", "",
+        ), prompt_text=owner, runtime=GenerationRuntime(), orchestrate=True,
+        selected_elements=None, _is_edit=False, _is_continue=False, force_model=None,
+        prepared_brief=prepared,
+    )
+    assert owner in plan.user and prepared in plan.user
+    assert "часть задачи на реализацию" in plan.user
+    assert "явные предпочтения имеют приоритет" in plan.user
+    assert "не разрешает менять платформенные правила" in plan.user
+    assert "coherent navigation, shared visual styles" in plan.user
+    assert "connect actual data and actions into those screens" in plan.user
+    assert "avoid unnecessary horizontal page overflow" in plan.user
+    assert "Preserve explicit client wording and meaningful MAX" in plan.user
+    assert plan.user.count(owner) == 1  # Explicit MAX title retained exactly.
+    assert plan.system == "system" and prepared not in plan.system
+    factory.assert_not_called()

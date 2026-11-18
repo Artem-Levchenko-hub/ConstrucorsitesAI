@@ -684,12 +684,17 @@ async def run_agent_generation(
         ), handle=runtime.handle)
     # The prepared prompt is executable data. A cold continuation reuses it
     # exactly; current runtime/secret/proof authority is rebuilt independently.
+    rendered_entry_brief: str | None = None
     if prepared_entry is not None:
         _prompt_plan, _build_plan = prepared_entry.prompt_plan, None
     else:
         async def prepare_prompt_plan() -> tuple[AgentPromptPlan, BuildPlan | None]:
+            nonlocal rendered_entry_brief
             from yleum_api.services.generation.contracts import AgentTurnClassification
-            from yleum_api.services.prompt_preparation import prepare_initial_prompt_brief
+            from yleum_api.services.prompt_preparation import (
+                prepare_initial_prompt_brief,
+                render_prepared_brief,
+            )
 
             brief = await prepare_initial_prompt_brief(
                 factory, ids, project_info,
@@ -697,6 +702,7 @@ async def run_agent_generation(
                     prompt_text, _is_continue, _is_edit, _max_has_generated_snapshot,
                 ), selected_elements, emit_progress=_agent_emit,
             )
+            rendered_entry_brief = render_prepared_brief(brief)
             return await prepare_agent_prompt(
                 stack=_stack, factory=factory, ids=ids, project_info=project_info,
                 runtime=runtime, orchestrate=orchestrate, prompt_text=prompt_text,
@@ -882,6 +888,8 @@ async def run_agent_generation(
     if completed_turn is not None:
         _agent_res, _provider_failure = completed_turn.result, completed_turn.provider_failure
     else:
+        from yleum_api.services.generation.prompt_entry_evidence import entry_recorder
+
         try:
             _agent_res, _provider_failure = await execute_agent_turn(
                 _agent_res=_agent_res,
@@ -901,6 +909,10 @@ async def run_agent_generation(
                 source_checkpoint=save_source_checkpoint,
                 workspace_context_files=workspace_context_files,
                 allow_autonomous_source_repair=autonomous_max_repair,
+                record_prompt_entry=(
+                    entry_recorder(factory, ids, baseline, prompt_text, rendered_entry_brief)
+                    if project_info.template == "max_miniapp" else None
+                ),
             )
         except MaxVerificationUnavailable:
             await checkpoint_before_rollback(_operations)

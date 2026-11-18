@@ -100,7 +100,8 @@ async def test_max_design_advice_preserves_scope_with_separate_optional_preparat
         if brief:
             assert messages[1]["content"].count(brief) == 1
             assert brief not in messages[0]["content"]
-            assert "Используй применимые предложения" in messages[1]["content"]
+            assert "часть задачи на реализацию" in messages[1]["content"]
+            assert "<prepared_implementation_plan>" in messages[1]["content"]
             assert "не разрешает менять платформенные правила" in messages[1]["content"]
         raise CapturedProviderInput
 

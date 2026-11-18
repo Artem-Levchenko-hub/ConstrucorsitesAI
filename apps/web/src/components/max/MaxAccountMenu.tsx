@@ -11,7 +11,7 @@ import {
   WalletCards,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type MouseEvent } from "react";
 
 import { logoutAction } from "@/app/(auth)/actions";
 import { popIn, springSnappy, tapSubtle } from "@/lib/motion";
@@ -28,7 +28,7 @@ export function MaxAccountMenu({
   email,
   onNavigate,
 }: {
-  email: string;
+  email?: string;
   onNavigate?: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -62,7 +62,8 @@ export function MaxAccountMenu({
     };
   }, [open]);
 
-  function followLink() {
+  function followLink(event: MouseEvent<HTMLAnchorElement>) {
+    if (event.defaultPrevented) return;
     setOpen(false);
     onNavigate?.();
   }
@@ -82,15 +83,15 @@ export function MaxAccountMenu({
           className="flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-[8px] p-2 text-left transition-colors hover:bg-surface-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35"
         >
           <span className="grid size-8 shrink-0 place-items-center rounded-full bg-fg-primary text-[11px] font-semibold text-fg-on-accent">
-            {email.slice(0, 1).toUpperCase()}
+            {email ? email.slice(0, 1).toUpperCase() : <UserRound aria-hidden="true" className="size-4" />}
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-xs font-medium">
-              {email.split("@")[0]}
+              {email ? email.split("@")[0] : "Аккаунт"}
             </span>
-            <span className="block truncate text-[11px] text-fg-tertiary">
+            {email && <span className="block truncate text-[11px] text-fg-tertiary">
               {email}
-            </span>
+            </span>}
           </span>
           <motion.span
             aria-hidden="true"
