@@ -78,6 +78,10 @@ async def test_max_design_advice_preserves_scope_with_separate_optional_preparat
     assert "Do not infer product screens" in plan.user
     assert "Navigation follows the requested journeys" in plan.user
     assert "within the current implementation" in plan.user
+    assert "prepared screen plan as a supporting implementation checklist" in plan.user
+    assert "resolving any conflict in favor of the owner's explicit request" in plan.user
+    assert "each requested screen and its primary action to reachable navigation" in plan.user
+    assert "an unused screen, decorative tab or feature name is not delivery" in plan.user
     assert "no separate design stage, visual acceptance gate or paid critique loop" in plan.user
     assert "existing style, working features and existing business records" in plan.user
     assert "Honor API-only and read-only requests" in plan.user
@@ -103,6 +107,7 @@ async def test_max_design_advice_preserves_scope_with_separate_optional_preparat
             assert "часть задачи на реализацию" in messages[1]["content"]
             assert "<prepared_implementation_plan>" in messages[1]["content"]
             assert "не разрешает менять платформенные правила" in messages[1]["content"]
+            assert "map those screens and actions to the implementation" in messages[1]["content"]
         raise CapturedProviderInput
 
     async def no_tool(action):

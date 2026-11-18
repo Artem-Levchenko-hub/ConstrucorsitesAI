@@ -272,30 +272,27 @@ def _infer_realtime_from_text(text: str) -> bool:
     return False
 
 
-_MAX_MINIAPP_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(
-        r"\bмини[- ]?приложени\w*\s+(?:в|для|внутри)\s+"
-        r"(?:мессенджер\w*\s+)?max\b",
-        re.I,
-    ),
-    re.compile(r"\b(?:max|макс)\s+мини[- ]?приложени\w*\b", re.I),
-    re.compile(r"\bmini[- ]?app\s+(?:for\s+)?max\b", re.I),
-    re.compile(r"\bmax\s+mini[- ]?app\b", re.I),
-    re.compile(
-        r"\bприложени\w*\s+(?:в|для|внутри)\s+мессенджер\w*\s+(?:max|макс)\b",
-        re.I,
-    ),
-    re.compile(
-        r"\b(?:бот|магазин|сервис)\w*\s+(?:в|для|внутри)\s+"
-        r"(?:мессенджер\w*\s+)?max\b",
-        re.I,
-    ),
+_MAX_PLATFORM_NAME = r"(?:max|макс)"
+_MAX_MINIAPP_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.I)
+    for pattern in (
+        rf"\b(?:мини[- ]?приложени\w*|приложени\w*|бот\w*|магазин\w*|сервис\w*)\s+"
+        rf"(?:(?:именно|специально|исключительно|только)\s+)?"
+        rf"(?:в|для|внутри|под|на\s+платформе)\s+(?:мессенджер\w*\s+)?{_MAX_PLATFORM_NAME}\b",
+        rf"\bмини[- ]?приложени\w*\s+{_MAX_PLATFORM_NAME}\b",
+        rf"\b{_MAX_PLATFORM_NAME}\s+(?:мини[- ]?приложени\w*|mini[- ]?app)\b",
+        rf"\bmini[- ]?app\s+(?:(?:specifically|only|exclusively)\s+)?"
+        rf"(?:(?:for|in|inside)\s+(?:the\s+)?)?(?:messenger\s+)?{_MAX_PLATFORM_NAME}\b",
+    )
 )
 
 
 def _infer_max_miniapp_from_text(text: str) -> bool:
     """Route explicit MAX-platform products without matching a bare CSS `max-*`."""
-    return any(pattern.search(text or "") for pattern in _MAX_MINIAPP_PATTERNS)
+    normalized = re.sub(r'["\'«»“”]', '', text or '')
+    normalized = re.sub(r'[\u2010-\u2014]', '-', normalized)
+    normalized = ' '.join(normalized.split())
+    return any(pattern.search(normalized) for pattern in _MAX_MINIAPP_PATTERNS)
 
 
 # App-ification framing (P-H1, owner 2026-06-21). On a FOLLOW-UP, an UNMISTAKABLE
@@ -927,23 +924,22 @@ def _infer_multi_select(message: str) -> bool:
 
 
 def _fallback_brief(history: list[dict[str, str]], latest_prompt: str) -> str:
-    """Compile a build brief from the raw conversation when the model can't —
-    so a forced/capped build still has the full context to work from."""
-    parts: list[str] = []
+    """Keep one request intact, or retain the dialog without imposing a product type."""
+    turns: list[tuple[str, str]] = []
     for m in history:
         content = (m.get("content") or "").strip()
         if not content:
             continue
         who = "Пользователь" if m.get("role") == "user" else "Ассистент"
-        parts.append(f"{who}: {content}")
+        turns.append((who, content))
     latest = (latest_prompt or "").strip()
     if latest:
-        parts.append(f"Пользователь: {latest}")
-    convo = "\n".join(parts)
-    return (
-        "Собери продуманный, завершённый сайт по итогам этого диалога-знакомства.\n\n"
-        f"{convo}"
-    ).strip()
+        turns.append(("Пользователь", latest))
+    if len(turns) == 1 and turns[0][0] == "Пользователь":
+        return turns[0][1]
+    return "\n".join(f"{who}: {content}" for who, content in turns) or (
+        "Собери запрошенный продукт по доступным требованиям."
+    )
 
 
 def _parse(raw: str) -> dict[str, object] | None:

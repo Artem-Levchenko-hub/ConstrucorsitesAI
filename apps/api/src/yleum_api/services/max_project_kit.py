@@ -473,6 +473,21 @@ is 'large-strong' | 'medium-strong' | 'small' | 'small-strong' | 'custom'.
 For a semantic heading use <Typography.Title variant="small" asChild><h2>Title</h2></Typography.Title>.
 Keep the installed MAX UI version; do not add a replacement UI library or bypass
 TypeScript errors.
+Product typography comes from the project's stylesheet; the MAX shell inherits
+its font family. Preserve explicit owner fonts and intentional heading/control
+roles. Check the actual inherited font and component styles rather than applying
+a blanket font or color override to every descendant.
+For authored component CSS, use CSS Modules or product-scoped class names.
+Do not redefine framework utility names such as .ring for a product illustration:
+Tailwind's .ring also paints a box-shadow on the element's rectangular box.
+Use framework utilities intentionally and keep custom selectors scoped to their
+own component. Do not remove keyboard focus styles or all shadows to mask a clash.
+For a first visit, distinguish absent personal data from measured zero progress.
+Show what is needed and the requested next action instead of empty charts,
+invented history or a completed-looking summary. Keep requested empty screens
+usable, and distinguish a successful empty read from loading or a failed read.
+Static reference content is separate from the current user's records. Honor an
+explicitly blank, static or API-only scope without adding a dashboard or onboarding.
 """.strip()
 
 MAX_MANAGED_SDK_GUIDANCE = """
@@ -522,6 +537,15 @@ If intent_storage_unavailable blocks an attempt, say that attempt was not sent.
 History reads
 getManagedRecords(resource,{limit,cursor}) and renders result.records; show only
 the current customer's records and the server-returned status.
+Order creation, payment and fulfillment are separate states. A successful order
+write confirms the saved order/request, not a paid or fulfilled order. A payment
+creation response, confirmation_url, return URL or browser redirect is not payment
+confirmation. Use the selected checkout SDK's authoritative status/receipt read
+after returning and on reload; only a verified succeeded payment may be shown as
+paid. Keep pending, canceled, failed and needs_review states honest and identify
+test payments as test payments. If payment is unavailable or not connected, say
+so and keep the saved order's actual state. Never create another order or replay
+a business write to check payment, and never bypass the pending-intent contract.
 SDK CONNECTION CONTRACT (projects with .omnia/management.json):
 Use the current exported SDK types and actual method signatures. Each selected
 resource connects its createManaged* method and getManagedRecords history to the

@@ -24,31 +24,30 @@ PROVIDER_HTTP_422_DETAIL = (
     "Провайдер модели отклонил запрос (HTTP 422). Требуется проверить параметры запроса."
 )
 
-_SENSITIVE_NAME = (
-    r"(?:"
-    r"DATABASE_URL|AUTH_SECRET|"
-    r"[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASS|PRIVATE_KEY|ACCESS_KEY|API_KEY|DSN)"
-    r"[A-Z0-9_]*"
-    r")"
+_SENSITIVE_NAME_RE = re.compile(
+    r"DATABASE_URL$|SECRET|TOKEN|PASSWORD|PASS|PRIVATE_KEY|ACCESS_KEY|API_KEY|DSN",
+    re.IGNORECASE,
 )
-_SHELL_ASSIGNMENT_RE = re.compile(rf"(?im)^(\s*(?:export\s+)?{_SENSITIVE_NAME}\s*=\s*)([^\r\n]*)$")
+_SHELL_ASSIGNMENT_RE = re.compile(
+    r"(?im)^([^\S\r\n]*(?:export\s+)?(?P<name>[A-Z0-9_]+)\s*=\s*)([^\r\n]*)$"
+)
 _JSON_ASSIGNMENT_RE = re.compile(
-    rf"""(?ix)
+    r"""(?ix)
+    (?<![A-Z0-9_])
     (
-      ["']?{_SENSITIVE_NAME}["']?
+      ["']?(?P<name>[A-Z0-9_]+)["']?
       \s*:\s*
       ["']
     )
-    ([^"'\r\n]*)
-    (["'])
     """
 )
+_JSON_VALUE_RE = re.compile(r"""[^"'\r\n]*(?:["']|\Z)""")
 _DSN_PASSWORD_RE = re.compile(
     r"(?i)\b((?:postgres(?:ql)?|mysql|mariadb|redis|mongodb)"
     r"(?:\+[a-z0-9_]+)?://[^:\s/@]+:)([^@\s/]+)(@)"
 )
 _AUTH_HEADER_RE = re.compile(
-    r"(?im)^(\s*(?:authorization|x-api-key|x-max-bot-api-secret)\s*:\s*)"
+    r"(?im)^([^\S\r\n]*(?:authorization|x-api-key|x-max-bot-api-secret)\s*:\s*)"
     r"([^\r\n]+)$"
 )
 _KNOWN_TOKEN_RE = re.compile(r"(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,})")
@@ -56,9 +55,27 @@ _PARTIAL_DSN_PASSWORD_RE = re.compile(
     r"(?i)\b((?:postgres(?:ql)?|mysql|mariadb|redis|mongodb)"
     r"(?:\+[a-z0-9_]+)?://[^:\s/@]+:)([^@\s/]+)$"
 )
-_PARTIAL_JSON_ASSIGNMENT_RE = re.compile(
-    rf"(?is)([\"']?{_SENSITIVE_NAME}[\"']?\s*:\s*[\"'])([^\"'\r\n]*)$"
-)
+
+
+def _redact_json_assignments(value: str, *, allow_partial: bool = False) -> str:
+    """Scan whole names once, without hiding labels inside nonsecret values."""
+    parts: list[str] = []
+    cursor = 0
+    for match in _JSON_ASSIGNMENT_RE.finditer(value):
+        if match.start() < cursor or not _SENSITIVE_NAME_RE.search(match["name"]):
+            continue
+        quoted = _JSON_VALUE_RE.match(value, match.end())
+        if quoted is None:
+            continue
+        end = quoted.end()
+        if end > match.end() and value[end - 1] in "\"'":
+            end -= 1
+        elif not allow_partial:
+            continue
+        parts.extend((value[cursor:match.end()], REDACTED))
+        cursor = end
+    parts.append(value[cursor:])
+    return "".join(parts)
 
 
 def redact_sensitive_text(value: str) -> str:
@@ -66,8 +83,12 @@ def redact_sensitive_text(value: str) -> str:
 
     if not value:
         return value
-    redacted = _SHELL_ASSIGNMENT_RE.sub(rf"\1{REDACTED}", value)
-    redacted = _JSON_ASSIGNMENT_RE.sub(rf"\1{REDACTED}\3", redacted)
+    redacted = _SHELL_ASSIGNMENT_RE.sub(
+        lambda match: match[1] + REDACTED
+        if _SENSITIVE_NAME_RE.search(match["name"]) else match[0],
+        value,
+    )
+    redacted = _redact_json_assignments(redacted)
     redacted = _DSN_PASSWORD_RE.sub(rf"\1{REDACTED}\3", redacted)
     redacted = _AUTH_HEADER_RE.sub(rf"\1{REDACTED}", redacted)
     return _KNOWN_TOKEN_RE.sub(REDACTED, redacted)
@@ -84,7 +105,7 @@ def bounded_redacted_text(value: str, *, max_bytes: int, lookahead_bytes: int = 
     )
     redacted = redact_sensitive_text(preview)
     redacted = _PARTIAL_DSN_PASSWORD_RE.sub(rf"\1{REDACTED}", redacted)
-    redacted = _PARTIAL_JSON_ASSIGNMENT_RE.sub(rf"\1{REDACTED}", redacted)
+    redacted = _redact_json_assignments(redacted, allow_partial=True)
     encoded = redacted.encode("utf-8")
     marker_start = redacted.rfind(REDACTED)
     if marker_start >= 0:

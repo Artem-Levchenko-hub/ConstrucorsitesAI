@@ -58,6 +58,12 @@ from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, PositiveInt
 
 from yleum_api.services import llm_client
 from yleum_api.services.agent_build_feedback import render_model_observation
+from yleum_api.services.agent_discovery_context import (
+    INFORMATION_ACTIONS,
+    cached_information,
+    new_information,
+    retained_information,
+)
 from yleum_api.services.agent_output_budget import (
     DEFAULT_REPAIR_OUTPUT_TOKENS,
     KIMI_PILOT_MODEL,
@@ -193,7 +199,7 @@ _SOURCE_CHANGE_REQUIRED = (
     "Preserve existing features and data; then build and call done."
 )
 
-# Caps so one fat observation can't blow the context window.
+# Diagnostics stay compact; source/docs retain the executor's actual read size.
 _MAX_OBS_CHARS = 6_000
 _MAX_READ_CHARS = 16_000
 _PRODUCT_ENTRY_PATH = "src/app/page.tsx"
@@ -294,17 +300,23 @@ def _truncate(s: str, n: int) -> str:
     return s if len(s) <= n else s[:n] + f"\n…[truncated {len(s) - n} chars]"
 
 
-# Keep the per-call payload bounded: always the system prompt + the first user
-# turn (task + seeded project context) + the most recent `keep_last` turns. The
-# loop still holds the full transcript for its own logic; only the MODEL CALL is
-# windowed. This is what keeps a 30-step loop at roughly one-step cost.
+# Keep the task and recent turns, plus exact still-current discovery results.
+# Dropping an SDK read must not force another paid turn to recover its signature.
 def _window_messages(
-    convo: list[dict[str, Any]], keep_last: int = 12
+    convo: list[dict[str, Any]], keep_last: int = 12, *,
+    discovery_history: list[dict[str, Any]] | None = None,
+    source_files: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     head = 2  # system + first user (orientation + seeded layout)
-    if len(convo) <= head + keep_last:
+    if len(convo) <= head + keep_last and not discovery_history:
         return convo
-    return convo[:head] + convo[-keep_last:]
+    recent = convo[max(head, len(convo) - keep_last):]
+    context = retained_information(
+        [*(discovery_history or []), *convo], parse_action, recent_messages=len(recent),
+        source_files=source_files,
+    )
+    memory = [{"role": "user", "content": context}] if context else []
+    return [*convo[:head], *memory, *recent]
 
 
 def _repair_window_messages(
@@ -339,13 +351,15 @@ def _progress_note(
         listing = "\n".join(f"  - {p}" for p in sorted(written))
         parts.append(
             "FILES YOU HAVE ALREADY WRITTEN this run — they EXIST. Do NOT write "
-            "them again with the same content. Only touch one with edit_file if "
-            "you must FIX a specific build error in it:\n" + listing
+            "them again with the same content. Use edit_file for a concrete "
+            "unfinished requirement, coherent design improvement or diagnosed error. "
+            "Preserve completed behavior and verify after changes:\n" + listing
         )
     if last_build_ok is True:
         parts.append(
-            "LAST build: CLEAN. If every file the task needs now exists, call "
-            "done — do not keep re-writing existing files."
+            "LAST build: CLEAN. This proves compilation, not requested behavior "
+            "or visual quality. Finish the owner's remaining scenarios and prepared "
+            "screen plan; call done when the requested work and checks are complete."
         )
     elif last_build_ok is False:
         parts.append(
@@ -362,7 +376,10 @@ def _format_observation(action: Action, obs: dict[str, Any]) -> str:
     ok = obs.get("ok", True)
     head = f"[observation: {action.name}{(' ' + action.path) if action.path else ''} "
     head += "SKIPPED]" if obs.get("skipped") is True else "OK]" if ok else "FAILED]"
-    body = obs.get("detail") or obs.get("content") or obs.get("error") or ""
+    prefer_content = action.name in INFORMATION_ACTIONS
+    body = (obs.get("content") or obs.get("detail") or obs.get("error") or ""
+            if prefer_content else obs.get("detail") or obs.get("content") or obs.get("error") or "")
+    body_limit = _MAX_READ_CHARS if prefer_content else _MAX_OBS_CHARS
     scope = ""
     read_range = obs.get("read_range")
     if action.name == "read_file" and ok and isinstance(read_range, dict):
@@ -370,9 +387,14 @@ def _format_observation(action: Action, obs: dict[str, Any]) -> str:
             f"[read_file lines {read_range['start_line']}-{read_range['end_line']} "
             f"of {read_range['total_lines']}]\n"
         )
-    rendered = render_model_observation(obs, max_body_chars=_MAX_OBS_CHARS)
+    source_hash = obs.get("read_source_sha256")
+    if action.name == "read_file" and isinstance(source_hash, str) and re.fullmatch(r"[a-f0-9]{64}", source_hash):
+        scope += f"[source sha256: {source_hash}]\n"
+    rendered = render_model_observation(
+        obs, max_body_chars=body_limit, prefer_content=prefer_content,
+    )
     if action.name == "read_file" and ok and (
-        len(str(body)) > _MAX_OBS_CHARS
+        len(str(body)) > body_limit
         or (isinstance(read_range, dict) and read_range.get("truncated"))
     ):
         rendered += (
@@ -658,6 +680,7 @@ async def run_agent_build(
             on_progress=segment_progress,
             edit_deadline=edit_deadline, continuation=continuation,
             source_repair=source_repair,
+            discovery_history=transcript,
             report_managed_build_gap=report_managed_build_gap,
             reserve_full_provider_window=reserve_full_provider_window,
             bounded_repair=bounded_repair,
@@ -758,6 +781,7 @@ async def _run_agent_segment(
     reserve_full_provider_window: bool = False,
     bounded_repair: bool = False,
     allow_filtered_source_handoff: bool = False,
+    discovery_history: list[dict[str, Any]] | None = None,
 ) -> AgentResult:
     """Drive the plan→act→observe loop until the model says done or budget hits.
 
@@ -786,7 +810,9 @@ async def _run_agent_segment(
     stalls = 0
     last_sig = ""
     repeat_count = 0
-    no_write_streak = 0  # consecutive actions that wrote nothing (cycle breaker)
+    # Useful new information prevents an exploration stall; it never earns
+    # source-change, FAST_CHECK, runtime, continuation or completion authority.
+    no_write_streak = 0
     infra_dead_streak = 0  # consecutive tool ops that died on infra (container gone)
     sig_seen: dict[str, int] = {}  # executed non-consecutive action signatures
     blocked_cycles: dict[str, int] = {}  # denied repeat attempts keep the existing bound
@@ -866,8 +892,9 @@ async def _run_agent_segment(
     # The executor can synchronize physical source during build without returning
     # obs.files. Reuse its latest post-action snapshot, never the write inventory.
     completion_inventory = None
-    if (saved_frame is not None and snapshot_files is not None
-            and (completion_check is not None or source_repair.context_path is not None)):
+    if snapshot_files is not None and (saved_frame is not None or discovery_history):
+        # A cold/next-segment call must validate retained readings before they
+        # reach a new provider request, not only after its first tool execution.
         completion_inventory = dict(await snapshot_files())
 
     async def _step_result(
@@ -899,13 +926,17 @@ async def _run_agent_segment(
         nonlocal no_write_streak
         no_write_streak += 1
         await _step_result(action, step, skipped=reason)
+        previous = cached_information(
+            action, [*(discovery_history or []), *convo], parse_action,
+            source_files=completion_inventory,
+        ) if action.name in INFORMATION_ACTIONS else ""
+        feedback = _format_observation(action, {"ok": None, "skipped": True, "detail": reason})
+        if previous:
+            feedback += "\nPREVIOUS EXECUTED RESULT (not a new tool execution):\n" + previous
         convo.append(
             {
                 "role": "user",
-                "content": _format_observation(
-                    action,
-                    {"ok": None, "skipped": True, "detail": reason},
-                ),
+                "content": feedback,
             }
         )
 
@@ -966,8 +997,10 @@ async def _run_agent_segment(
             )
         elif green and coordinator_handoff:
             nudge = (
-                "FAST_CHECK is current and clean. Call done to HAND OFF to the "
-                "server coordinator; do not rewrite source for deferred runtime proof."
+                "FAST_CHECK is current and clean; it proves compilation, not completion "
+                "of the owner's scenarios. Finish any concrete missing requested behavior "
+                "or prepared screen state, then recheck changed source. If the requested "
+                "work is complete, call done to hand off deferred runtime checks."
             )
         elif green:
             nudge = _DONE_WHEN_GREEN_NUDGE
@@ -1175,7 +1208,9 @@ async def _run_agent_segment(
             call_msgs = saved_frame.call_messages
             repair_max_tokens = saved_frame.repair_max_tokens
         else:
-            call_msgs = _window_messages(convo)
+            call_msgs = _window_messages(
+                convo, discovery_history=discovery_history, source_files=completion_inventory,
+            )
             focused_repair = False
             if source_repair.context_path is not None:
                 # Pin one exact, current source quotation outside the observation clip.
@@ -1769,9 +1804,10 @@ async def _run_agent_segment(
                 )
                 convo.append({"role": "user", "content": _BUILD_PRESSURE_NUDGE})
                 continue  # build once before piling on more files
-        elif not repair_read and action.name not in _VERIFY_ACTIONS and no_write_streak >= (
+        elif (not repair_read and action.name not in _VERIFY_ACTIONS | INFORMATION_ACTIONS
+              and no_write_streak >= (
             _EDIT_NO_WRITE_NUDGE_AT if edit_mode else _NO_WRITE_NUDGE_AT
-        ):
+        )):
             # The threshold-producing action ran on the previous turn. Its real
             # observation is already visible; only further discovery is paused.
             await _skip_action(action, step, "No source progress; discovery paused")
@@ -1862,6 +1898,14 @@ async def _run_agent_segment(
         if action.name == "build":
             # Consume the allowance even on red builds; no extra model/retry budget.
             pending_source_build = False
+        if action.name == "read_file" and obs.get("ok") is True and source_after is not None:
+            read_source = source_after.get(_safe_file_path(action.path) or "")
+            if isinstance(read_source, str):
+                obs = {**obs, "read_source_sha256": hashlib.sha256(read_source.encode()).hexdigest()}
+        observation = _format_observation(action, obs)
+        useful_read = obs.get("ok") is True and new_information(
+            action, observation, [*(discovery_history or []), *convo], parse_action,
+        )
         if changed_source_paths and obs.get("ok") is True:
             no_write_streak = 0
             source_repair.clear_context()
@@ -1872,6 +1916,8 @@ async def _run_agent_segment(
                     if path in paths_since_build:
                         rewrites_since_build += 1
                     paths_since_build.add(path)
+        elif useful_read:
+            no_write_streak = 0
         else:
             no_write_streak += 1
         for path in changed_source_paths:
@@ -1963,7 +2009,6 @@ async def _run_agent_segment(
             or (action.name == "bash" and obs.get("environment_mutated") is not False)
         ):
             fast_check_fresh = False
-        observation = _format_observation(action, obs)
         managed_gap, repeated_managed_gap = None, False
         if action.name == "build" and _can_check_source_completion():
             source_gap = _source_completion_gap() if fast_check_fresh else None
@@ -2024,11 +2069,9 @@ async def _run_agent_segment(
 # instead of grinding the full step budget (2026-07-08 incident).
 _INFRA_DEAD_ABORT_AT = 3
 
-# Cycle breaker thresholds (no-WRITE streak): after this many consecutive actions
-# that write nothing (read_file/grep/list_dir/build), nudge HARD to write; after the
-# abort threshold, give up exploring rather than burn the whole step budget. A real
-# build writes within a few reads (the seed context is handed up-front), so a long
-# read-only streak is always a stall, never legitimate orientation.
+# Cycle breaker thresholds for actions yielding neither real source changes nor
+# new useful information. Fresh SDK reads can be legitimate orientation; only
+# verified source changes earn write/check/continuation authority.
 _NO_WRITE_NUDGE_AT = 5
 _NO_WRITE_ABORT_AT = 14
 _MANAGED_SOURCE_REJECTION_LIMIT = 3
@@ -2064,10 +2107,12 @@ _NO_ACTION_ABORT_AT = 4
 # nothing left to build, the model is just thrashing after success. Push it to
 # finish rather than invent more work.
 _DONE_WHEN_GREEN_NUDGE = (
-    "STOP — the build is CLEAN and the main route already renders (verified). The "
-    "app is DONE. Do NOT run more bash / build / reads. Call "
-    '<omnia:action name="done">{"summary": "what you built"}</omnia:action> NOW. '
-    "Preserve the verified working result."
+    "The build is CLEAN and the checked route renders. These are engineering "
+    "checks, not evidence that every requested scenario is finished. Preserve "
+    "working behavior; implement any concrete remaining owner requirement or "
+    "prepared screen state and verify changes. If the requested work is complete, "
+    'call <omnia:action name="done">{"summary": "what you built"}</omnia:action>. '
+    "Do not repeat an unchanged check without a new question."
 )
 
 _REPEAT_CYCLE_NUDGE = (
@@ -2075,7 +2120,7 @@ _REPEAT_CYCLE_NUDGE = (
     "content, or the same command); repeating it changes NOTHING and the build is "
     "not advancing. The file is already written. Move to the NEXT unfinished step: "
     "write a still-MISSING page/file, fix the specific build error you were shown, "
-    "or — if the build is clean and every screen exists — call done. Never re-write "
+    "or — if the request is implemented and checks are clean — call done. Never re-write "
     "a file with the same content you already wrote."
 )
 
@@ -2085,16 +2130,19 @@ _BUILD_PRESSURE_NUDGE = (
     "churns forever and never finishes (you keep tweaking blind instead of letting "
     "the typecheck tell you what is actually wrong). Your VERY NEXT action MUST be "
     '<omnia:action name="build">{}</omnia:action>. Read the REAL errors it returns, '
-    "fix the specific file/line it names, and once the build is clean call done. Do "
+    "fix the specific file/line it names. Once the request is implemented and "
+    "the final checks are clean, call done. Do "
     "NOT rewrite a file you already wrote before you have run build."
 )
 
 _EXPLORE_STALL_NUDGE = (
-    "Discovery is paused because no source changed. Use the real compiler "
-    "diagnostic and the current task: fix the named file, or create the next "
+    "Recent actions supplied neither changed source nor new useful information. "
+    "Use the retained real SDK/source results and the current task: fix the named "
+    "diagnostic, implement the next concrete requirement, or create its "
     "required page and its dependencies. Do not assume a component, user field "
-    "or schema column exists. Implement any needed component before importing it. "
-    "Then run build after the last change; when the source is complete, call done."
+    "or schema column exists. A targeted new read of missing information is allowed; "
+    "do not repeat unchanged requests. Build after the last change; call done "
+    "when the requested behavior and checks are complete."
 )
 
 # Edit-mode nudges. The build nudges above name ENTITY primitives (CrudResource,
@@ -2107,12 +2155,11 @@ _EXPLORE_STALL_NUDGE = (
 _EDIT_NO_WRITE_NUDGE_AT = 3
 
 _EDIT_EXPLORE_STALL_NUDGE = (
-    "STOP READING. You have already located the code for this change — that is "
-    "ENOUGH. Do NOT read_file / grep / list_dir / bash again. Your VERY NEXT action "
-    "MUST be edit_file or write_file that implements the requested change (add the "
-    "UI control, wire the call, fix the handler — whatever was asked). After "
-    "writing, run build; when it is clean, call done. Emitting the file patch is "
-    "the ONLY way to apply the edit — another read applies nothing."
+    "Recent actions did not advance this edit. Reuse retained source and SDK "
+    "results; read a missing exact signature or edit context if needed rather "
+    "than guessing it. Implement the requested change with a focused patch, "
+    "preserve working features and data, then build. Call done when the requested "
+    "behavior and checks are complete. Repeating unchanged exploration is not progress."
 )
 
 _EDIT_REPEAT_CYCLE_NUDGE = (

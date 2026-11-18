@@ -28,6 +28,8 @@ class PortableGuideExecutor(Protocol):
 
 MAX_COORDINATOR_HANDOFF = (
     "COORDINATOR HANDOFF: Finish the requested source changes and applicable local tests. "
+    "For requested UI work, connect the planned screens, navigation and real data/actions; "
+    "file presence or a green build alone does not complete that interface. "
     "Use build to run FAST_CHECK after the last source change and fix concrete errors. "
     "With complete source and a fresh green FAST_CHECK, call done to hand off the candidate. "
     "The server coordinator launches the candidate and owns full build, signed runtime proof "
@@ -202,6 +204,9 @@ authenticated identity or query changes, and ignore stale in-flight responses
 from the previous key.
 
 Create the requested UI, behavior, navigation and real failure/empty states.
+For a first visit, use the absence of real user records to explain the requested
+next action, not to fabricate progress or fill a dashboard with empty charts.
+Keep explicitly blank, static and API-only requests within their requested scope.
 Before editing an existing app, trace its actual entry route through the components
 it imports and renders. Connect new UI and actions to that reachable route and
 navigation; an unused component does not deliver the feature. Preserve existing

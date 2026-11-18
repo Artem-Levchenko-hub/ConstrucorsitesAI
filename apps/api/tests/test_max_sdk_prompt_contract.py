@@ -69,14 +69,21 @@ async def test_provider_request_contains_one_managed_sdk_contract(monkeypatch, m
     assert len(captured) == 1
     prompt = captured[0]
     assert prompt.count("MAX MANAGED SDK CONTRACT") == 1
+    delivered = " ".join(prompt.split())
     for required in (
         "profile.app_name", "item.title", "useYleumCatalogSelection",
         "createManagedOrder", "createManagedLead", "createManagedBooking",
         "loadPendingManagedIntent(resource)", "getManagedRecords(resource,{limit,cursor})",
         "explicit recovery action", "original operationKey", "empty cart",
         "quote_changed", "intent_storage_unavailable", "current customer's records",
+        "CSS Modules or product-scoped class names", "Tailwind's .ring",
+        "absent personal data from measured zero progress",
+        "successful empty read", "explicitly blank, static or API-only scope",
+        "Order creation, payment and fulfillment are separate states",
+        "return URL or browser redirect is not payment confirmation",
+        "only a verified succeeded payment", "Never create another order",
     ):
-        assert required in prompt, required
+        assert required in delivered, required
 
 
 def test_real_sdk_field_contract_typechecks_without_a_prescribed_jsx_tree(tmp_path):

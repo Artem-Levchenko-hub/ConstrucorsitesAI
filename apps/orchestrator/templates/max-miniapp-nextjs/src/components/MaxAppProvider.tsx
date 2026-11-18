@@ -298,7 +298,33 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
   }), [snapshot.principal, snapshot.checking, user, error, previewOrigins]);
   const blocked = snapshot.checking || !!error || !snapshot.principal;
   return (
-    <MaxUI platform={appearance.platform} colorScheme={appearance.colorScheme}>
+    <MaxUI platform={appearance.platform} colorScheme={appearance.colorScheme}
+      className="yleum-max-ui-font">
+      {/* MAX UI 0.2.0 owns its root and control font declarations. Bridge only
+          their families to the product; leave sizes, appearance and roles intact. */}
+      <style>{`
+        .yleum-max-ui-font.yleum-max-ui-font {
+          font-family: inherit;
+          --font: var(--font-body, inherit);
+          --family-base: var(--font-body, inherit);
+          --family-accent: var(--font-display, var(--font-body, inherit));
+        }
+        .yleum-max-ui-font :where(h1, h2, h3, h4, h5, h6) {
+          --font: var(--font-display, var(--font-body, inherit));
+          --family-base: var(--font-display, var(--font-body, inherit));
+          --family-accent: var(--font-display, var(--font-body, inherit));
+        }
+        .yleum-max-ui-font :where(button, input, select, textarea, [role="button"], a[href]) {
+          --font: var(--font-ui, var(--font-body, inherit));
+          --family-base: var(--font-ui, var(--font-body, inherit));
+          --family-accent: var(--font-ui, var(--font-body, inherit));
+        }
+        @layer base {
+          .yleum-max-ui-font :where(button, input, select, textarea, [role="button"], a[href]) {
+            font-family: var(--font-ui, inherit);
+          }
+        }
+      `}</style>
       <MaxContext.Provider value={value}>
         {blocked && (
           <AuthScreen error={error} onRetry={() => void authenticate()} />

@@ -340,7 +340,10 @@ async def test_first_build_at_hard_exploration_limit_requires_real_source_delta(
             except SyntaxError:
                 return {"ok": False, "detail": "source syntax error"}
             return {"ok": True, "detail": "compiled current source"}
-        return {"ok": True, "content": "context"}
+        # These failed reads yield no useful information, so the existing hard
+        # non-progress bound still applies. Fresh successful reads are tested
+        # separately and must not be mistaken for stalled exploration.
+        return {"ok": False, "error": "missing context file"}
 
     result = await ab.run_agent_build(
         system_prompt="sys", user_prompt="edit", model="test", complete=complete,

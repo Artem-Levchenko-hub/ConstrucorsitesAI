@@ -2,9 +2,9 @@
 
 Dependency-injected (`complete` + `execute`), so these run with zero network /
 container. The fake `complete` records which model each step was issued on and
-returns a read action with a FRESH path each call — so no consecutive/cycle
-repeat fires, the no-write streak climbs, and the explore nudge (and thus the
-escalation) is what we exercise.
+returns a read action with a fresh path each call. Failed reads provide no new
+information and exercise the exploration nudge; successful new readings must
+not cause an unnecessary model upgrade.
 
 Run:  cd apps/api && uv run pytest tests/test_agent_escalation.py -q
 """
@@ -21,6 +21,11 @@ from yleum_api.services import agent_builder as ab
 
 async def _ok_executor(action: ab.Action) -> dict:
     return {"ok": True, "content": "x"}
+
+
+async def _failed_read_executor(action: ab.Action) -> dict:
+    assert action.name == "read_file"
+    return {"ok": False, "error": "file unavailable"}
 
 
 def _recording_complete(models: list[str]):
@@ -47,7 +52,7 @@ def test_escalates_to_strong_model_after_stall_nudge():
             user_prompt="u",
             model="cheap",
             escalate_model="strong",
-            execute=_ok_executor,
+            execute=_failed_read_executor,
             complete=_recording_complete(models),
             max_steps=8,
         )
@@ -67,7 +72,7 @@ def test_escalates_at_most_once():
             user_prompt="u",
             model="cheap",
             escalate_model="strong",
-            execute=_ok_executor,
+            execute=_failed_read_executor,
             complete=_recording_complete(models),
             max_steps=10,
         )
@@ -75,6 +80,17 @@ def test_escalates_at_most_once():
     first_strong = models.index("strong")
     # Once switched, it never flips back to cheap.
     assert all(m == "strong" for m in models[first_strong:])
+
+
+def test_useful_new_readings_do_not_trigger_model_upgrade():
+    models: list[str] = []
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="u", model="cheap", escalate_model="strong",
+        execute=_ok_executor, complete=_recording_complete(models), max_steps=8,
+        ship_green_on_abort=False,
+    ))
+    assert models == ["cheap"] * 8
+    assert not result.done and result.stop_reason == "max_steps"
 
 
 def test_no_escalation_when_escalate_model_none():

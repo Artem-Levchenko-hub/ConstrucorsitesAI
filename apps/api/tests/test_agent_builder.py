@@ -23,13 +23,13 @@ def test_read_observation_identifies_range_and_how_to_recover_truncated_source()
     action = ab.Action("read_file", {"path": "src/lib/omnia/integration-client.ts"})
     observation = ab._format_observation(action, {
         "ok": True,
-        "content": "x" * (ab._MAX_OBS_CHARS + 40),
+        "content": "x" * (ab._MAX_READ_CHARS + 40),
         "read_range": {"start_line": 1, "end_line": 450, "total_lines": 450, "truncated": False},
     })
     assert "lines 1-450 of 450" in observation
     assert "start_line" in observation and "end_line" in observation
     assert "truncated" in observation
-    assert len(observation) < ab._MAX_OBS_CHARS + 500
+    assert len(observation) < ab._MAX_READ_CHARS + 500
 
 
 def test_ranged_read_observation_preserves_complete_sdk_signature():
@@ -1034,10 +1034,10 @@ def test_source_repair_nudge_does_not_claim_green_source_is_ready():
         *_repair_prelude(), _repair_action("list_dir", path="src/app"),
     ])
     assert not result.done
-    last_message = result.transcript[-1]["content"]
-    assert "Connect catalog items." in last_message
-    assert "write_file" in last_message and "edit_file" in last_message
-    assert "Call done to HAND OFF" not in last_message
+    messages = [str(turn["content"]) for turn in result.transcript if turn["role"] == "user"]
+    assert any("NOT DONE YET" in message and "Connect catalog items." in message
+               for message in messages)
+    assert not any("Call done to HAND OFF" in message for message in messages)
 
 
 @pytest.mark.parametrize("read_ok", [True, False])
@@ -1230,9 +1230,10 @@ def test_source_repair_repeated_semantic_done_consumes_existing_no_progress_limi
     ])
     assert not result.done and result.stop_reason == "exploring"
     assert result.steps < len(_repair_prelude()) + 30
-    assert len([event for event in events if event["action"] == "done"]) == (
-        ab._NO_WRITE_ABORT_AT - 5
-    )
+    # One genuinely new documentation result is information, not a source fix.
+    # Rejected completion claims still consume a finite non-progress allowance.
+    rejections = [event for event in events if event["action"] == "done"]
+    assert 1 <= len(rejections) <= ab._NO_WRITE_ABORT_AT
     assert len(executed) == 6  # Initial write, four discoveries, one build; no hidden tools.
 
 
@@ -1549,7 +1550,7 @@ def test_coordinator_handoff_never_rescues_a_stale_fast_check(mutation):
     assert not result.done and not result.needs_finalization
 
 
-def test_coordinator_handoff_nudges_done_after_read_only_exploration():
+def test_coordinator_does_not_force_done_after_useful_read_only_exploration():
     result = asyncio.run(ab.run_agent_build(
         system_prompt="s", user_prompt="x", model="m", execute=_ok_executor([]),
         complete=_scripted([
@@ -1560,7 +1561,9 @@ def test_coordinator_handoff_nudges_done_after_read_only_exploration():
         ]), max_steps=7, require_green_before_done=True, coordinator_handoff=True,
     ))
     assert result.done and result.needs_finalization
-    assert any("HAND OFF" in item["content"] for item in result.transcript)
+    assert not any("The app is DONE" in item["content"] for item in result.transcript)
+    assert len([turn for turn in result.transcript
+                if turn["content"].startswith("[observation: read_file")]) == 5
 
 
 @pytest.mark.parametrize("call_done", [True, False])

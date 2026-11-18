@@ -1,0 +1,311 @@
+"""Real injected legacy loops: useful discovery survives without minting proof."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+
+import pytest
+
+from yleum_api.services import agent_builder as ab
+from yleum_api.services.agent_discovery_context import (
+    MAX_RETAINED_CONTEXT_CHARS,
+    cached_information,
+    new_information,
+    retained_information,
+)
+
+
+def call(name, **args):
+    return f'<omnia:action name="{name}">{json.dumps(args)}</omnia:action>'
+
+
+def turns(name, body, **args):
+    tool = ab.Action(name, args)
+    obs = {"ok": True, "content": body}
+    if name == "read_file":
+        obs["read_source_sha256"] = hashlib.sha256(body.encode()).hexdigest()
+    return [
+        {"role": "assistant", "content": call(name, **args)},
+        {"role": "user", "content": ab._format_observation(tool, obs)},
+    ]
+
+
+@pytest.mark.parametrize("tool", ["docs", "provider_docs", "read_file"])
+def test_information_delivers_real_content_and_tail_beyond_old_6000(tool):
+    content = "export type SDK = string;\n" + "x" * 9000 + "\nACTUAL_SDK_TAIL"
+    result = ab._format_observation(
+        ab.Action(tool, {"path": "sdk.ts"}),
+        {
+            "ok": True,
+            "detail": "Found SDK documentation",
+            "content": content,
+        },
+    )
+    assert content in result
+    assert "ACTUAL_SDK_TAIL" in result
+    assert "Found SDK documentation" not in result
+
+
+def test_window_preserves_initial_request_and_exact_sdk_after_recent_turns_leave():
+    history = [{"role": "system", "content": "rules"}, {"role": "user", "content": "owner plan"}]
+    history += turns("read_file", "export function buy(id: string): PaidReceipt;", path="sdk.ts")
+    for i in range(10):
+        history += [
+            {"role": "assistant", "content": f"reasoning {i}"},
+            {"role": "user", "content": f"event {i}"},
+        ]
+    original = json.dumps(history)
+    window = ab._window_messages(history)
+    assert window[:2] == history[:2]
+    assert "export function buy(id: string): PaidReceipt;" in str(window)
+    assert window[-12:] == history[-12:]
+    assert json.dumps(history) == original
+
+
+def test_current_hash_preserves_unchanged_sdk_after_build_and_rejects_side_effect_change():
+    history = turns("read_file", "old SDK", path="sdk.ts") + turns("build", "compiled")
+    old = retained_information(
+        history, ab.parse_action, recent_messages=0, source_files={"sdk.ts": "old SDK"}
+    )
+    changed = retained_information(
+        history, ab.parse_action, recent_messages=0, source_files={"sdk.ts": "new SDK"}
+    )
+    assert "old SDK" in old
+    assert "old SDK" not in changed
+
+
+def test_hashless_historical_read_is_not_a_current_source_witness():
+    history = [
+        {"role": "assistant", "content": call("read_file", path="sdk.ts")},
+        {"role": "user", "content": "[observation: read_file sdk.ts OK]\nOLD_SIGNATURE"},
+    ]
+    source = {"sdk.ts": "NEW_SIGNATURE"}
+    assert "OLD_SIGNATURE" not in retained_information(
+        history,
+        ab.parse_action,
+        recent_messages=0,
+        source_files=source,
+    )
+    assert (
+        cached_information(
+            ab.Action("read_file", {"path": "sdk.ts"}),
+            history,
+            ab.parse_action,
+            source_files=source,
+        )
+        == ""
+    )
+
+
+@pytest.mark.asyncio
+async def test_next_segment_checks_current_source_before_first_new_provider_call():
+    order = []
+    prior = turns("read_file", "OLD_SIGNATURE", path="sdk.ts")
+    prior += turns("docs", "SDK_DOCUMENTATION", q="SDK")
+
+    async def snapshot():
+        order.append("snapshot")
+        return {"sdk.ts": "NEW_SIGNATURE"}
+
+    async def complete(messages, *_args, **_kwargs):
+        order.append("provider")
+        assert "OLD_SIGNATURE" not in str(messages)
+        assert "SDK_DOCUMENTATION" in str(messages)
+        assert messages[1]["content"] == "owner request"
+        return call("done")
+
+    async def execute(_tool):
+        raise AssertionError("no tool required")
+
+    await ab._run_agent_segment(
+        system_prompt="rules",
+        user_prompt="owner request",
+        model="fixture",
+        execute=execute,
+        complete=complete,
+        snapshot_files=snapshot,
+        discovery_history=prior,
+        max_steps=1,
+    )
+    assert order == ["snapshot", "provider"]
+
+
+@pytest.mark.parametrize(
+    "mutation,path", [("write_file", "./sdk.ts"), ("edit_file", "sdk.ts"), ("bash", "")]
+)
+def test_unknown_mutation_invalidates_source_aliases_but_not_external_docs(mutation, path):
+    history = turns("read_file", "old signature", path="sdk.ts")
+    history += turns("docs", "official SDK guide", q="sdk")
+    history += turns(mutation, "changed", path=path)
+    context = retained_information(history, ab.parse_action, recent_messages=0)
+    assert "old signature" not in context
+    assert "official SDK guide" in context
+
+
+def test_failed_mutation_does_not_make_identical_read_new_information():
+    read = ab.Action("read_file", {"path": "sdk.ts"})
+    previous = turns("read_file", "same SDK", path="sdk.ts")
+    previous += [
+        {
+            "role": "assistant",
+            "content": call("edit_file", path="sdk.ts", search="absent", replace="x"),
+        },
+        {"role": "user", "content": "[observation: edit_file sdk.ts FAILED]\nexact edit mismatch"},
+    ]
+    assert not new_information(
+        read, turns("read_file", "same SDK", path="sdk.ts")[1]["content"], previous, ab.parse_action
+    )
+    assert cached_information(read, previous, ab.parse_action) == ""
+
+
+def test_memory_is_bounded_explicit_and_redacted():
+    history = []
+    for i in range(7):
+        history += turns("docs", f"guide {i}: " + "x" * 15_000 + " sk-" + "s" * 32, q=str(i))
+    result = retained_information(history, ab.parse_action, recent_messages=0)
+    assert len(result) < MAX_RETAINED_CONTEXT_CHARS + 1000
+    assert "older result(s)" in result and "targeted new read is permitted" in result
+    assert "sk-" not in result
+
+
+@pytest.mark.asyncio
+async def test_eight_fresh_reads_allow_implementation_without_false_source_progress():
+    state = {
+        **{f"sdk{i}.ts": f"export type SDK{i} = string;" for i in range(8)},
+        "page.tsx": "before",
+    }
+    replies = iter(
+        [
+            *[call("read_file", path=f"sdk{i}.ts") for i in range(8)],
+            call("write_file", path="page.tsx", content="after"),
+            call("build"),
+            call("done"),
+        ]
+    )
+    seen, executed, progress = [], [], []
+
+    async def complete(messages, *_args, **_kwargs):
+        seen.append(messages)
+        return next(replies)
+
+    async def execute(tool):
+        executed.append(tool.name)
+        if tool.name == "write_file":
+            state[tool.path] = tool.args["content"]
+        return {"ok": True, "content": state.get(tool.path, "compiled")}
+
+    async def snapshot():
+        return dict(state)
+
+    async def checkpoint(result):
+        progress.append(result)
+
+    result = await ab.run_agent_build(
+        system_prompt="rules",
+        user_prompt="owner plan",
+        model="fixture",
+        execute=execute,
+        complete=complete,
+        snapshot_files=snapshot,
+        coordinator_handoff=True,
+        checkpoint=checkpoint,
+        max_steps=11,
+        ship_green_on_abort=False,
+    )
+    assert executed[:8] == ["read_file"] * 8
+    assert result.done and state["page.tsx"] == "after"
+    assert len(progress) == 1 and progress[0].files == {"page.tsx": "after"}
+    assert "export type SDK0 = string;" in str(seen[-1])
+    assert not any("discovery paused" in str(message) for message in seen)
+
+
+@pytest.mark.asyncio
+async def test_fresh_information_cannot_authorize_unchanged_edit_or_finalization():
+    replies = iter(
+        [*[call("read_file", path=f"sdk{i}.ts") for i in range(8)], call("build"), call("done")]
+    )
+    executed = []
+
+    async def complete(*_args, **_kwargs):
+        return next(replies, call("done"))
+
+    async def execute(tool):
+        executed.append(tool.name)
+        return {"ok": True, "content": "information from " + tool.path}
+
+    result = await ab.run_agent_build(
+        system_prompt="rules",
+        user_prompt="edit",
+        model="fixture",
+        execute=execute,
+        complete=complete,
+        edit_source_changed=lambda: False,
+        coordinator_handoff=True,
+        max_steps=25,
+        ship_green_on_abort=False,
+    )
+    assert executed == ["read_file"] * 8
+    assert not result.done and not result.needs_finalization
+    assert result.stop_reason == "no_progress"
+
+
+@pytest.mark.asyncio
+async def test_blocked_duplicate_returns_real_previous_result_without_another_tool_call():
+    state = {"sdk.ts": "export type ImportantSDK = string;", "page.tsx": "before"}
+    replies = iter(
+        [
+            *[call("read_file", path="sdk.ts") for _ in range(3)],
+            call("write_file", path="page.tsx", content="after"),
+            call("build"),
+            call("done"),
+        ]
+    )
+    messages, reads = [], []
+
+    async def complete(current, *_args, **_kwargs):
+        messages.append(current)
+        return next(replies)
+
+    async def execute(tool):
+        if tool.name == "read_file":
+            reads.append(tool.path)
+        if tool.name == "write_file":
+            state[tool.path] = tool.args["content"]
+        return {"ok": True, "content": state.get(tool.path, "compiled")}
+
+    async def snapshot():
+        return dict(state)
+
+    result = await ab.run_agent_build(
+        system_prompt="rules",
+        user_prompt="build",
+        model="fixture",
+        execute=execute,
+        complete=complete,
+        snapshot_files=snapshot,
+        coordinator_handoff=True,
+        max_steps=6,
+        ship_green_on_abort=False,
+    )
+    assert result.done and len(reads) == 2
+    assert "PREVIOUS EXECUTED RESULT" in str(messages[3])
+    assert "export type ImportantSDK = string;" in str(messages[3])
+
+
+def test_prior_segment_discovery_survives_with_exact_original_task():
+    prior = turns("docs", "exact useful SDK documentation", q="sdk")
+    current = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "original complete plan"},
+    ]
+    window = ab._window_messages(current, discovery_history=prior)
+    assert window[:2] == current
+    assert "exact useful SDK documentation" in str(window)
+
+
+def test_progress_notes_do_not_restrict_valid_design_work_to_compiler_errors():
+    note = ab._progress_note({"page.tsx": "source"}, True)
+    assert "unfinished requirement" in note and "design improvement" in note
+    assert "not requested behavior" in note
+    assert "Only touch one" not in note
