@@ -11,10 +11,10 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { connectAppIntegration, getIntegrationCatalog } from "@/lib/api/app-integrations";
 import { describeApiError } from "@/lib/api/errors";
-import { saveLandingPrompt, takeLandingPrompt } from "@/lib/landing-prompt";
+import { peekLandingPrompt, takeLandingPrompt } from "@/lib/landing-prompt";
 import { createProject, listProjects } from "@/lib/api/projects";
-import type { ManagementModule, MaxContentItem } from "@/lib/api/types";
-import { MAX_DEFAULT_SUMMARY, briefManagementModuleOptOuts, buildMaxProjectPrompt, defaultManagementModules, newProjectManagementModules, selectedMaxAppTypes, serializeMaxProjectFeatures, type MaxAppTypeId, type MaxFeature, type MaxProjectBrief } from "@/lib/max-brief";
+import { MAX_DEFAULT_SUMMARY, availableManagementModules, briefManagementModuleOptOuts, buildMaxProjectPrompt, newProjectManagementModules, selectedMaxAppTypes, serializeMaxProjectFeatures, type MaxProjectBrief } from "@/lib/max-brief";
+import { completeMaxProjectDraft, emptyMaxProjectDraft, readMaxProjectDraft, replaceMaxProjectDraft, saveMaxProjectDraft, startMaxProjectDraft, type MaxProjectDraft } from "@/lib/max-project-draft";
 import { containsChatSecret, resolveChatCredential } from "@/lib/max-chat-credentials";
 import { extractInitialCatalog } from "@/lib/max-catalog-brief";
 import { newMaxContentItem } from "@/lib/max-catalog";
@@ -31,9 +31,12 @@ import { MaxProjectWizard } from "./MaxProjectWizard";
 import { MaxInitialCatalog } from "./MaxInitialCatalog";
 import "./max-studio.css";
 
-const STARTER_FEATURES: MaxFeature[] = ["Профиль пользователя", "История действий"];
-
 export function MaxStudio({ email }: { email: string }) {
+  // A changed authenticated owner gets a distinct in-memory and durable draft.
+  return <OwnedMaxStudio key={email.trim().toLowerCase()} email={email} />;
+}
+
+function OwnedMaxStudio({ email }: { email: string }) {
   const router = useRouter();
   const quota = useOwnerChatQuota();
   const qc = useQueryClient();
@@ -41,47 +44,58 @@ export function MaxStudio({ email }: { email: string }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [search, setSearch] = useState("");
   const searchField = useRef<HTMLInputElement>(null);
-  const [name, setName] = useState("");
-  const [idea, setIdea] = useState("");
-
-  const [appTypes, setAppTypes] = useState<MaxAppTypeId[]>(["loyalty"]);
+  const [draft, setDraft] = useState<MaxProjectDraft>(emptyMaxProjectDraft);
+  const draftRef = useRef(draft);
+  const completedDraft = useRef(false);
+  const mounted = useRef(false);
+  const [draftReady, setDraftReady] = useState(false);
+  const [draftStorageFailed, setDraftStorageFailed] = useState(false);
+  const { name, idea, appTypes, audience, primaryAction, features, brandColors, managementModules,
+    managementModuleOptOuts, catalogDraft } = draft;
   const appType = appTypes[0];
-  const [audience, setAudience] = useState("");
-  const [primaryAction, setPrimaryAction] = useState("");
-  const [features, setFeatures] = useState<MaxFeature[]>(STARTER_FEATURES);
-  const [brandColors, setBrandColors] = useState("");
-  const [managementModules, setManagementModules] = useState<ManagementModule[]>(() => defaultManagementModules("loyalty"));
-  const [managementModuleOptOuts, setManagementModuleOptOuts] = useState<ManagementModule[]>([]);
   const safeCatalogIdea = useMemo(() => publicMaxBriefText(idea), [idea]);
   const moduleOptOuts = [...new Set([...managementModuleOptOuts, ...briefManagementModuleOptOuts(safeCatalogIdea)])];
   const modules = newProjectManagementModules(appType, managementModules, appTypes, moduleOptOuts);
+  const availableModules = availableManagementModules(moduleOptOuts);
   const hasCatalog = modules.includes("catalog");
   const proposedCatalog = useMemo(() => {
     const result = extractInitialCatalog(safeCatalogIdea);
     return { ...result, items: result.items.map(item => ({ ...newMaxContentItem(), ...item })) };
   }, [safeCatalogIdea]);
-  const [catalogDraft, setCatalogDraft] = useState<{ source: string; items: MaxContentItem[]; tooManyItems: boolean } | null>(null);
   const initialContent = catalogDraft?.items ?? proposedCatalog.items;
   const tooManyItems = catalogDraft?.tooManyItems ?? proposedCatalog.tooManyItems;
   const catalogError = hasCatalog ? initialCatalogError(publicInitialCatalog(initialContent), tooManyItems) : null;
 
   const projects = useQuery({ queryKey: learning ? ["projects", learning.userKey] : ["projects"], queryFn: listProjects });
   const allMaxProjects = useMemo(() => (projects.data ?? []).filter(project => project.template === "max_miniapp"), [projects.data]);
-  // Открытие мастера переносит черновик один раз и не создаёт проект.
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  function updateDraft(patch: Partial<MaxProjectDraft>) {
+    if (completedDraft.current) return;
+    const next = { ...draftRef.current, ...patch };
+    draftRef.current = next;
+    setDraft(next);
+    setDraftStorageFailed(!saveMaxProjectDraft(email, next));
+  }
+
+  // Persist the destination before consuming the registration handoff. Strict
+  // mode cleanup only cancels the frame; it never consumes or rewrites the draft.
   useEffect(() => {
-    const pending = takeLandingPrompt();
-    if (!pending) return;
-    let applied = false;
+    const saved = readMaxProjectDraft(email);
+    const pending = saved ? null : peekLandingPrompt();
+    const next = saved ?? { ...draftRef.current, ...(pending ? { idea: pending } : {}) };
     const frame = window.requestAnimationFrame(() => {
-      applied = true;
-      setIdea(pending);
-      setDialogOpen(true);
+      draftRef.current = next;
+      setDraft(next);
+      if (pending) {
+        const persisted = startMaxProjectDraft(email, next);
+        setDraftStorageFailed(!persisted);
+        if (persisted && peekLandingPrompt() === pending) takeLandingPrompt();
+      }
+      setDialogOpen(Boolean(saved || pending));
+      setDraftReady(true);
     });
-    return () => {
-      window.cancelAnimationFrame(frame);
-      if (!applied) saveLandingPrompt(pending);
-    };
-  }, []);
+    return () => window.cancelAnimationFrame(frame);
+  }, [email]);
   const maxProjects = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ru-RU");
     return allMaxProjects.filter(project => !needle || project.name.toLocaleLowerCase("ru-RU").includes(needle));
@@ -89,6 +103,8 @@ export function MaxStudio({ email }: { email: string }) {
 
   const create = useMutation({
     mutationFn: async () => {
+      const submittedDraftId = draft.id;
+      const submittedOwner = email;
       if (quota.initialExhausted) throw new Error(FREE_CHAT_UPGRADE_MESSAGE);
       const content = hasCatalog ? publicInitialCatalog(initialContent) : [];
       if (catalogError) throw new Error(catalogError);
@@ -103,7 +119,7 @@ export function MaxStudio({ email }: { email: string }) {
         brandColors,
         managementModules: modules,
         managementModuleOptOuts: moduleOptOuts,
-        catalogItemCount: content.length,
+        catalogItemCount: hasCatalog ? content.length : undefined,
       });
       const hasCredential = containsChatSecret(rawPrompt);
       const safeName = publicMaxBriefText(name);
@@ -122,11 +138,13 @@ export function MaxStudio({ email }: { email: string }) {
         brandColors: safeBrandColors,
         managementModules: modules,
         managementModuleOptOuts: moduleOptOuts,
-        catalogItemCount: content.length,
+        catalogItemCount: hasCatalog ? content.length : undefined,
       });
       const project = await createProject({
         name: safeName, template: "max_miniapp",
-        ...(moduleOptOuts.length > 0 ? { management_module_opt_outs: moduleOptOuts } : {}),
+        // Unspecified UI choices do not deny SDK capabilities. Only explicit
+        // exclusions constrain availability; these do not activate integrations.
+        management_module_opt_outs: moduleOptOuts,
         // The owner can start the order queue and choose its payment mode in Team.
         staff_settings: { leads_enabled: modules.includes("leads"), orders_mode: null, prep_minutes: 7 },
         max_config: {
@@ -152,7 +170,7 @@ export function MaxStudio({ email }: { email: string }) {
             policy_url: "",
           },
           max_url_attached: false,
-          management_modules: modules,
+          management_modules: availableModules,
         },
       });
       let credentialReady = !hasCredential;
@@ -176,9 +194,14 @@ export function MaxStudio({ email }: { email: string }) {
           credentialReady = false;
         }
       }
-      return { project, prompt, credentialReady };
+      return { project, prompt, credentialReady, submittedDraftId, submittedOwner };
     },
-    onSuccess: ({ project, prompt, credentialReady }) => {
+    onSuccess: ({ project, prompt, credentialReady, submittedDraftId, submittedOwner }) => {
+      completeMaxProjectDraft(submittedOwner, submittedDraftId);
+      // An old owner's accepted creation remains theirs after navigation. Do
+      // not route or mutate the visible state of a remounted/different owner.
+      if (!mounted.current || submittedOwner !== email) return;
+      completedDraft.current = true;
       qc.invalidateQueries({ queryKey: ["projects"] });
       if (!credentialReady) {
         toast.warning("Проект создан, но ключ не подключён", {
@@ -197,6 +220,7 @@ export function MaxStudio({ email }: { email: string }) {
       }
     },
     onError: (error: unknown) => {
+      if (!mounted.current) return;
       toast.error("Не удалось создать приложение", {
         description: describeApiError(error, "Попробуйте ещё раз."),
       });
@@ -204,39 +228,43 @@ export function MaxStudio({ email }: { email: string }) {
   });
 
   function openWizard() {
+    if (!draftReady || completedDraft.current) return;
+    setDraftStorageFailed(!startMaxProjectDraft(email, draftRef.current));
     setDialogOpen(true);
   }
 
   /** Готовая идея заполняет мастер, а не создаёт проект молча. */
   function applyIdea(idea: MaxStudioIdea) {
-    setName(idea.title);
-    setIdea(idea.idea);
-    setAppTypes([idea.appType]);
-    setManagementModules(defaultManagementModules(idea.appType));
-    setManagementModuleOptOuts([]);
-    setCatalogDraft(null);
-    setAudience(idea.audience);
-    setPrimaryAction(idea.primaryAction);
-    openWizard();
+    if (!draftReady || completedDraft.current) return;
+    const current = draftRef.current;
+    const dirty = current.name || current.idea || current.audience || current.primaryAction || current.brandColors
+      || current.features.length || current.managementModules.length || current.appTypes.some(type => type !== "custom");
+    if (dirty && !window.confirm("Заменить текущий черновик выбранной идеей?")) return;
+    const replacement = { ...emptyMaxProjectDraft(), name: idea.title, idea: idea.idea,
+      appType: idea.appType, appTypes: [idea.appType], audience: idea.audience, primaryAction: idea.primaryAction };
+    const persisted = replaceMaxProjectDraft(email, current.id, replacement)
+      || (!dirty && startMaxProjectDraft(email, replacement));
+    if (!persisted) {
+      setDraftStorageFailed(true);
+      toast.warning("Не удалось заменить черновик", {
+        description: "Он изменился в другой вкладке или хранилище недоступно. Текущие ответы не изменены. Обновите страницу и проверьте сохранённую идею.",
+      });
+      return;
+    }
+    draftRef.current = replacement;
+    setDraft(replacement);
+    setDraftStorageFailed(false);
+    setDialogOpen(true);
   }
 
-  function updateBrief(patch: Partial<MaxProjectBrief>) {
-    if (patch.name !== undefined) setName(patch.name);
-    if (patch.idea !== undefined) setIdea(patch.idea);
+  function updateBrief(patch: Partial<Omit<MaxProjectBrief, "catalogItemCount">>) {
+    const { managementModuleOptOuts: excluded, ...fields } = patch;
     const changingTypes = patch.appTypes !== undefined || patch.appType !== undefined;
     const nextTypes = patch.appTypes !== undefined
       ? selectedMaxAppTypes(appType, patch.appTypes)
       : patch.appType !== undefined ? [patch.appType] : appTypes;
-    if (changingTypes) setAppTypes(nextTypes);
-    if (patch.audience !== undefined) setAudience(patch.audience);
-    if (patch.primaryAction !== undefined) setPrimaryAction(patch.primaryAction);
-    if (patch.features !== undefined) setFeatures(patch.features);
-    if (patch.brandColors !== undefined) setBrandColors(patch.brandColors);
-    if (patch.managementModuleOptOuts !== undefined) {
-      setManagementModuleOptOuts([...patch.managementModuleOptOuts]);
-    }
-    if (patch.managementModules !== undefined) setManagementModules(patch.managementModules);
-    else if (changingTypes) setManagementModules(defaultManagementModules(nextTypes[0], nextTypes));
+    updateDraft({ ...fields, ...(changingTypes ? { appTypes: nextTypes, appType: nextTypes[0] } : {}),
+      managementModuleOptOuts: excluded === undefined ? draftRef.current.managementModuleOptOuts : [...excluded] });
   }
 
   return (
@@ -249,7 +277,7 @@ export function MaxStudio({ email }: { email: string }) {
               <p className="omnia-kicker text-accent">Ваша студия</p>
               <h1>Мои приложения</h1>
             </div>
-            <Button data-learning="create-project" size="lg" disabled={quota.initialExhausted} onClick={openWizard}>
+            <Button data-learning="create-project" size="lg" disabled={!draftReady || quota.initialExhausted} onClick={openWizard}>
               <Plus className="size-4" /> Создать приложение
             </Button>
           </div>
@@ -311,15 +339,15 @@ export function MaxStudio({ email }: { email: string }) {
         onOpenChange={setDialogOpen}
         pending={create.isPending}
         submitDisabled={quota.initialExhausted || Boolean(catalogError)}
-        quotaNotice={<OwnerChatQuotaNotice {...quota} initialOnly />}
+        quotaNotice={<><OwnerChatQuotaNotice {...quota} initialOnly />{draftStorageFailed && <p role="status" className="text-sm text-fg-secondary">Не удалось сохранить черновик в этом браузере. Не закрывайте страницу до создания проекта.</p>}</>}
         initialCatalog={hasCatalog && <MaxInitialCatalog
           items={initialContent}
           pending={create.isPending}
           tooManyItems={tooManyItems}
           descriptionChanged={catalogDraft !== null && catalogDraft.source !== safeCatalogIdea}
           error={catalogError}
-          onChange={(items) => setCatalogDraft({ source: safeCatalogIdea, items, tooManyItems: tooManyItems && items.length > 0 })}
-          onReset={() => setCatalogDraft(null)}
+          onChange={(items) => updateDraft({ catalogDraft: { source: safeCatalogIdea, items, tooManyItems: tooManyItems && items.length > 0 } })}
+          onReset={() => updateDraft({ catalogDraft: null })}
         />}
         values={{ name, idea, appType, appTypes, audience, primaryAction, features, brandColors, managementModules, managementModuleOptOuts }}
         onChange={updateBrief}

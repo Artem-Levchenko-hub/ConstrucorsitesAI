@@ -13,6 +13,7 @@
  */
 
 import { MAX_BRIEF_LENGTH } from "@/lib/max-brief";
+import { withinCharacters } from "@/lib/codepoints";
 
 const KEY = "yleum:landing-prompt";
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -39,11 +40,11 @@ function storage(): Storage | null {
 
 export function saveLandingPrompt(text: string, now: number = Date.now()): boolean {
   const trimmed = text.trim();
-  if (!trimmed) return false;
+  if (!trimmed || !withinCharacters(trimmed, LANDING_PROMPT_MAX_LENGTH)) return false;
   const store = storage();
   if (!store) return false;
   try {
-    const value: Stored = { text: trimmed.slice(0, LANDING_PROMPT_MAX_LENGTH), savedAt: now };
+    const value: Stored = { text: trimmed, savedAt: now };
     store.setItem(KEY, JSON.stringify(value));
     return true;
   } catch {
@@ -57,7 +58,7 @@ export function saveLandingPrompt(text: string, now: number = Date.now()): boole
  * Возвращает сохранённый запрос и СРАЗУ его удаляет: он предназначен ровно для
  * одного проекта. Иначе он всплывал бы при каждом следующем создании.
  */
-export function takeLandingPrompt(now: number = Date.now()): string | null {
+export function peekLandingPrompt(now: number = Date.now()): string | null {
   const store = storage();
   if (!store) return null;
   let raw: string | null = null;
@@ -67,11 +68,6 @@ export function takeLandingPrompt(now: number = Date.now()): string | null {
     return null;
   }
   if (!raw) return null;
-  try {
-    store.removeItem(KEY);
-  } catch {
-    // Не смогли убрать — не беда: проверка срока не даст ему всплывать вечно.
-  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -83,7 +79,15 @@ export function takeLandingPrompt(now: number = Date.now()): string | null {
   if (typeof text !== "string" || typeof savedAt !== "number") return null;
   if (!Number.isFinite(savedAt) || now - savedAt > MAX_AGE_MS || savedAt > now) return null;
   const trimmed = text.trim();
-  return trimmed ? trimmed.slice(0, LANDING_PROMPT_MAX_LENGTH) : null;
+  return trimmed && withinCharacters(trimmed, LANDING_PROMPT_MAX_LENGTH) ? trimmed : null;
+}
+
+/** Consume only after a durable destination exists; the legacy one-shot API stays available. */
+export function takeLandingPrompt(now: number = Date.now()): string | null {
+  const value = peekLandingPrompt(now);
+  if (!value) return null;
+  try { storage()?.removeItem(KEY); } catch { /* Retain it until it can be consumed safely. */ }
+  return value;
 }
 
 /**

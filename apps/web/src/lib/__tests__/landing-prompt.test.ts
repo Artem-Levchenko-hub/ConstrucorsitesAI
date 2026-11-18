@@ -4,6 +4,7 @@ import {
   LANDING_PROMPT_MAX_LENGTH,
   saveLandingPrompt,
   takeLandingPrompt,
+  peekLandingPrompt,
 } from "@/lib/landing-prompt";
 
 /**
@@ -53,10 +54,19 @@ describe("запрос с витрины", () => {
     expect(takeLandingPrompt()).toBe("Приложение клуба");
   });
 
-  it("слишком длинный текст обрезается до предела поля в мастере", () => {
-    saveLandingPrompt("я".repeat(LANDING_PROMPT_MAX_LENGTH + 500));
+  it("не заменяет сохранённый текст молча обрезанным oversized вводом", () => {
+    saveLandingPrompt("Сохранённая идея");
+    expect(saveLandingPrompt("я".repeat(LANDING_PROMPT_MAX_LENGTH + 500))).toBe(false);
+    expect(takeLandingPrompt()).toBe("Сохранённая идея");
+  });
 
-    expect(takeLandingPrompt()).toHaveLength(LANDING_PROMPT_MAX_LENGTH);
+  it("переносит допустимые emoji и хвост целиком, не потребляя до ack", () => {
+    const text = "😀".repeat(10_000) + "КОНЕЦ";
+    expect(saveLandingPrompt(text)).toBe(true);
+    expect(peekLandingPrompt()).toBe(text);
+    expect(peekLandingPrompt()).toBe(text);
+    expect(takeLandingPrompt()).toBe(text);
+    expect(peekLandingPrompt()).toBeNull();
   });
 
   it("испорченное значение не роняет кабинет", () => {

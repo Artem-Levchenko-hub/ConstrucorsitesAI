@@ -1,8 +1,16 @@
 import type { ManagementModule, MaxProjectConfigPayload } from "./api/types";
+import { characterCount } from "./codepoints";
 
 export const MAX_BRIEF_LENGTH = 20_000;
 export const MAX_PROMPT_LENGTH = 30_000;
 export const MAX_DEFAULT_SUMMARY = "Мини-приложение для пользователей MAX";
+export const MAX_BRIEF_FIELD_LIMITS = { name: 100, audience: 400, primaryAction: 200, brandColors: 200 } as const;
+
+export function maxBriefFieldError(field: keyof typeof MAX_BRIEF_FIELD_LIMITS, value: string): string | null {
+  const labels = { name: "Название", audience: "Аудитория", primaryAction: "Главное действие", brandColors: "Цвета бренда" };
+  const limit = MAX_BRIEF_FIELD_LIMITS[field];
+  return characterCount(value.trim()) > limit ? `${labels[field]}: не более ${limit} символов. Текст сохранён — сократите его.` : null;
+}
 
 export const MAX_APP_TYPES = [
   {
@@ -81,16 +89,7 @@ export function defaultManagementModules(appType: MaxAppTypeId, appTypes?: reado
   return withDefaultManagementModules(defaults);
 }
 
-/** New-project defaults only; saved legacy configurations keep their own contract. */
-export function newProjectManagementModules(
-  appType: MaxAppTypeId,
-  selected?: readonly ManagementModule[],
-  appTypes?: readonly MaxAppTypeId[],
-  optedOut: readonly ManagementModule[] = [],
-): ManagementModule[] {
-  const modules = selected?.length
-    ? withDefaultManagementModules(selected)
-    : defaultManagementModules(appType, appTypes);
+function withoutExcludedManagementModules(modules: readonly ManagementModule[], optedOut: readonly ManagementModule[]): ManagementModule[] {
   const excluded = new Set(optedOut);
   if (excluded.has("catalog")) {
     excluded.add("orders");
@@ -99,18 +98,80 @@ export function newProjectManagementModules(
   return modules.filter(module => !excluded.has(module));
 }
 
-const API_ONLY_BRIEF = /\b(?:api[- ]only|backend[- ]only|only\s+api|api\s+only)\b|(?<!\p{L})только\s+api\b/iu;
-const MODULE_EXCLUSION = /(?<!\p{L})(?:без|without|no)\s+(?:a\s+)?(каталога|заявок|catalog(?:ue)?|leads?)(?:\s*(?:,|и|and)\s*(каталога|заявок|catalog(?:ue)?|leads?))?(?!\p{L})/gu;
+/** Explicit UI choices; saved legacy callers retain their original defaults. */
+export function newProjectManagementModules(
+  appType: MaxAppTypeId,
+  selected?: readonly ManagementModule[],
+  appTypes?: readonly MaxAppTypeId[],
+  optedOut: readonly ManagementModule[] = [],
+): ManagementModule[] {
+  const modules = selected === undefined ? defaultManagementModules(appType, appTypes)
+    : MAX_MANAGEMENT_MODULES.filter(module => selected.includes(module.id)).map(module => module.id);
+  if ((modules.includes("orders") || modules.includes("bookings")) && !modules.includes("catalog")) modules.unshift("catalog");
+  return withoutExcludedManagementModules(modules, optedOut);
+}
+
+/** SDK availability is not a request to implement every available product flow. */
+export function availableManagementModules(optedOut: readonly ManagementModule[] = []): ManagementModule[] {
+  return withoutExcludedManagementModules(MAX_MANAGEMENT_MODULES.map(module => module.id), optedOut);
+}
+
+/** Classifiers inspect unquoted requests; the full original is always retained. */
+function unquotedRequest(value: string): string {
+  const pairs: Record<string, string> = { '"': '"', "'": "'", "«": "»", "“": "”", "‘": "’", "`": "`" };
+  let closing = "";
+  let fence = "";
+  let result = "";
+  for (let i = 0; i < value.length; i += 1) {
+    const char = value[i];
+    const marker = value.slice(i, i + 3);
+    if ((marker === "```" || marker === "~~~") && (!fence || marker === fence)) {
+      fence = fence ? "" : marker;
+      closing = ""; result += "   "; i += 2;
+      continue;
+    }
+    if (fence) { result += char === "\n" ? "\n" : " "; continue; }
+    if (closing) {
+      if (char === closing || char === "\n") closing = "";
+      result += char === "\n" ? "\n" : " ";
+    } else if (pairs[char] && !(char === "'" && /\p{L}/u.test(value[i - 1] ?? ""))) {
+      closing = pairs[char]; result += " ";
+    } else result += char;
+  }
+  return result;
+}
+
+export function isExplicitApiOnlyBrief(idea: string): boolean {
+  // Quotes around the requested scope do not negate an explicit command;
+  // quoted examples/names without that command remain ordinary mention data.
+  const requested = idea.replace(/(^|[.!?;\n]\s*)((?:мне\s+)?(?:нужен|нужно|нужна|создай|сделай|реализуй|разработай|implement|build|create|i\s+need)\s+(?:an?\s+)?)["«“'‘`](api[- ]only|backend[- ]only|only\s+api|api\s+only|только\s+api)["»”'’`]/giu, "$1$2$3");
+  const text = unquotedRequest(requested);
+  if (/(?:не\s+только\s+api|not\s+only\s+api)/iu.test(text)) return false;
+  return text.split(/[.!?;\n]/u).some(clause => {
+    const value = clause.trim();
+    const scope = /^(?:(?:мне\s+)?(?:нужен|нужно|нужна|создай|сделай|реализуй|разработай|implement|build|create|i\s+need)\s+(?:an?\s+)?)?(?:api[- ]only|backend[- ]only|only\s+api|api\s+only|только\s+api)\b/iu.exec(value);
+    if (!scope) return false;
+    return !/^\s*(?:[—–:-]\s*)?(?:не\s+(?:нужен|нужна|нужны|нужно|хочу|требуется)|is\s+not\s+(?:needed|required)|not\s+(?:needed|required))(?:\s+(?:совсем|вообще))?\s*(?=[:,;]|$)/iu.test(value.slice(scope[0].length));
+  });
+}
+const MODULE_NOUN = "каталог(?:а|ом|е|у|и|ов|ами|ах)?|заказ(?:а|ы|ов|ами|ах|у|ом)?|заявк(?:а|и|у|е|ой|ами|ах)|заявок|бронировани(?:е|я|й)|catalog(?:ue|s)?|orders?|leads?|bookings?";
+const MODULE_EXCLUSION = new RegExp(`(?<!\\p{L})(?:без|without|no|не\\s+(?:нужен|нужна|нужны|нужно|хочу|добавляй|добавлять|создавай|создавать))\\s+(?:a\\s+)?(${MODULE_NOUN})(?:\\s*(?:,|и|and)\\s*(${MODULE_NOUN}))?(?!\\p{L})`, "gu");
+const nounModule = (noun: string): ManagementModule => noun.startsWith("каталог") || noun.startsWith("catalog") ? "catalog"
+  : noun.startsWith("заказ") || noun.startsWith("order") ? "orders"
+    : noun.startsWith("бронирован") || noun.startsWith("booking") ? "bookings" : "leads";
 
 export function briefManagementModuleOptOuts(idea: string): ManagementModule[] {
-  if (API_ONLY_BRIEF.test(idea)) return ["catalog", "leads"];
   const excluded = new Set<ManagementModule>();
-  for (const [, first, second] of idea.toLocaleLowerCase("ru-RU").matchAll(MODULE_EXCLUSION)) {
+  const request = unquotedRequest(idea).toLocaleLowerCase("ru-RU");
+  for (const match of request.matchAll(MODULE_EXCLUSION)) {
+    if (/(?:не|not)\s*$/u.test(request.slice(0, match.index))) continue;
+    const [, first, second] = match;
     for (const noun of [first, second]) {
-      if (noun) excluded.add(noun === "каталога" || noun.startsWith("catalog") ? "catalog" : "leads");
+      if (noun) excluded.add(nounModule(noun));
     }
   }
-  return DEFAULT_MANAGEMENT_MODULES.filter(module => excluded.has(module));
+  for (const match of request.matchAll(new RegExp(`(?<!\\p{L})(${MODULE_NOUN})\\s+не\\s+(?:нужен|нужна|нужны|нужно)(?!\\p{L})`, "gu"))) excluded.add(nounModule(match[1]));
+  return MAX_MANAGEMENT_MODULES.filter(module => excluded.has(module.id)).map(module => module.id);
 }
 
 export type MaxProjectBrief = {
@@ -151,7 +212,11 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
   const appTypes = selectedMaxAppTypes(brief.appType, brief.appTypes);
   const scenarios = appTypes.map(type => MAX_APP_TYPES.find(option => option.id === type)!);
   const idea = brief.idea.trim();
-  const apiOnly = API_ONLY_BRIEF.test(idea);
+  const apiOnly = isExplicitApiOnlyBrief(idea);
+  for (const field of Object.keys(MAX_BRIEF_FIELD_LIMITS) as (keyof typeof MAX_BRIEF_FIELD_LIMITS)[]) {
+    const error = maxBriefFieldError(field, brief[field]);
+    if (error) throw new Error(error);
+  }
   if (brief.catalogItemCount !== undefined && (!Number.isInteger(brief.catalogItemCount) || brief.catalogItemCount < 0 || brief.catalogItemCount > 100)) {
     throw new Error("В начальном каталоге может быть от 0 до 100 позиций.");
   }
@@ -168,10 +233,9 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
     brief.primaryAction.trim() || "определи главное действие пользователя";
   const colors =
     brief.brandColors.trim() || "подбери уместную палитру под продукт";
-  const managementModules = newProjectManagementModules(
-    brief.appType, brief.managementModules, brief.appTypes,
-    [...(brief.managementModuleOptOuts ?? []), ...briefManagementModuleOptOuts(idea)],
-  );
+  const optedOut = [...new Set([...(brief.managementModuleOptOuts ?? []), ...briefManagementModuleOptOuts(idea)])];
+  const managementModules = newProjectManagementModules(brief.appType, brief.managementModules, brief.appTypes, optedOut);
+  const moduleLabels = (modules: readonly ManagementModule[]) => MAX_MANAGEMENT_MODULES.filter(item => modules.includes(item.id)).map(item => item.label).join(", ");
 
   const prompt = [
     apiOnly
@@ -184,12 +248,11 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
     `Что должно делать приложение: ${scenarioDetails}.`,
     "Это служебное задание для создания приложения, а не публичное описание. Не выводи инструкции из задания посетителю. Публичное описание владелец задаёт отдельно в данных приложения.",
     `Целевая аудитория: ${audience}.`,
-    ...(apiOnly ? [] : [
-      `Главное действие пользователя: ${primaryAction}.`,
-      `Нужные возможности: ${features}.`,
-      `Цвета бренда: ${colors}.`,
-    ]),
-    `Управление в Yleum: ${MAX_MANAGEMENT_MODULES.filter(item => managementModules.includes(item.id)).map(item => item.label).join(", ") || "бизнес-модули не выбраны"}. Используй только модули из .omnia/management.json. Личные данные пользователей не превращай в общий реестр владельца.`,
+    ...(!apiOnly || brief.primaryAction.trim() ? [`Главное действие пользователя: ${primaryAction}.`] : []),
+    ...(!apiOnly || brief.features.length ? [`Нужные возможности: ${features}.`] : []),
+    ...(!apiOnly || brief.brandColors.trim() ? [`Цвета бренда: ${colors}.`] : []),
+    ...(apiOnly ? ["Режим только API не требует продуктового интерфейса. Явные функциональные пожелания выше сохраняются; пожелания к оформлению применимы только если интерфейс запрошен отдельно."] : []),
+    `Управление в Yleum: ${moduleLabels(managementModules) || "не уточнено — используй возможности по задаче"}. Это явные пожелания, а не закрытый список функций. Перечень .omnia/management.json описывает доступные SDK-возможности, а не обязательные экраны или функции.${optedOut.length ? ` Явно исключено владельцем: ${moduleLabels(optedOut)}.` : ""} Личные данные пользователей не превращай в общий реестр владельца.`,
     "",
     ...(apiOnly ? [] : [
       "Сразу собери целостный рабочий MVP. Экраны и навигацию добавляй по запросу владельца, а не по отраслевому шаблону. Предусмотри состояния загрузки/пустого списка/ошибки, реальные русские тексты. Начальные данные добавляй только по явному запросу пользователя; иначе оставь списки пустыми.",
@@ -220,7 +283,7 @@ export type MaxFeatureScreen =
 
 export const MAX_FEATURE_INFO: Record<MaxFeature, { summary: string; screen: MaxFeatureScreen }> = {
   "Профиль пользователя": {
-    summary: "Личный экран: имя из MAX, заказы и записи этого человека, его настройки.",
+    summary: "Личный экран: настройки, заказы и записи этого человека. MAX подтверждает его идентификатор; остальные данные он заполняет сам.",
     screen: "profile",
   },
   "Каталог или лента": {

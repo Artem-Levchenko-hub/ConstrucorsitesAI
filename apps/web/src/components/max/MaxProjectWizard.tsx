@@ -7,7 +7,8 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { MAX_APP_TYPES, MAX_BRIEF_LENGTH, MAX_FEATURES, MAX_FEATURE_INFO, MAX_MANAGEMENT_MODULES, briefManagementModuleOptOuts, defaultManagementModules, newProjectManagementModules, selectedMaxAppTypes, type MaxAppTypeId, type MaxFeature, type MaxProjectBrief } from "@/lib/max-brief";
+import { MAX_APP_TYPES, MAX_BRIEF_LENGTH, MAX_FEATURES, MAX_FEATURE_INFO, MAX_MANAGEMENT_MODULES, briefManagementModuleOptOuts, defaultManagementModules, maxBriefFieldError, newProjectManagementModules, selectedMaxAppTypes, type MaxAppTypeId, type MaxFeature, type MaxProjectBrief } from "@/lib/max-brief";
+import { characterCount } from "@/lib/codepoints";
 import { MaxFeaturePreview } from "./MaxFeaturePreview";
 import { MaxProjectReview } from "./MaxProjectReview";
 import "./max-studio.css";
@@ -31,17 +32,14 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
   const [step, setStep] = useState(0);
   const [pinnedFeature, setPinnedFeature] = useState<MaxFeature | null>(null);
   const [hoveredFeature, setHoveredFeature] = useState<MaxFeature | null>(null);
-  const [detailsRevealed, setDetailsRevealed] = useState(false);
   const previewedFeature = hoveredFeature ?? pinnedFeature;
   const [submitting, setSubmitting] = useState(false);
   const submitLock = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
-  const detailsField = useRef<HTMLTextAreaElement>(null);
   const busy = pending || submitting;
   const appTypes = selectedMaxAppTypes(values.appType, values.appTypes);
   const multipleTypes = values.appTypes !== undefined;
   const customSelected = appTypes.includes("custom");
-  const showDetails = customSelected || detailsRevealed || values.idea.length > 0;
   const briefOptOuts = briefManagementModuleOptOuts(values.idea);
   const moduleOptOuts = values.managementModuleOptOuts ?? [];
   // Keep the draft selections when the catalog temporarily hides dependent modules.
@@ -49,13 +47,17 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
   const managementModules = newProjectManagementModules(
     values.appType, draftManagementModules, values.appTypes, [...moduleOptOuts, ...briefOptOuts],
   );
-  const length = Array.from(values.idea.trim()).length;
+  const length = characterCount(values.idea.trim());
   const ideaTooShort = customSelected && length < 10;
   const ideaTooLong = length > MAX_BRIEF_LENGTH;
-  const ready = values.name.trim().length > 1 && !ideaTooShort && !ideaTooLong;
+  const fieldErrors = { name: maxBriefFieldError("name", values.name), audience: maxBriefFieldError("audience", values.audience),
+    primaryAction: maxBriefFieldError("primaryAction", values.primaryAction), brandColors: maxBriefFieldError("brandColors", values.brandColors) };
+  const ideaReady = characterCount(values.name.trim()) > 1 && !ideaTooShort && !ideaTooLong && !fieldErrors.name;
+  const ready = ideaReady && !Object.values(fieldErrors).some(Boolean);
+  const stepValid = step === 0 ? ideaReady
+    : step === 1 ? !fieldErrors.audience && !fieldErrors.primaryAction : !fieldErrors.brandColors;
 
   useEffect(() => { if (open) heading.current?.focus(); }, [step, open]);
-  useEffect(() => { if (detailsRevealed) detailsField.current?.focus(); }, [detailsRevealed]);
 
   function selectAppType(type: MaxAppTypeId) {
     if (!multipleTypes) {
@@ -64,17 +66,11 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
     }
     const selected = appTypes.includes(type);
     if (selected && appTypes.length === 1) return;
-    const next = type === "custom" || customSelected
-      ? [type]
-      : selected ? appTypes.filter(current => current !== type) : [...appTypes, type];
-    const defaults = selected ? [] : defaultManagementModules(type);
-    onChange({
-      appType: next[0],
-      appTypes: next,
-      managementModules: newProjectManagementModules(
-        next[0], [...draftManagementModules, ...defaults], next,
-      ),
-    });
+    // The initial custom entry is neutral. Choosing a concrete scenario needs
+    // no extra click to remove it; adding custom to explicit scenarios keeps them.
+    const next = selected ? appTypes.filter(current => current !== type)
+      : appTypes.length === 1 && customSelected ? [type] : [...appTypes, type];
+    onChange({ appType: next[0], appTypes: next });
   }
 
   async function submit() {
@@ -105,7 +101,7 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
         <form className="contents" aria-busy={busy} onSubmit={(event) => {
           event.preventDefault();
           if (busy || submitLock.current) return;
-          if (step < 3) { if (step !== 0 || ready) setStep(step + 1); }
+          if (step < 3) { if (stepValid) setStep(step + 1); }
           else void submit();
         }}>
           <div className="max-wizard-heading">
@@ -125,35 +121,27 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
             {step === 0 && <>
               <div className="space-y-2">
                 <Label htmlFor="max-project-name">Название</Label>
-                <Input id="max-project-name" value={values.name} onChange={(event) => onChange({ name: event.target.value })} placeholder="Например, Кофе рядом" maxLength={100} required aria-describedby="max-project-name-hint" />
-                <p id="max-project-name-hint" className="text-xs text-fg-secondary">Не менее 2 символов</p>
+                <Input id="max-project-name" disabled={busy} value={values.name} onChange={(event) => onChange({ name: event.target.value })} placeholder="Например, Кофе рядом" required aria-invalid={Boolean(fieldErrors.name)} aria-describedby="max-project-name-hint" />
+                <p id="max-project-name-hint" className="text-xs text-fg-secondary">{fieldErrors.name || "От 2 до 100 символов"}</p>
               </div>
               <fieldset>
                 <legend className="text-sm font-medium">Что пользователь сможет делать?</legend>
                 {multipleTypes && <p className="max-wizard-note">Выберите хотя бы один</p>}
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                  {MAX_APP_TYPES.map(item => <button key={item.id} type="button" aria-pressed={appTypes.includes(item.id)} onClick={() => selectAppType(item.id)} className="max-wizard-option">
+                  {MAX_APP_TYPES.map(item => <button key={item.id} type="button" disabled={busy} aria-pressed={appTypes.includes(item.id)} onClick={() => selectAppType(item.id)} className="max-wizard-option">
                     <span className="flex items-center justify-between gap-2 text-sm font-medium">{item.label}{appTypes.includes(item.id) && <Check className="size-4 text-accent" />}</span>
                     <span className="mt-1 block text-xs leading-5 text-fg-secondary">{item.description}</span>
                   </button>)}
                 </div>
-                {!showDetails && (
-                  <Button type="button" variant="outline" className="mt-3" aria-expanded={false}
-                    aria-controls="max-project-details" onClick={() => setDetailsRevealed(true)}>
-                    Добавить детали
-                  </Button>
-                )}
-                <div id="max-project-details" className="mt-3 space-y-2" hidden={!showDetails}>
-                  {showDetails && <>
+                <div id="max-project-details" className="mt-3 space-y-2">
                     <Label htmlFor="max-project-idea">
                       {customSelected ? "Опишите свою идею" : "Детали сценария (необязательно)"}
                     </Label>
                     <Textarea
-                      ref={detailsField}
                       id="max-project-idea"
+                      disabled={busy}
                       value={values.idea}
                       onChange={(event) => {
-                        setDetailsRevealed(true);
                         onChange({ idea: event.target.value });
                       }}
                       placeholder="Например, получать баллы, выбирать награды и оформлять заказ к выдаче"
@@ -167,23 +155,22 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
                       {ideaTooShort && <span className="block">Не менее 10 символов</span>}
                       {ideaTooLong && <span className="block">Сократите описание перед отправкой</span>}
                     </p>
-                  </>}
                 </div>
               </fieldset>
             </>}
             {step === 1 && <>
-              <div className="space-y-2"><Label htmlFor="max-audience">Аудитория</Label><Input id="max-audience" value={values.audience} onChange={event => onChange({ audience: event.target.value })} placeholder="Например, постоянные гости кофейни" /></div>
-              <div className="space-y-2"><Label htmlFor="max-action">Главное действие</Label><Input id="max-action" value={values.primaryAction} onChange={event => onChange({ primaryAction: event.target.value })} placeholder="Например, обменять баллы на награду" /></div>
+              <div className="space-y-2"><Label htmlFor="max-audience">Аудитория</Label><Input id="max-audience" disabled={busy} value={values.audience} aria-invalid={Boolean(fieldErrors.audience)} aria-describedby="max-audience-limit" onChange={event => onChange({ audience: event.target.value })} placeholder="Например, постоянные гости кофейни" /><p id="max-audience-limit" className="max-wizard-note">{fieldErrors.audience || `${characterCount(values.audience.trim())} / 400 символов`}</p></div>
+              <div className="space-y-2"><Label htmlFor="max-action">Главное действие</Label><Input id="max-action" disabled={busy} value={values.primaryAction} aria-invalid={Boolean(fieldErrors.primaryAction)} aria-describedby="max-action-limit" onChange={event => onChange({ primaryAction: event.target.value })} placeholder="Например, обменять баллы на награду" /><p id="max-action-limit" className="max-wizard-note">{fieldErrors.primaryAction || `${characterCount(values.primaryAction.trim())} / 200 символов`}</p></div>
             </>}
             {step === 2 && <>
               <fieldset>
                 <legend className="text-sm font-medium">Управление в Yleum</legend>
-                <p className="max-wizard-note">Выберите нужные модули. Для заказов и записи нужен каталог.</p>
+                <p className="max-wizard-note">Отметьте то, что точно нужно. Неотмеченные возможности доступны по задаче и не требуют отдельных экранов. Снятая вами отметка явно исключает модуль. Для заказов и записи нужен каталог.</p>
                 {briefOptOuts.length > 0 && <p className="max-wizard-note">Исключения из описания учтены в выборе модулей.</p>}
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {MAX_MANAGEMENT_MODULES.map(module => <label key={module.id} className="max-wizard-option flex items-start gap-3">
                     <input type="checkbox" className="mt-1 size-4" checked={managementModules.includes(module.id)}
-                      disabled={briefOptOuts.includes(module.id) || (
+                      disabled={busy || briefOptOuts.includes(module.id) || (
                         (module.id === "orders" || module.id === "bookings") &&
                         !managementModules.includes("catalog")
                       )}
@@ -199,7 +186,7 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
                         }
                         onChange({ managementModules: [...selected], managementModuleOptOuts: [...excluded] });
                       }} />
-                    <span><span className="block text-sm font-medium">{module.label}</span><span className="mt-1 block text-xs leading-5 text-fg-secondary">{module.description}</span></span>
+                    <span><span className="block text-sm font-medium">{module.label}</span><span className="mt-1 block text-xs leading-5 text-fg-secondary">{module.description}{moduleOptOuts.includes(module.id) ? " Исключено вами." : ""}</span></span>
                   </label>)}
                 </div>
               </fieldset>
@@ -210,7 +197,7 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
                   {MAX_FEATURES.map(feature => {
                     const selected = values.features.includes(feature);
                     return <div key={feature} className="max-feature-chip" data-selected={selected}>
-                      <button type="button" aria-pressed={selected} className="max-feature-chip__toggle" onClick={() => onChange({ features: selected ? values.features.filter(item => item !== feature) : [...values.features, feature] })}>
+                      <button type="button" disabled={busy} aria-pressed={selected} className="max-feature-chip__toggle" onClick={() => onChange({ features: selected ? values.features.filter(item => item !== feature) : [...values.features, feature] })}>
                         <span className="max-feature-chip__check" aria-hidden="true">{selected && <Check className="size-3" />}</span>
                         <span className="max-feature-chip__copy">
                           <span className="max-feature-chip__label">{feature}</span>
@@ -232,17 +219,17 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
               </fieldset>
               <div className="space-y-2">
                 <Label htmlFor="max-brand">Цвета бренда</Label>
-                <Input id="max-brand" value={values.brandColors}
+                <Input id="max-brand" disabled={busy} value={values.brandColors} aria-invalid={Boolean(fieldErrors.brandColors)}
                   onChange={event => onChange({ brandColors: event.target.value })}
                   placeholder="#0062ee, графит, молочный" aria-describedby="max-brand-hint" />
-                <p id="max-brand-hint" className="max-wizard-note">Другие пожелания к оформлению можно написать в описании идеи.</p>
+                <p id="max-brand-hint" className="max-wizard-note">{fieldErrors.brandColors || `${characterCount(values.brandColors.trim())} / 200 символов. Другие пожелания к оформлению можно написать в описании идеи.`}</p>
               </div>
             </>}
             {step === 3 && <>{initialCatalog}<MaxProjectReview {...values} /></>}
           </div>
           <footer className="max-wizard-footer">
             <Button type="button" variant="outline" disabled={busy} onClick={() => step === 0 ? onOpenChange(false) : setStep(step - 1)}>{step === 0 ? "Отмена" : "Назад"}</Button>
-            <Button type="submit" disabled={busy || (step === 3 && submitDisabled) || ((step === 0 || step === 3) && !ready)}>
+            <Button type="submit" disabled={busy || !stepValid || (step === 3 && (submitDisabled || !ready))}>
               {step === 3 && (busy ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />)}
               {step === 3 ? "Создать проект" : "Далее"}
             </Button>

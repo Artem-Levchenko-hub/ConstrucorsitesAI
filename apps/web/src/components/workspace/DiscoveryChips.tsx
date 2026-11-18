@@ -4,6 +4,8 @@ import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUp, Check, Plus } from "lucide-react";
 import { EASE_OUT } from "@/lib/motion";
+import { MAX_PROMPT_LENGTH } from "@/lib/max-brief";
+import { characterCount } from "@/lib/codepoints";
 
 /**
  * Interactive answer card for a progressive-discovery question (P1 / pillar 2).
@@ -35,10 +37,11 @@ export function DiscoveryChips({
 }) {
   // Multi-select picks — preset chips toggled on + any inline custom additions.
   const [selected, setSelected] = useState<string[]>([]);
-  const [customOpen, setCustomOpen] = useState(false);
+  const [customOpen, setCustomOpen] = useState(choices.length === 0 && allowCustom);
   const [customValue, setCustomValue] = useState("");
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
-  if (choices.length === 0) return null;
+  if (choices.length === 0 && !allowCustom) return null;
 
   const isSelected = (c: string) => selected.includes(c);
   const toggle = (c: string) =>
@@ -49,9 +52,18 @@ export function DiscoveryChips({
   // rendered as their own (always-on) selected chips so the picks stay visible.
   const customExtras = selected.filter((c) => !choices.includes(c));
 
+  const submitAnswer = (answer: string) => {
+    if (characterCount(answer) > MAX_PROMPT_LENGTH) {
+      setSubmitError(`Ответ превышает ${MAX_PROMPT_LENGTH} символов. Сократите текст — он сохранён в поле.`);
+      return;
+    }
+    setSubmitError(null);
+    onPick(answer);
+  };
+
   const handleChip = (c: string) => {
     if (multiSelect) toggle(c);
-    else onPick(c);
+    else submitAnswer(c);
   };
 
   const submitCustom = () => {
@@ -62,13 +74,14 @@ export function DiscoveryChips({
       setCustomValue("");
       // Keep the field open so several custom values can be added in a row.
     } else {
-      onPick(v);
+      submitAnswer(v);
     }
   };
 
   const submitMulti = () => {
-    if (selected.length === 0) return;
-    onPick(selected.join(", "));
+    const typed = customValue.trim();
+    const answer = typed ? [...new Set([...selected, typed])] : selected;
+    if (answer.length) submitAnswer(answer.join(", "));
   };
 
   const baseChip =
@@ -180,12 +193,13 @@ export function DiscoveryChips({
         )}
       </AnimatePresence>
 
+      {submitError && <p role="alert" className="text-xs text-fg-secondary">{submitError}</p>}
       {/* «Готово» — submit the whole multi-select set as one answer. */}
       {multiSelect && (
         <motion.button
           type="button"
           onClick={submitMulti}
-          disabled={selected.length === 0}
+          disabled={selected.length === 0 && !customValue.trim()}
           initial={{ opacity: 0, y: 4 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.2, ease: EASE_OUT }}

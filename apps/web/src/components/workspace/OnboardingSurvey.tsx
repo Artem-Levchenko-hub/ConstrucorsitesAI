@@ -5,6 +5,8 @@ import { motion } from "framer-motion";
 import { ArrowRight, Check, Plus, X } from "lucide-react";
 import { EASE_OUT } from "@/lib/motion";
 import type { SurveyQuestion } from "@/lib/api/types";
+import { MAX_PROMPT_LENGTH } from "@/lib/max-brief";
+import { characterCount } from "@/lib/codepoints";
 
 /**
  * Onboarding SURVEY popup (owner 2026-06-19 — «несколько вопросов сразу»).
@@ -33,6 +35,8 @@ export function OnboardingSurvey({
   const [answers, setAnswers] = useState<Record<number, string[]>>({});
   const [custom, setCustom] = useState<Record<number, string>>({});
   const [preset, setPreset] = useState<string | null>(null);
+  const [customPalette, setCustomPalette] = useState("");
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const toggle = (qi: number, value: string, multi: boolean) =>
     setAnswers((prev) => {
@@ -54,7 +58,8 @@ export function OnboardingSurvey({
     if (!v) return;
     setAnswers((prev) => {
       const cur = prev[qi] ?? [];
-      return cur.includes(v) ? prev : { ...prev, [qi]: [...cur, v] };
+      const next = questions[qi].multi_select ? [...new Set([...cur, v])] : [v];
+      return { ...prev, [qi]: next };
     });
     setCustom((prev) => ({ ...prev, [qi]: "" }));
   };
@@ -63,17 +68,27 @@ export function OnboardingSurvey({
     const parts: string[] = [];
     questions.forEach((q, i) => {
       if (q.kind === "palette") return; // preset rides separately
-      const picked = answers[i] ?? [];
+      const typed = (custom[i] ?? "").trim();
+      const saved = answers[i] ?? [];
+      const picked = typed ? q.multi_select ? [...new Set([...saved, typed])] : [typed] : saved;
       if (picked.length) parts.push(`${q.message} — ${picked.join(", ")}`);
     });
-    if (preset) {
+    const ownColors = customPalette.trim();
+    if (ownColors) parts.push(`Палитра — ${ownColors}`);
+    else if (preset) {
       const name =
         questions
           .flatMap((q) => (q.kind === "palette" ? q.options : []))
           .find((o) => o.id === preset)?.name ?? preset;
       parts.push(`Палитра — ${name}`);
     }
-    onDone(parts.join("\n"), preset);
+    const combined = parts.join("\n");
+    if (characterCount(combined) > MAX_PROMPT_LENGTH) {
+      setSubmitError(`Ответы с вопросами превышают ${MAX_PROMPT_LENGTH} символов. Сократите текст — все ответы сохранены в форме.`);
+      return;
+    }
+    setSubmitError(null);
+    onDone(combined, ownColors ? null : preset);
   };
 
   const baseChip =
@@ -126,14 +141,14 @@ export function OnboardingSurvey({
               </div>
 
               {q.kind === "palette" ? (
-                <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-2"><div className="grid grid-cols-2 gap-2">
                   {q.options.map((o) => {
                     const sel = preset === o.id;
                     return (
                       <button
                         key={o.id}
                         type="button"
-                        onClick={() => setPreset(sel ? null : o.id)}
+                        onClick={() => { setPreset(sel ? null : o.id); setCustomPalette(""); }}
                         aria-pressed={sel}
                         className={`flex items-center gap-2 rounded-xl border p-2 text-left transition-colors ${
                           sel
@@ -160,7 +175,11 @@ export function OnboardingSurvey({
                       </button>
                     );
                   })}
-                </div>
+                </div>{q.allow_custom && <label className="block text-xs text-fg-secondary">Свои цвета
+                  <input type="text" className="mt-1 block w-full rounded-md border border-border-default bg-surface-overlay px-3 py-2 text-sm text-fg-primary"
+                    value={customPalette} placeholder="Например, белый фон и красные кнопки"
+                    onChange={event => { setCustomPalette(event.target.value); if (event.target.value.trim()) setPreset(null); }} />
+                </label>}</div>
               ) : (
                 <div className="flex flex-wrap gap-1.5">
                   {q.choices.map((c) => {
@@ -228,6 +247,7 @@ export function OnboardingSurvey({
           ))}
         </div>
 
+        {submitError && <p role="alert" className="px-5 py-2 text-sm text-fg-secondary">{submitError}</p>}
         <div className="flex items-center justify-between gap-3 border-t border-border-subtle px-5 py-3">
           <button
             type="button"

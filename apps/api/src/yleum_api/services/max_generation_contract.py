@@ -446,14 +446,59 @@ def requested_max_capabilities(prompt: str) -> list[tuple[str, str, tuple[str, .
     return found
 
 
-_API_ONLY_RE = re.compile(
-    r"\b(?:api[- ]only|backend[- ]only|only\s+api|api\s+only|только\s+api)\b",
-    re.IGNORECASE,
+_API_MODE = r"(?:api[- ]only|backend[- ]only|only\s+api|api\s+only|только\s+api)"
+_API_REQUEST_VERB = (
+    r"(?:(?:мне\s+)?(?:нужен|нужно|нужна|создай|сделай|реализуй|разработай|"
+    r"implement|build|create|i\s+need)\s+(?:an?\s+)?)"
+)
+_API_ONLY_RE = re.compile(r"^(?:" + _API_REQUEST_VERB + r")?" + _API_MODE + r"\b", re.I)
+_QUOTED_API_REQUEST = re.compile(
+    r"(^|[.!?;\n]\s*)(" + _API_REQUEST_VERB + r")[\"«“‘'`](" + _API_MODE + r")[\"»”’'`]",
+    re.I,
+)
+_API_MODE_REJECTION = re.compile(
+    r"^\s*(?:[—–:-]\s*)?(?:не\s+(?:нужен|нужна|нужны|нужно|хочу|требуется)|"
+    r"is\s+not\s+(?:needed|required)|not\s+(?:needed|required))"
+    r"(?:\s+(?:совсем|вообще))?\s*(?=[:,;]|$)", re.I,
 )
 
 
+def _unquoted_api_request(prompt: str) -> str:
+    # Unquote an explicit requested mode, while masking quoted UI copy/examples.
+    prompt = re.sub(
+        r"(?P<fence>```|~~~).*?(?:(?P=fence)|\Z)",
+        lambda match: "".join("\n" if char == "\n" else " " for char in match[0]),
+        prompt, flags=re.S,
+    )
+    prompt = _QUOTED_API_REQUEST.sub(r"\1\2\3", prompt)
+    pairs = {'"': '"', "'": "'", "«": "»", "“": "”", "‘": "’", "`": "`"}
+    result, closing = [], ""
+    for index, char in enumerate(prompt):
+        if closing:
+            if char in {closing, "\n"}:
+                closing = ""
+            result.append("\n" if char == "\n" else " ")
+        elif char in pairs and not (char == "'" and index > 0 and prompt[index - 1].isalpha()):
+            closing = pairs[char]
+            result.append(" ")
+        else:
+            result.append(char)
+    return "".join(result)
+
+
 def is_api_only_request(prompt: str) -> bool:
-    return _API_ONLY_RE.search(positive_request_scope(prompt)) is not None
+    request = _product_request_text(prompt)
+    # The wizard's owner description is data, separate from names and metadata.
+    request = re.sub(r"(?m)^Что должно делать приложение:\s*", "", request)
+    request = _unquoted_api_request(request)
+    if re.search(r"(?:не\s+только\s+api|not\s+only\s+api)", request, re.I):
+        return False
+    for clause in re.split(r"[.!?;\n]", request):
+        value = clause.strip()
+        scope = _API_ONLY_RE.match(value)
+        if scope and not _API_MODE_REJECTION.match(value[scope.end():]):
+            return True
+    return False
 
 
 def build_max_product_contract(

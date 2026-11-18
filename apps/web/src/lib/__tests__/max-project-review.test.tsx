@@ -152,7 +152,7 @@ it("keeps brand colors editable without offering canned visual styles", async ()
   expect(ui.submit).not.toHaveBeenCalled();
 });
 
-it("requires ten characters only for the exclusive custom scenario and preserves the text when switching", async () => {
+it("requires an idea when custom is selected and preserves explicit scenarios and text", async () => {
   const ui = await selectableWizard({ ...values, idea: "", appType: "loyalty", appTypes: ["loyalty"] });
   const idea = () => document.querySelector<HTMLTextAreaElement>("#max-project-idea")!;
   const next = () => [...document.querySelectorAll("button")].find(button => button.textContent?.trim() === "Далее")!;
@@ -169,7 +169,7 @@ it("requires ten characters only for the exclusive custom scenario and preserves
   await act(async () => custom.click());
   expect(document.activeElement).toBe(custom);
   expect(custom.getAttribute("aria-pressed")).toBe("true");
-  for (const label of ["Лояльность", "Каталог"]) expect(ui.typeButton(label).getAttribute("aria-pressed")).toBe("false");
+  for (const label of ["Лояльность", "Каталог"]) expect(ui.typeButton(label).getAttribute("aria-pressed")).toBe("true");
   expect(idea().required).toBe(true);
   expect(document.querySelector("#max-project-idea-limit")?.textContent).toContain("Не менее 10 символов");
   expect(next().disabled).toBe(true);
@@ -182,7 +182,8 @@ it("requires ten characters only for the exclusive custom scenario and preserves
   expect(idea().value).toBe("Моя задача");
 
   await act(async () => ui.typeButton("Запись").click());
-  expect(ui.typeButton("Своя идея").getAttribute("aria-pressed")).toBe("false");
+  expect(ui.typeButton("Своя идея").getAttribute("aria-pressed")).toBe("true");
+  await act(async () => ui.typeButton("Своя идея").click());
   expect(ui.typeButton("Запись").getAttribute("aria-pressed")).toBe("true");
   expect(idea().required).toBe(false);
   expect(idea().value).toBe("Моя задача");
@@ -206,7 +207,6 @@ it("preserves three selected types through back and review and submits the full 
   expect(ui.submit).toHaveBeenCalledTimes(1);
   expect(ui.submit.mock.calls[0][0]).toMatchObject({
     appType: "loyalty", appTypes: ["loyalty", "catalog", "booking"],
-    managementModules: ["catalog", "orders", "leads", "bookings"],
   });
 });
 
@@ -220,13 +220,13 @@ it("keeps the last type selected and retains manually chosen modules when anothe
   expect(ui.typeButton("Каталог").getAttribute("aria-pressed")).toBe("true");
   await ui.click("Далее"); await ui.click("Далее");
   const modules = [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
-  expect(modules.map(input => input.checked)).toEqual([true, true, true, true]);
+  expect(modules.map(input => input.checked)).toEqual([true, false, true, true]);
   expect(modules[1].disabled).toBe(false);
   await act(async () => modules[1].click());
   await ui.click("Назад"); await ui.click("Назад");
   await act(async () => ui.typeButton("Запись").click());
   await ui.click("Далее"); await ui.click("Далее");
-  expect([...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].map(input => input.checked)).toEqual([true, false, true, true]);
+  expect([...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].map(input => input.checked)).toEqual([true, true, true, true]);
 });
 
 it("retains single-type selection for legacy parents without appTypes", async () => {

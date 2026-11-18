@@ -38,7 +38,9 @@ from yleum_api.services.max_generation_contract import is_api_only_request
 log = logging.getLogger(__name__)
 KEY = "prompt_preparation_v1"
 POLICY_KEY = "prompt_preparation_policy_v1"
-MAX_DESCRIPTION = 6000
+# Match the accepted owner prompt contract; preparation must not silently lose
+# requirements from its middle. This side call still loads no project/history.
+MAX_DESCRIPTION = 30_000
 MAX_RESULT = 64000
 PreparationProgress = Callable[[str, dict[str, Any]], Awaitable[None]]
 _PROGRESS_TIMEOUT_SECONDS = 2.0
@@ -133,10 +135,15 @@ async def admit_prompt_preparation(
 def _plain_description(value: str) -> str:
     # Source files and selected HTML are never loaded. If the owner's own
     # description contains fenced code, omit that code from this side call too.
-    value = re.sub(r"```.*?(?:```|\Z)", "[фрагмент кода опущен]", value, flags=re.S)
-    if len(value) <= MAX_DESCRIPTION:
-        return value
-    return value[:4500] + "\n[середина длинного описания опущена]\n" + value[-1400:]
+    if len(value) > MAX_DESCRIPTION:
+        raise ValueError("Description exceeds the accepted owner prompt contract")
+    omitted = "[фрагмент кода опущен]"
+    # A short/empty fence must not expand an otherwise valid boundary request.
+    return re.sub(
+        r"```.*?(?:```|\Z)",
+        lambda match: omitted if len(match[0]) >= len(omitted) else " ",
+        value, flags=re.S,
+    )
 
 
 def preparation_messages(description: str, preferences: dict[str, Any]) -> list[dict[str, str]]:

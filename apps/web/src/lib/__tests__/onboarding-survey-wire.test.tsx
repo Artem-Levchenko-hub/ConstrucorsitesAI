@@ -153,3 +153,53 @@ it("preserves the explicit skip action without fabricating selected answers", ()
   expect(done).not.toHaveBeenCalled();
   expect(sendPrompt).not.toHaveBeenCalled();
 });
+
+function change(input: HTMLInputElement, value: string) {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+it("Done includes pending custom answers and lets a typed single answer replace an old chip", async () => {
+  act(() => button("Кофейня").click());
+  act(() => button("Меню").click());
+  const inputs = container.querySelectorAll<HTMLInputElement>('input[type="text"]');
+  act(() => { change(inputs[0], "Мой собственный продукт"); change(inputs[1], "Дневник самочувствия"); });
+  expect(done).not.toHaveBeenCalled();
+  act(() => button("Готово, собираем").click());
+  expect(done).toHaveBeenCalledExactlyOnceWith("Что за продукт? — Мой собственный продукт\nЧто показать? — Меню, Дневник самочувствия", null);
+});
+
+it("supports actual custom palette input with no stale preset identity", async () => {
+  act(() => client.setQueryData(["onboarding-survey", "p"], questions.map(q => q.kind === "palette" ? { ...q, allow_custom: true } : q)));
+  await flush();
+  act(() => button("Тёплый кофе").click());
+  const own = [...container.querySelectorAll("label")].find(label => label.textContent?.includes("Свои цвета"))!.querySelector("input")!;
+  act(() => change(own, "Белый фон и красные кнопки"));
+  expect(button("Тёплый кофе").getAttribute("aria-pressed")).toBe("false");
+  expect(done).not.toHaveBeenCalled();
+  act(() => button("Готово, собираем").click());
+  expect(done).toHaveBeenCalledExactlyOnceWith("Палитра — Белый фон и красные кнопки", null);
+});
+
+it("a later explicit preset replaces custom colors unambiguously", async () => {
+  act(() => client.setQueryData(["onboarding-survey", "p"], questions.map(q => q.kind === "palette" ? { ...q, allow_custom: true } : q)));
+  await flush();
+  const own = [...container.querySelectorAll("label")].find(label => label.textContent?.includes("Свои цвета"))!.querySelector("input")!;
+  act(() => change(own, "красный"));
+  act(() => button("Холодный сланец").click());
+  expect(own.value).toBe("");
+  act(() => button("Готово, собираем").click());
+  expect(done).toHaveBeenCalledExactlyOnceWith("Палитра — Холодный сланец", "cool-slate");
+});
+
+it("validates the final combined codepoint budget before Done and preserves an oversized answer", async () => {
+  const first = container.querySelector<HTMLInputElement>('input[type="text"]')!;
+  const prefix = `${questions[0].message} — `;
+  const boundary = "😀".repeat(30_000 - Array.from(prefix).length);
+  act(() => change(first, boundary + "я"));
+  act(() => button("Готово, собираем").click());
+  expect(done).not.toHaveBeenCalled(); expect(first.value).toBe(boundary + "я");
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("30000");
+  act(() => change(first, boundary)); act(() => button("Готово, собираем").click());
+  expect(done).toHaveBeenCalledExactlyOnceWith(prefix + boundary, null);
+});

@@ -55,8 +55,8 @@ export function MaxStudioIdeas({ onPick }: { onPick: (idea: MaxStudioIdea) => vo
   return (
     <section className="max-studio-ideas" aria-labelledby="max-ideas-heading">
       <header>
-        <h2 id="max-ideas-heading">Шаблоны</h2>
-        <p>Открой готовое приложение и поправь его под себя</p>
+        <h2 id="max-ideas-heading">Идеи для старта</h2>
+        <p>Выберите описание, дополните его и создайте своё приложение</p>
       </header>
       <div className="max-studio-ideas-grid">
         {MAX_STUDIO_IDEAS.map(idea => {
@@ -68,7 +68,7 @@ export function MaxStudioIdeas({ onPick }: { onPick: (idea: MaxStudioIdea) => vo
                 <span className="max-studio-idea-title">{idea.title}</span>
                 <span className="max-studio-idea-text">{idea.idea}</span>
               </span>
-              <span className="max-studio-idea-go" aria-hidden="true">Взять за основу<ArrowRight className="size-3.5" /></span>
+              <span className="max-studio-idea-go" aria-hidden="true">Использовать описание<ArrowRight className="size-3.5" /></span>
             </button>
           );
         })}

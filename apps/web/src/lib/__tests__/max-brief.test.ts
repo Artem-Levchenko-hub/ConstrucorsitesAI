@@ -57,7 +57,7 @@ describe("buildMaxProjectPrompt", () => {
     expect(prompt).toContain("Цвета бренда: #7c3aed");
     expect(prompt).toContain("Экраны и навигацию добавляй по запросу владельца");
     expect(prompt).not.toContain("мобильную навигацию, все основные экраны");
-    expect(prompt).toContain("Используй только модули из .omnia/management.json");
+    expect(prompt).toContain(".omnia/management.json описывает доступные SDK-возможности, а не обязательные экраны или функции");
     expect(prompt).toContain("серверную проверку initData");
   });
 
@@ -85,28 +85,84 @@ it("preserves the complete long brief including its final requirement", () => {
 
 it("includes explicit owner modules without exposing private diary data", () => {
   const prompt = buildMaxProjectPrompt({ ...longBrief, managementModules: ["catalog", "orders"] });
-  expect(prompt).toContain("Управление в Yleum: Каталог, Заказы, Заявки");
-  expect(buildMaxProjectPrompt({ ...longBrief, managementModules: [] })).toContain("Управление в Yleum: Каталог, Заявки");
+  expect(prompt).toContain("Управление в Yleum: Каталог, Заказы.");
+  expect(buildMaxProjectPrompt({ ...longBrief, managementModules: [] })).toContain("Управление в Yleum: не уточнено — используй возможности по задаче.");
   expect(prompt).toContain("Личные данные пользователей не превращай в общий реестр владельца");
 });
-it.each(["event", "education", "custom"] as const)("always includes catalog and leads for a new %s app", appType => {
+it.each(["event", "education", "custom"] as const)("preserves an explicit empty module choice for %s", appType => {
   expect(defaultManagementModules(appType)).toEqual(["catalog", "leads"]);
-  expect(newProjectManagementModules(appType, [])).toEqual(["catalog", "leads"]);
+  expect(newProjectManagementModules(appType, [])).toEqual([]);
 });
 it("keeps scenario defaults while respecting an explicit opt-out of orders or bookings", () => {
   expect(defaultManagementModules("catalog")).toEqual(["catalog", "orders", "leads"]);
   expect(defaultManagementModules("loyalty")).toEqual(["catalog", "orders", "leads"]);
   expect(defaultManagementModules("booking")).toEqual(["catalog", "leads", "bookings"]);
-  expect(newProjectManagementModules("catalog", [])).toEqual(["catalog", "orders", "leads"]);
+  expect(newProjectManagementModules("catalog", [])).toEqual([]);
   expect(newProjectManagementModules("catalog", ["catalog", "leads"])).toEqual(["catalog", "leads"]);
   expect(newProjectManagementModules("booking", ["catalog", "leads"])).toEqual(["catalog", "leads"]);
 });
 
 it("lets a new informational application explicitly opt out of catalog and requests", () => {
   expect(newProjectManagementModules("custom", [], undefined, ["catalog", "leads"])).toEqual([]);
-  expect(newProjectManagementModules("booking", [], undefined, ["catalog"])).toEqual(["leads"]);
+  expect(newProjectManagementModules("booking", [], undefined, ["catalog"])).toEqual([]);
   expect(maxBrief.briefManagementModuleOptOuts("Справочная страница без заявок и каталога.")).toEqual(["catalog", "leads"]);
   expect(maxBrief.briefManagementModuleOptOuts("Покажи заявки и каталог.")).toEqual([]);
+});
+
+it.each(["Не только API: нужен интерфейс", "Не нужен api-only, нужен каталог", 'Пример: "api-only". Создай интерфейс', "Не оставляй backend-only: добавь экраны", "API-only не нужен: нужен интерфейс", "API-only — не нужно. Нужен интерфейс."])("does not turn a negative or quoted mention into API-only: %s", idea => {
+  expect(maxBrief.isExplicitApiOnlyBrief(idea)).toBe(false);
+  const prompt = buildMaxProjectPrompt({ ...longBrief, idea, brandColors: "красный" });
+  expect(prompt).toContain("Цвета бренда: красный");
+  expect(prompt).toContain(idea);
+  expect(prompt.startsWith("Реализуй запрошенный API")).toBe(false);
+});
+it.each(["Только API для MAX", "Создай только API без интерфейса", "Implement API-only for MAX", "Нужен «API-only»", 'Сделай "API-only"', "Build `API-only` service", "Нужен ‘API-only’ сервис", "Build an API-only service", "I need an `API-only` backend"])("keeps an unambiguous positive API request: %s", idea => {
+  expect(maxBrief.isExplicitApiOnlyBrief(idea)).toBe(true);
+});
+it.each(["Пример, так не надо:\n```text\nAPI-only\n```\nНужен интерфейс", "Пример:\n~~~text\nBuild API-only service\n~~~\nНужен интерфейс", "Пример:\n```\nAPI-only\n"])("does not classify fenced examples while preserving the raw request: %s", idea => {
+  expect(maxBrief.isExplicitApiOnlyBrief(idea)).toBe(false);
+  expect(buildMaxProjectPrompt({ ...longBrief, idea })).toContain(idea.trim());
+});
+it("does not remove modules because of quoted or double-negative exclusions", () => {
+  expect(maxBrief.briefManagementModuleOptOuts('Не без каталога. Пример: «без заявок».')).toEqual([]);
+  expect(maxBrief.briefManagementModuleOptOuts("Без ошибок, с каталогом и заказами")).toEqual([]);
+  expect(maxBrief.isExplicitApiOnlyBrief('Название «API-only», нужен интерфейс')).toBe(false);
+});
+it("keeps SDK availability independent of vocabulary and explicit UI choices", () => {
+  const brief = { ...longBrief, idea: "Хочу магазин с покупкой и оплатой", appTypes: ["custom"] as MaxAppTypeId[], managementModules: [] };
+  expect(maxBrief.availableManagementModules()).toEqual(["catalog", "orders", "leads", "bookings"]);
+  const prompt = buildMaxProjectPrompt(brief);
+  expect(prompt).toContain(brief.idea);
+  expect(prompt).toContain("Управление в Yleum: не уточнено — используй возможности по задаче.");
+  expect(prompt).toContain(".omnia/management.json описывает доступные SDK-возможности, а не обязательные экраны или функции");
+  expect(prompt).not.toContain("Используй только модули");
+  expect(prompt).not.toContain("Владелец подтвердил пустой начальный каталог");
+  expect(newProjectManagementModules("custom", [])).toEqual([]);
+});
+it("limits availability only through actual exclusions, including catalog dependencies", () => {
+  expect(maxBrief.availableManagementModules(["orders"])).toEqual(["catalog", "leads", "bookings"]);
+  expect(maxBrief.availableManagementModules(["catalog"])).toEqual(["leads"]);
+  const brief = { ...longBrief, idea: "Хочу магазин с покупкой и оплатой, без заявок", managementModules: [] };
+  const exclusions = maxBrief.briefManagementModuleOptOuts(brief.idea);
+  expect(exclusions).toEqual(["leads"]);
+  expect(maxBrief.availableManagementModules(exclusions)).toEqual(["catalog", "orders", "bookings"]);
+  expect(buildMaxProjectPrompt(brief)).toContain("Явно исключено владельцем: Заявки.");
+});
+it("API-only changes presentation scope, not explicit functional data capabilities", () => {
+  const brief = { ...longBrief, idea: "Только API каталога и заказов, без интерфейса", appTypes: ["custom"] as MaxAppTypeId[], managementModules: [],
+    primaryAction: "Оформлять подтверждённый заказ", features: ["Уведомления бота" as const], brandColors: "Красный" };
+  expect(maxBrief.isExplicitApiOnlyBrief(brief.idea)).toBe(true);
+  expect(maxBrief.briefManagementModuleOptOuts(brief.idea)).toEqual([]);
+  const prompt = buildMaxProjectPrompt(brief);
+  expect(prompt).toContain("Управление в Yleum: не уточнено — используй возможности по задаче.");
+  expect(maxBrief.availableManagementModules(maxBrief.briefManagementModuleOptOuts(brief.idea))).toContain("orders");
+  expect(prompt).toContain(brief.primaryAction); expect(prompt).toContain("Уведомления бота"); expect(prompt).toContain("Цвета бренда: Красный");
+  expect(prompt).not.toContain("Сразу собери целостный рабочий MVP");
+});
+it.each(["audience", "primaryAction", "brandColors"] as const)("validates the API field budget before creating: %s", field => {
+  const limit = maxBrief.MAX_BRIEF_FIELD_LIMITS[field];
+  expect(() => buildMaxProjectPrompt({ ...longBrief, [field]: "😀".repeat(limit) })).not.toThrow();
+  expect(() => buildMaxProjectPrompt({ ...longBrief, [field]: "я".repeat(limit + 1) })).toThrow("Текст сохранён");
 });
 it("rejects an oversized brief instead of sending a partial request", () => {
   expect(() => buildMaxProjectPrompt({ ...longBrief, idea: "я".repeat(20_001) })).toThrow();

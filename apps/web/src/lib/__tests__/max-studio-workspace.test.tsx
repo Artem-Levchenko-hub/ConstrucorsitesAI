@@ -24,6 +24,13 @@ const project: Project = { id: "coffee", owner_id: "owner", name: "Кофе ря
 let root: Root;
 let container: HTMLDivElement;
 let client: QueryClient;
+let manualFrames = false;
+async function flushHydration() { if (!manualFrames) await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)); }); }
+async function chooseScenario(label: string) {
+  const choice = (name: string) => [...document.querySelectorAll<HTMLButtonElement>(".max-wizard-option")].find(b => b.querySelector("span")?.textContent?.startsWith(name))!;
+  await act(async () => choice(label).click());
+  if (label !== "Своя идея" && choice("Своя идея").getAttribute("aria-pressed") === "true") await act(async () => choice("Своя идея").click());
+}
 const button = (name: string) => [...document.querySelectorAll("button")].find(b => b.textContent?.trim() === name || b.getAttribute("aria-label") === name)!;
 async function click(name: string) { expect(button(name), `button ${name}`).toBeTruthy(); await act(async () => { button(name).click(); }); }
 async function change(selector: string, value: string) {
@@ -35,12 +42,13 @@ async function change(selector: string, value: string) {
   });
 }
 async function settle(check: () => void) { await act(async () => { await vi.waitFor(check); }); }
-async function render() { await act(async () => { root.render(<QueryClientProvider client={client}><MaxStudio email="owner@example.ru" /></QueryClientProvider>); }); }
+async function render() { await act(async () => { root.render(<QueryClientProvider client={client}><MaxStudio email="owner@example.ru" /></QueryClientProvider>); }); await flushHydration(); }
 async function openWizard() { await render(); await settle(() => expect(button("Создать приложение")).toBeTruthy()); await click("Создать приложение"); }
 
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
+  manualFrames = false;
   Object.assign(mocks.quota, { limited: false, remaining: null, initials: null, edits: null, exhausted: false, initialExhausted: false });
   mocks.list.mockResolvedValue([]);
   mocks.readiness.mockResolvedValue({ items: [] });
@@ -58,6 +66,7 @@ async function renderHome(userKey: string, strict = false) {
   vi.stubGlobal("matchMedia", () => ({ matches: true }));
   const home = <QueryClientProvider client={client}><LearningProvider key={userKey} userKey={userKey}><MaxStudio email="owner@example.test" /><ProductLearning userKey={userKey} /></LearningProvider></QueryClientProvider>;
   await act(async () => root.render(strict ? <StrictMode>{home}</StrictMode> : home));
+  await flushHydration();
 }
 
 function expectNoTraining() {
@@ -73,6 +82,7 @@ function expectNoCreation() {
   expect(mocks.push).not.toHaveBeenCalled();
 }
 function controlledFrames() {
+  manualFrames = true;
   let next = 0;
   const pending = new Map<number, FrameRequestCallback>();
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { const id = ++next; pending.set(id, callback); return id; });
@@ -117,7 +127,7 @@ it.each(["create", "empty-state", "ready-idea"])("opens the wizard directly from
     await change("#max-project-idea", "Показать любимые напитки");
     expect(idea?.value).toBe("Показать любимые напитки");
   } else {
-    expect(idea).toBeNull();
+    expect(idea?.value).toBe("");
   }
   expectNoTraining(); expectNoCreation();
 });
@@ -136,9 +146,9 @@ it("consumes the saved landing prompt once under StrictMode and does not create 
   await act(async () => root.render(<></>));
   await renderHome("strict-landing-owner", true);
   await frames.flush();
-  expect(document.querySelector("#max-project-idea")).toBeNull();
+  expect(document.querySelector("#max-project-idea")).not.toBeNull();
   await click("Создать приложение");
-  expect(document.querySelector("#max-project-idea")).toBeNull();
+  expect(document.querySelector("#max-project-idea")).not.toBeNull();
   expectNoCreation();
 });
 
@@ -263,23 +273,18 @@ it("validates the name, retains optional details through Back, and creates only 
   const describedText = () => document.getElementById(dialog.getAttribute("aria-describedby") ?? "")?.textContent;
   expect(dialog.hasAttribute("aria-describedby")).toBe(false);
   expect(dialog.textContent).not.toContain("Название и идея станут основой первой сборки");
-  expect(dialog.querySelector("#max-project-name-hint")?.textContent).toBe("Не менее 2 символов");
+  expect(dialog.querySelector("#max-project-name-hint")?.textContent).toBe("От 2 до 100 символов");
   expect(dialog.querySelector("#max-project-name")?.getAttribute("aria-describedby")).toBe("max-project-name-hint");
   expect(dialog.querySelector("fieldset > legend")?.textContent).toBe("Что пользователь сможет делать?");
-  const addDetails = button("Добавить детали");
-  expect(addDetails.getAttribute("aria-expanded")).toBe("false");
-  expect(document.getElementById(addDetails.getAttribute("aria-controls")!)?.hidden).toBe(true);
-  addDetails.focus();
-  await click("Добавить детали");
   const idea = dialog.querySelector<HTMLTextAreaElement>("#max-project-idea")!;
-  expect(document.activeElement).toBe(idea);
-  expect(idea.required).toBe(false);
+  expect(idea).not.toBeNull();
+  expect(idea.required).toBe(true);
   expect(dialog.querySelector("#max-project-idea")?.getAttribute("placeholder")).toBe("Например, получать баллы, выбирать награды и оформлять заказ к выдаче");
   expect(dialog.querySelector("#max-project-idea")?.getAttribute("aria-describedby")).toBe("max-project-idea-limit");
   expect(button("Далее")?.disabled).toBe(true);
   await change("#max-project-name", "Кофе рядом");
   await change("#max-project-idea", "мало");
-  expect(button("Далее").disabled).toBe(false);
+  expect(button("Далее").disabled).toBe(true);
   await change("#max-project-idea", "Получать баллы и выбирать награды");
   await click("Далее");
   expect(document.activeElement?.textContent).toBe("Для кого приложение?");
@@ -307,9 +312,10 @@ it("validates the name, retains optional details through Back, and creates only 
   await settle(() => expect(mocks.push).toHaveBeenCalledWith("/max/coffee?starter=1"));
   expect(mocks.create).toHaveBeenCalledTimes(1);
   expect(mocks.create).toHaveBeenCalledWith({name:"Кофе рядом",template:"max_miniapp",
-    staff_settings:{leads_enabled:true,orders_mode:null,prep_minutes:7},max_config:{
-    app_name:"Кофе рядом",summary:"Мини-приложение для пользователей MAX",app_type:"loyalty",audience:"Гости кофейни",primary_action:"Выбрать награду",
-    features:["Профиль пользователя","История действий"],style:"brand",brand_colors:"молочный",management_modules:["catalog","orders","leads"],content:[],
+    management_module_opt_outs:[],
+    staff_settings:{leads_enabled:false,orders_mode:null,prep_minutes:7},max_config:{
+    app_name:"Кофе рядом",summary:"Мини-приложение для пользователей MAX",app_type:"custom",audience:"Гости кофейни",primary_action:"Выбрать награду",
+    features:[],style:"brand",brand_colors:"молочный",management_modules:["catalog","orders","leads","bookings"],content:[],
     operator:{legal_name:""},support:{email:null,response_time:"Ответим в течение 2 рабочих дней"},
     legal:{age_rating:"0+",has_sales:false,has_user_content:false,marketing_notifications:false,personal_data_consent:true,terms_accepted:false,policy_url:""},max_url_attached:false,
   }});
@@ -320,8 +326,9 @@ it("validates the name, retains optional details through Back, and creates only 
 it("keeps optional answers optional and locks duplicate submit and dismissal while creating", async () => {
   mocks.create.mockReturnValue(new Promise(() => {}));
   await openWizard();
+  await chooseScenario("Лояльность");
   await change("#max-project-name", "Кофе рядом");
-  expect(document.querySelector("#max-project-idea")).toBeNull();
+  expect(document.querySelector("#max-project-idea")).not.toBeNull();
   expect(button("Далее").disabled).toBe(false);
   await click("Далее"); await click("Далее"); await click("Далее");
   const review = document.querySelector('[aria-label="Сводка проекта"]');
@@ -336,12 +343,17 @@ it("keeps optional answers optional and locks duplicate submit and dismissal whi
   expect(document.querySelector('[role="dialog"]')).toBeTruthy();
 });
 
+async function chooseCatalogModule() {
+  const label = [...document.querySelectorAll("label")].find(item => item.querySelector("span span")?.textContent === "Каталог")!;
+  await act(async () => label.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+}
+
 it("reviews prompt products, preserves manual edits through Back and creates the canonical catalog in one request", async () => {
   await openWizard();
   await change("#max-project-name", "Кофейня");
-  await click("Добавить детали");
+  await chooseScenario("Каталог");
   await change("#max-project-idea", "Создай кофейню в стиле брутализм, латте 300 ₽, капучино 200 ₽");
-  await click("Далее"); await click("Далее"); await click("Далее");
+  await click("Далее"); await click("Далее"); await chooseCatalogModule(); await click("Далее");
   const titles = () => [...document.querySelectorAll<HTMLInputElement>('input[id$="-title"]')];
   expect(titles().map(input => input.value)).toEqual(["латте", "капучино"]);
   await change('input[id$="-price"]', "350 ₽");
@@ -367,9 +379,9 @@ it("reviews prompt products, preserves manual edits through Back and creates the
 it("honors the owner's explicit empty catalog even when the brief contains priced products", async () => {
   await openWizard();
   await change("#max-project-name", "Кофейня");
-  await click("Добавить детали");
+  await chooseScenario("Каталог");
   await change("#max-project-idea", "Создай кофейню, латте 300 ₽, капучино 200 ₽");
-  await click("Далее"); await click("Далее"); await click("Далее");
+  await click("Далее"); await click("Далее"); await chooseCatalogModule(); await click("Далее");
   await click("Начать с пустого каталога");
   expect(document.querySelectorAll('input[id$="-title"]')).toHaveLength(0);
   await click("Назад"); await click("Далее");
@@ -391,9 +403,9 @@ it("retains the reviewed empty-catalog decision after securely connecting a prov
   const token = "sk-" + "e".repeat(24);
   await openWizard();
   await change("#max-project-name", "Кофейня");
-  await click("Добавить детали");
+  await chooseScenario("Каталог");
   await change("#max-project-idea", `Кофейня, латте 300 ₽, капучино 200 ₽\nAITUNNEL token: "${token}"`);
-  await click("Далее"); await click("Далее"); await click("Далее");
+  await click("Далее"); await click("Далее"); await chooseCatalogModule(); await click("Далее");
   await click("Начать с пустого каталога");
   await click("Создать проект");
   await settle(() => expect(mocks.push).toHaveBeenCalledWith("/max/coffee?starter=1"));
@@ -409,9 +421,9 @@ it("retains the reviewed empty-catalog decision after securely connecting a prov
 it("blocks an unnamed position and an overflowing proposal until the owner explicitly resolves it", async () => {
   await openWizard();
   await change("#max-project-name", "Каталог");
-  await click("Добавить детали");
+  await chooseScenario("Каталог");
   await change("#max-project-idea", Array.from({ length: 101 }, (_, index) => `Товар ${index + 1}: 300 ₽`).join("; "));
-  await click("Далее"); await click("Далее"); await click("Далее");
+  await click("Далее"); await click("Далее"); await chooseCatalogModule(); await click("Далее");
   expect(button("Создать проект").disabled).toBe(true);
   await change('input[id$="-price"]', "350 ₽");
   expect(button("Создать проект").disabled).toBe(true);
@@ -427,7 +439,6 @@ it("retains the review after a failed create so the same answers can be retried"
   mocks.create.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce(project);
   await openWizard();
   await change("#max-project-name", "Кофе рядом");
-  await click("Добавить детали");
   await change("#max-project-idea", "Получать баллы и выбирать награды");
   await click("Далее"); await click("Далее"); await click("Далее");
   await click("Создать проект");
@@ -459,8 +470,8 @@ it("предлагает готовые идеи вместо пустых дв�
   mocks.list.mockResolvedValue([project]);
   mocks.readiness.mockResolvedValue({ items: [{ id: "build", done: true }] });
   await render();
-  await settle(() => expect(container.querySelector("#max-ideas-heading")?.textContent).toBe("Шаблоны"));
-  expect(container.textContent).toContain("Открой готовое приложение и поправь его под себя");
+  await settle(() => expect(container.querySelector("#max-ideas-heading")?.textContent).toBe("Идеи для старта"));
+  expect(container.textContent).toContain("Выберите описание, дополните его и создайте своё приложение");
   const ideas = [...container.querySelectorAll<HTMLButtonElement>(".max-studio-idea")];
   expect(ideas).toHaveLength(3);
 
