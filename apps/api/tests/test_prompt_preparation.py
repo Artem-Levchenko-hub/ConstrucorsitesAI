@@ -68,6 +68,10 @@ def test_prepared_design_is_usable_data_without_promoting_its_authority():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [None, RuntimeError("unknown")])
 async def test_platform_wrapper_has_no_run_or_message_and_restores_context(monkeypatch, failure):
+    settings = llm_client.get_settings().model_copy(
+        update={"max_generation_deadline_seconds": 900},
+    )
+    monkeypatch.setattr(llm_client, "get_settings", lambda: settings)
     real = (str(uuid4()), str(uuid4()), str(uuid4()))
     token = llm_client._generation_billing_context.set(real)
     seen = []
@@ -98,9 +102,9 @@ async def test_platform_wrapper_has_no_run_or_message_and_restores_context(monke
             "project_id": real[2],
             "stage": "prompt_preparation",
             "free": True,
-            "max_tokens": 8192,
+            "max_tokens": None,
             "temperature": 0.2,
-            "timeout_seconds": 120.0,
+            "timeout_seconds": 900.0,
         }
     ]
 
@@ -302,14 +306,16 @@ async def test_wire_payload_has_attribution_but_no_generation_identity(monkeypat
 
     from yleum_api.core.config import get_settings
 
-    settings = get_settings().model_copy(update={"mock_llm": False})
+    settings = get_settings().model_copy(
+        update={"mock_llm": False, "max_generation_deadline_seconds": 900},
+    )
     monkeypatch.setattr(llm_client, "get_settings", lambda: settings)
     owner, project, run = (str(uuid4()) for _ in range(3))
     seen = []
 
     async def post(payload, url, budget):
         seen.append(payload)
-        assert budget == 120.0
+        assert budget == 900.0
         return httpx.Response(
             200,
             json={
@@ -334,6 +340,7 @@ async def test_wire_payload_has_attribution_but_no_generation_identity(monkeypat
     assert len(seen) == 1
     payload = seen[0]
     assert payload["user"] == owner and payload["messages"] == messages
+    assert "max_tokens" not in payload
     assert payload["metadata"] == {
         "project_id": project,
         "stage": "prompt_preparation",
@@ -343,7 +350,7 @@ async def test_wire_payload_has_attribution_but_no_generation_identity(monkeypat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("finish_reason", ["stop", "length"])
-async def test_native_output_headroom_is_saved_once_without_accepting_truncation(
+async def test_native_provider_default_is_saved_once_without_accepting_truncation(
     client, db_session, test_engine, monkeypatch, finish_reason,
 ):
     import httpx
@@ -361,7 +368,7 @@ async def test_native_output_headroom_is_saved_once_without_accepting_truncation
 
     async def post(payload, url, budget):
         requests.append(payload)
-        assert payload["max_tokens"] == 8192 and budget == 120.0
+        assert "max_tokens" not in payload and budget == settings.max_generation_deadline_seconds
         instruction = payload["messages"][0]["content"]
         assert "полноценный рабочий промпт" in instruction
         assert "Не ужимай" in instruction

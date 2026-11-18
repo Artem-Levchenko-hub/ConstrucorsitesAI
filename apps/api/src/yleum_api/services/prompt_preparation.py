@@ -31,6 +31,7 @@ from yleum_api.services.generation.contracts import (
     ProjectGenerationFacts,
     SourceBaseline,
 )
+from yleum_api.services.generation.recovery_trace import safe_recovery_trace
 from yleum_api.services.generation.retry_request import resolve_request_source
 from yleum_api.services.max_generation_contract import is_api_only_request
 
@@ -367,6 +368,52 @@ async def _emit_preparation_progress(
         log.info("prompt_preparation progress unavailable: %s", type(exc).__name__)
 
 
+def _validated_brief(value: object) -> str:
+    """Reject unusable output whole; never turn a partial/oversized note into ready."""
+    from yleum_api.services.llm_client import LLMError
+
+    if not isinstance(value, str):
+        raise LLMError("Invalid prepared brief", code="provider_output_invalid")
+    result = value.strip()
+    if not result:
+        raise LLMError("Empty prepared brief", code="provider_output_empty")
+    if len(result) > MAX_RESULT:
+        raise LLMError("Prepared brief exceeds storage bound", code="provider_output_oversize")
+    return result
+
+
+def _failure_diagnostics(error: Exception) -> dict[str, object]:
+    """Persist only closed codes and bounded protocol scalars, never exception text."""
+    from yleum_api.services.llm_client import LLMError, LLMOutputTruncated
+
+    facts = safe_recovery_trace({
+        key: getattr(error, key, None)
+        for key in ("finish_reason", "requested_max_tokens", "completion_tokens", "http_status")
+    } if isinstance(error, LLMError) else {})
+    code = error.code if isinstance(error, LLMError) else None
+    safe_code = safe_recovery_trace({"error_code": code}).get("error_code")
+    # Reuse recovery-trace's closed protocol values, with local transport/result codes.
+    local_codes = {
+        "generation_response_indeterminate", "generation_response_pending",
+        "native_transcript_rejected", "providers_exhausted", "upstream_refused",
+        "preconnect", "transport", "provider_output_empty", "provider_output_oversize",
+    }
+    if safe_code is None:
+        safe_code = code if isinstance(code, str) and code in local_codes else "unknown"
+        if isinstance(error, TimeoutError):
+            safe_code = "timeout"
+    facts["code"] = safe_code
+    facts["error_type"] = (
+        "LLMOutputTruncated" if isinstance(error, LLMOutputTruncated) else
+        "LLMError" if isinstance(error, LLMError) else
+        "TimeoutError" if isinstance(error, TimeoutError) else "unexpected_error"
+    )
+    # Null records an omitted/unknown scalar, never an invented output ceiling.
+    for key in ("finish_reason", "requested_max_tokens", "completion_tokens", "http_status"):
+        facts.setdefault(key, None)
+    return facts
+
+
 async def prepare_prompt_brief(
     factory: async_sessionmaker[AsyncSession],
     ids: GenerationIds,
@@ -380,6 +427,7 @@ async def prepare_prompt_brief(
 
     claim = None
     result = ""
+    failure: dict[str, object] | None = None
     try:
         if not get_settings().prompt_preparation_enabled:
             return ""
@@ -389,19 +437,18 @@ async def prepare_prompt_brief(
         # A cache hit or an excluded input never announces a model request.
         await _emit_preparation_progress(emit_progress, "started")
         try:
-            result = await (complete or complete_prompt_brief)(
+            result = _validated_brief(await (complete or complete_prompt_brief)(
                 claim.pop("messages"),
                 user_id=str(ids.user_id),
                 project_id=str(ids.project_id),
-            )
-            if not isinstance(result, str) or not 0 < len(result.strip()) <= MAX_RESULT:
-                result = ""
-            else:
-                result = result.strip()
+            ))
         except Exception as exc:
-            # Log only the class, never the provider body or owner's brief.
-            log.info("prompt_preparation fallback: %s", type(exc).__name__)
-        value = {**claim, "state": "ready" if result else "fallback", "result": result}
+            failure = _failure_diagnostics(exc)
+            log.info("prompt_preparation fallback: %s", failure)
+        value = {
+            **claim, "state": "ready" if result else "fallback", "result": result,
+            **({"failure": failure} if failure is not None else {}),
+        }
         async with factory() as session:
             if not await _write(session, ids, value, claim_id=claim["claim_id"]):
                 result = ""

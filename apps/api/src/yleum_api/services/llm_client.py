@@ -1328,8 +1328,9 @@ async def complete_chat(
     except ValueError:
         raise LLMError(
             "Не удалось прочитать подтверждённый результат LLM-запроса.",
-            http_status=resp.status_code,
+            code="provider_output_invalid", http_status=resp.status_code,
             provider_charge_ambiguous=True,
+            requested_max_tokens=effective_max_tokens,
         ) from None
     choices = data.get("choices") if isinstance(data, dict) else None
     choice = choices[0] if isinstance(choices, list) and choices else None
@@ -1351,7 +1352,7 @@ async def complete_chat(
                 "provider_output_filtered"
                 if reason == "content_filter" else "provider_output_invalid"
             ),
-            retry_safe=False,
+            http_status=resp.status_code, retry_safe=False,
             finish_reason=reason, requested_max_tokens=effective_max_tokens,
             completion_tokens=completion_tokens,
         )
@@ -1361,7 +1362,9 @@ async def complete_chat(
     if not isinstance(message, dict) or (content is not None and not isinstance(content, str)):
         raise LLMError(
             "LLM-провайдер вернул неподтверждённый формат ответа.",
-            code="provider_output_invalid", retry_safe=False,
+            code="provider_output_invalid", http_status=resp.status_code, retry_safe=False,
+            finish_reason=reason, requested_max_tokens=effective_max_tokens,
+            completion_tokens=completion_tokens,
         )
     return content or ""
 
@@ -1371,7 +1374,9 @@ async def complete_prompt_brief(
 ) -> str:
     """Included optional service expense, not another paid generation action.
 
-    A complete prepared prompt has output headroom, without a brevity target.
+    Output follows the model/provider default; no application token cap is sent.
+    Provider limits, the configured generation window, and owning cancellation
+    still apply; this call neither extends nor restarts the generation clock.
     Owner/project attribution remains; no run/message id may be inferred into
     accepted-unit billing or the coding agent's retained provider cursor. The
     caller durably claims this optional request before HTTP, never repeats an
@@ -1379,14 +1384,14 @@ async def complete_prompt_brief(
     """
     from yleum_api.core.config import model_for_role
 
+    timeout_seconds = float(get_settings().max_generation_deadline_seconds)
     token = _generation_billing_context.set(None)
     try:
-        async with asyncio.timeout(120.0):
-            return await complete_chat(
-                messages, model_for_role("prompt_prepare"), user_id=user_id,
-                project_id=project_id, stage="prompt_preparation", free=True,
-                max_tokens=8192, temperature=0.2, timeout_seconds=120.0,
-            )
+        return await complete_chat(
+            messages, model_for_role("prompt_prepare"), user_id=user_id,
+            project_id=project_id, stage="prompt_preparation", free=True,
+            max_tokens=None, temperature=0.2, timeout_seconds=timeout_seconds,
+        )
     finally:
         _generation_billing_context.reset(token)
 
