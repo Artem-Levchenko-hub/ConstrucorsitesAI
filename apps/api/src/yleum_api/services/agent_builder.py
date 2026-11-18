@@ -371,6 +371,41 @@ def _progress_note(
     return "\n\n[PROGRESS — current container state]\n" + "\n".join(parts)
 
 
+def _read_observation_source_hash(
+    action: Action, obs: dict[str, Any],
+    before: Mapping[str, str] | None, after: Mapping[str, str] | None,
+) -> str | None:
+    """Bind retained quotations to the source actually observed, including replay."""
+    if action.name != "read_file" or obs.get("ok") is not True or before is None or after is None:
+        return None
+    path = _safe_file_path(action.path) or ""
+    source = after.get(path)
+    if not isinstance(source, str) or before.get(path) != source:
+        return None
+    selected = source
+    expected_range = None
+    if "start_line" in action.args or "end_line" in action.args:
+        lines = source.splitlines(keepends=True)
+        start, end = action.args.get("start_line", 1), action.args.get("end_line", len(lines))
+        if (type(start) is not int or start < 1 or start > max(len(lines), 1)
+                or type(end) is not int or ("end_line" in action.args and end < start)):
+            return None
+        end = min(end, len(lines))
+        selected = "".join(lines[start - 1:end])
+        expected_range = {
+            "start_line": start, "end_line": end, "total_lines": len(lines),
+            "truncated": len(selected) > _MAX_READ_CHARS,
+        }
+    expected_content = selected
+    if len(selected) > _MAX_READ_CHARS:
+        expected_content = (
+            selected[:_MAX_READ_CHARS] + f"\n…[truncated {len(selected) - _MAX_READ_CHARS} chars]"
+        )
+    if obs.get("content") != expected_content or obs.get("read_range") != expected_range:
+        return None
+    return hashlib.sha256(source.encode()).hexdigest()
+
+
 def _format_observation(action: Action, obs: dict[str, Any]) -> str:
     """Render an executor result as the next user turn the model reads."""
     ok = obs.get("ok", True)
@@ -1898,13 +1933,20 @@ async def _run_agent_segment(
         if action.name == "build":
             # Consume the allowance even on red builds; no extra model/retry budget.
             pending_source_build = False
-        if action.name == "read_file" and obs.get("ok") is True and source_after is not None:
-            read_source = source_after.get(_safe_file_path(action.path) or "")
-            if isinstance(read_source, str):
-                obs = {**obs, "read_source_sha256": hashlib.sha256(read_source.encode()).hexdigest()}
+        if action.name == "read_file":
+            obs = {key: value for key, value in obs.items() if key != "read_source_sha256"}
+            read_source_hash = _read_observation_source_hash(action, obs, source_before, source_after)
+            if read_source_hash is not None:
+                obs = {**obs, "read_source_sha256": read_source_hash}
         observation = _format_observation(action, obs)
-        useful_read = obs.get("ok") is True and new_information(
-            action, observation, [*(discovery_history or []), *convo], parse_action,
+        # Repair reads consume that phase's existing allowance; only ordinary
+        # discovery can count new information against its exploration stall.
+        useful_read = (
+            not bounded_repair and source_repair.gap is None
+            and obs.get("ok") is True
+            and new_information(
+                action, observation, [*(discovery_history or []), *convo], parse_action,
+            )
         )
         if changed_source_paths and obs.get("ok") is True:
             no_write_streak = 0

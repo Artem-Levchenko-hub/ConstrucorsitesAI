@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -309,3 +310,81 @@ def test_progress_notes_do_not_restrict_valid_design_work_to_compiler_errors():
     assert "unfinished requirement" in note and "design improvement" in note
     assert "not requested behavior" in note
     assert "Only touch one" not in note
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bounded", [False, True])
+async def test_only_ordinary_discovery_renews_the_exploration_allowance(bounded):
+    frames = []
+    state = {f"sdk{i}.ts": f"export type SDK{i} = string;" for i in range(4)}
+
+    async def snapshot():
+        return dict(state)
+
+    async def complete(*_args, **_kwargs):
+        return call("read_file", path=f"sdk{len(frames) - 1}.ts")
+
+    async def provider(frame, invoke):
+        frames.append(frame["value"])
+        return await invoke()
+
+    async def execute(tool):
+        return {"ok": True, "content": state[tool.path]}
+
+    result = await ab._run_agent_segment(
+        system_prompt="rules", user_prompt="owner request", model="fixture",
+        execute=execute, complete=complete, snapshot_files=snapshot,
+        continuation=SimpleNamespace(restore_frame=lambda _kind: None, provider=provider),
+        bounded_repair=bounded, max_steps=4, ship_green_on_abort=False,
+    )
+    assert [frame["no_write_streak"] for frame in frames] == (
+        [0, 1, 2, 3] if bounded else [0, 0, 0, 0]
+    )
+    assert not result.done and not result.needs_finalization and not result.files
+
+
+@pytest.mark.parametrize("source,args", [
+    ("", {}), ("short\nsource\n", {}), ("x" * 17_000, {}),
+    ("first\nsecond\nthird\n", {"start_line": 2, "end_line": 9}),
+    ("first\n" + "x" * 17_000, {"start_line": 2}),
+    ("", {"start_line": 1}),
+])
+def test_read_hash_matches_the_executors_exact_projection(source, args):
+    from yleum_api.services.project_cell_executor import _read_file
+
+    action = ab.Action("read_file", {"path": "sdk.ts", **args})
+    files = {"sdk.ts": source}
+    observation = _read_file(files, action.path, action.args)
+    assert ab._read_observation_source_hash(action, observation, files, files) == hashlib.sha256(
+        source.encode()
+    ).hexdigest()
+    assert ab._read_observation_source_hash(
+        action, {**observation, "content": "stale replay"}, files, files
+    ) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed_during_read", [False, True])
+async def test_stale_read_replay_cannot_acquire_the_current_source_hash(changed_during_read):
+    state = {"sdk.ts": "old source" if changed_during_read else "new source"}
+
+    async def snapshot():
+        return dict(state)
+
+    async def complete(*_args, **_kwargs):
+        return call("read_file", path="sdk.ts")
+
+    async def execute(_tool):
+        state["sdk.ts"] = "new source"
+        return {"ok": True, "content": "old source", "read_source_sha256": "f" * 64}
+
+    result = await ab._run_agent_segment(
+        system_prompt="rules", user_prompt="owner request", model="fixture",
+        execute=execute, complete=complete, snapshot_files=snapshot,
+        max_steps=1, ship_green_on_abort=False,
+    )
+    observation = result.transcript[-1]["content"]
+    assert "old source" in observation and "[source sha256:" not in observation
+    assert "old source" not in retained_information(
+        result.transcript, ab.parse_action, recent_messages=0, source_files=state
+    )
