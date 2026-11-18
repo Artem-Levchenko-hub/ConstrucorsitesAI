@@ -10,11 +10,6 @@ import {
   ChevronRight,
   Loader2,
   Wand2,
-  Target,
-  Palette,
-  Layers,
-  Info,
-  Sparkles,
   Check,
   Pause,
 } from "lucide-react";
@@ -39,11 +34,8 @@ import { Markdown } from "./Markdown";
 import { GenerationFailureCard } from "./GenerationFailureCard";
 import { IntegrationRequestCard } from "./IntegrationRequestCard";
 import { recognizeBuiltinIntegrationRequest } from "@/lib/builtin-integration-prompts";
+import { UserMessageContent } from "./UserMessageContent";
 
-// The onboarding quiz folds its answers into the user prompt after this marker
-// (see OnboardingQuiz.compile). We split on it to render the answers as chips
-// instead of a wall of bullet text.
-const QUIZ_MARKER = "— Бриф из опроса —";
 // Backend status lines streamed mid-generation (messages.py): acceptance retry
 // and the freeform→catalog fallback. They arrive as `*…*` italic prose; we lift
 // them out into a live "working" card instead of plain italic text.
@@ -81,8 +73,7 @@ export function ChatMessage({
   const isUser = message.role === "user";
   const studio = presentation === "studio";
   const studioUser = studio && isUser;
-  const quiz = isUser ? parseQuizBrief(message.content) : null;
-  const integrationRequest = isUser && !quiz ? recognizeBuiltinIntegrationRequest(message.content) : null;
+  const integrationRequest = isUser ? recognizeBuiltinIntegrationRequest(message.content) : null;
   const parts: AssistantPart[] = isUser ? [] : parseAssistantContent(message.content);
 
   return (
@@ -172,11 +163,7 @@ export function ChatMessage({
           {integrationRequest ? (
             <IntegrationRequestCard request={integrationRequest} text={message.content} />
           ) : isUser ? (
-            quiz ? (
-              <QuizSummary idea={quiz.idea} items={quiz.items} />
-            ) : (
-              <UserBubble text={message.content} plain={studio} />
-            )
+            <UserMessageContent text={message.content} plain={studio} />
           ) : (
             parts.map((p, i) =>
               p.kind === "text" ? (
@@ -235,144 +222,6 @@ export function ChatMessage({
           )}
       </div>
     </motion.div>
-  );
-}
-
-/* ───────────────────────────── user message ───────────────────────────── */
-
-/** The user's words in a soft accent-tinted speech bubble. */
-function UserBubble({ text, plain = false }: { text: string; plain?: boolean }) {
-  const [expanded, setExpanded] = useState(false);
-  if (plain) {
-    const collapsible = text.length > 700;
-    return (
-      <div>
-        <div
-          className={cn(
-            "whitespace-pre-wrap break-words text-sm leading-6 text-inherit",
-            collapsible && !expanded && "max-h-[240px] overflow-hidden",
-          )}
-        >
-          {text}
-        </div>
-        {collapsible && (
-          <button
-            type="button"
-            aria-expanded={expanded}
-            onClick={() => setExpanded((current) => !current)}
-            className="mt-2 text-xs font-medium text-inherit underline-offset-2 hover:underline"
-          >
-            {expanded ? "Свернуть" : "Показать полностью"}
-          </button>
-        )}
-      </div>
-    );
-  }
-  return (
-    <div className="inline-block max-w-full whitespace-pre-wrap break-words rounded-2xl rounded-tl-md border border-accent/20 bg-accent-subtle/50 px-3.5 py-2 text-sm leading-6 text-fg-primary">
-      {text}
-    </div>
-  );
-}
-
-/* ───────────────────────────── quiz answers ───────────────────────────── */
-
-type QuizItem = { label: string; value: string };
-
-/** Extracts the original idea + the quiz answer bullets from a compiled brief. */
-function parseQuizBrief(
-  content: string,
-): { idea: string; items: QuizItem[] } | null {
-  const idx = content.indexOf(QUIZ_MARKER);
-  if (idx === -1) return null;
-  const idea = content.slice(0, idx).trim();
-  const rest = content.slice(idx + QUIZ_MARKER.length);
-  const items: QuizItem[] = [];
-  for (const line of rest.split("\n")) {
-    const m = line.match(/^\s*[•\-*]\s*([^:]+):\s*(.+)$/);
-    if (m) items.push({ label: m[1].trim(), value: m[2].trim() });
-  }
-  return items.length ? { idea, items } : null;
-}
-
-function iconForLabel(label: string) {
-  const l = label.toLowerCase();
-  if (l.includes("задач")) return Target;
-  if (l.includes("настроен") || l.includes("тон")) return Sparkles;
-  if (l.includes("стиль") || l.includes("цвет") || l.includes("палитр"))
-    return Palette;
-  if (l.includes("блок") || l.includes("раздел")) return Layers;
-  return Info;
-}
-
-const HEX_RE = /#[0-9a-fA-F]{3,8}/g;
-
-/** Quiz answers rendered as tappable-looking chips, staggered in. */
-function QuizSummary({ idea, items }: { idea: string; items: QuizItem[] }) {
-  // Flatten "Обязательные блоки: A, B, C" into one chip per block.
-  const chips: { label?: string; value: string; Icon: typeof Info; hexes?: string[] }[] =
-    [];
-  for (const it of items) {
-    const Icon = iconForLabel(it.label);
-    const l = it.label.toLowerCase();
-    if (l.includes("блок") || l.includes("раздел")) {
-      it.value
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .forEach((v) => chips.push({ value: v, Icon: Layers }));
-    } else {
-      const hexes = it.value.match(HEX_RE) ?? undefined;
-      const value = it.value.replace(/\(палитра:[^)]*\)/i, "").trim();
-      chips.push({ label: it.label, value, Icon, hexes: hexes ?? undefined });
-    }
-  }
-
-  return (
-    <div className="space-y-2">
-      {idea && <UserBubble text={idea} />}
-      <div className="rounded-2xl border border-border-subtle bg-surface-raised/60 p-2.5">
-        <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-fg-tertiary">
-          <Sparkles className="h-3 w-3 text-accent" />
-          Ответы опроса
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {chips.map((c, i) => (
-            <motion.span
-              key={i}
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.2, ease: EASE_OUT, delay: i * 0.03 }}
-              className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border-subtle bg-surface-overlay/70 px-2 py-1"
-            >
-              <c.Icon className="h-3 w-3 shrink-0 text-accent" />
-              <span className="flex min-w-0 flex-col leading-tight">
-                {c.label && (
-                  <span className="text-[9px] uppercase tracking-wide text-fg-tertiary">
-                    {c.label}
-                  </span>
-                )}
-                <span className="truncate text-xs text-fg-primary">
-                  {c.value}
-                </span>
-              </span>
-              {c.hexes && c.hexes.length > 0 && (
-                <span className="ml-0.5 flex shrink-0 items-center gap-0.5">
-                  {c.hexes.slice(0, 5).map((h, j) => (
-                    <span
-                      key={j}
-                      className="h-3 w-3 rounded-[3px] border border-black/20 shadow-sm"
-                      style={{ backgroundColor: h }}
-                      title={h}
-                    />
-                  ))}
-                </span>
-              )}
-            </motion.span>
-          ))}
-        </div>
-      </div>
-    </div>
   );
 }
 

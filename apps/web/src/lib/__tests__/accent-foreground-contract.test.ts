@@ -11,14 +11,18 @@ function source(path: string): string {
 }
 
 const chatMessage = source("src/components/workspace/ChatMessage.tsx");
+const userMessage = source("src/components/workspace/UserMessageContent.tsx");
 const button = source("src/components/ui/button.tsx");
 
 describe("semantic foreground contracts", () => {
   it("keeps MAX message links readable on tinted bubbles", () => {
     expect(chatMessage).toContain('studioUser ? "max-editor-user-message"');
-    expect(chatMessage).toContain("text-inherit");
-    expect(chatMessage).not.toContain("text-white/80 underline-offset-2");
-    expect(chatMessage).not.toContain("text-inherit opacity-80");
+    expect(chatMessage).toContain('<UserMessageContent text={message.content} plain={studio} />');
+    expect(userMessage).toContain("text-inherit");
+    for (const messageSource of [chatMessage, userMessage]) {
+      expect(messageSource).not.toContain("text-white/80 underline-offset-2");
+      expect(messageSource).not.toContain("text-inherit opacity-80");
+    }
   });
 
   it("uses a dedicated light foreground for destructive buttons", () => {
