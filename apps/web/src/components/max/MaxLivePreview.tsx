@@ -218,14 +218,27 @@ export function MaxLivePreview({
       ? lastMessage.generation_status : null;
   // Optimistic chat rows cannot release a durable failed/cancelled first draft.
   // An admitted active run or accepted history owns that transition instead.
+  const activeVersion = versions.some((version) => version.status === "queued" || version.status === "running");
   const firstBuildTerminal = !viewingHistorical && noSuccessfulBuild && !isGenerationActive(currentRun) &&
-    !versions.some((version) => version.status === "queued" || version.status === "running")
+    !activeVersion
       ? terminalRunStatus ?? terminalMessageStatus : null;
+  // A seed/history row is not a finished application. Wait for accepted build
+  // evidence before starting its runtime or minting a session. Older accepted
+  // apps and the explicit incomplete-history fallback retain their preview.
+  const firstBuildState = (() => {
+    if (viewingHistorical || !noSuccessfulBuild) return null;
+    if (firstBuildTerminal) return "paused";
+    if (isGenerationActive(currentRun) || activeVersion || isChatMessageStreaming(lastMessage)) return "generating";
+    if (currentRun?.response_mode === "build" && currentRun.status === "completed"
+      && !currentAcceptance.isCurrentRequestComplete) return "unconfirmed";
+    return "empty";
+  })();
+  const firstBuildWaiting = firstBuildState === "generating" || firstBuildState === "unconfirmed";
   // A reload has no first-build verdict until the initial owner metadata joins.
   // Starting/syncing the draft in that gap can race normal prompt admission.
   // Background refetches keep their settled data and must not retire a live app.
   const initialPreviewMetadataPending = snapshotsLoading || messages.isPending || latestGeneration.isPending;
-  const previewDisabled = viewingHistorical || initialPreviewMetadataPending || Boolean(firstBuildTerminal);
+  const previewDisabled = viewingHistorical || initialPreviewMetadataPending || Boolean(firstBuildTerminal) || firstBuildWaiting;
   const previewTargetSnapshotId = currentSnapshotId ?? "no-current-snapshot";
   const previewDocumentKey = `${previewTargetSnapshotId}:${acceptedGenerationId ?? "unconfirmed"}`;
   // Each pause/project change retires the old mutation, including retries
@@ -475,8 +488,9 @@ export function MaxLivePreview({
     return () => window.removeEventListener("message", syncPreviewChrome);
   }, []);
 
-  const previewUrl = firstBuildTerminal ? null : previewSession.data?.url ?? null;
-  const displayPreviewUrl = firstBuildTerminal ? null : previewUrl ?? lastWorking?.url ?? null;
+  const firstBuildHidden = Boolean(firstBuildTerminal) || firstBuildWaiting;
+  const previewUrl = firstBuildHidden ? null : previewSession.data?.url ?? null;
+  const displayPreviewUrl = firstBuildHidden ? null : previewUrl ?? lastWorking?.url ?? null;
   const displayDocumentKey = previewUrl ? previewDocumentKey : lastWorking?.documentKey;
   useEffect(() => {
     if (!displayPreviewUrl || viewingHistorical) return;
@@ -492,7 +506,9 @@ export function MaxLivePreview({
   const currentPreviewReady = !previewDisabled && !snapshotsLoading && runtimeRunning &&
     !runtime.isFetching && !start.isPending && managedKit.isSuccess && !managedKit.isFetching &&
     previewSession.isSuccess && !previewSession.isFetching && Boolean(previewUrl);
-  const connectionLabel = connected ? "Подключено" : firstBuildTerminal ? "На паузе" : "Запускается";
+  const connectionLabel = connected ? "Подключено" : firstBuildTerminal ? "На паузе"
+    : firstBuildState === "generating" ? "Собирается"
+      : firstBuildState === "unconfirmed" ? "Подтверждается" : "Запускается";
   // A cold provision can outlive an earlier start request. Once polling sees
   // the runtime running, that old mutation error is no longer relevant and
   // must not replace the active "preparing" state with a false failure.
@@ -507,7 +523,7 @@ export function MaxLivePreview({
     runtime.isLoading ||
     start.isPending ||
     (runtimeRunning && (managedKit.isLoading || previewSession.isLoading));
-  const showPreviewError = !firstBuildTerminal && Boolean(previewError) && !preparing;
+  const showPreviewError = !firstBuildHidden && Boolean(previewError) && !preparing;
   const selectedVersion = selectedSnapshot?.number ?? null;
   const galleryIndex = gallery.findIndex((version) => version.id === selectedVersionId);
   const previousVersion = galleryIndex >= 0 ? gallery[galleryIndex + 1] : undefined;
@@ -524,16 +540,7 @@ export function MaxLivePreview({
     { label: "Приложение", done: managedKit.isSuccess },
     { label: "Безопасная сессия", done: Boolean(previewUrl) },
   ];
-  // До первой сборки показывать нечего: технический прогресс запуска сервера
-  // владельцу ничего не объясняет, поэтому ждём первую версию молча. Реальный
-  // отказ превью при этом остаётся виден — тишина не должна прятать ошибку.
-  const awaitingFirstBuild =
-    !viewingHistorical &&
-    !snapshotsLoading &&
-    !historyError &&
-    !showPreviewError &&
-    versions.length === 0 &&
-    !displayPreviewUrl;
+  const awaitingFirstBuild = firstBuildState === "empty" && !showPreviewError && !displayPreviewUrl;
   const showPreviewActions = viewingHistorical || showOpenSeparately;
 
   function openSeparatePreview() {
@@ -768,6 +775,8 @@ export function MaxLivePreview({
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-raised px-10 text-center">
                       {firstBuildTerminal ? (
                         <Pause className="size-7 text-fg-secondary" />
+                      ) : firstBuildWaiting ? (
+                        <Loader2 className="size-7 animate-spin text-accent" />
                       ) : awaitingFirstBuild ? (
                         <Sparkles className="size-7 text-accent" />
                       ) : preparing ? (
@@ -778,6 +787,10 @@ export function MaxLivePreview({
                       <p className="mt-5 text-[15px] font-medium text-fg-primary">
                         {firstBuildTerminal
                           ? "Подготовка на паузе"
+                          : firstBuildState === "generating"
+                            ? "Ожидаем завершения генерации"
+                          : firstBuildState === "unconfirmed"
+                            ? "Подтверждаем готовую версию"
                           : awaitingFirstBuild
                           ? "Превью появится после первой сборки"
                           : showPreviewError
@@ -787,13 +800,17 @@ export function MaxLivePreview({
                       <p className="mt-2 text-[12px] leading-5 text-fg-tertiary">
                         {firstBuildTerminal
                           ? "Продолжите сборку в чате — готовая версия откроется здесь."
+                          : firstBuildState === "generating"
+                            ? "Приложение ещё собирается. Готовое превью откроется автоматически."
+                          : firstBuildState === "unconfirmed"
+                            ? "После подтверждения результата превью откроется автоматически."
                           : awaitingFirstBuild
                           ? "Опишите в чате, что нужно приложению, — готовый экран откроется здесь."
                           : showPreviewError
                             ? "Yleum не смог создать защищённую сессию. Данные приложения не раскрыты."
                             : "Обычно подготовка занимает от 15 до 60 секунд."}
                       </p>
-                      {!firstBuildTerminal && !showPreviewError && !awaitingFirstBuild && (
+                      {!firstBuildHidden && !showPreviewError && !awaitingFirstBuild && (
                         <ol className="mt-5 w-full space-y-2 text-left">
                           {preparationSteps.map((step) => (
                             <li key={step.label} className="flex items-center gap-2 text-[11px] text-fg-secondary">

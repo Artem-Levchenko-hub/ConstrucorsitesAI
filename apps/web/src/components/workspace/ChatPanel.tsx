@@ -99,6 +99,7 @@ export function ChatPanel({
   );
   const toggleChat = useWorkspaceStore((s) => s.toggleChat);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollContentRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const credentialSubmitPending = useRef(false);
   const adaptationSubmitPending = useRef(false);
@@ -382,7 +383,10 @@ export function ChatPanel({
     });
   };
 
-  const chatScroll = useChatScroll(scrollRef, `${messages?.length}:${last?.content}:${chips?.choices.join("|")}`);
+  const chatScroll = useChatScroll(scrollRef, `${messages?.length}:${last?.content}:${chips?.choices.join("|")}`, {
+    contentRef: scrollContentRef,
+    scopeKey: projectId,
+  });
 
   // The starter flow hands the user's task over via `?p=`: auto-fire it ONCE on
   // a fresh (empty) project so they land mid-agent-run instead of re-typing it.
@@ -436,55 +440,57 @@ export function ChatPanel({
         onScroll={chatScroll.onScroll}
         className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-elegant"
       >
-        {isPending && (
-          <div className="p-4 space-y-3">
-            <Skeleton className="h-16" />
-            <Skeleton className="h-24" />
-          </div>
-        )}
+        <div ref={scrollContentRef} className="flow-root">
+          {isPending && (
+            <div className="p-4 space-y-3">
+              <Skeleton className="h-16" />
+              <Skeleton className="h-24" />
+            </div>
+          )}
 
-        {!isPending && messages && messages.length === 0 && (
-          <div className="max-editor-empty">
-            <h2 className="text-sm text-fg-primary">Какое приложение создадим?</h2>
-            <p className="text-xs text-fg-tertiary leading-5">
-              Расскажите, для кого оно и что должен сделать пользователь.
-              Например: «Каталог кофе с заказом к определённому времени».
-            </p>
-          </div>
-        )}
+          {!isPending && messages && messages.length === 0 && (
+            <div className="max-editor-empty">
+              <h2 className="text-sm text-fg-primary">Какое приложение создадим?</h2>
+              <p className="text-xs text-fg-tertiary leading-5">
+                Расскажите, для кого оно и что должен сделать пользователь.
+                Например: «Каталог кофе с заказом к определённому времени».
+              </p>
+            </div>
+          )}
 
-        {messages?.map((m) => (
-          <ChatMessage
-            key={m.id}
-            message={m}
-            streaming={m.id === streamingId}
-            projectId={projectId}
-            onFix={quota.exhausted ? undefined : handleFix}
-            onRetry={retryAvailable && m.id === last?.id ? retryLatestRequest : undefined}
-            onReturnToPrompt={!isPending && m.id === last?.id ? returnToPrompt : undefined}
-            onSuggest={quota.exhausted ? undefined : handleSuggest}
-            presentation="studio"
-          />
-        ))}
-
-        {!quota.exhausted && !showSurvey && chips && chips.choices.length > 0 && (
-          <DiscoveryFrame
-            key={lastAssistantId}
-            niche={chips.niche ?? null}
-            questionIndex={chips.questionIndex ?? null}
-            questionTotal={chips.questionTotal ?? null}
-            recap={chips.recap ?? null}
-            designPreview={chips.designPreview ?? null}
-            onSkip={handleSkip}
-          >
-            <DiscoveryChips
-              choices={chips.choices}
-              allowCustom={chips.allowCustom}
-              multiSelect={chips.multiSelect}
-              onPick={handlePickChoice}
+          {messages?.map((m) => (
+            <ChatMessage
+              key={m.id}
+              message={m}
+              streaming={m.id === streamingId}
+              projectId={projectId}
+              onFix={quota.exhausted ? undefined : handleFix}
+              onRetry={retryAvailable && m.id === last?.id ? retryLatestRequest : undefined}
+              onReturnToPrompt={!isPending && m.id === last?.id ? returnToPrompt : undefined}
+              onSuggest={quota.exhausted ? undefined : handleSuggest}
+              presentation="studio"
             />
-          </DiscoveryFrame>
-        )}
+          ))}
+
+          {!quota.exhausted && !showSurvey && chips && chips.choices.length > 0 && (
+            <DiscoveryFrame
+              key={lastAssistantId}
+              niche={chips.niche ?? null}
+              questionIndex={chips.questionIndex ?? null}
+              questionTotal={chips.questionTotal ?? null}
+              recap={chips.recap ?? null}
+              designPreview={chips.designPreview ?? null}
+              onSkip={handleSkip}
+            >
+              <DiscoveryChips
+                choices={chips.choices}
+                allowCustom={chips.allowCustom}
+                multiSelect={chips.multiSelect}
+                onPick={handlePickChoice}
+              />
+            </DiscoveryFrame>
+          )}
+        </div>
       </div>
 
       <div className="relative shrink-0">

@@ -204,6 +204,23 @@ function capitalize(value: string): string {
  * сохранённых лент, где в `action` лежит сырое имя инструмента.
  */
 export function stepCopy(step: AgentStep, generationCompleted = false): StepCopy {
+  if (step.kind === "heartbeat" && step.tool === "prompt_preparation" && !step.skipped) {
+    if (step.ok === true) return {
+      title: "Промпт подготовлен",
+      hint: "Уточнения готовы; сборка приложения продолжается.",
+      tone: "check", icon: "docs",
+    };
+    if (step.ok === false) return {
+      title: "Продолжаю по исходному запросу",
+      hint: "Дополнительные уточнения недоступны. Приложение собирается по вашему исходному запросу.",
+      tone: "work", icon: "docs",
+    };
+    return {
+      title: "Подготавливаю промпт",
+      hint: "Уточняю задачу и визуальное направление перед сборкой приложения.",
+      tone: "think", icon: "docs",
+    };
+  }
   if (step.skipped) {
     return {
       title: "Шаг пропущен",

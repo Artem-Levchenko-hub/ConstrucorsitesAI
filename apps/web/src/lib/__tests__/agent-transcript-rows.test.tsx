@@ -6,6 +6,7 @@ import { AgentTranscript } from "@/components/workspace/AgentTranscript";
 import { CAPACITY_WAITING_COPY } from "@/lib/agent-transcript";
 import { humanPath, stepCopy } from "@/lib/agent-step-copy";
 import type { AgentStep } from "@/lib/api/types";
+import { countAgentActions } from "@/lib/agent-steps";
 
 const waiting = (seq: number): AgentStep => ({
   eventId: `w${seq}`,
@@ -84,6 +85,21 @@ describe("лента работы агента", () => {
 });
 
 describe("словарь действий", () => {
+  it("treats preparation as a separate truthful state without counting coding actions", () => {
+    const pending: AgentStep = { step: 0, kind: "heartbeat", tool: "prompt_preparation",
+      action: "Подготавливаю промпт", path: "", ok: null };
+    const prepared = { ...pending, ok: true, action: "Промпт подготовлен" };
+    const fallback = { ...pending, ok: false, action: "Продолжаю по исходному запросу" };
+    expect(stepCopy(pending).title).toBe("Подготавливаю промпт");
+    expect(stepCopy(prepared).title).toBe("Промпт подготовлен");
+    expect(stepCopy(prepared).hint).toContain("сборка приложения продолжается");
+    expect(stepCopy(fallback).title).toBe("Продолжаю по исходному запросу");
+    expect(stepCopy(fallback).tone).not.toBe("fail");
+    expect(countAgentActions([pending, prepared, fallback])).toBe(0);
+    expect(countAgentActions([pending, prepared, { ...pending, kind: "step", tool: "write_file" }])).toBe(1);
+    expect(render([pending])).toContain("Подготавливаю промпт");
+  });
+
   it("не показывает пропущенный done как завершённую работу", () => {
     const skipped = stepCopy({
       step: 3, kind: "step", action: "done", path: "", ok: null, skipped: true,

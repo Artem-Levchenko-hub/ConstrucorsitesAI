@@ -122,3 +122,31 @@ it("refreshes a mounted legacy transcript from 9 cached to 20 persisted events w
     expect(container.textContent).toContain("TS2322: candidate type mismatch");
   } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
 });
+
+it.each([true, false])("hydrates actual preparation and clears its heading after the saved outcome (ready=%s)", async ready => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const running: GenerationRun = { ...completed, status: "running", finished_at: null, acceptance: null };
+  api.latest.mockResolvedValue(running);
+  const pending: AgentStep = { kind: "heartbeat", step: 0, path: "", tool: "prompt_preparation",
+    action: "Подготавливаю промпт", ok: null, runId: running.id };
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  client.setQueryData(["generation", "p"], running);
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<QueryClientProvider client={client}>
+      <AgentTranscript projectId="p" messageId="current-message" initialSteps={[pending]} />
+    </QueryClientProvider>));
+    const header = () => container.querySelector("[data-agent-transcript] > button")?.textContent;
+    expect(header()).toContain("Подготавливаю промпт");
+    await act(async () => {
+      client.setQueryData(["agent-steps", "p", "current-message"], [pending, {
+        ...pending, ok: ready, action: ready ? "Промпт подготовлен" : "Продолжаю по исходному запросу",
+      }]);
+      await vi.waitFor(() => expect(header()).toContain("Собираю приложение"));
+    });
+    expect(header()).not.toContain("Подготавливаю промпт");
+    expect(container.textContent).toContain(ready ? "Промпт подготовлен" : "Продолжаю по исходному запросу");
+    expect(container.textContent).not.toContain("шаг.");
+  } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
+});

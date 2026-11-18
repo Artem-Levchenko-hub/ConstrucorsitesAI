@@ -695,7 +695,7 @@ async def run_agent_generation(
                 factory, ids, project_info,
                 AgentTurnClassification(
                     prompt_text, _is_continue, _is_edit, _max_has_generated_snapshot,
-                ), selected_elements,
+                ), selected_elements, emit_progress=_agent_emit,
             )
             return await prepare_agent_prompt(
                 stack=_stack, factory=factory, ids=ids, project_info=project_info,

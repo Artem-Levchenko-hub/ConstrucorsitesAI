@@ -462,10 +462,14 @@ async def test_execution_scope_keeps_optional_preparation_out_of_other_modes(mon
         info = SimpleNamespace(template="max_miniapp")
     ids = GenerationIds(*(uuid4() for _ in range(5)))
     selected = [{"html": "PRIVATE HTML"}] if case == "selected" else None
-    result = await prep.prepare_initial_prompt_brief(None, ids, info, turn, selected)
+    emit = AsyncMock()
+    result = await prep.prepare_initial_prompt_brief(
+        None, ids, info, turn, selected, emit_progress=emit,
+    )
     if case == "fresh":
-        call.assert_awaited_once_with(None, ids)
+        call.assert_awaited_once_with(None, ids, emit_progress=emit)
         assert result == "Сохранённая заметка"
     else:
         call.assert_not_awaited()
         assert result == ""
+    emit.assert_not_awaited()

@@ -417,6 +417,66 @@ describe("MAX live preview recovery", () => {
     await flushPromises();
     expect(container.querySelector("[data-testid='max-accepted-preview-status']")?.textContent)
       .toContain("Готовая версия приложения пока не подтверждена.");
+    expect(container.textContent).toContain("Подтверждаем готовую версию");
+    expect(container.textContent).not.toContain("от 15 до 60 секунд");
+    expect(getRuntime).not.toHaveBeenCalled();
+    expect(syncMaxManagedKit).not.toHaveBeenCalled();
+    expect(createMaxPreviewSession).not.toHaveBeenCalled();
+  });
+
+  it.each(["pending", "queued_for_capacity", "running"] as const)(
+    "waits for the first %s generation without starting a seed preview", async (status) => {
+      const current: GenerationRun = {
+        id: "first-build", project_id: PROJECT.id, assistant_message_id: "build-1", status,
+        response_mode: "build", created_at: "2026-11-18T04:20:00Z", started_at: null, finished_at: null,
+      };
+      queryClient.setQueryData(["generation", PROJECT.id], current);
+      getLatestGeneration.mockResolvedValue(current);
+      queryClient.setQueryData(["messages", PROJECT.id], [buildMessage("running")]);
+      listMessages.mockResolvedValue([buildMessage("running")]);
+      renderPreview("seed-snapshot", { versions: [buildVersion(status === "running" ? "running" : "queued")] });
+      await waitForValue(() => container.textContent?.includes("Ожидаем завершения генерации"));
+      expect(container.textContent).toContain("Готовое превью откроется автоматически.");
+      expect(container.textContent).not.toContain("от 15 до 60 секунд");
+      expect(container.textContent).not.toContain("Запускаем сервер приложения");
+      expect(container.querySelector("iframe")).toBeNull();
+      expect(container.querySelector<HTMLButtonElement>("[data-testid='max-refresh-preview']")?.disabled).toBe(true);
+      expect(getRuntime).not.toHaveBeenCalled();
+      expect(startRuntime).not.toHaveBeenCalled();
+      expect(syncMaxManagedKit).not.toHaveBeenCalled();
+      expect(createMaxPreviewSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it("automatically opens the first accepted result after waiting on its seed snapshot", async () => {
+    const running: GenerationRun = {
+      id: "first-build", project_id: PROJECT.id, assistant_message_id: "build-1", status: "running",
+      response_mode: "build", created_at: "2026-11-18T04:20:00Z", started_at: "2026-11-18T04:22:00Z", finished_at: null,
+    };
+    getLatestGeneration.mockResolvedValue(running);
+    queryClient.setQueryData(["generation", PROJECT.id], running);
+    syncMaxManagedKit.mockResolvedValue(managedKit("built-snapshot"));
+    createMaxPreviewSession.mockResolvedValue(session("https://first-accepted.example"));
+    renderPreview("seed-snapshot", { versions: [buildVersion("running")] });
+    await waitForValue(() => container.textContent?.includes("Ожидаем завершения генерации"));
+    // A snapshot event may precede acceptance: it must not start preparation.
+    renderPreview("built-snapshot", { versions: [buildVersion("running")] });
+    await flushPromises();
+    expect(createMaxPreviewSession).not.toHaveBeenCalled();
+    const accepted: GenerationRun = {
+      ...running, status: "completed", finished_at: "2026-11-18T04:43:00Z",
+      acceptance: { run_id: running.id, assistant_message_id: running.assistant_message_id,
+        snapshot_id: "built-snapshot", accepted_at: null, current_request_complete: true },
+    };
+    getLatestGeneration.mockResolvedValue(accepted);
+    act(() => queryClient.setQueryData(["generation", PROJECT.id], accepted));
+    renderPreview("built-snapshot", { versions: [{ ...buildVersion("ready"), snapshot_id: "built-snapshot" }] });
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    expect(frame.src).toBe("https://first-accepted.example/");
+    expect(container.textContent).not.toContain("Ожидаем завершения генерации");
+    expect(syncMaxManagedKit).toHaveBeenCalledTimes(1);
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
+    expect(startRuntime).not.toHaveBeenCalled();
   });
 
   it("activates the confirmed version once after earlier preparation of the same snapshot", async () => {
@@ -436,7 +496,7 @@ describe("MAX live preview recovery", () => {
     // The service may return the same renewable owner-session URL. A new
     // accepted document still needs one navigation; never add a cache-buster.
     createMaxPreviewSession.mockResolvedValue(session("https://preview-1.example"));
-    renderPreview("snapshot-1");
+    renderPreview("snapshot-1", { versions: [{ ...buildVersion("ready"), snapshot_id: "snapshot-1" }] });
     const initial = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
     act(() => initial.dispatchEvent(new Event("load")));
     const initialSessions = createMaxPreviewSession.mock.calls.length;
@@ -492,8 +552,8 @@ describe("MAX live preview recovery", () => {
     syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
     createMaxPreviewSession.mockResolvedValue(session("https://starting.example"));
     act(() => root.render(<QueryClientProvider client={queryClient}><MaxOwnerPreviewPage project={PROJECT} /></QueryClientProvider>));
-    const initial = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
-    act(() => initial.dispatchEvent(new Event("load")));
+    await waitForValue(() => container.textContent?.includes("Ожидаем завершения генерации"));
+    expect(createMaxPreviewSession).not.toHaveBeenCalled();
     listSnapshots.mockResolvedValue([{ id: "snapshot-2" } as Snapshot]);
     syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-2"));
     createMaxPreviewSession.mockResolvedValue(session("https://finished.example"));
@@ -506,7 +566,8 @@ describe("MAX live preview recovery", () => {
       const frame = container.querySelector<HTMLIFrameElement>("iframe");
       return frame?.getAttribute("src") === "https://finished.example" ? frame : null;
     });
-    expect(ready).not.toBe(initial);
+    expect(ready).toBeDefined();
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
     expect(listSnapshots).toHaveBeenCalledTimes(2);
     expect(startRuntime).not.toHaveBeenCalled();
     expect(container.querySelector("[data-testid='max-accepted-preview-status']")?.textContent)
@@ -618,7 +679,8 @@ describe("MAX live preview recovery", () => {
     syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
     createMaxPreviewSession.mockResolvedValue(session("https://working.example"));
     act(() => root.render(<QueryClientProvider client={queryClient}><MaxOwnerPreviewPage project={PROJECT} /></QueryClientProvider>));
-    await waitForValue(() => container.querySelector("iframe"));
+    await waitForValue(() => queryClient.getQueryState(["generation", PROJECT.id])?.status === "success"
+      && listSnapshots.mock.calls.length === 1);
     await flushPromises();
     expect(listSnapshots).toHaveBeenCalledTimes(1);
     expect(queryClient.getQueryData<Snapshot[]>(["snapshots", PROJECT.id])?.[0].id).toBe("snapshot-1");
@@ -959,7 +1021,8 @@ describe("MAX live preview recovery", () => {
         assistant_message_id: "new-admitted-message", finished_at: null };
       getLatestGeneration.mockResolvedValue(admitted);
       act(() => queryClient.setQueryData(["generation", PROJECT.id], admitted));
-      await waitForValue(() => startRuntime.mock.calls.length === 1);
+      await waitForValue(() => container.textContent?.includes("Ожидаем завершения генерации"));
+      expect(startRuntime).not.toHaveBeenCalled();
       const ready = { ...buildVersion("ready"), snapshot_id: "built-snapshot" };
       renderPreview("built-snapshot", { versions: [ready] });
       const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
@@ -1000,7 +1063,8 @@ describe("MAX live preview recovery", () => {
     queryClient.setQueryData(["messages", PROJECT.id], [buildMessage("running")]);
     syncMaxManagedKit.mockResolvedValue(managedKit("seed-snapshot"));
     createMaxPreviewSession.mockResolvedValue(session("https://unaccepted-first-draft.example"));
-    renderPreview("seed-snapshot", { versions: [buildVersion("running")] });
+    // A legacy history failure can already have started preparation before the first-build verdict.
+    renderPreview("seed-snapshot", { versions: [buildVersion("running")], historyError: true });
     const oldFrame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
     act(() => oldFrame.dispatchEvent(new Event("load")));
     const sessions = createMaxPreviewSession.mock.calls.length;
@@ -1041,7 +1105,8 @@ describe("MAX live preview recovery", () => {
     const optimistic = buildMessage(null, "optimistic-next");
     listMessages.mockResolvedValue([failed, optimistic]);
     act(() => queryClient.setQueryData(["messages", PROJECT.id], [failed, optimistic]));
-    await waitForValue(() => startRuntime.mock.calls.length === 1);
+    await waitForValue(() => container.textContent?.includes("Ожидаем завершения генерации"));
+    expect(startRuntime).not.toHaveBeenCalled();
     expect(container.textContent).not.toContain("Подготовка на паузе");
 
     act(() => queryClient.setQueryData(["messages", PROJECT.id], [failed, buildMessage("running", "next")]));
@@ -1063,7 +1128,8 @@ describe("MAX live preview recovery", () => {
     queryClient.setQueryData(["messages", PROJECT.id], [buildMessage("running")]);
     getRuntime.mockResolvedValue(runtime("stopped"));
     startRuntime.mockRejectedValue(new ApiError(503, { code: "orchestrator_unavailable", message: "busy" }));
-    renderPreview("seed-snapshot", { versions: [buildVersion("running")] });
+    // A legacy history failure can already have started preparation before the first-build verdict.
+    renderPreview("seed-snapshot", { versions: [buildVersion("running")], historyError: true });
     await act(async () => { await vi.advanceTimersByTimeAsync(20); });
     expect(startRuntime).toHaveBeenCalledTimes(1);
     listMessages.mockResolvedValue([buildMessage("failed")]);
@@ -1082,7 +1148,8 @@ describe("MAX live preview recovery", () => {
     syncMaxManagedKit.mockResolvedValue(managedKit("seed-snapshot"));
     const target = stage === "sync" ? syncMaxManagedKit : createMaxPreviewSession;
     target.mockRejectedValue(new ApiError(503, { code: "orchestrator_unavailable", message: "busy" }));
-    renderPreview("seed-snapshot", { versions: [buildVersion("running")] });
+    // A legacy history failure can already have started preparation before the first-build verdict.
+    renderPreview("seed-snapshot", { versions: [buildVersion("running")], historyError: true });
     await act(async () => { await vi.advanceTimersByTimeAsync(30); });
     expect(target).toHaveBeenCalledTimes(1);
     const failed = buildMessage("failed");
@@ -1102,7 +1169,8 @@ describe("MAX live preview recovery", () => {
     getRuntime.mockResolvedValue(runtime("stopped"));
     startRuntime.mockRejectedValueOnce(new ApiError(503, { code: "orchestrator_unavailable", message: "busy" }))
       .mockResolvedValue(runtime("provisioning"));
-    renderPreview("seed-snapshot", { versions: [buildVersion("running")] });
+    // A legacy history failure can already have started preparation before the first-build verdict.
+    renderPreview("seed-snapshot", { versions: [buildVersion("running")], historyError: true });
     await act(async () => { await vi.advanceTimersByTimeAsync(20); });
     expect(startRuntime).toHaveBeenCalledTimes(1);
     const failed = buildMessage("failed");
@@ -1114,9 +1182,9 @@ describe("MAX live preview recovery", () => {
     listMessages.mockResolvedValue([failed, next]);
     act(() => queryClient.setQueryData(["messages", PROJECT.id], [failed, next]));
     await act(async () => { await vi.advanceTimersByTimeAsync(20); });
-    expect(startRuntime).toHaveBeenCalledTimes(2);
+    expect(startRuntime).toHaveBeenCalledTimes(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(1_600); });
-    expect(startRuntime).toHaveBeenCalledTimes(2);
+    expect(startRuntime).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Подготовка на паузе");
   });
 
@@ -1145,10 +1213,9 @@ describe("MAX live preview recovery", () => {
     listMessages.mockResolvedValue([buildMessage("failed")]);
     getRuntime.mockResolvedValue(runtime("provisioning"));
     renderPreview("seed-snapshot", { versions: [buildVersion(status)] });
-    await waitForValue(() => queryClient.getQueryState(["generation", PROJECT.id])?.status === "success"
-      && getRuntime.mock.calls.length === 1);
+    await waitForValue(() => container.textContent?.includes("Ожидаем завершения генерации"));
     expect(container.textContent).not.toContain("Подготовка на паузе");
-    expect(getRuntime).toHaveBeenCalledTimes(1);
+    expect(getRuntime).not.toHaveBeenCalled();
   });
 
   it("does not infer generation failure from a failed message-history request", async () => {
@@ -1166,7 +1233,8 @@ describe("MAX live preview recovery", () => {
     syncMaxManagedKit.mockResolvedValue(managedKit("seed-snapshot"));
     // Browsers emit load for cross-origin HTTP error pages as well as app pages.
     createMaxPreviewSession.mockResolvedValue(session("https://error-page.example"));
-    renderPreview("seed-snapshot", { versions: [buildVersion("running")] });
+    // A legacy history failure can already have started preparation before the first-build verdict.
+    renderPreview("seed-snapshot", { versions: [buildVersion("running")], historyError: true });
     const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
     act(() => frame.dispatchEvent(new Event("load")));
     const failed = buildMessage("failed");
@@ -1420,11 +1488,11 @@ describe("MAX live preview recovery", () => {
   it("does not wake an active generation when the new snapshot runtime is provisioning", async () => {
     syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
     createMaxPreviewSession.mockResolvedValue(session("https://preview-1.example"));
-    renderPreview("snapshot-1");
+    renderPreview("snapshot-1", { versions: [{ ...buildVersion("ready"), snapshot_id: "snapshot-1" }] });
     await waitForValue(() => container.querySelector("[data-testid='max-live-iframe']"));
     getRuntime.mockResolvedValue(runtime("provisioning"));
     syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-2"));
-    renderPreview("snapshot-2", { versions: [buildVersion("running")] });
+    renderPreview("snapshot-2", { versions: [buildVersion("running"), { ...buildVersion("ready"), snapshot_id: "snapshot-1" }] });
     await waitForValue(() => queryClient.getQueryData<RuntimeStatus>(["runtime", PROJECT.id])?.state === "provisioning");
     expect(startRuntime).not.toHaveBeenCalled();
     expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
@@ -1539,7 +1607,8 @@ describe("MAX live preview recovery", () => {
     queryClient.setQueryData(["messages", PROJECT.id], [running]);
     listMessages.mockResolvedValue([running]);
     getRuntime.mockResolvedValueOnce(runtime()).mockImplementationOnce(() => pendingRuntime.promise);
-    renderPreview("seed-snapshot", { versions: [buildVersion("running")] });
+    // A legacy history failure can already have started preparation before the first-build verdict.
+    renderPreview("seed-snapshot", { versions: [buildVersion("running")], historyError: true });
     await act(async () => { await vi.advanceTimersByTimeAsync(20); });
     expect(getRuntime).toHaveBeenCalledTimes(2);
 

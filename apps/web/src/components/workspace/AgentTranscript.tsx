@@ -31,7 +31,7 @@ import type { AgentStep, GenerationRunStatus } from "@/lib/api/types";
 import { agentElapsedSeconds } from "@/lib/agent-elapsed";
 import { collapseAgentSteps, countAgentActions } from "@/lib/agent-steps";
 import { humanPath, stepCopy, type StepIconName, type StepTone } from "@/lib/agent-step-copy";
-import { CAPACITY_WAITING_COPY, agentTranscriptTitle } from "@/lib/agent-transcript";
+import { CAPACITY_WAITING_COPY, agentTranscriptTitle, isPromptPreparationPending } from "@/lib/agent-transcript";
 import { generationVerifiedActionLabel, isGenerationResultConfirmed, parseGenerationRecovery } from "@/lib/generation-recovery";
 import { cn } from "@/lib/utils";
 import { EASE_OUT } from "@/lib/motion";
@@ -204,6 +204,7 @@ export function AgentTranscript({
   });
 
   const visibleSteps = steps ?? [];
+  const lastCurrentStep = visibleSteps.filter(step => !boundRun || !step.runId || step.runId === boundRun.id).at(-1);
   // Одинаковое действие подряд — одна строка со счётчиком повторов: десять
   // строк «Ожидаю ресурсы сервера» читаются как поломка, а не как ожидание.
   const rows = collapseAgentSteps(visibleSteps);
@@ -215,7 +216,7 @@ export function AgentTranscript({
     !streaming &&
     (generationStatus === "failed" ||
       generationStatus === "cancelled" ||
-      (!generationStatus && visibleSteps.at(-1)?.ok === false));
+      (!generationStatus && lastCurrentStep?.ok === false));
 
   return (
     <div data-agent-transcript={streaming || capacityWaiting ? "working" : "idle"} className="overflow-hidden rounded-xl border border-border-subtle bg-surface-raised/60">
@@ -245,10 +246,11 @@ export function AgentTranscript({
           {agentTranscriptTitle(
             Boolean(streaming),
             generationStatus,
-            visibleSteps.at(-1)?.ok === false,
+            lastCurrentStep?.ok === false,
             recoveryUnconfirmed ? {} : recovery,
             currentRequestComplete,
             historicalRequest,
+            isPromptPreparationPending(lastCurrentStep),
           )}
         </span>
         <span className="ml-auto flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-fg-tertiary">
