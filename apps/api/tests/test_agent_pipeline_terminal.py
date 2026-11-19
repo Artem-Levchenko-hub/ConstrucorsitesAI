@@ -581,6 +581,7 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
     monkeypatch, prepared, bootstrap_gate
 ):
     from tests.test_generation_recovery_reconciliation import bootstrap
+    from yleum_api.services import prompt_preparation
     from yleum_api.services.generation import recovery_execution as ex
     from yleum_api.services.generation.contracts import AgentPromptPlan, StackPrompt
     from yleum_api.services.generation.recovery_contract import (
@@ -714,6 +715,8 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
             handle.prove_restoration_adaptation = AsyncMock()
     monkeypatch.setattr(agent_pipeline, "adjacent_checkpoint", AsyncMock(return_value=None))
     monkeypatch.setattr(agent_pipeline, "_seed_saved_max_config", AsyncMock())
+    prepare_brief = AsyncMock(return_value="")
+    monkeypatch.setattr(prompt_preparation, "prepare_initial_prompt_brief", prepare_brief)
     bindings = SimpleNamespace(
         execute=AsyncMock(),
         probe_runtime=AsyncMock(),
@@ -805,6 +808,9 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
         if bootstrap_gate == "isolated_retry" and name == "classify_agent_turn":
             expected = 0
         assert getattr(agent_pipeline, name).await_count == expected
+    assert prepare_brief.await_count == int(not prepared)
+    if not prepared:
+        assert prepare_brief.await_args.kwargs["baseline"] == SourceBaseline(None, None, {})
     assert agent_pipeline.prepare_agent_runtime.await_count == 1  # Rebind live owned handle.
     assert agent_pipeline._load_turn_reference_images.await_count == int(
         bootstrap_gate != "completed",

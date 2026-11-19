@@ -591,6 +591,7 @@ async def test_pipeline_binds_trusted_seed_before_entering_model(monkeypatch, pr
     from datetime import UTC, datetime, timedelta
 
     from tests.test_generation_recovery_reconciliation import bootstrap
+    from yleum_api.services import prompt_preparation
     from yleum_api.services.generation import (
         agent_pipeline,
         recovery_execution,
@@ -696,6 +697,8 @@ async def test_pipeline_binds_trusted_seed_before_entering_model(monkeypatch, pr
     }.items():
         monkeypatch.setattr(agent_pipeline, name, AsyncMock(return_value=value))
     monkeypatch.setattr(agent_pipeline, "prepare_stack_prompt", prepare_stack)
+    prepare_brief = AsyncMock(return_value="")
+    monkeypatch.setattr(prompt_preparation, "prepare_initial_prompt_brief", prepare_brief)
 
     class ObservedModelBoundary(BaseException):
         pass
@@ -712,10 +715,11 @@ async def test_pipeline_binds_trusted_seed_before_entering_model(monkeypatch, pr
         raise ObservedModelBoundary()
 
     monkeypatch.setattr(agent_pipeline, "execute_agent_turn", model)
+    baseline = SourceBaseline(uuid4(), "a" * 40, {"src/app/page.tsx": "product"})
     with pytest.raises(ObservedModelBoundary):
         await agent_pipeline.run_agent_generation(
             _consume_free_generation=AsyncMock(),
-            baseline=SourceBaseline(uuid4(), "a" * 40, {"src/app/page.tsx": "product"}),
+            baseline=baseline,
             capacity_dispatch_token=None,
             factory=None,
             force_model=None,
@@ -732,3 +736,6 @@ async def test_pipeline_binds_trusted_seed_before_entering_model(monkeypatch, pr
             selected_elements=None,
             _resume_state=state,
         )
+    assert prepare_brief.await_count == int(not prepared)
+    if not prepared:
+        assert prepare_brief.await_args.kwargs["baseline"] == baseline
