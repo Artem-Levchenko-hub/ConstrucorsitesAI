@@ -152,17 +152,36 @@ async def test_old_ready_paywall_first_brief_keeps_cache_and_receives_post_data_
     assert "добавленные автором условия" in suffix
     assert "не расширяют ограничения исходного запроса" in suffix
     for required in (
-        'Главное действие «Купить подписку» и модель по подписке сами по себе не запрещают',
+        'Главное действие владельца сохраняет визуальный приоритет, но само по себе не запрещает',
         'исходного контекста',
         'явного условия владельца или подтверждённого серверного контракта',
-        'визуальный приоритет покупки',
-        'без превращения её в единственный разрешённый шаг из-за пустого списка тарифов',
+        'не требует скрывать весь интерфейс или делать её единственным разрешённым шагом',
+        'Не добавляй незапрошенных экранов, оплаты или подписки',
     ):
         assert required in suffix
-    assert "ненастроенные тарифы или недоступный провайдер не требуют скрывать весь" in suffix
     assert "Явное ограничение владельца на доступ ко всему продукту сохраняется" in suffix
     assert (
-        "Платные данные и операции доступны только после серверного подтверждения права" in suffix
+        "Для запрошенных платных данных и операций требуется "
+        "серверное подтверждение права" in suffix
     )
     assert "заказ, возврат из оплаты или состояние клиента" in suffix
     assert prep.render_prepared_brief(legacy) == rendered
+
+
+@pytest.mark.parametrize("brief", [
+    "Бесплатное расписание занятий. Главное действие — выбрать время.",
+    "Публичный путеводитель: открыть маршрут. Без аккаунтов и оплаты.",
+    "Справочник птиц: поиск по видам. Без подписки и покупок.",
+])
+def test_renderer_does_not_assign_a_purchase_action_to_unrelated_products(brief):
+    rendered = prep.render_prepared_brief(brief)
+    prefix, data_and_suffix = rendered.split("<prepared_implementation_plan>\n", 1)
+    data, suffix = data_and_suffix.split("\n</prepared_implementation_plan>", 1)
+    assert json.loads(data) == {"prepared_implementation_plan": brief}
+    instructions = prefix + suffix
+    assert "Главное действие владельца сохраняет визуальный приоритет" in instructions
+    assert "Не добавляй незапрошенных экранов, оплаты или подписки" in instructions
+    assert "Для запрошенных платных данных и операций" in instructions
+    assert "Купить подписку" not in instructions
+    assert "приоритет покупки" not in instructions
+    assert "пустого списка тарифов" not in instructions
