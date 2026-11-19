@@ -47,7 +47,7 @@ from yleum_gateway.services import (
 from yleum_gateway.services import model_router as router_module
 from yleum_gateway.services import provider_calls as provider_calls
 from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
-from yleum_gateway.services.output_budget import uses_provider_output_default
+from yleum_gateway.services.output_budget import is_sol_model, uses_provider_output_default
 from yleum_gateway.services.output_stop import completion_finish_reason, output_stop_error
 from yleum_gateway.services.pricing import (
     calculate_cost_rub,
@@ -502,6 +502,8 @@ async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -
             actual_model = llmgw.resolve_response_model(
                 response.get("model", ""), req.model, known_receipt["provider_request_id"],
             )
+            if actual_model != req.model and (is_sol_model(req.model) or is_sol_model(actual_model)):
+                raise BillingReconciliationRequiredError("Provider returned a different selected model")
             if provider_scope == "aitunnel" and actual_model != req.model:
                 raise BillingReconciliationRequiredError("Backup returned an unexpected model")
             fallback_used = actual_model != req.model or provider_scope == "aitunnel"

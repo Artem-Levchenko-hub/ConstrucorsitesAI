@@ -34,3 +34,17 @@ it.each(["existing-signed-session", undefined])("forwards only the existing plat
   expect(headers.get("x-forwarded-for")).toBe("192.0.2.10");
   expect(cookieSet).toHaveBeenCalledWith(expect.objectContaining({ value: "renewed-session" }));
 });
+
+it.each([true, false, undefined, "true"])("passes the fresh server QA capability without widening it (%s)", async (capability) => {
+  vi.stubEnv("NEXT_PUBLIC_USE_MOCKS", "false");
+  cookieGet.mockReturnValue({ value: "synthetic-existing-session" });
+  const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+    id: "owner", email: "qa@example.invalid", status: "active",
+    can_choose_generation_engine: capability,
+  }), { headers: { "content-type": "application/json" } }));
+  vi.stubGlobal("fetch", fetcher);
+  const { getSession } = await import("@/lib/auth-mock");
+  expect((await getSession())?.canChooseGenerationEngine).toBe(capability === true);
+  expect(fetcher.mock.calls[0][1]).toMatchObject({ cache: "no-store",
+    headers: { Cookie: "omnia_session=synthetic-existing-session" } });
+});

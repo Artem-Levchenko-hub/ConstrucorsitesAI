@@ -40,6 +40,7 @@ from yleum_gateway.services import (
 from yleum_gateway.services import model_router as router_module
 from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
 from yleum_gateway.services.generation_identity import GenerationProviderIdentity
+from yleum_gateway.services.output_budget import is_sol_model
 from yleum_gateway.services.output_stop import output_stop_error
 from yleum_gateway.services.pricing import read_reported_cost, resolve_request_cost
 from yleum_gateway.services.provider_receipt_cleanup import await_provider_receipt
@@ -178,6 +179,8 @@ async def stream_completion(
         actual_model = llmgw.resolve_response_model(
             receipt.get("model", ""), actual_model, provider_request_id,
         )
+        if actual_model != model and (is_sol_model(model) or is_sol_model(actual_model)):
+            raise BillingReconciliationRequiredError("Provider returned a different selected model")
         if provider_scope == "aitunnel" and actual_model != model:
             raise BillingReconciliationRequiredError("Backup returned an unexpected model")
         output_text = "".join(accumulated)

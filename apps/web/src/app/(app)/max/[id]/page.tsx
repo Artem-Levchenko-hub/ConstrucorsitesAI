@@ -47,5 +47,6 @@ export default async function MaxWorkspacePage({
   const destination = legacyMaxEditorDestination(project.id, (await searchParams) ?? {});
   if (destination) redirect(destination);
 
-  return <MaxWorkspaceShell project={project} email={session.email} />;
+  return <MaxWorkspaceShell project={project} email={session.email}
+    canChooseGenerationEngine={session.canChooseGenerationEngine === true} />;
 }

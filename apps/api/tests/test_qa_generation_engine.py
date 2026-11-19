@@ -67,6 +67,20 @@ async def test_default_claude_needs_no_pilot_authorization(monkeypatch):
     allowed.assert_not_awaited()
 
 
+@pytest.mark.parametrize("role", ["user", None, "ADMIN"])
+async def test_ordinary_profile_does_not_query_private_qa_plan(monkeypatch, role):
+    load = AsyncMock(side_effect=AssertionError("A non-admin cannot qualify for the QA plan"))
+    monkeypatch.setattr(generation_engines, "load_plan_context", load)
+    assert (
+        await generation_engines.can_choose_generation_engine(
+            SimpleNamespace(),
+            SimpleNamespace(id=uuid4(), role=role),
+        )
+        is False
+    )
+    load.assert_not_awaited()
+
+
 @pytest.mark.parametrize("requested, stored", [("sol", "claude"), ("claude", "sol")])
 async def test_same_key_cannot_change_engine_before_any_upload_or_reservation(
     monkeypatch, requested, stored

@@ -40,7 +40,7 @@ afterEach(async () => {
 async function mount(allowed: boolean) {
   mocks.profile.mockResolvedValue({ id: "owner", can_choose_generation_engine: allowed });
   await act(async () => root.render(<QueryClientProvider client={client}>
-    <ChatPanel projectId="p" projectSlug="p" />
+    <ChatPanel projectId="p" projectSlug="p" initialCanChooseGenerationEngine={allowed} />
   </QueryClientProvider>));
   await act(async () => vi.waitFor(() => expect(client.getQueryState(["owner-profile"])?.status).toBe("success")));
 }
@@ -65,6 +65,66 @@ it("ordinary users do not see the QA selector", async () => {
   await mount(false);
   expect(host.querySelector("select")).toBeNull();
   expect(mocks.submit).not.toHaveBeenCalled();
+});
+
+it("a previous QA login's cached profile cannot expose the selector in an ordinary server session", async () => {
+  client.setQueryData(["owner-profile"], { id: "previous-owner", can_choose_generation_engine: true });
+  mocks.profile.mockImplementation(() => new Promise(() => {}));
+  await act(async () => root.render(<QueryClientProvider client={client}>
+    <ChatPanel projectId="p" projectSlug="p" initialCanChooseGenerationEngine={false} />
+  </QueryClientProvider>));
+  expect(host.querySelector("select")).toBeNull();
+  expect(mocks.submit).not.toHaveBeenCalled();
+});
+
+it("server-authorized QA can choose Sol before the first wizard brief is sent, retaining the handoff on unknown acceptance", async () => {
+  const brief = "Хочу дневник растений с красивым оформлением";
+  window.history.replaceState(null, "", "/max/p?starter=1");
+  sessionStorage.setItem("omnia:max:starter:p", brief);
+  mocks.profile.mockImplementation(() => new Promise(() => {}));
+  mocks.submit.mockResolvedValue(false);
+  await act(async () => root.render(<QueryClientProvider client={client}>
+    <ChatPanel projectId="p" projectSlug="p" initialCanChooseGenerationEngine />
+  </QueryClientProvider>));
+  await act(async () => {
+    await vi.waitFor(() => expect(client.getQueryState(["messages", "p"])?.status).toBe("success"));
+    // Flush the query's already-scheduled observer notification before checking
+    // the child composer update; a successful cache alone is not a DOM commit.
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+  expect(host.querySelector("textarea")?.value).toBe(brief);
+  expect(mocks.submit).not.toHaveBeenCalled();
+  const select = host.querySelector("select")!;
+  expect(select.value).toBe("claude");
+  await act(async () => { select.value = "sol"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(mocks.submit).not.toHaveBeenCalled();
+  const send = [...host.querySelectorAll("button")].find(b => b.textContent?.trim() === "Отправить")!;
+  await act(async () => send.click());
+  expect(mocks.submit).toHaveBeenCalledTimes(1);
+  expect(mocks.submit.mock.calls[0][0]).toBe(brief);
+  expect(mocks.submit.mock.calls[0][3]).toMatchObject({ generationEngine: "sol", skipClarify: true, idempotencyKey: "max-starter-p" });
+  expect(sessionStorage.getItem("omnia:max:starter:p")).toBe(brief);
+  expect(location.search).toBe("?starter=1");
+  mocks.submit.mockResolvedValue(true);
+  await act(async () => send.click());
+  expect(mocks.submit.mock.calls[1][3].idempotencyKey).toBe("max-starter-p");
+  expect(sessionStorage.getItem("omnia:max:starter:p")).toBeNull();
+  expect(location.search).toBe("");
+});
+
+it("an ordinary wizard handoff still auto-submits once without waiting for the profile or selecting a model", async () => {
+  const brief = "Создай дневник растений";
+  window.history.replaceState(null, "", "/max/p?starter=1");
+  sessionStorage.setItem("omnia:max:starter:p", brief);
+  mocks.profile.mockImplementation(() => new Promise(() => {}));
+  await act(async () => root.render(<QueryClientProvider client={client}>
+    <ChatPanel projectId="p" projectSlug="p" />
+  </QueryClientProvider>));
+  await act(async () => vi.waitFor(() => expect(mocks.submit).toHaveBeenCalledTimes(1)));
+  expect(mocks.submit.mock.calls[0][0]).toBe(brief);
+  expect(mocks.submit.mock.calls[0][3]).toEqual({ skipClarify: true, idempotencyKey: "max-starter-p" });
+  expect(sessionStorage.getItem("omnia:max:starter:p")).toBeNull();
+  expect(host.querySelector("select")).toBeNull();
 });
 
 it("a queued submit retains engine and stable key across reload", () => {

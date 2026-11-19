@@ -19,6 +19,7 @@ export type SessionUser = {
   phoneVerificationRequired: boolean;
   registrationVerificationReason: "phone_verification_required" | "email_verification_required" | null;
   status: string;
+  canChooseGenerationEngine?: boolean;
 };
 
 /** Same order and empty-value rule as `lib/api/server.ts:apiBaseUrl`. */
@@ -70,6 +71,7 @@ export async function getSession(): Promise<SessionUser | null> {
       phone_verification_required?: boolean;
       registration_verification_reason?: SessionUser["registrationVerificationReason"];
       status?: string;
+      can_choose_generation_engine?: boolean;
     };
     return {
       id: user.id,
@@ -86,6 +88,7 @@ export async function getSession(): Promise<SessionUser | null> {
             ? null
             : "email_verification_required",
       status: user.status ?? "active",
+      canChooseGenerationEngine: user.can_choose_generation_engine === true,
     };
   } catch {
     return null;

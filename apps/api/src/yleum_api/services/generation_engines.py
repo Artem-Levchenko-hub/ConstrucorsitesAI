@@ -16,6 +16,8 @@ ENGINE_SELECTION_KEY = "qa_generation_engine_v1"
 
 async def can_choose_generation_engine(session: AsyncSession, user: User) -> bool:
     # The private active QA plan is authority, not an email or a browser flag.
+    if user.role != "admin":
+        return False
     return has_qa_unlimited_generations(user, await load_plan_context(session, user.id))
 
 

@@ -43,13 +43,13 @@ def client(neutralize_lifespan, neutralize_side_effects, monkeypatch):
         yield value
 
 
-def upstream(monkeypatch, *, finish_reason="stop", reported_rub=None):
+def upstream(monkeypatch, *, finish_reason="stop", reported_rub=None, reported_model=SLUG):
     captured = []
 
     def reply(request):
         body = json.loads(request.content)
         captured.append(body)
-        common = {"id": "synthetic-sol-response", "model": SLUG}
+        common = {"id": "synthetic-sol-response", "model": reported_model}
         headers = {"x-llmgw-request-id": "synthetic-sol-provider-receipt"}
         if reported_rub is not None:
             headers["x-llmgw-cost-rub"] = reported_rub
@@ -135,6 +135,59 @@ def test_reasoning_completion_usage_is_billed_once_with_receipt_precedence(
     assert charge["cache_read_tokens"] == 100 and charge["cost_rub"] == expected
     assert charge["provider_request_id"] == "synthetic-sol-provider-receipt"
     assert charge["cost_provenance"]["basis"] == ("token_tariff" if reported_rub is None else "provider_reported_rub")
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("requested,reported", [
+    (MODEL, "anthropic/claude-sonnet-5.5"),
+    ("claude-sonnet-5.5", SLUG),
+])
+@pytest.mark.parametrize("reported_rub", ["0", "0.9"])
+def test_sol_choice_isolation_rejects_model_substitution_but_keeps_known_expense(
+    client, monkeypatch, stream, requested, reported, reported_rub,
+):
+    captured = upstream(monkeypatch, reported_model=reported, reported_rub=reported_rub)
+    finish = AsyncMock()
+    monkeypatch.setattr(provider_calls, "finish_call", finish)
+    response = client.post("/v1/chat/completions", json={
+        "model": requested, "messages": MESSAGES, "stream": stream, "user": str(uuid4()),
+    })
+    assert len(captured) == 1
+    if stream:
+        events = [line[6:] for line in response.text.splitlines() if line.startswith("data: ")]
+        assert "[DONE]" not in events
+        assert not any(json.loads(event).get("usage") for event in events)
+        error = json.loads(events[-1])["error"]
+    else:
+        assert response.status_code == 503
+        body = response.json()
+        assert "choices" not in body
+        error = body["detail"]["error"]
+    assert error["code"] == "billing_reconciliation_required"
+    assert error["details"].get("retry_safe") is not True
+    chat.billing.charge.assert_not_awaited()
+    finish.assert_awaited_once()
+    receipt = finish.await_args.kwargs
+    assert receipt["status"] == "ambiguous"
+    assert receipt["provider_request_id"] == "synthetic-sol-provider-receipt"
+    assert receipt["provider_cost_rub"] == Decimal(reported_rub)
+    assert receipt.get("calculated_cost_rub") is None
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_existing_non_sol_primary_fallback_still_accounts_for_actual_model(client, monkeypatch, stream):
+    captured = upstream(monkeypatch, reported_model="anthropic/claude-sonnet-5", reported_rub="0.9")
+    response = client.post("/v1/chat/completions", json={
+        "model": "claude-sonnet-5.5", "messages": MESSAGES, "stream": stream, "user": str(uuid4()),
+    })
+    assert response.status_code == 200
+    assert len(captured) == 1
+    body = response_body(response, stream)
+    assert body["model"] == "claude-sonnet-5"
+    assert body["metadata"]["fallback_used"] is True
+    chat.billing.charge.assert_awaited_once()
+    assert chat.billing.charge.await_args.kwargs["model_id"] == "claude-sonnet-5"
+    assert chat.billing.charge.await_args.kwargs["cost_rub"] == Decimal("0.9")
 
 
 @pytest.mark.parametrize("stream", [False, True])

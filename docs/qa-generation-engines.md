@@ -11,6 +11,13 @@ it does not start a generation. Each explicit submit sends the closed
 ignored. A Sol request for an ordinary account or an unowned/non-MAX project
 is refused before reservation or model work.
 
+For a QA project's first wizard handoff, the editor stages the description in
+the composer instead of starting a paid call before the engine can be chosen.
+The server-rendered session supplies this capability before hydration. An
+explicit Send uses the original stable handoff key; refresh or an unknown
+acceptance retains that handoff until success. Ordinary starter auto-submit
+keeps its existing behavior.
+
 Admission saves the Sol selection in `GenerationRun.agent_state` and freezes
 `gpt-6.2-sol` in the existing dispatch's `model_id` and `force_model`. Replaying
 the same submit key with another engine produces an identity conflict.

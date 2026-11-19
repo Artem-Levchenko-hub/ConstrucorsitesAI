@@ -81,6 +81,7 @@ export function ChatPanel({
   currentSnapshotId,
   draftRef,
   adaptationRef,
+  initialCanChooseGenerationEngine = false,
 }: {
   projectId: string;
   projectSlug: string;
@@ -89,6 +90,7 @@ export function ChatPanel({
   currentSnapshotId?: string | null;
   draftRef?: Ref<PromptInputHandle>;
   adaptationRef?: Ref<ChatPanelAdaptationHandle>;
+  initialCanChooseGenerationEngine?: boolean;
 }) {
   // Ordinary clients retain server routing. The explicit QA option is separate
   // from this historical optimistic label and is authorized again by the API.
@@ -96,7 +98,9 @@ export function ChatPanel({
   const quota = useOwnerChatQuota();
   const profile = useQuery({ queryKey: OWNER_PROFILE_QUERY_KEY, queryFn: getOwnerProfile,
     staleTime: 0, retry: false });
-  const canChooseEngine = profile.data?.can_choose_generation_engine === true;
+  // A cached profile from a previous login cannot expose the QA control.
+  const canChooseEngine = initialCanChooseGenerationEngine
+    && profile.data?.can_choose_generation_engine !== false;
   const [engineChoice, setEngineChoice] = useState<{ projectId: string; engine: GenerationEngine } | null>(null);
   const engine = engineChoice?.projectId === projectId ? engineChoice.engine : "claude";
   const authoredPending = useRef(false);
@@ -109,6 +113,19 @@ export function ChatPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollContentRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const composerDraftRef = useRef<PromptInputHandle>(null);
+  const stagedStarterRef = useRef(false);
+  useImperativeHandle(draftRef, () => ({
+    insertDraft: text => composerDraftRef.current?.insertDraft(text) ?? false,
+  }), []);
+  const clearStarterHandoff = useCallback(() => {
+    // Local housekeeping must not turn a confirmed paid submit into uncertainty.
+    try { window.sessionStorage.removeItem(`omnia:max:starter:${projectId}`); }
+    catch { /* The accepted server receipt remains authoritative. */ }
+    try { window.history.replaceState(null, "", basePath); }
+    catch { /* The run key still prevents a second generation. */ }
+    stagedStarterRef.current = false;
+  }, [basePath, projectId]);
   const credentialSubmitPending = useRef(false);
   const adaptationSubmitPending = useRef(false);
   const acceptedAdaptations = useRef(new Set<string>());
@@ -248,11 +265,13 @@ export function ChatPanel({
   const handleSubmit = async (text: string, selections: SelectedElement[], { idempotencyKey, referenceImages, fontSelections, generationEngine }: PromptReferenceSubmit, replay: boolean): Promise<PromptInputSubmitResult> => {
     let referencesExpired = false;
     const accepted = await submitWithCredentialIntake(text, selections, {
-      idempotencyKey,
+      idempotencyKey: stagedStarterRef.current ? `max-starter-${projectId}` : idempotencyKey,
+      ...(stagedStarterRef.current ? { skipClarify: true } : {}),
       ...(generationEngine ? { generationEngine } : {}),
       ...(referenceImages.length ? { referenceImages, onReferenceImagesExpired: () => { referencesExpired = true; } } : {}),
       ...(fontSelections?.length ? { fontSelections } : {}),
     }, replay);
+    if (accepted === true && stagedStarterRef.current) clearStarterHandoff();
     return referencesExpired ? { accepted: false, reason: "reference_images_expired" } : accepted;
   };
 
@@ -426,6 +445,17 @@ export function ChatPanel({
       p = window.sessionStorage.getItem(starterStorageKey);
     }
     if (p && p.trim() && messages.length === 0) {
+      if (initialCanChooseGenerationEngine) {
+        if (pendingPrompt) return;
+        // Server session already supplied QA authority before hydration. Keep
+        // this first brief reviewable so choosing Sol precedes the paid call.
+        // Retain the handoff/key through F5 or unknown acceptance until success.
+        if (composerDraftRef.current?.insertDraft(p.trim())) {
+          autoFiredRef.current = true;
+          stagedStarterRef.current = true;
+        }
+        return;
+      }
       autoFiredRef.current = true;
       void submitWithCredentialIntake(p.trim(), [], {
         skipClarify: true,
@@ -435,14 +465,13 @@ export function ChatPanel({
         idempotencyKey: `max-starter-${projectId}`,
       }).then((submitted) => {
         if (submitted) {
-          window.sessionStorage.removeItem(starterStorageKey);
-          window.history.replaceState(null, "", basePath);
+          clearStarterHandoff();
         } else {
           autoFiredRef.current = false;
         }
       });
     }
-  }, [messages, submitWithCredentialIntake, basePath, projectId]);
+  }, [messages, submitWithCredentialIntake, basePath, projectId, canChooseEngine, initialCanChooseGenerationEngine, pendingPrompt, clearStarterHandoff]);
 
   return (
     // h-full + min-h-0 нужны чтобы в grid-cell flex-колонка получила фиксированную
@@ -522,7 +551,7 @@ export function ChatPanel({
         </div>}
         <Composer
           key={projectId}
-          draftRef={draftRef}
+          draftRef={composerDraftRef}
           projectId={projectId}
           snapshotId={adviceSnapshotId}
           generationEngine={canChooseEngine ? engine : undefined}
