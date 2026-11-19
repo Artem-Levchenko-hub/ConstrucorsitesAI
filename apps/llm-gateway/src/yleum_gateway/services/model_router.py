@@ -1,8 +1,9 @@
 """Single dispatch point for LLM calls — everything goes to llmgw.ru.
 
-There is exactly ONE upstream and ONE chat model
-(`gemini-3.1-pro-preview-customtools`), so this is a thin façade over
-`providers/llmgw.py` plus a route helper for the native `/v1/messages` adapter.
+The public model registry selects supported chat models on this upstream.
+This is a thin façade over `providers/llmgw.py` plus a route helper for the
+separately validated native `/v1/messages` adapter. Chat support alone does not
+grant native Messages/tool support.
 
 R-01 (deep module): callers (`routers/chat.py`, `services/streaming.py`,
 `routers/messages_native.py`) see `acompletion` / `slug_to_omnia` /

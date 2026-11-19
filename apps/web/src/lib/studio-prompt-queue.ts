@@ -1,5 +1,6 @@
 import type { PromptSubmitOptions } from "@/hooks/usePromptStream";
 import type { MessageFontSelection, SelectedElement } from "@/lib/api/types";
+import { isGenerationEngine } from "@/lib/generation-engine";
 
 export type QueuedPromptPhase = "waiting" | "sending" | "retry" | "images_expired";
 
@@ -31,6 +32,7 @@ export function readQueuedPrompt(key: string): QueuedPrompt | null {
       (entry.selections && !Array.isArray(entry.selections)) ||
       (entry.opts.referenceImages && !Array.isArray(entry.opts.referenceImages)) ||
       (entry.opts.fontSelections && !Array.isArray(entry.opts.fontSelections))) return null;
+    if (entry.opts.generationEngine !== undefined && !isGenerationEngine(entry.opts.generationEngine)) return null;
     // An interrupted POST might have reached the server. Resume only explicitly,
     // with the original request key and exact uploaded attachment identities.
     return { ...entry, phase: entry.phase === "sending" ? "retry" : entry.phase };
@@ -43,11 +45,12 @@ export function writeQueuedPrompt(key: string, entry: QueuedPrompt | null): bool
   try {
     if (entry) {
       const { text, modelId, selections, opts, phase } = entry;
-      const { idempotencyKey, skipClarify, designPresetId, referenceImages, fontSelections } = opts;
+      const { idempotencyKey, skipClarify, designPresetId, referenceImages, fontSelections, generationEngine } = opts;
       // Files stay in the live composer. Only already-uploaded attachment
       // metadata is recoverable after refresh; no URL or callback is needed.
       sessionStorage.setItem(key, JSON.stringify({ text, modelId, selections, phase, opts: {
         idempotencyKey, skipClarify, designPresetId,
+        ...(generationEngine ? { generationEngine } : {}),
         referenceImages: referenceImages?.map((image) => ({ ...image, url: "" })),
         fontSelections,
       } }));

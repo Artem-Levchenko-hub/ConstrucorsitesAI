@@ -48,7 +48,11 @@ from yleum_gateway.core.errors import (
 )
 from yleum_gateway.providers import inflight_budget, native_stream
 from yleum_gateway.providers.rate_limit import bounded_error_body, refusal_retry_candidate
-from yleum_gateway.services.output_budget import output_tokens, uses_provider_output_default
+from yleum_gateway.services.output_budget import (
+    is_sol_model,
+    output_tokens,
+    uses_provider_output_default,
+)
 from yleum_gateway.services.provider_calls import ReceiptFailure
 from yleum_gateway.services.provider_failure_diagnostics import record_provider_failure
 from yleum_gateway.services.receipt_evidence import aitunnel_request_id, receipt_evidence
@@ -88,6 +92,7 @@ _MODEL_SLUG: dict[str, str] = {
     "claude-sonnet-5": "anthropic/claude-sonnet-5",
     "claude-sonnet-5.5": "anthropic/claude-sonnet-5.5",
     "~anthropic/claude-sonnet-latest": "~anthropic/claude-sonnet-latest",
+    "gpt-6.2-sol": "openai/gpt-6.2-sol",
 }
 
 # The native Messages response may add the provider prefix; accept both forms.
@@ -99,13 +104,15 @@ _SLUG_TO_OMNIA: dict[str, str] = {
     "claude-sonnet-5.5": "claude-sonnet-5.5",
     "anthropic/claude-sonnet-5.5": "claude-sonnet-5.5",
     "~anthropic/claude-sonnet-latest": "~anthropic/claude-sonnet-latest",
+    "gpt-6.2-sol": "gpt-6.2-sol",
+    "openai/gpt-6.2-sol": "gpt-6.2-sol",
 }
 
 # Natively multimodal models — keep OpenAI image_url blocks instead of flattening
 # them (the acceptance/vision judge + the agent `see` tool send screenshots).
 _MULTIMODAL: frozenset[str] = frozenset(
     {"gemini-3.1-pro-preview-customtools", "claude-sonnet-5", "claude-sonnet-5.5",
-     "~anthropic/claude-sonnet-latest"}
+     "~anthropic/claude-sonnet-latest", "gpt-6.2-sol"}
 )
 
 _DEFAULT_MAX_TOKENS = 32768
@@ -185,6 +192,36 @@ def _to_messages(messages: list[dict[str, Any]], *, vision: bool = False) -> lis
         content = raw if vision else _flatten_content(raw)
         out.append({"role": role, "content": content})
     return out
+
+
+def _chat_payload(
+    model: str,
+    slug: str,
+    messages: list[dict[str, Any]],
+    *,
+    temperature: float | None,
+    max_tokens: int | None,
+    stream: bool,
+) -> dict[str, Any]:
+    """Keep ingress identity stable; translate model parameters only upstream."""
+    budget = output_tokens(model, max_tokens, fallback=_DEFAULT_MAX_TOKENS)
+    payload: dict[str, Any] = {
+        "model": slug,
+        "messages": _to_messages(messages, vision=_is_vision(model)),
+        "stream": stream,
+    }
+    if is_sol_model(model):
+        payload["reasoning_effort"] = "medium"
+        if budget is not None:
+            payload["max_completion_tokens"] = budget
+    else:
+        payload["temperature"] = temperature
+        if budget is not None:
+            payload["max_tokens"] = budget
+    if stream:
+        # The final chunk is the provider's usage receipt, including reasoning.
+        payload["stream_options"] = {"include_usage": True}
+    return payload
 
 
 def _approx_tokens(text: str) -> int:
@@ -409,16 +446,9 @@ async def astream(
             raise ValidationFailedError("Unsupported backup model")
         slug = model
 
-    budget = output_tokens(model, max_tokens, fallback=_DEFAULT_MAX_TOKENS)
-    payload: dict[str, Any] = {
-        "model": slug,
-        "messages": _to_messages(messages, vision=_is_vision(model)),
-        "temperature": temperature,
-        **({"max_tokens": budget} if budget is not None else {}),
-        "stream": True,
-        # The final chunk is the provider's usage receipt, including cache/reasoning.
-        "stream_options": {"include_usage": True},
-    }
+    payload = _chat_payload(
+        model, slug, messages, temperature=temperature, max_tokens=max_tokens, stream=True,
+    )
     from yleum_gateway.services.payload_limits import require_provider_payload_size
 
     require_provider_payload_size(payload)
@@ -705,14 +735,9 @@ async def acompletion(
             raise ValidationFailedError("Unsupported backup model")
         slug = model
 
-    budget = output_tokens(model, max_tokens, fallback=_DEFAULT_MAX_TOKENS)
-    payload: dict[str, Any] = {
-        "model": slug,
-        "messages": _to_messages(messages, vision=_is_vision(model)),
-        "temperature": temperature,
-        **({"max_tokens": budget} if budget is not None else {}),
-        "stream": False,
-    }
+    payload = _chat_payload(
+        model, slug, messages, temperature=temperature, max_tokens=max_tokens, stream=False,
+    )
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",

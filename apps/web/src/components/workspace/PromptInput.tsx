@@ -17,9 +17,10 @@ import { useInspectorStore, type PickedElement } from "@/store/inspector";
 import type { QueuedPromptDraft, QueuedPromptPhase } from "@/lib/studio-prompt-queue";
 import { SelectedChips } from "./SelectedChips";
 import { FontAttachmentChips, FontAttachmentPanel } from "./FontAttachments";
+import type { GenerationEngine } from "@/lib/generation-engine";
 
 export type PromptInputHandle = { insertDraft: (text: string) => boolean };
-export type PromptReferenceSubmit = { referenceImages: ReferenceImage[]; fontSelections?: MessageFontSelection[]; idempotencyKey: string };
+export type PromptReferenceSubmit = { referenceImages: ReferenceImage[]; fontSelections?: MessageFontSelection[]; idempotencyKey: string; generationEngine?: GenerationEngine };
 export type PromptInputSubmitResult = boolean | { accepted: false; reason: "reference_images_expired" };
 
 export function PromptInput(props: ComponentProps<typeof ProjectPromptInput>) {
@@ -47,6 +48,7 @@ function ProjectPromptInput({
   quotaNotice,
   projectId,
   compact = false,
+  generationEngine,
 }: {
   onSubmit: (
     text: string,
@@ -75,6 +77,7 @@ function ProjectPromptInput({
   quotaNotice?: ReactNode;
   projectId?: string;
   compact?: boolean;
+  generationEngine?: GenerationEngine;
 }) {
   const [value, setValue] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -154,9 +157,9 @@ function ProjectPromptInput({
           : references.items.length ? "Используй прикреплённые изображения как визуальный референс для приложения." : "");
     const images = references.items.flatMap((item) => item.image ? [item.image] : []);
     const fontSelections = fonts.items.flatMap(item => item.asset ? [{ ...item.asset, role: item.role }] : []);
-    const signature = JSON.stringify([finalText, wire, images.map((image) => image.id), fontSelections.map(font => [font.id, font.role])]);
-    return { text: finalText, wire, images, fontSelections, signature };
-  }, [value, references.items, fonts.items]);
+    const signature = JSON.stringify([finalText, wire, images.map((image) => image.id), fontSelections.map(font => [font.id, font.role]), generationEngine ?? "claude"]);
+    return { text: finalText, wire, images, fontSelections, signature, generationEngine };
+  }, [value, references.items, fonts.items, generationEngine]);
 
   const currentDraft = prepareDraft(selections);
   const restoreExpired = () => {
@@ -190,6 +193,7 @@ function ProjectPromptInput({
         referenceImages: draft.images,
         ...(draft.fontSelections.length ? { fontSelections: draft.fontSelections } : {}),
         idempotencyKey: key,
+        ...(draft.generationEngine ? { generationEngine: draft.generationEngine } : {}),
       }, replay);
       if (submissionEpoch.current !== epoch) return;
       if (submitted === true) {

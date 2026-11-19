@@ -1,0 +1,115 @@
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { ChatPanel } from "@/components/workspace/ChatPanel";
+import { sendPrompt } from "@/lib/api/messages";
+import { readQueuedPrompt, writeQueuedPrompt } from "@/lib/studio-prompt-queue";
+import { PromptInput } from "@/components/workspace/PromptInput";
+import type { GenerationEngine } from "@/lib/generation-engine";
+
+const mocks = vi.hoisted(() => ({ submit: vi.fn(), profile: vi.fn() }));
+vi.mock("@/hooks/usePromptStream", () => ({ usePromptStream: () => ({
+  submit: mocks.submit, cancel: vi.fn(), cancelPending: vi.fn(), pendingPrompt: null,
+}) }));
+vi.mock("@/lib/api/owner-profile", () => ({ getOwnerProfile: mocks.profile }));
+vi.mock("@/lib/api/messages", async importOriginal => ({
+  ...await importOriginal<typeof import("@/lib/api/messages")>(), listMessages: async () => [],
+  getLatestGeneration: async () => null,
+}));
+vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));
+vi.mock("@/lib/api/max-studio", () => ({ getMaxProjectConfig: async () => ({ config_version: 1 }) }));
+vi.mock("@/components/workspace/AgentTranscript", () => ({ AgentTranscript: () => null }));
+vi.mock("@/hooks/useVoiceInput", () => ({ useVoiceInput: () => ({ supported: false, state: "idle" }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("sonner", () => ({ toast: { info: vi.fn(), success: vi.fn(), warning: vi.fn(), error: vi.fn() } }));
+
+let root: Root, host: HTMLDivElement, client: QueryClient;
+beforeEach(() => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.clearAllMocks(); sessionStorage.clear(); window.history.replaceState(null, "", "/max/p");
+  mocks.submit.mockResolvedValue(true);
+  host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+});
+afterEach(async () => {
+  await act(async () => root.unmount()); client.clear(); host.remove(); vi.unstubAllGlobals();
+  sessionStorage.clear();
+});
+
+async function mount(allowed: boolean) {
+  mocks.profile.mockResolvedValue({ id: "owner", can_choose_generation_engine: allowed });
+  await act(async () => root.render(<QueryClientProvider client={client}>
+    <ChatPanel projectId="p" projectSlug="p" />
+  </QueryClientProvider>));
+  await act(async () => vi.waitFor(() => expect(client.getQueryState(["owner-profile"])?.status).toBe("success")));
+}
+
+it("QA defaults to Claude; selecting Sol sends nothing and only explicit submit freezes Sol", async () => {
+  await mount(true);
+  const select = host.querySelector("select")!;
+  expect(select.value).toBe("claude");
+  await act(async () => { select.value = "sol"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(mocks.submit).not.toHaveBeenCalled();
+  const input = host.querySelector("textarea")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "Создай дневник растений");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => [...host.querySelectorAll("button")].find(b => b.textContent?.trim() === "Отправить")!.click());
+  expect(mocks.submit).toHaveBeenCalledTimes(1);
+  expect(mocks.submit.mock.calls[0][3]).toMatchObject({ generationEngine: "sol", idempotencyKey: expect.any(String) });
+});
+
+it("ordinary users do not see the QA selector", async () => {
+  await mount(false);
+  expect(host.querySelector("select")).toBeNull();
+  expect(mocks.submit).not.toHaveBeenCalled();
+});
+
+it("a queued submit retains engine and stable key across reload", () => {
+  writeQueuedPrompt("test-queue", { text: "Build", modelId: "topmix-v1", phase: "sending",
+    opts: { generationEngine: "sol", idempotencyKey: "stable-request-key" } });
+  expect(readQueuedPrompt("test-queue")).toMatchObject({ phase: "retry",
+    opts: { generationEngine: "sol", idempotencyKey: "stable-request-key" } });
+  const corrupted = JSON.parse(sessionStorage.getItem("test-queue")!);
+  corrupted.opts.generationEngine = "arbitrary-model";
+  sessionStorage.setItem("test-queue", JSON.stringify(corrupted));
+  expect(readQueuedPrompt("test-queue")).toBeNull();
+});
+
+it("wire sends only the closed engine choice, preserving the ignored legacy model field", async () => {
+  const fetch = vi.fn(async (_url: unknown, _init?: RequestInit) => new Response(JSON.stringify({ message_id: "m" }), {
+    status: 202, headers: { "content-type": "application/json" },
+  }));
+  vi.stubGlobal("fetch", fetch);
+  await sendPrompt("p", "Build", "untrusted-model", null, { generationEngine: "sol", idempotencyKey: "stable-request-key" });
+  expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toEqual({
+    prompt: "Build", generation_engine: "sol", idempotency_key: "stable-request-key",
+  });
+});
+
+it("an unresolved QA profile becoming default Claude keeps an unconfirmed submit key; Sol changes it", async () => {
+  const submit = vi.fn(async (..._args: unknown[]) => false);
+  const renderComposer = async (generationEngine?: GenerationEngine) => {
+    await act(async () => root.render(<PromptInput projectId="p" generationEngine={generationEngine}
+      onSubmit={submit} onCancel={() => {}} onCancelPending={() => {}}
+      isStreaming={false} pendingPrompt={null} />));
+  };
+  await renderComposer();
+  const input = host.querySelector("textarea")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "Build a journal");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const send = async () => act(async () => [...host.querySelectorAll("button")].find(b => b.textContent?.trim() === "Отправить")!.click());
+  await send();
+  await renderComposer("claude");
+  await send();
+  expect(submit.mock.calls[1][2]).toMatchObject(submit.mock.calls[0][2] as object);
+  expect(submit.mock.calls[1][3]).toBe(true);
+  await renderComposer("sol");
+  await send();
+  expect(submit.mock.calls[2][2]).not.toMatchObject(submit.mock.calls[0][2] as object);
+  expect(submit.mock.calls[2][3]).toBe(false);
+});

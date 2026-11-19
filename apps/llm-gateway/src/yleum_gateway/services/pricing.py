@@ -37,6 +37,11 @@ PRICE_TABLE: Mapping[str, ModelPrice] = {
     # actual RUB receipts and validated live catalog quotes take precedence.
     "claude-sonnet-5.5": ModelPrice(Decimal("0.3498078"), Decimal("1.7490389"), Decimal("0.05")),
     "~anthropic/claude-sonnet-latest": ModelPrice(Decimal("0.3498078"), Decimal("1.7490389"), Decimal("0.05")),
+    # LLMGW public quote verified 2026-11-19, RUB per million:
+    # input 339.71, output 1698.53, cached input 16.99. Receipts take precedence.
+    "gpt-6.2-sol": ModelPrice(
+        Decimal("0.33971"), Decimal("1.69853"), Decimal("16.99") / Decimal("339.71"),
+    ),
 }
 
 _PER_1K = Decimal("1000")
@@ -273,6 +278,7 @@ _CATALOG_MODEL_IDS = {
     "anthropic/claude-sonnet-5": "claude-sonnet-5",
     "anthropic/claude-sonnet-5.5": "claude-sonnet-5.5",
     "~anthropic/claude-sonnet-latest": "~anthropic/claude-sonnet-latest",
+    "openai/gpt-6.2-sol": "gpt-6.2-sol",
 }
 _CATALOG_TTL = 15.0
 _catalog_cache: tuple[float, dict[str, tuple[Decimal, Decimal, Decimal]]] | None = None
@@ -565,6 +571,10 @@ _MODEL_META: Mapping[str, _ModelMeta] = {
     "~anthropic/claude-sonnet-latest": _ModelMeta(
         "Claude Sonnet Latest", "anthropic", 1_000_000,
         ("agentic", "coding", "tool-use", "multimodal"),
+    ),
+    "gpt-6.2-sol": _ModelMeta(
+        "GPT-6.2 Sol", "openai", 1_050_000,
+        ("agentic", "coding", "multimodal"),
     ),
 }
 

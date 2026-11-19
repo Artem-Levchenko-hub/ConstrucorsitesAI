@@ -48,6 +48,10 @@ import { isChatMessageStreaming } from "@/lib/chat-message-status";
 import { readMaxLaunch } from "@/lib/max-launch-runner";
 import type { MaxAdaptationAttachment } from "@/lib/use-max-adaptation";
 import type { Message, Snapshot } from "@/lib/api/types";
+import { getOwnerProfile } from "@/lib/api/owner-profile";
+import { OWNER_PROFILE_QUERY_KEY } from "@/lib/owner-chat-quota";
+import type { GenerationEngine } from "@/lib/generation-engine";
+import { GenerationEngineSelect } from "./GenerationEngineSelect";
 
 export type ChatPanelAdaptationHandle = {
   submitAdaptation: (attachment: MaxAdaptationAttachment) => Promise<boolean>;
@@ -86,11 +90,15 @@ export function ChatPanel({
   draftRef?: Ref<PromptInputHandle>;
   adaptationRef?: Ref<ChatPanelAdaptationHandle>;
 }) {
-  // Server orchestrates per-role models (Opus director, DeepSeek polish, …).
-  // The client no longer picks a model; this label is just sent through for
-  // the optimistic chat row and is ignored by the backend.
+  // Ordinary clients retain server routing. The explicit QA option is separate
+  // from this historical optimistic label and is authorized again by the API.
   const modelId = "topmix-v1";
   const quota = useOwnerChatQuota();
+  const profile = useQuery({ queryKey: OWNER_PROFILE_QUERY_KEY, queryFn: getOwnerProfile,
+    staleTime: 0, retry: false });
+  const canChooseEngine = profile.data?.can_choose_generation_engine === true;
+  const [engineChoice, setEngineChoice] = useState<{ projectId: string; engine: GenerationEngine } | null>(null);
+  const engine = engineChoice?.projectId === projectId ? engineChoice.engine : "claude";
   const authoredPending = useRef(false);
   const { submit, cancel, cancelPending, retryPending, restoreExpiredPending, pendingPrompt, pendingPhase } = usePromptStream(
     projectId,
@@ -141,6 +149,10 @@ export function ChatPanel({
       opts?: PromptSubmitOptions,
       replay = Boolean(opts?.idempotencyKey),
     ): Promise<boolean> => {
+      // Capture once per submission; the queue/replay retains this exact choice.
+      if (canChooseEngine && opts?.generationEngine === undefined) {
+        opts = { ...opts, generationEngine: engine };
+      }
       // An explicit stable key may be an already accepted request whose response
       // was lost; only the server can adjudicate that replay. Fresh manual sends
       // must not become a second queued message on Free.
@@ -230,13 +242,14 @@ export function ChatPanel({
         credentialSubmitPending.current = false;
       }
     },
-    [modelId, projectId, qc, submit, quota.exhausted, quota.limited],
+    [modelId, projectId, qc, submit, quota.exhausted, quota.limited, canChooseEngine, engine],
   );
 
-  const handleSubmit = async (text: string, selections: SelectedElement[], { idempotencyKey, referenceImages, fontSelections }: PromptReferenceSubmit, replay: boolean): Promise<PromptInputSubmitResult> => {
+  const handleSubmit = async (text: string, selections: SelectedElement[], { idempotencyKey, referenceImages, fontSelections, generationEngine }: PromptReferenceSubmit, replay: boolean): Promise<PromptInputSubmitResult> => {
     let referencesExpired = false;
     const accepted = await submitWithCredentialIntake(text, selections, {
       idempotencyKey,
+      ...(generationEngine ? { generationEngine } : {}),
       ...(referenceImages.length ? { referenceImages, onReferenceImagesExpired: () => { referencesExpired = true; } } : {}),
       ...(fontSelections?.length ? { fontSelections } : {}),
     }, replay);
@@ -315,7 +328,8 @@ export function ChatPanel({
   const streamingId = isStreaming ? last?.id : null;
   const generationActive = latest.data?.project_id === projectId && isGenerationActive(latest.data);
   const retryAvailable = !quota.exhausted && !isPending && !pendingPrompt && !isStreaming && !generationActive;
-  const retryLatestRequest = () => submitWithCredentialIntake("Попробуй ещё раз", []);
+  const retryLatestRequest = () => submitWithCredentialIntake("Попробуй ещё раз", [],
+    canChooseEngine ? { generationEngine: last?.model_id === "gpt-6.2-sol" ? "sol" : "claude" } : undefined);
   const returnToPrompt = () => inputRef.current?.focus();
 
   // Progressive-discovery quick replies (P1): chips belong to the LATEST
@@ -498,6 +512,9 @@ export function ChatPanel({
       </div>
 
       <div className="relative shrink-0">
+        {canChooseEngine && <GenerationEngineSelect value={engine}
+          disabled={isStreaming || !!pendingPrompt}
+          onChange={value => setEngineChoice({ projectId, engine: value })} />}
         {!chatScroll.following && <div className="max-chat-latest">
           <Button type="button" variant="secondary" size="sm" onClick={chatScroll.scrollToLatest}>
             <ArrowDown aria-hidden="true" /> К последнему сообщению
@@ -508,6 +525,7 @@ export function ChatPanel({
           draftRef={draftRef}
           projectId={projectId}
           snapshotId={adviceSnapshotId}
+          generationEngine={canChooseEngine ? engine : undefined}
           contextVersion={currentConfig?.config_version}
           onSubmit={handleSubmit}
           sendDisabled={quota.exhausted || (quota.limited && isStreaming)}

@@ -12,7 +12,7 @@ from uuid import UUID
 from yleum_api.core.config import get_settings
 from yleum_api.services import agent_builder
 from yleum_api.services import repo as repo_svc
-from yleum_api.services.agent_output_budget import KIMI_PILOT_MODEL, is_sonnet55_model
+from yleum_api.services.agent_output_budget import KIMI_PILOT_MODEL, is_sol_model, is_sonnet55_model
 from yleum_api.services.generation.agent_recovery import _restore_max_core
 from yleum_api.services.generation.contracts import (
     AgentOperations,
@@ -295,6 +295,7 @@ async def run_native_source_repair(
     from yleum_api.services.generation.agent_generation import (
         SourceCheckpointError,
         checkpoint_source_actions,
+        raise_if_source_checkpoint_failed,
     )
     from yleum_api.services.generation.agent_runtime import guard_native_source_contract
     from yleum_api.services.max_generation_contract import max_source_completion_gap
@@ -453,38 +454,63 @@ async def run_native_source_repair(
             directed_path = None
     kimi_repair_paths = source_failure.allowed_paths if kimi_repair and source_failure else ()
     try:
-        result = await agent_native.run_native_build(
-            continuation=continuation,
-            response_recovery=getattr(operations, "response_recovery", None),
-            take_verified_progress=getattr(operations, "take_verified_progress", None),
-            pure_check=getattr(operations, "pure_check", None),
-            model=KIMI_PILOT_MODEL if kimi_repair else plan.model,
-            system=agent_native.native_system_prompt(
-                plan.stack_guide or "", plan.skills, coordinator_handoff=True,
-            ),
-            task=task, execute=repair_execute,
-            user_id=str(ids.user_id), project_id=str(ids.project_id), run_id=str(ids.run_id),
-            message_id=str(ids.assistant_message_id), free=is_free,
-            emit=None if single_repair else operations.emit,
-            max_steps=plan.steps,
-            max_segments=(
-                None
-                if not single_repair and (continuation is not None or not autonomous_repair)
-                and runtime.coordinator is not None
-                and getattr(get_settings(), "agent_progressive_continuation", False)
-                and (not kimi_repair or bool(kimi_repair_paths))
-                else 1
-            ),
-            snapshot_files=snapshot if callable(snapshot) else None,
-            source_repair=True,
-            kimi_repair=kimi_repair,
-            kimi_repair_paths=kimi_repair_paths,
-            directed_path=directed_path,
-            allow_max_bash=shell_enabled and not kimi_repair,
-            portable_cell=True, coordinator_handoff=True,
-            initial_files=model_baseline,
-            edit_deadline=edit_deadline, completion_check=repair_completion,
-        )
+        if is_sol_model(plan.model):
+            # Same authorized executor, checkpoint and completion check; Sol
+            # keeps its text action protocol through finalization and recovery.
+            result = await agent_builder.run_agent_build(
+                system_prompt=plan.system, user_prompt=task,
+                model=plan.model, escalate_model=plan.model,
+                # The text agent supplies its complete current snapshot here;
+                # native callbacks below receive only a partial write log.
+                execute=repair_execute, completion_check=guarded_completion,
+                user_id=str(ids.user_id), project_id=str(ids.project_id),
+                emit=None if single_repair else operations.emit,
+                max_steps=plan.steps, coordinator_handoff=True,
+                bounded_repair=True, require_green_before_done=False,
+                ship_green_on_abort=False, edit_mode=True,
+                max_segments=None if continuation is not None and callable(snapshot) else 1,
+                snapshot_files=snapshot if callable(snapshot) else None,
+                checkpoint=checkpoint,
+                recovery=getattr(operations, "recovery", None),
+                recovery_binding=getattr(operations, "recovery_binding", None),
+                response_recovery=accounting,
+                take_verified_progress=getattr(operations, "take_verified_progress", None),
+                continuation=continuation, edit_deadline=edit_deadline,
+            )
+            raise_if_source_checkpoint_failed(result)
+        else:
+            result = await agent_native.run_native_build(
+                continuation=continuation,
+                response_recovery=getattr(operations, "response_recovery", None),
+                take_verified_progress=getattr(operations, "take_verified_progress", None),
+                pure_check=getattr(operations, "pure_check", None),
+                model=KIMI_PILOT_MODEL if kimi_repair else plan.model,
+                system=agent_native.native_system_prompt(
+                    plan.stack_guide or "", plan.skills, coordinator_handoff=True,
+                ),
+                task=task, execute=repair_execute,
+                user_id=str(ids.user_id), project_id=str(ids.project_id), run_id=str(ids.run_id),
+                message_id=str(ids.assistant_message_id), free=is_free,
+                emit=None if single_repair else operations.emit,
+                max_steps=plan.steps,
+                max_segments=(
+                    None
+                    if not single_repair and (continuation is not None or not autonomous_repair)
+                    and runtime.coordinator is not None
+                    and getattr(get_settings(), "agent_progressive_continuation", False)
+                    and (not kimi_repair or bool(kimi_repair_paths))
+                    else 1
+                ),
+                snapshot_files=snapshot if callable(snapshot) else None,
+                source_repair=True,
+                kimi_repair=kimi_repair,
+                kimi_repair_paths=kimi_repair_paths,
+                directed_path=directed_path,
+                allow_max_bash=shell_enabled and not kimi_repair,
+                portable_cell=True, coordinator_handoff=True,
+                initial_files=model_baseline,
+                edit_deadline=edit_deadline, completion_check=repair_completion,
+            )
     except SourceCheckpointError as exc:
         raise RuntimeError(exc.candidate.summary) from None
     if (

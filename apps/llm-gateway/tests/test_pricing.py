@@ -99,6 +99,7 @@ def test_list_models_covers_price_table() -> None:
         "claude-sonnet-5",
         "claude-sonnet-5.5",
         "~anthropic/claude-sonnet-latest",
+        "gpt-6.2-sol",
     }
     assert {m["id"] for m in catalog} == set(PRICE_TABLE.keys())
     for m in catalog:

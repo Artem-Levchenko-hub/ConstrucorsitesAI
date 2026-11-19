@@ -1076,6 +1076,7 @@ MODEL_TIER_MAP: dict[str, str] = {
     "claude-opus-4-6": "premium",
     "claude-sonnet-4-6": "premium",
     "gpt-5": "premium",
+    "gpt-6.2-sol": "premium",
     "gemini-2.5-pro": "premium",
     # Balanced — single-shot with trimmed kit blocks.
     "gpt-5-mini": "balanced",

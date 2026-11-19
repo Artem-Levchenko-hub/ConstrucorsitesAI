@@ -59,6 +59,7 @@ const PROMPT_REFUSALS: Record<string, string> = {
 };
 
 export type PromptSubmitOptions = {
+  generationEngine?: import("@/lib/generation-engine").GenerationEngine;
   skipClarify?: boolean;
   designPresetId?: string | null;
   /** Stable for one logical submit so an F5 replay cannot create a new run. */

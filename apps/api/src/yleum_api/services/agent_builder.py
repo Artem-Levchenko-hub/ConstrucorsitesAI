@@ -65,11 +65,10 @@ from yleum_api.services.agent_discovery_context import (
     retained_information,
 )
 from yleum_api.services.agent_output_budget import (
-    DEFAULT_REPAIR_OUTPUT_TOKENS,
     KIMI_PILOT_MODEL,
-    SONNET55_REPAIR_OUTPUT_TOKENS,
     agent_output_tokens,
     is_sonnet55_model,
+    repair_output_tokens,
 )
 from yleum_api.services.agent_progress import bounded_redacted_diagnostic
 from yleum_api.services.generation.continuation import (
@@ -1257,10 +1256,7 @@ async def _run_agent_segment(
                     call_msgs = _repair_window_messages(convo, source_repair.gap)
                 call_msgs = [*call_msgs, {"role": "user", "content": context}]
             if max_tokens is None and (bounded_repair or focused_repair):
-                repair_max_tokens = (
-                    SONNET55_REPAIR_OUTPUT_TOKENS if is_sonnet55_model(active_model)
-                    else DEFAULT_REPAIR_OUTPUT_TOKENS
-                )
+                repair_max_tokens = repair_output_tokens(active_model)
 
             # The transcript window can drop the actions that wrote these files.
             note = _progress_note(

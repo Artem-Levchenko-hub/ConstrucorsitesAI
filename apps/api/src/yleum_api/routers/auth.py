@@ -362,6 +362,7 @@ async def logout(
 @router.get("/me", response_model=UserPublic)
 async def me(current_user: CurrentUserDep, session: SessionDep) -> UserPublic:
     from yleum_api.services.entitlements import free_chat_allowance
+    from yleum_api.services.generation_engines import can_choose_generation_engine
 
     limit, remaining = await free_chat_allowance(session, current_user.id)
     from yleum_api.services.generation_credits import credits_view, uses_unit_billing
@@ -380,6 +381,9 @@ async def me(current_user: CurrentUserDep, session: SessionDep) -> UserPublic:
         update={
             "user_chat_messages_limit": limit,
             "user_chat_messages_remaining": remaining,
+            "can_choose_generation_engine": await can_choose_generation_engine(
+                session, current_user,
+            ),
             **units,
         }
     )

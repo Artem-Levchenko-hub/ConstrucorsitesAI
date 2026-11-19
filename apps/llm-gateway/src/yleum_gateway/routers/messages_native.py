@@ -73,7 +73,11 @@ from yleum_gateway.services.native_request_validation import (
     NativeRequestValidationError,
     validate_native_chat_request,
 )
-from yleum_gateway.services.output_budget import output_tokens, uses_provider_output_default
+from yleum_gateway.services.output_budget import (
+    is_sol_model,
+    output_tokens,
+    uses_provider_output_default,
+)
 from yleum_gateway.services.output_stop import output_stop_error
 from yleum_gateway.services.payload_limits import provider_payload_rejection
 from yleum_gateway.services.pricing import (
@@ -1118,6 +1122,12 @@ async def _native_messages_execute(
     elif model == KIMI_LLMGW_MODEL:
         model = KIMI_MODEL
 
+    if is_sol_model(model):
+        return _err(
+            400, "validation_failed",
+            "This model is supported only by /v1/chat/completions; native Messages is unavailable",
+        )
+
     user_id = (
         None if runner_claims is not None else _uuid(body.get("user") or metadata.get("user_id"))
     )
@@ -1270,7 +1280,7 @@ async def _native_messages_execute(
         actual_model = model if kimi else slug_to_omnia(reported_model) if isinstance(reported_model, str) else None
         model_mismatch = (
             reported_model != kimi.wire_model if kimi else bool(reported_model) and (
-                actual_model is None or not is_supported(actual_model)
+                actual_model is None or is_sol_model(actual_model) or not is_supported(actual_model)
                 or (provider_scope == "aitunnel" and actual_model != model)
             )
         )

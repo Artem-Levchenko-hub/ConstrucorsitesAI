@@ -62,6 +62,7 @@ def test_models_endpoint_lists_all_supported(client: TestClient) -> None:
         "claude-sonnet-5",
         "claude-sonnet-5.5",
         "~anthropic/claude-sonnet-latest",
+        "gpt-6.2-sol",
     }
     # No keys configured in test → all unavailable.
     assert all(m["available"] is False for m in body["data"])

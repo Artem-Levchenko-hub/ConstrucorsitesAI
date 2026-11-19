@@ -63,6 +63,8 @@ class UserPublic(BaseModel):
     generation_initials_available: int | None = Field(default=None,ge=0)
     user_chat_messages_limit: int | None = Field(default=None, ge=0, le=1)
     user_chat_messages_remaining: int | None = Field(default=None, ge=0, le=1)
+    # Populated only for this authenticated owner; false on older/login responses.
+    can_choose_generation_engine: bool = False
 
     @computed_field  # type: ignore[prop-decorator]
     @property

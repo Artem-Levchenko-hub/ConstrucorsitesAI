@@ -149,6 +149,8 @@ class RestorationAdaptationReference(BaseModel):
 
 class PromptRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=30_000)
+    # A server-authorized QA choice, frozen into the accepted run's dispatch.
+    generation_engine: Literal["claude", "sol"] = "claude"
     reference_image_ids: list[UUID] = Field(default_factory=list, max_length=4)
     font_selections: list[FontSelection] = Field(default_factory=list, max_length=6)
     # Stable identity of one UI submit. Retrying the same HTTP request with the

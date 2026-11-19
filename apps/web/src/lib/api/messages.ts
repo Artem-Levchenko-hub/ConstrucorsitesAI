@@ -1,5 +1,6 @@
 import { apiFetch } from "./client";
 import { mockApi, USE_MOCKS } from "./mocks";
+import type { GenerationEngine } from "@/lib/generation-engine";
 import type {
   GenerationRun,
   Message,
@@ -50,6 +51,7 @@ export async function sendPrompt(
   modelId: string,
   selectedElements?: SelectedElement[] | null,
   opts?: {
+    generationEngine?: GenerationEngine;
     skipClarify?: boolean;
     designPresetId?: string | null;
     idempotencyKey?: string;
@@ -88,6 +90,7 @@ export async function sendPrompt(
     // behaviour byte-identical and the backend field optional.
     json: {
       prompt,
+      ...(opts?.generationEngine ? { generation_engine: opts.generationEngine } : {}),
       idempotency_key: idempotencyKey,
       ...(opts?.referenceImages?.length ? { reference_image_ids: opts.referenceImages.map((image) => image.id) } : {}),
       ...(opts?.fontSelections?.length ? { font_selections: opts.fontSelections.map((font) => ({ asset_id: font.id, role: font.role })) } : {}),

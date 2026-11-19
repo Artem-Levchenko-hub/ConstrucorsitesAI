@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from yleum_api.core.config import get_settings
 from yleum_api.schemas.project import orchestrator_template
 from yleum_api.services import agent_builder
-from yleum_api.services.agent_output_budget import KIMI_PILOT_MODEL
+from yleum_api.services.agent_output_budget import KIMI_PILOT_MODEL, is_sol_model
 from yleum_api.services.generation.contracts import (
     AgentOperations,
     AgentPromptPlan,
@@ -22,6 +22,7 @@ from yleum_api.services.generation.contracts import (
     uses_single_max_source_repair,
 )
 from yleum_api.services.generation.file_transforms import _merge_seeded_agent_files
+from yleum_api.services.generation.recovery_contract import RecoveryContractError
 from yleum_api.services.generation.source_intent import (
     requested_source_edit as requested_source_edit,
 )
@@ -50,6 +51,18 @@ class SourceCheckpointError(ProjectCellInfrastructureError):
     def __init__(self, candidate: agent_builder.AgentResult) -> None:
         super().__init__("checkpoint_error")
         self.candidate = candidate
+
+
+def uses_native_protocol(
+    model: str, frame: object, *, configured: bool, directed_repair: bool,
+) -> bool:
+    if is_sol_model(model):
+        if isinstance(frame, dict) and frame.get("kind") == "native":
+            raise RecoveryContractError("Sol cannot resume an Anthropic native transcript")
+        return False
+    if isinstance(frame, dict):
+        return frame.get("kind") == "native"
+    return model == KIMI_PILOT_MODEL or configured or directed_repair
 
 
 def raise_if_source_checkpoint_failed(candidate: agent_builder.AgentResult) -> None:
@@ -455,12 +468,9 @@ async def execute_agent_turn(
     # An already-issued request keeps its original wire protocol when the worker resumes.
     _native_agent = False
     if _agent_res is None or source_checkpoint is not None:
-        _native_agent = (
-            frame.get("kind") == "native" if isinstance(frame, dict) else (
-                plan.model == KIMI_PILOT_MODEL
-                or get_settings().use_native_agent
-                or directed_path is not None
-            )
+        _native_agent = uses_native_protocol(
+            plan.model, frame, configured=get_settings().use_native_agent,
+            directed_repair=directed_path is not None,
         )
     authoritative_first_build = (
         _native_agent and not _is_edit and runtime.coordinator is not None

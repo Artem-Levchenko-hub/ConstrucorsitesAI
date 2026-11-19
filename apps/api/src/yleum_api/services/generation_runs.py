@@ -505,6 +505,13 @@ def load_generation_dispatch(run: GenerationRun) -> GenerationDispatch:
         raise ValueError("generation dispatch UUID is invalid") from exc
     if dispatch.project_id != run.project_id or dispatch.user_id != run.user_id:
         raise ValueError("generation dispatch ownership mismatch")
+    from yleum_api.services.generation_engines import SOL_MODEL, selected_engine
+
+    sol_selected = selected_engine(state) == "sol"
+    if sol_selected != (dispatch.force_model == SOL_MODEL) or (
+        sol_selected and dispatch.model_id != SOL_MODEL
+    ):
+        raise ValueError("generation dispatch engine binding conflicts")
     return dispatch
 
 
