@@ -1,5 +1,7 @@
 """Preparation request preserves client choices and truthful MAX/data boundaries."""
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -11,6 +13,10 @@ from yleum_api.services import prompt_preparation as prep
     'Каталог пуст. На первом экране нужна декоративная иллюстрация, без выдуманных товаров.',
     'Без фотографий и декоративной графики. Имя пользователь вводит в форме.',
     'Нужен аватар в профиле, если пользователь разрешённым способом добавил его сам.',
+    'Платное составление рациона. До настройки тарифов нужны анкета и доступная история.',
+    'Все данные сервиса доступны только подписчикам. Публично только объяснение и вход.',
+    'Провайдер временно недоступен. Сохрани введённый контекст и навигацию по моим экранам.',
+    'Публичный подзаголовок точно «Мини-приложение для пользователей MAX». Не меняй его.',
     pytest.param(
         'Начало задачи. ' + 'я' * 8000 + 'ВАЖНЫЙ СЦЕНАРИЙ В СЕРЕДИНЕ' + 'я' * 8000 + ' Конец.',
         id='long_description_keeps_middle',
@@ -48,6 +54,18 @@ async def test_guidance_reaches_the_same_single_request_without_rewriting_owner_
     assert 'Декор не выдаётся за реальные позиции каталога или записи пользователя' in instruction
     assert 'Не изобретай новых запретов' in instruction
     assert 'явные ограничения клиента сохраняй' in instruction
+    for required in (
+        'исходные данные пользователя, настройку сервиса владельцем '
+        'и право на платную операцию',
+        'состояние настройки, а не причина автоматически закрывать весь интерфейс и навигацию',
+        'доступ требует подтверждённого сервером права',
+        'создание заказа, возврат из оплаты или показ цены не означают оплату',
+        'клиент явно ограничил доступ ко всему продукту, сохрани именно эту границу',
+        'нейтральный текст платформы не обязан становиться подзаголовком приложения',
+        'Первый экран без данных должен иметь ту же продуманную композицию, '
+        'иерархию и характер',
+    ):
+        assert required in instruction
     assert kwargs['stage'] == 'prompt_preparation' and kwargs['free'] is True
     assert kwargs['max_tokens'] is None and kwargs['temperature'] == 0.2
 
@@ -79,3 +97,49 @@ def test_short_code_fence_cannot_expand_or_merge_the_accepted_owner_description(
 def test_code_exclusion_does_not_admit_an_oversized_internal_owner_description():
     with pytest.raises(ValueError, match='accepted owner prompt contract'):
         prep.preparation_messages('```tsx\n' + 'x' * 30_000 + '\n```', {})
+
+
+async def test_old_ready_paywall_first_brief_keeps_cache_and_receives_post_data_access_guard(
+    monkeypatch,
+):
+    from yleum_api.core import config
+
+    legacy = "На первом экране только тарифы. До выбора тарифа скрыты анкета и история."
+    fingerprint = "a" * 64
+    cache = {"version": 1, "state": "ready", "input_sha256": fingerprint, "result": legacy}
+    cached = prep._cached(cache, fingerprint)
+    assert cached == legacy
+    claim = AsyncMock(return_value=(None, cached))
+    complete = AsyncMock(side_effect=AssertionError("ready cache must not dispatch a model"))
+    factory = Mock(side_effect=AssertionError("ready cache must not write a new claim"))
+    write = AsyncMock(side_effect=AssertionError("ready cache must not be rewritten"))
+    progress = AsyncMock()
+    monkeypatch.setattr(config, "get_settings", lambda: SimpleNamespace(
+        prompt_preparation_enabled=True,
+    ))
+    monkeypatch.setattr(prep, "_claim", claim)
+    monkeypatch.setattr(prep, "_write", write)
+    returned = await prep.prepare_prompt_brief(
+        factory, SimpleNamespace(), complete=complete, emit_progress=progress,
+    )
+    assert returned == legacy and cache["result"] == legacy
+    claim.assert_awaited_once()
+    factory.assert_not_called()
+    complete.assert_not_awaited()
+    write.assert_not_awaited()
+    progress.assert_not_awaited()
+    rendered = prep.render_prepared_brief(returned)
+    start = rendered.index("<prepared_implementation_plan>\n")
+    end = rendered.index("\n</prepared_implementation_plan>")
+    data = json.loads(rendered[start + len("<prepared_implementation_plan>\n"):end])
+    assert data == {"prepared_implementation_plan": legacy}
+    suffix = rendered[end + len("\n</prepared_implementation_plan>"):]
+    assert "добавленные автором условия" in suffix
+    assert "не расширяют ограничения исходного запроса" in suffix
+    assert "ненастроенные тарифы или недоступный провайдер не требуют скрывать весь" in suffix
+    assert "Явное ограничение владельца на доступ ко всему продукту сохраняется" in suffix
+    assert (
+        "Платные данные и операции доступны только после серверного подтверждения права" in suffix
+    )
+    assert "заказ, возврат из оплаты или состояние клиента" in suffix
+    assert prep.render_prepared_brief(legacy) == rendered

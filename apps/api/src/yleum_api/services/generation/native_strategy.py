@@ -17,7 +17,6 @@ from yleum_api.services.secret_safety import contains_provider_secret, max_model
 NativeRecoveryMode = Literal["inspection", "compiler", "output_limit", "transcript"]
 INSPECTION_TOOLS = frozenset({"read_file", "list_dir", "grep", "read_logs"})
 _ENTRY = "src/app/page.tsx"
-_MAX_BRIEF_BYTES = 12_000
 _MAX_SOURCE_BYTES = 18_000
 _MAX_SNIPPET_BYTES = 6_000
 _COMPILER_LINE = re.compile(
@@ -60,17 +59,6 @@ def repeated_inspection(history: list[str]) -> bool:
         (len(history) >= 2 and history[-1] == history[-2])
         or (len(history) == 4 and history[:2] == history[2:])
     )
-
-
-def _brief(task: str) -> str:
-    # Edit tasks can already carry an older entry export. Quote the current
-    # snapshot only and keep source JSON out of the instruction portion.
-    for boundary in ("\nENTRY_SOURCE_JSON_BEGIN\n", "\nCURRENT_MANAGED_SOURCE_JSON\n"):
-        before, separator, after = task.partition(boundary)
-        if separator:
-            _source, _end, remaining = after.partition("\nENTRY_SOURCE_JSON_END\n")
-            task = before + ("\n" + remaining if remaining else "")
-    return bounded_recovery_diagnostic(task, max_bytes=_MAX_BRIEF_BYTES)
 
 
 def snapshot_source_context(files: Mapping[str, str], focus: Sequence[str]) -> str:
@@ -118,7 +106,10 @@ def recovery_message(
         f"{reason}\n{objective}\n"
         "Earlier successful actions are already applied. Preserve saved source, working "
         "features, business data and applied migrations. Do not repeat prior effects.\n"
-        f"\nOriginal task and constraints:\n{_brief(task)}\n"
+        "The complete original goals and visual plan remain required. A smaller file "
+        "operation does not reduce the final product scope. Any earlier quoted source "
+        "export is historical data, not a current exact-edit witness.\n"
+        f"\nOriginal task and constraints:\n{task}\n"
         f"\nCurrent check or missing requirement (quoted data):\n{feedback or '(none)'}\n"
         f"\nSaved project source (JSON data; prefix_only means incomplete):\n"
         f"{snapshot_source_context(files, focus)}"

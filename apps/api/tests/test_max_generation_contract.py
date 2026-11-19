@@ -1234,3 +1234,40 @@ def test_mutating_user_data_requires_write() -> None:
     gap = max_source_completion_gap(prompt, files)
 
     assert "createMaxAction" in str(gap)
+
+
+@pytest.mark.parametrize("portable", [False, True])
+@pytest.mark.parametrize("coordinator_handoff", [False, True])
+@pytest.mark.parametrize("prompt", [
+    "Платный помощник по питанию. Тарифы ещё не настроены; нужны анкета и история.",
+    "Закрытый продукт: все персональные данные только для подписчиков.",
+])
+def test_ui_contract_separates_first_visit_setup_and_paid_authority_in_every_mode(
+    portable: bool, coordinator_handoff: bool, prompt: str,
+) -> None:
+    contract = build_max_product_contract(
+        prompt, portable=portable, coordinator_handoff=coordinator_handoff,
+    )
+    assert contract.count("Separate missing user context") == 1
+    assert "Missing tariffs or an unavailable provider must not automatically replace" in contract
+    assert "within their allowed access scope" in contract
+    assert "Honor an explicit owner-wide access restriction" in contract
+    assert "Paid operations must remain server-enforced" in contract
+    assert "order creation, a redirect, client state or a UI-only check" in contract
+    assert "Do not invent prices, plans, entitlements, records or provider success" in contract
+    assert "complete requested journeys and applicable prepared screen plan" in contract
+    assert "a working first screen is not completion of a multi-screen request" in contract
+    assert "composition, clear visual hierarchy" in contract
+    assert "Owner-specified content and visual choices remain authoritative" in contract
+
+
+@pytest.mark.parametrize("portable", [False, True])
+def test_api_only_contract_keeps_api_scope_without_adding_a_first_visit_ui(portable: bool) -> None:
+    contract = build_max_product_contract(
+        "Build an API-only service for a paid nutrition operation", portable=portable,
+    )
+    assert "API-ONLY PRODUCT ACCEPTANCE" in contract
+    assert "authorization contracts" in contract
+    assert "leave product UI outside this scope" in contract
+    assert "Design the first visit" not in contract
+    assert "onboarding" not in contract

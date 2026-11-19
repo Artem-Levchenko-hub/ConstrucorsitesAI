@@ -79,6 +79,8 @@ async def test_provider_request_contains_one_managed_sdk_contract(monkeypatch, m
         "CSS Modules or product-scoped class names", "Tailwind's .ring",
         "absent personal data from measured zero progress",
         "successful empty read", "explicitly blank, static or API-only scope",
+        "neutral platform summary", "metadata, not a mandatory customer-facing tagline",
+        "Preserve explicit owner wording", "do not rewrite the owner's stored config",
         "Order creation, payment and fulfillment are separate states",
         "return URL or browser redirect is not payment confirmation",
         "only a verified succeeded payment", "Never create another order",
@@ -178,3 +180,18 @@ def test_sdk_guidance_preserves_data_contracts_without_source_shape_or_layout_re
     ):
         assert required in MAX_MANAGED_SDK_GUIDANCE, required
     assert "implementation choices" in " ".join(MAX_MANAGED_SDK_GUIDANCE.split())
+
+
+@pytest.mark.parametrize("summary", [
+    None, "Разбор питания по вашим привычкам", "Мини-приложение для пользователей MAX",
+])
+def test_summary_guidance_does_not_rewrite_default_or_explicit_owner_metadata(summary):
+    config = MaxProjectConfigPayload.default_for("Продукт владельца")
+    if summary is not None:
+        config = config.model_copy(update={"summary": summary})
+    before = config.model_dump(mode="json")
+    files = render_max_managed_files(config)
+    assert config.model_dump(mode="json") == before
+    assert json.dumps(config.summary, ensure_ascii=False) in files["src/lib/omnia/max-config.ts"]
+    assert "profile.app_name" in MAX_MANAGED_SDK_GUIDANCE
+    assert "Keep required legal/platform attribution" in MAX_MANAGED_SDK_GUIDANCE

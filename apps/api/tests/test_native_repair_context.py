@@ -16,6 +16,7 @@ from yleum_api.services.generation import agent_finalization, agent_runtime
 from yleum_api.services.max_management_contract import build_management_contract
 
 from .test_agent_native_truncation import turn
+from .test_source_repair_context import full_design_task
 
 ENTRY = "src/app/page.tsx"
 MANIFEST = ".omnia/management.json"
@@ -164,6 +165,7 @@ async def test_directed_text_strategy_resumes_original_request(
     from yleum_api.services.generation.recovery_execution import GenerationYielded
     from yleum_api.services.generation.recovery_pipeline import PreparedAgentEntry
 
+    task = full_design_task()
     files = {"src/lib/ration/domain.ts": "export const dishCount = 10;"}
     page = "export default function Page() { return <main>Рацион</main>; }"
     frames, effects, calls = [], [], []
@@ -211,7 +213,7 @@ async def test_directed_text_strategy_resumes_original_request(
 
     monkeypatch.setattr(agent_native, "_call_messages", model)
     arguments = dict(
-        system="MAX VERIFICATION OVERRIDE", task="Continue saved ration", execute=execute,
+        system="MAX VERIFICATION OVERRIDE", task=task, execute=execute,
         model="claude-sonnet-5.5", run_id=run_id, directed_path=ENTRY, source_repair=True,
         portable_cell=True, initial_files=dict(files), max_steps=8, snapshot_files=snapshot,
         continuation=SimpleNamespace(provider=recorded_provider, restore_frame=restore_frame),
@@ -225,12 +227,13 @@ async def test_directed_text_strategy_resumes_original_request(
     result = await agent_native._run_native_segment(**arguments)
     assert calls[1][1:] == ([], 128_000)
     assert calls[2] == (*calls[1][:2], saved_limit)
+    assert task in calls[2][0][0]["content"]
     assert calls[3][2] == 128_000
     assert effects == ["write_file", "build"]
     assert result.done and result.files == {ENTRY: page}
 
 
-async def test_missing_entry_reduces_scope_after_rejected_formats_then_completes_original_task(
+async def test_missing_entry_limits_file_operation_and_completes_full_design_task(
     monkeypatch, isolated_repair,
 ):
     domain = "src/lib/ration/domain.ts"
@@ -240,7 +243,7 @@ async def test_missing_entry_reduces_scope_after_rejected_formats_then_completes
             "export default function Page() { return <main>{dishCount}</main>; }\n")
     report_source = "export const GET = () => new Response('report');"
     calls, effects, checkpoints = [], [], []
-    task = "Use the saved meal domain.\n" + "x" * 5000 + "\nComplete the requested report."
+    task = full_design_task() + "\nUse the saved meal domain. Complete the requested report."
 
     async def model(*args, **kwargs):
         calls.append(kwargs)
@@ -250,10 +253,9 @@ async def test_missing_entry_reduces_scope_after_rejected_formats_then_completes
         if seq in {2, 3}:
             return {"stop_reason": "max_tokens", "content": [{"type": "text", "text": "partial"}]}
         if seq == 4:
-            context = str(args[2])
+            context = args[2][0]["content"]
             assert kwargs["tools"] == []
-            assert "one working screen" in context and files[domain] in context
-            assert "x" * 5000 not in context
+            assert task in context and files[domain] in context
             return {"stop_reason": "end_turn", "content": [
                 {"type": "text", "text": "```tsx\n" + page + "```"},
             ]}
@@ -297,6 +299,52 @@ async def test_missing_entry_reduces_scope_after_rejected_formats_then_completes
         ("write_file", ENTRY), ("build", ""), ("write_file", report), ("build", ""),
     ]
     assert checkpoints == [{domain: files[domain], ENTRY: page}, files]
+
+
+async def test_recovery_uses_full_product_task_and_current_source_not_attached_old_export(
+    monkeypatch, repair_settings,
+):
+    from yleum_api.services.generation.source_repair_context import with_managed_source_context
+
+    monkeypatch.setattr(agent_native.get_settings(), "use_max_finalization_coordinator", False)
+    task = full_design_task()
+    files = managed_files("export const version = 'old snapshot';")
+    attached = with_managed_source_context(task, files)
+    calls, effects = [], []
+
+    async def model(_client, _url, convo, _system, **kwargs):
+        calls.append(deepcopy(convo))
+        if len(calls) == 1:
+            return turn(("edit_file", {
+                "path": ENTRY, "search": "old snapshot", "replace": "current snapshot",
+            }))
+        if len(calls) == 2:
+            return turn(("write_file", {"path": ENTRY, "content": "NEVER_APPLY"}),
+                        stop="max_tokens")
+        return turn(("build", {}), ("done", {}))
+
+    async def execute(action):
+        effects.append(action.name)
+        if action.name == "edit_file":
+            files[ENTRY] = files[ENTRY].replace(action.args["search"], action.args["replace"])
+            return {"ok": True, "content": files[ENTRY]}
+        return {"ok": True}
+
+    async def snapshot():
+        return dict(files)
+
+    monkeypatch.setattr(agent_native, "_call_messages", model)
+    result = await agent_native._run_native_segment(
+        system="MAX VERIFICATION OVERRIDE", task=attached, execute=execute,
+        initial_files=dict(files), source_repair=True, snapshot_files=snapshot, max_steps=5,
+    )
+    assert result.done
+    assert len(calls) == 3 and effects == ["edit_file", "build"]
+    assert attached in calls[0][0]["content"]
+    context = calls[2][0]["content"]
+    assert len(calls[2]) == 1 and task in context
+    assert "old snapshot" not in context and "current snapshot" in context
+    assert "NEVER_APPLY" not in str(result.transcript)
 
 
 async def test_late_exact_edit_uses_complete_loaded_source_without_any_read(

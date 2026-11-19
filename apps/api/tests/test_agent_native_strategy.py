@@ -9,6 +9,7 @@ from yleum_api.core.config import get_settings
 from yleum_api.services import agent_native
 
 from .test_agent_native_truncation import turn
+from .test_source_repair_context import full_design_task
 
 _PAGE = "src/app/page.tsx"
 _HELPER = "src/lib/products.ts"
@@ -22,6 +23,7 @@ def legacy_proof(monkeypatch):
 
 @pytest.mark.parametrize("alternating", [False, True])
 async def test_repeated_inspection_switches_to_one_small_change(monkeypatch, alternating):
+    task = full_design_task()
     files = {_PAGE: "export const title = 'Old';", _HELPER: "export const product = 1;"}
     reads = [(_PAGE, 1), (_HELPER if alternating else _PAGE, 1)]
     expected_reads = (reads * 2) if alternating else reads
@@ -36,6 +38,7 @@ async def test_repeated_inspection_switches_to_one_small_change(monkeypatch, alt
         if call == len(expected_reads) + 1:
             # The old discovery history must not lead another broad request.
             assert len(convo) == 1 and convo[0]["role"] == "user"
+            assert task in convo[0]["content"]
             assert "Old" in str(convo[0]["content"])
             assert "read_file" not in {tool["name"] for tool in kwargs["tools"]}
             return turn(("edit_file", {"path": _PAGE, "search": "Old", "replace": "New"}))
@@ -59,7 +62,7 @@ async def test_repeated_inspection_switches_to_one_small_change(monkeypatch, alt
 
     monkeypatch.setattr(agent_native, "_call_messages", provider)
     result = await agent_native._run_native_segment(
-        system="MAX VERIFICATION OVERRIDE", task="Rename Old to New",
+        system="MAX VERIFICATION OVERRIDE", task=task,
         execute=execute, initial_files=files, snapshot_files=snapshot,
         completion_check=lambda *_: None if "New" in files[_PAGE] else "Rename requested title",
         max_steps=10, portable_cell=True,
@@ -70,6 +73,7 @@ async def test_repeated_inspection_switches_to_one_small_change(monkeypatch, alt
 
 
 async def test_output_limit_resets_context_and_narrows_next_product_milestone(monkeypatch):
+    task = full_design_task()
     files = {_HELPER: "export const product = 1;"}
     calls, executed = [], []
 
@@ -82,6 +86,7 @@ async def test_output_limit_resets_context_and_narrows_next_product_milestone(mo
                         stop="max_tokens")
         if len(calls) == 3:
             assert len(convo) == 1 and convo[0]["role"] == "user"
+            assert task in convo[0]["content"]
             assert "NEVER_APPLY" not in str(convo)
             assert [tool["name"] for tool in kwargs["tools"]] == ["write_file"]
             return turn(("write_file", {"path": _PAGE, "content": "working screen"}))
@@ -101,7 +106,7 @@ async def test_output_limit_resets_context_and_narrows_next_product_milestone(mo
 
     monkeypatch.setattr(agent_native, "_call_messages", provider)
     result = await agent_native._run_native_segment(
-        system="MAX VERIFICATION OVERRIDE", task="Build the catalog and product details",
+        system="MAX VERIFICATION OVERRIDE", task=task,
         execute=execute, initial_files=files, max_steps=8,
         completion_check=lambda *_: None if "src/app/detail/page.tsx" in files else "Add details",
     )
@@ -113,6 +118,7 @@ async def test_output_limit_resets_context_and_narrows_next_product_milestone(mo
 
 @pytest.mark.parametrize("trusted", [False, True])
 async def test_gateway_transcript_rejection_allows_one_fresh_request(monkeypatch, trusted):
+    task = full_design_task()
     requests = []
     files = {_PAGE: "original page"}
     effects = []
@@ -127,6 +133,7 @@ async def test_gateway_transcript_rejection_allows_one_fresh_request(monkeypatch
         if len(requests) == 3:
             assert len(payload["messages"]) == 1
             assert payload["messages"][0]["role"] == "user"
+            assert task in payload["messages"][0]["content"]
             assert "accepted edit" in str(payload["messages"])
         error = {"type": "invalid_request_error", "message": "Invalid native provider request"}
         if trusted:
@@ -146,7 +153,7 @@ async def test_gateway_transcript_rejection_allows_one_fresh_request(monkeypatch
         transport=httpx.MockTransport(gateway),
     ))
     result = await agent_native._run_native_segment(
-        system="MAX VERIFICATION OVERRIDE", task="Change the existing page",
+        system="MAX VERIFICATION OVERRIDE", task=task,
         execute=execute, initial_files=files, max_steps=8,
         messages_url="https://gateway.test/v1/messages",
     )
@@ -220,6 +227,7 @@ async def test_source_change_after_repeated_reads_reopens_discovery(monkeypatch)
 
 @pytest.mark.parametrize("old_frame", [False, True])
 async def test_recovery_restores_exact_paid_turn(monkeypatch, old_frame):
+    task = full_design_task()
     files = {_PAGE: "original", _HELPER: "details"}
     executed, requests = [], []
     paid_frame = None
@@ -279,7 +287,7 @@ async def test_recovery_restores_exact_paid_turn(monkeypatch, old_frame):
 
     monkeypatch.setattr(agent_native, "_call_messages", provider)
     options = dict(
-        system="MAX VERIFICATION OVERRIDE", task="Update the title", execute=execute,
+        system="MAX VERIFICATION OVERRIDE", task=task, execute=execute,
         initial_files=dict(files), max_steps=8, completion_check=lambda *_: None,
         continuation=Continuation(),
     )
@@ -359,6 +367,7 @@ async def test_output_limit_uses_only_trusted_provider_cap(monkeypatch, scope, c
 
 
 async def test_same_compiler_failure_after_different_writes_changes_the_next_task(monkeypatch):
+    task = full_design_task()
     files = {_PAGE: "page", _HELPER: "bad"}
     requests, builds = [], []
 
@@ -387,10 +396,11 @@ async def test_same_compiler_failure_after_different_writes_changes_the_next_tas
 
     monkeypatch.setattr(agent_native, "_call_messages", provider)
     result = await agent_native._run_native_segment(
-        system="MAX VERIFICATION OVERRIDE", task="Fix type error", execute=execute,
+        system="MAX VERIFICATION OVERRIDE", task=task, execute=execute,
         initial_files=files, max_steps=8,
     )
     assert result.done and builds == ["still bad 1", "still bad 2", "fixed"]
     assert len(requests[2][0]) == 1
+    assert task in requests[2][0][0]["content"]
     assert "TS2322" in str(requests[2][0][0]["content"])
     assert "read_file" not in {tool["name"] for tool in requests[2][1]}

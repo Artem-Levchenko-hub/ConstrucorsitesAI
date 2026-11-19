@@ -83,6 +83,7 @@ from yleum_api.services.generation.recovery_trace import (
 from yleum_api.services.generation.source_repair_context import (
     MAX_REPAIR_CONTEXT_BYTES,
     directed_source_context,
+    without_managed_source_context,
 )
 from yleum_api.services.generation_failure import failure_for_error
 from yleum_api.services.integration_providers import PROVIDER_MAP
@@ -1939,8 +1940,11 @@ async def _run_native_segment(
             ),
         )
 
+    # Keep immutable product instructions separate from a backend-attached old
+    # snapshot. Recovery supplies current source under its existing bounds.
+    product_task = without_managed_source_context(task, baseline_files) if source_repair else task
     directed_request = (
-        directed_source_context(task, baseline_files, directed_path)
+        directed_source_context(product_task, baseline_files, directed_path)
         if directed_path is not None else ""
     )
 
@@ -2420,7 +2424,7 @@ async def _run_native_segment(
                                     "human": "Разбиваю работу: сначала главный экран",
                                 })
                             selected_context = directed_source_context(
-                                task, baseline_files, active_path, entry_milestone=True,
+                                product_task, baseline_files, active_path, entry_milestone=True,
                             )
                         request.update(
                             convo=[{"role": "user", "content": (
@@ -2447,9 +2451,10 @@ async def _run_native_segment(
                             objective = _MAX_ENTRY_WRITE_GUIDANCE
                             if response_recovery.budget.since_progress >= 2:
                                 objective += (
-                                    " For this attempt, connect the primary action and one working "
-                                    "screen only. Use built-in markup and saved modules. Leave "
-                                    "secondary screens, styling and integrations for later steps."
+                                    " For this response, make one complete entry-file change "
+                                    "consistent with the full user goals and visual plan. Continue "
+                                    "the remaining screens and flows after this change; the final "
+                                    "scope and design requirements remain unchanged."
                                 )
                         elif checking_only:
                             objective = (
@@ -2489,7 +2494,7 @@ async def _run_native_segment(
                             if kimi_repair else current_source
                         )
                         convo = [{"role": "user", "content": user_content(recovery_message(
-                            active_recovery, task=task, files=recovery_source,
+                            active_recovery, task=product_task, files=recovery_source,
                             focus=focus, objective=objective, diagnostic=diagnostic,
                         ), reference_images, native=True)}]
                         request["convo"] = convo

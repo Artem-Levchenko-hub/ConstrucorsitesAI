@@ -501,6 +501,27 @@ def is_api_only_request(prompt: str) -> bool:
     return False
 
 
+_PRODUCT_EXPERIENCE_GUIDANCE = (
+    "- Implement the owner's complete requested journeys and applicable prepared screen plan. "
+    "Keep requested views, transitions and available actions usable; a working first screen "
+    "is not completion of a multi-screen request. Do not invent screens for a deliberately "
+    "blank, static or API-only scope.",
+    "- Design the first visit with no personal data as a finished product state: a specific "
+    "composition, clear visual hierarchy, purposeful type/color/spacing roles and the next "
+    "permitted action. Keep this product-led direction coherent across the requested views, "
+    "rather than falling back to an unrelated template, an unstyled form or library defaults. "
+    "Owner-specified content and visual choices remain authoritative.",
+    "- Separate missing user context, missing owner tariff/provider setup, and verified paid "
+    "entitlement. Missing tariffs or an unavailable provider must not automatically replace "
+    "the entire requested interface/navigation with a paywall or setup notice. Keep useful "
+    "requested onboarding, context and existing-data views within their allowed access scope; "
+    "explain the unavailable operation where it belongs. Honor an explicit owner-wide access "
+    "restriction. Paid operations must remain server-enforced; do not grant paid access from "
+    "order creation, a redirect, client state or a UI-only check. Do not invent prices, plans, "
+    "entitlements, records or provider success.",
+)
+
+
 def build_max_product_contract(
     prompt: str, *, portable: bool = False, coordinator_handoff: bool = False,
 ) -> str:
@@ -516,12 +537,13 @@ def build_max_product_contract(
     capabilities = requested_max_capabilities(prompt)
     if portable:
         completion = "" if coordinator_handoff else " Pass build and signed runtime_check."
-        return (
+        contract = (
             "PORTABLE MAX PRODUCT ACCEPTANCE: implement the complete requested product, "
             f"and declare real build/test/service commands.{completion} "
             "Do not fabricate user data or integration success. Explicit brief coverage: "
             + ", ".join(label for _key, label, _needles in capabilities)
         )
+        return "\n".join((contract, *_PRODUCT_EXPERIENCE_GUIDANCE))
     lines = [
         "MAX PRODUCT ACCEPTANCE CONTRACT (done is rejected until this is true):",
         "- No product home page or visual template exists initially. Create "
@@ -549,6 +571,7 @@ def build_max_product_contract(
         "the exact shape is `const { answer } = await requestYleumAI({ message, "
         "instructions, context })`. setTimeout/random/static text is not AI.",
     ]
+    lines.extend(_PRODUCT_EXPERIENCE_GUIDANCE)
     if not coordinator_handoff:
         lines.append(
             "- After implementation: run a clean build, runtime_check the finished home screen "

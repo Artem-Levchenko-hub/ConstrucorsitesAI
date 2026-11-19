@@ -500,7 +500,12 @@ This requirement applies even if the personal Profile screen was left off.
 Add a personal profile or user history screen only when the brief or the managed
 module requires it. Do not use app metadata to invent a user feature.
 The hook returns {profile,configVersion,status,error,refresh}. Public fields
-are app_name, summary and support.email/response_time. Handle loading and error
+are app_name, summary and support.email/response_time. A neutral platform summary
+such as "Мини-приложение для пользователей MAX" is metadata, not a mandatory
+customer-facing tagline. Preserve explicit owner wording and a meaningful saved
+summary. If useful public benefit copy is needed, derive it from the brief rather
+than copying a platform placeholder; do not rewrite the owner's stored config.
+Keep required legal/platform attribution. Handle loading and error
 without a bundled app-name fallback. Use app_name, never name. Catalog items use
 item.title. Read the SDK declarations for precise types before calling any method.
 Read the locked management manifest before implementing business flows. Use
