@@ -1,29 +1,29 @@
 .phase {
   container: generation-phase / inline-size;
   display: grid;
-  gap: 16px;
-  padding: 20px;
-  background: var(--color-surface);
+  gap: 8px;
+  padding: 12px 16px;
+  background: color-mix(in srgb, var(--color-accent) 3%, var(--color-surface));
   color: var(--color-fg-primary);
 }
 
 .main {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
-  align-items: center;
-  gap: 10px 20px;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: start;
+  gap: 6px 12px;
 }
 
 .mark {
   grid-row: 1;
-  width: 72px;
-  height: 72px;
+  width: 40px;
+  height: 40px;
   color: var(--color-accent);
 }
 
-.frame { color: var(--color-border-strong); }
-.rails { color: var(--color-fg-tertiary); }
-.slot { color: var(--color-border-strong); }
+.frame { color: var(--color-accent); }
+.rails { color: var(--color-accent); }
+.slot { color: color-mix(in srgb, var(--color-accent) 35%, var(--color-surface)); }
 .tileDetail { color: var(--color-surface); }
 .cursor {
   animation: assemble-part 3.6s cubic-bezier(.22, 1, .36, 1) infinite;
@@ -41,25 +41,26 @@
 
 .content { grid-column: 2; min-width: 0; }
 .title {
-  font-size: 20px;
-  line-height: 26px;
+  color: color-mix(in srgb, var(--color-accent) 88%, var(--color-fg-primary));
+  font-size: 17px;
+  line-height: 22px;
   font-weight: 600;
-  letter-spacing: -.025em;
+  letter-spacing: -.02em;
   overflow-wrap: anywhere;
 }
 .explanation {
-  margin-top: 4px;
-  max-width: 58ch;
+  margin-top: 2px;
+  max-width: 68ch;
   color: var(--color-fg-secondary);
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 18px;
   overflow-wrap: anywhere;
 }
 .milestones {
   grid-column: 2;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 16px;
+  gap: 4px 12px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -67,60 +68,50 @@
 .milestones li {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  max-width: 100%;
   color: var(--color-fg-secondary);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 11px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
 }
 .milestones svg { flex-shrink: 0; color: var(--color-accent); }
 .main:has(> .milestones) .mark { grid-row: 1 / span 2; }
 
 .backgroundNotice {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  display: flex;
   align-items: start;
-  gap: 6px 24px;
-  padding-top: 12px;
-  border-top: 1px solid var(--color-border-subtle);
+  gap: 6px;
+  margin: 0;
   color: var(--color-fg-secondary);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 11px;
+  line-height: 16px;
   overflow-wrap: anywhere;
 }
-.noticeMark { flex-shrink: 0; margin-top: 2px; color: var(--color-fg-tertiary); }
-.estimate { display: flex; align-items: start; gap: 7px; font-weight: 500; }
-.continuity { max-width: 74ch; }
+.noticeMark { flex-shrink: 0; margin-top: 1px; color: var(--color-accent); }
+.estimate { font-weight: 500; }
 
 @keyframes assemble-part {
   0%, 20%, 70%, 100% { transform: translateX(14px); opacity: 1; }
   42% { transform: translateX(0); opacity: .6; }
 }
 
-@container generation-phase (min-width: 480px) {
-  .backgroundNotice { grid-template-columns: minmax(0, .85fr) minmax(0, 1.3fr); }
-}
-
 @container generation-phase (min-width: 660px) {
-  .main:has(> .milestones) { grid-template-columns: 72px minmax(0, 1fr) minmax(156px, .55fr); }
+  .main:has(> .milestones) { grid-template-columns: 40px minmax(0, 1fr) auto; }
+  .main:has(> .milestones) .mark { grid-row: 1; }
   .milestones {
     grid-column: 3;
     grid-row: 1;
     flex-direction: column;
-    gap: 8px;
-    padding-left: 20px;
-    border-left: 1px solid var(--color-border-subtle);
+    align-self: center;
   }
-  .main:has(> .milestones) .mark { grid-row: 1; }
-}
-
-@media (max-width: 480px) {
-  .phase { gap: 14px; padding: 16px; }
+  .backgroundNotice { padding-left: 52px; }
 }
 
 @container generation-phase (max-width: 479px) {
-  .main { grid-template-columns: 60px minmax(0, 1fr); column-gap: 12px; }
-  .mark { width: 60px; height: 60px; align-self: start; }
-  .title { font-size: 18px; line-height: 24px; }
+  .main { grid-template-columns: 32px minmax(0, 1fr); }
+  .mark { width: 32px; height: 32px; }
+  .title { font-size: 16px; line-height: 21px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

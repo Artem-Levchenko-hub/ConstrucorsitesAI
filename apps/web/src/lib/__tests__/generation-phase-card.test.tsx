@@ -146,10 +146,11 @@ it.each([
   expect(notice.textContent).toContain("20–30 минут, иногда дольше");
   expect(notice.textContent).toContain("Можно закрыть вкладку");
   expect(notice.textContent).toContain(active ? "работа продолжится на сервере" : "задача сохранена на сервере");
-  expect(notice.textContent).toContain("результат");
-  expect(notice.querySelectorAll("p")).toHaveLength(2);
-  expect(notice.querySelectorAll(":scope > p")).toHaveLength(2);
-  expect(notice.querySelector("p")!.textContent).toBe("Создание может занять 20–30 минут, иногда дольше.");
+  expect(notice.tagName).toBe("P");
+  expect(notice.querySelectorAll("p")).toHaveLength(0);
+  expect(notice.textContent).toBe(`20–30 минут, иногда дольше. Можно закрыть вкладку — ${active
+    ? "работа продолжится на сервере." : "задача сохранена на сервере."}`);
+  expect(notice.querySelectorAll("svg")).toHaveLength(1);
   expect(notice.closest('[aria-live], [role="status"]')).toBeNull();
   expect(card().dataset.motion).toBe("paused");
   expect(container.querySelector('[role="progressbar"]')).toBeNull();

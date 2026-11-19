@@ -52,9 +52,9 @@ export function GenerationPhaseCard({ phase, motionActive }: {
   motionActive: boolean;
 }) {
   const backgroundNotice = phase.active
-    ? "Можно закрыть вкладку: работа продолжится на сервере, готовый результат останется здесь."
+    ? "Можно закрыть вкладку — работа продолжится на сервере."
     : phase.id === "queued" || phase.id === "waiting"
-      ? "Можно закрыть вкладку: задача сохранена на сервере. Готовый результат будет доступен здесь."
+      ? "Можно закрыть вкладку — задача сохранена на сервере."
       : null;
   return <div className={styles.phase} data-generation-phase={phase.id}
     data-motion={phase.active && motionActive ? "running" : "paused"}>
@@ -70,12 +70,9 @@ export function GenerationPhaseCard({ phase, motionActive }: {
         {phase.milestones.map(label => <li key={label}><Check size={13} aria-hidden="true" />{label}</li>)}
       </ul>}
     </div>
-    {backgroundNotice && <div className={styles.backgroundNotice} data-generation-background-notice>
-      <p className={styles.estimate}>
-        <Clock3 className={styles.noticeMark} size={13} strokeWidth={1.5} aria-hidden="true" />
-        <span>Создание может занять 20–30 минут, иногда дольше.</span>
-      </p>
-      <p className={styles.continuity}>{backgroundNotice}</p>
-    </div>}
+    {backgroundNotice && <p className={styles.backgroundNotice} data-generation-background-notice>
+      <Clock3 className={styles.noticeMark} size={13} strokeWidth={1.5} aria-hidden="true" />
+      <span><span className={styles.estimate}>20–30 минут, иногда дольше.</span> {backgroundNotice}</span>
+    </p>}
   </div>;
 }
