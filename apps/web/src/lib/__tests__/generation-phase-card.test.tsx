@@ -147,6 +147,9 @@ it.each([
   expect(notice.textContent).toContain("Можно закрыть вкладку");
   expect(notice.textContent).toContain(active ? "работа продолжится на сервере" : "задача сохранена на сервере");
   expect(notice.textContent).toContain("результат");
+  expect(notice.querySelectorAll("p")).toHaveLength(2);
+  expect(notice.querySelectorAll(":scope > p")).toHaveLength(2);
+  expect(notice.querySelector("p")!.textContent).toBe("Создание может занять 20–30 минут, иногда дольше.");
   expect(notice.closest('[aria-live], [role="status"]')).toBeNull();
   expect(card().dataset.motion).toBe("paused");
   expect(container.querySelector('[role="progressbar"]')).toBeNull();
@@ -163,6 +166,66 @@ it.each<GenerationPhaseId>(["ready", "history", "paused", "stopping", "stopped",
 it("provides a static reduced-motion path and inherits light/dark shell tokens", () => {
   const css = readFileSync(resolve(process.cwd(), "src/components/workspace/GenerationPhaseCard.module.css"), "utf8");
   expect(css).toContain("prefers-reduced-motion: reduce");
+  expect(css.match(/@keyframes\s/g)).toHaveLength(1);
+  expect(css).toContain('animation-play-state: paused');
+  expect(css).toContain('[data-motion="running"]');
+  expect(css).toContain('var(--color-surface)');
+  expect(css).toContain('minmax(0, 1fr)');
+  expect(css).toContain('container: generation-phase / inline-size');
+  expect(css).toContain('@container generation-phase (min-width: 660px)');
+  expect(css).toContain('@container generation-phase (max-width: 479px)');
   expect(css).toMatch(/\.cursor\s*\{\s*animation: none/);
   expect(css).not.toMatch(/#[a-fA-F0-9]{3,8}\b|gradient\(|box-shadow/);
+});
+
+
+it("renders only observed facts even when real phase order goes backwards", async () => {
+  await act(async () => root.render(<GenerationPhaseCard phase={{ id: "workspace", active: true,
+    title: "Готовлю рабочую среду", explanation: "Текущая фаза", milestones: ["Промпт подготовлен"] }} motionActive />));
+  expect([...container.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Промпт подготовлен"]);
+  expect(card().textContent).not.toContain("Среда подготовлена");
+  const status = card().querySelector('[role="status"]')!;
+  expect(status.textContent).not.toContain("Промпт подготовлен");
+  await act(async () => root.render(<GenerationPhaseCard phase={{ id: "creating", active: true,
+    title: "Создаю приложение", explanation: "Работа продолжается после проверки", milestones: [] }} motionActive />));
+  expect(card().dataset.generationPhase).toBe("creating");
+  expect(container.querySelector('[aria-label="Подтверждённые этапы"]')).toBeNull();
+  expect(card().textContent).not.toContain("Сборка проверена");
+  expect(container.querySelector('[role="progressbar"]')).toBeNull();
+});
+
+it("keeps observed fact updates outside the single stable live announcement", async () => {
+  const phase = { id: "creating" as const, active: true, title: "Создаю приложение",
+    explanation: "Собираю экраны и действия", milestones: [] as string[] };
+  await act(async () => root.render(<GenerationPhaseCard phase={phase} motionActive />));
+  const status = card().querySelector('[role="status"]')!;
+  const copy = status.textContent;
+  await act(async () => root.render(<GenerationPhaseCard
+    phase={{ ...phase, milestones: ["Промпт подготовлен"] }} motionActive />));
+  expect(card().querySelector('[role="status"]')).toBe(status);
+  expect(status.textContent).toBe(copy);
+  expect(status.getAttribute("aria-live")).toBe("polite");
+  expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
+  expect(container.querySelector("li")!.closest('[aria-live]')).toBeNull();
+  const facts = container.querySelector('[aria-label="Подтверждённые этапы"]')!;
+  expect(facts.parentElement).toBe(status.parentElement!.parentElement);
+  expect(container.querySelector('[data-generation-indicator]')!.getAttribute("aria-hidden")).toBe("true");
+});
+
+it("uses one substantial fitted app pane without turning its geometry into progress", async () => {
+  const phase = { id: "creating" as const, active: true, title: "Создаю приложение",
+    explanation: "Собираю экраны и действия", milestones: [] as string[] };
+  await act(async () => root.render(<GenerationPhaseCard phase={phase} motionActive />));
+  const mark = container.querySelector('[data-generation-indicator]')!;
+  const fittedPane = mark.querySelector("g > rect")!;
+  expect(fittedPane.getAttribute("width")).toBe("36");
+  expect(fittedPane.getAttribute("height")).toBe("20");
+  expect(mark.querySelectorAll("g")).toHaveLength(1);
+  expect(mark.querySelector("text, title, [role=progressbar]")).toBeNull();
+  expect(container.querySelector('[aria-label="Подтверждённые этапы"]')).toBeNull();
+  await act(async () => root.render(<GenerationPhaseCard phase={{ ...phase, id: "ready", active: false,
+    title: "Приложение готово" }} motionActive />));
+  expect(card().dataset.motion).toBe("paused");
+  expect(mark.querySelector("g")).toBeNull();
+  expect(container.querySelector("[data-generation-background-notice]")).toBeNull();
 });
