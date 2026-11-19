@@ -21,8 +21,12 @@ SDK contracts and verified component APIs remain required.
   the owner's final choice. Select available local/system typography for the
   product when that axis is free; keep typography metadata, CSS and pinned font
   assets consistent. Change dependencies only when the runtime permits; otherwise
-  use available fonts and retain protected files. Explicit owner choices remain authoritative. On edits,
-  continuations and restoration preserve the established design and typography.
+  use available fonts and retain protected files. Explicit owner choices remain authoritative.
+  Ordinary edits and restoration of a finished product preserve its established design
+  and typography. An unfinished first build must still implement the original request
+  and prepared visual plan: a seed fallback or intermediate draft is not an accepted
+  final design. Complete the open visual choices while preserving working code and
+  explicit owner preferences.
 
 ## Verified public imports
 
@@ -81,8 +85,10 @@ icons. Avoid new usage of deprecated `Switch` and `ToolButton`.
 - Use concrete copy in the owner's requested language and only supplied or
   explicitly requested seed data. Every visible control
   performs an action or is clearly disabled with an explanation.
-- At 360–390px: no horizontal/nested scroll; touch targets are at least 44px;
-  safe areas and the keyboard do not cover the active control or CTA.
+- At 360–390px: prevent accidental page-wide horizontal overflow; touch targets are
+  at least 44px and safe areas and the keyboard do not cover the active control or CTA.
+  A deliberately contained gallery, tab strip or other requested scrolling surface
+  is allowed when its boundaries, controls and content remain usable on the phone.
 - Prefer one consistent icon style, using `lucide-react` when the owner has not
   requested a different treatment. Avoid arbitrary decorative icons.
 - Use the active generation mode's completion checks and repair concrete errors.

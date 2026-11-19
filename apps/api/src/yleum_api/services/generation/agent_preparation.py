@@ -11,11 +11,10 @@ from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.schemas.project import orchestrator_template
-from yleum_api.services import agent_builder, app_errors
+from yleum_api.services import agent_builder
 from yleum_api.services.generation.agent_messages import (
     _is_continue_request,
     _is_retry_request,
-    _recover_max_resume_prompt,
 )
 from yleum_api.services.generation.contracts import (
     AgentTurnClassification,
@@ -25,51 +24,13 @@ from yleum_api.services.generation.contracts import (
     SourceBaseline,
     StackPrompt,
 )
-from yleum_api.services.generation.retry_request import resolve_request_source
-from yleum_api.services.generation.runtime import _build_agent_seed_parts
-from yleum_api.services.generation.source_checkpoint import (
-    _adjacent_run,
-    _admitted_checkpoint_baseline,
-    _ambiguous_run_order,
-    _owned_checkpoint_source,
+from yleum_api.services.generation.retry_request import (
+    can_continue_generation,
+    resolve_request_source,
 )
+from yleum_api.services.generation.runtime import _build_agent_seed_parts
 
 _log = logging.getLogger("yleum_api.routers.messages")
-
-
-async def _can_continue_generation(
-    session: AsyncSession,
-    run: GenerationRun | None,
-    ids: GenerationIds,
-    baseline: SourceBaseline,
-) -> bool:
-    if (
-        run is None or run.project_id != ids.project_id or run.user_id != ids.user_id
-        or run.user_message_id != ids.user_message_id
-    ):
-        return False
-    previous = await _adjacent_run(session, run)
-    if (
-        previous is None or previous.created_at >= run.created_at
-        or previous.user_id != ids.user_id or previous.response_mode not in {"build", "edit"}
-        or previous.user_message_id is None or await _ambiguous_run_order(session, previous)
-    ):
-        return False
-    stopped_source = _owned_checkpoint_source(previous, ids)
-    same_base = _admitted_checkpoint_baseline(previous, baseline)
-    if stopped_source and same_base:
-        return True
-    if previous.assistant_message_id is None:
-        return False
-    assistant = await session.get(Message, previous.assistant_message_id)
-    if assistant is None or assistant.project_id != ids.project_id or assistant.role != "assistant":
-        return False
-    legacy_partial = (
-        previous.status == "completed" and app_errors.has_continue_card(assistant.content)
-    )
-    return (stopped_source or legacy_partial) and (
-        same_base or assistant.snapshot_id == baseline.snapshot_id
-    )
 
 
 async def classify_agent_turn(
@@ -87,6 +48,10 @@ async def classify_agent_turn(
         request_prompt = (
             request.content if request is not None and isinstance(request.content, str) else ""
         )
+        continue_message = bool(
+            request is not None and not request.selected_elements
+            and _is_continue_request(request_prompt)
+        )
         wants_continue = (
             baseline.snapshot_id is not None and _is_continue_request(prompt_text)
             and request is not None and not request.selected_elements
@@ -96,7 +61,7 @@ async def classify_agent_turn(
         retry_message = _is_retry_request(request_prompt)
         if wants_continue or retry_message:
             run = await _max_history_session.get(GenerationRun, ids.run_id)
-            _is_continue = wants_continue and await _can_continue_generation(
+            _is_continue = wants_continue and await can_continue_generation(
                 _max_history_session, run, ids, baseline,
             )
             # A checkpoint may already have supplied its full saved brief.
@@ -106,10 +71,12 @@ async def classify_agent_turn(
                     run is not None and isinstance(run.agent_state, dict)
                     and "source_checkpoint_resume" not in run.agent_state
                 )
-        if recover_retry:
+        recovered_source = False
+        if recover_retry or continue_message:
             source = await resolve_request_source(_max_history_session, ids=ids, baseline=baseline)
             if source.message_id != ids.user_message_id:
                 prompt_text = source.prompt
+                recovered_source = True
         _max_has_generated_snapshot = bool(
             await _max_history_session.scalar(
                 select(func.count(Snapshot.id)).where(
@@ -120,30 +87,9 @@ async def classify_agent_turn(
             )
         )
         _is_edit = not orchestrate and not _is_continue
-        if _is_continue and not _max_has_generated_snapshot:
-            _prior_max_prompts = list(
-                (
-                    await _max_history_session.scalars(
-                        select(Message.content)
-                        .where(
-                            Message.project_id == ids.project_id,
-                            Message.role == "user",
-                            Message.id != ids.user_message_id,
-                        )
-                        .order_by(Message.created_at.desc())
-                        .limit(20)
-                    )
-                ).all()
-            )
-            _recovered_max_prompt = _recover_max_resume_prompt(_prior_max_prompts)
-            if _recovered_max_prompt:
-                prompt_text = _recovered_max_prompt
-                _is_continue = False
-                _is_edit = False
-                print(
-                    "[PP] MAX resume recovered original brief from history",
-                    flush=True,
-                )
+        if continue_message and recovered_source and not _max_has_generated_snapshot:
+            _is_continue = False
+            _is_edit = False
 
     return AgentTurnClassification(prompt_text, _is_continue, _is_edit, _max_has_generated_snapshot)
 

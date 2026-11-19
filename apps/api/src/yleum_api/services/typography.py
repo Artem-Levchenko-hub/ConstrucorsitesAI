@@ -386,7 +386,7 @@ def choose_typography(
 
 
 def existing_typography_context(seed: str, files: dict[str, str]) -> str:
-    """An edit/continuation follows accepted source, not a newly inferred brief.
+    """Keep owner choices and accepted design without freezing an unfinished seed.
 
     The pre-build contract is the final block appended by agent_preparation.
     Removing that first-build-only block also preserves legacy/custom designs.
@@ -408,14 +408,16 @@ def existing_typography_context(seed: str, files: dict[str, str]) -> str:
     except (ValueError, KeyError, TypeError):
         pass
     return context + (
-        "\n\nСуществующая типографика из исходников имеет приоритет: "
+        "\n\nСуществующая типографика из исходников: "
         + selected
         + ". Прочитай typography.json, DESIGN.md и текущий CSS; сохрани package/lock и шрифты "
-        "при обычной правке, продолжении и восстановлении. Даже исходный стартовый fallback "
-        "теперь относится к существующему дизайну, а не разрешает новый выбор шрифтов. "
-        "Не пересеивай legacy-проект без manifest. "
-        "Только явная просьба владельца изменить оформление разрешает согласованно обновить "
-        "выбор, CSS, dependencies, lock и design memory."
+        "при обычной правке и восстановлении готового продукта. Явный выбор владельца "
+        "сохраняет приоритет. В незавершённой первой сборке стартовый fallback не является "
+        "итоговым выбором: заверши исходный визуальный план на свободных осях, согласованно "
+        "обновляя типографику и CSS. Не пересеивай legacy-проект без manifest. "
+        "В готовом продукте новый выбор требует явной просьбы владельца изменить оформление. "
+        "Изменение dependencies и lock допускается только в разрешённом runtime режиме; "
+        "сохраняй защищённые файлы и согласованную design memory."
     )
 
 

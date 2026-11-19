@@ -280,8 +280,22 @@ def test_actual_existing_prompt_binds_accepted_typography(monkeypatch, mode, bri
     assert decision["heading"] in plan.user and decision["body"] in plan.seed_context
     assert "Unbounded" not in plan.user
     assert "осмысленно выбери типографику" not in plan.seed_context
-    assert "не разрешает новый выбор шрифтов" in plan.seed_context
-    assert "Только явная просьба владельца" in plan.seed_context
+    assert "Явный выбор владельца сохраняет приоритет" in plan.seed_context
+    assert "В готовом продукте новый выбор требует явной просьбы владельца" in plan.seed_context
+
+
+def test_existing_font_context_does_not_promote_an_unfinished_fallback_to_owner_choice():
+    from yleum_api.services.typography import existing_typography_context
+
+    files = {"typography.json": json.dumps({"version": 1, "heading": "Lora", "body": "Onest"})}
+    context = existing_typography_context(
+        "Existing source\n\nOMNIA DESIGN PRO · automatic replacement", files,
+    )
+    assert "Lora" in context and "Onest" in context
+    assert "automatic replacement" not in context
+    assert "стартовый fallback не является итоговым выбором" in context
+    assert "заверши исходный визуальный план" in context
+    assert "сохраняй защищённые файлы" in context
 
 
 @pytest.mark.parametrize(

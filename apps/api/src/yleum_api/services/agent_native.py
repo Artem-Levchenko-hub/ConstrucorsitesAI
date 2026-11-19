@@ -464,7 +464,10 @@ _MAX_ENTRY_WRITE_GUIDANCE = (
     "representative content, and required states — not a placeholder. Reuse only platform "
     "core imports that already exist; do not import product components, data modules, or "
     "styles you merely plan to create later. After this entry is written, the full toolset "
-    "returns so you can extract components, add styles/data, build, and repair normally."
+    "returns so you can extract components, add styles/data, build, and repair normally. "
+    "This entry operation does not reduce the complete request or its prepared visual "
+    "plan to one screen. Complete the remaining requested screens, flows and visual "
+    "composition in the same build."
 )
 _MAX_PREWRITE_LOCK_RESULT = (
     "MAX pre-write discovery budget is exhausted. The platform core and product "
@@ -1237,9 +1240,13 @@ _NATIVE_WEB_MEDIA_PREAMBLE = (
 _MAX_NATIVE_DESIGN_PREAMBLE = (
     "ВКУС В ДИЗАЙНЕ — создавай MAX Mini App под конкретный запрос. Текущий явный запрос "
     "владельца определяет продукт и оформление, включая цвета, шрифты и исключения; "
-    "общие вкусовые советы не отменяют его выбор. При обычной правке или продолжении "
-    "сохрани существующие исходники и DESIGN.md; явный редизайн может согласованно "
-    "изменить оформление и design memory. Защищённые платформенные и SDK-контракты "
+    "общие вкусовые советы не отменяют его выбор. При обычной правке сохраняй исходники "
+    "и принятое оформление из DESIGN.md; явный редизайн может согласованно изменить "
+    "оформление и design memory. Продолжение незавершённой первой сборки должно "
+    "доделать исходный запрос и подготовленный план: стартовый fallback и промежуточный "
+    "черновик не являются принятым итоговым дизайном. Сохраняй явный выбор владельца "
+    "и полезный существующий код, доводя открытые визуальные решения до реализации. "
+    "Защищённые платформенные и SDK-контракты "
     "из SYSTEM_PROMPT.md и max-ui-design.md остаются обязательными. Не назначай по "
     "отрасли экраны, корзину, историю, профиль или число вкладок. Навигацию добавляй "
     "только когда она нужна запрошенным сценариям. Для нового интерфейса или редизайна "
@@ -1305,9 +1312,12 @@ _DONE_WHEN_GREEN_NUDGE = (
     "owned resources) and call done NOW."
 )
 _MAX_DONE_WHEN_GREEN_NUDGE = (
-    "[LOOP GUARD] The MAX build is clean. Run runtime_check once after the final write "
-    "through the signed MAX preview, then call done NOW. Do not call "
-    "generic probe or verify_isolation."
+    "[LOOP GUARD] The MAX build is clean; that proves compilation, not completion "
+    "of the request or its prepared implementation plan. Implement any remaining "
+    "requested screens, flows and visual composition in this coding turn. When the "
+    "requested work is complete, run runtime_check once after the final write through "
+    "the signed MAX preview, then call done. Do not call generic probe or verify_isolation. "
+    "This adds no separate visual gate, screenshot review or extra refinement pass."
 )
 
 _MAX_NATIVE_VERIFICATION_OVERRIDE = (

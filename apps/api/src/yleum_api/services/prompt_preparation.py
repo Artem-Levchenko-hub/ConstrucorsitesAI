@@ -14,8 +14,9 @@ import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -32,12 +33,18 @@ from yleum_api.services.generation.contracts import (
     SourceBaseline,
 )
 from yleum_api.services.generation.recovery_trace import safe_recovery_trace
-from yleum_api.services.generation.retry_request import resolve_request_source
+from yleum_api.services.generation.request_binding import bound_message_request
+from yleum_api.services.generation.retry_request import (
+    RequestSourceRejected,
+    resolve_request_source,
+)
 from yleum_api.services.max_generation_contract import is_api_only_request
 
 log = logging.getLogger(__name__)
 KEY = "prompt_preparation_v1"
 POLICY_KEY = "prompt_preparation_policy_v1"
+REFERENCE_KEY = "prompt_preparation_reference_v1"
+_REFERENCE_WRITE_SECONDS = 2.0
 # Match the accepted owner prompt contract; preparation must not silently lose
 # requirements from its middle. This side call still loads no project/history.
 MAX_DESCRIPTION = 30_000
@@ -189,13 +196,15 @@ def preparation_messages(description: str, preferences: dict[str, Any]) -> list[
     ]
 
 
-def _preferences(project: Project, message: Message, run: GenerationRun) -> dict[str, Any]:
-    """Only bounded owner choices; never project memory, code, assets or history."""
+def _preferences(
+    project: Project, message: Message, run: GenerationRun, *, include_project: bool = True,
+) -> dict[str, Any]:
+    """Bounded inputs; generated discovery metadata is not fresh owner consent."""
     from yleum_api.services.design_presets import PRESETS
 
     result: dict[str, Any] = {}
     spec = project.discovery_spec
-    if type(spec) is dict:
+    if include_project and type(spec) is dict:
         for key in ("primary_family", "tone"):
             if type(spec.get(key)) is str:
                 result[key] = spec[key][:120]
@@ -236,9 +245,339 @@ def _cached(value: Any, fingerprint: str) -> str:
     return result if type(result) is str and 0 < len(result) <= MAX_RESULT else ""
 
 
+def _fingerprint(description: str, preferences: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(
+        {"description": description, "preferences": preferences},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+
+
+@dataclass(frozen=True)
+class _PreparationInput:
+    run: GenerationRun
+    source_message: Message
+    description: str
+    preferences: dict[str, Any]
+    owner_preferences: dict[str, Any]
+    baseline: SourceBaseline
+
+
+class PromptReferenceUnavailable(RuntimeError):
+    """A required owned-reference read is unknown, never proof that no plan exists."""
+
+    def __init__(self) -> None:
+        super().__init__("prompt_reference_unavailable")
+
+
+async def _load_input(
+    session: AsyncSession, ids: GenerationIds,
+    *, observe_request: Callable[[bool | None, bool], None] | None = None,
+    expected_baseline: SourceBaseline | None = None,
+) -> _PreparationInput | None:
+    """Resolve the admitted original before consulting any optional preparation policy."""
+    run = await session.get(GenerationRun, ids.run_id)
+    if (
+        run is None or run.project_id != ids.project_id or run.user_id != ids.user_id
+        or run.user_message_id != ids.user_message_id
+        or run.assistant_message_id != ids.assistant_message_id
+        or run.status != "running" or run.response_mode not in {"build", "edit"}
+    ):
+        return None
+    state = run.agent_state or {}
+    saved = state.get(KEY)
+    known_reference = (
+        type(saved) is dict and saved.get("state") == "ready"
+    ) or REFERENCE_KEY in state
+    if observe_request is not None:
+        observe_request(None, known_reference)
+    request = await session.get(Message, ids.user_message_id)
+    try:
+        bound_message_request(run, request, project_id=ids.project_id, run_id=ids.run_id)
+    except ValueError:
+        return None
+    assert request is not None
+    if observe_request is not None:
+        observe_request(
+            _is_retry_request(request.content) or _is_continue_request(request.content),
+            known_reference,
+        )
+    project = await session.get(Project, ids.project_id)
+    if project is None or project.owner_id != ids.user_id or project.template != "max_miniapp":
+        return None
+    snapshot = (await session.get(Snapshot, project.current_snapshot_id)
+                if project.current_snapshot_id else None)
+    if snapshot is not None and snapshot.project_id != project.id:
+        return None
+    baseline = SourceBaseline(
+        project.current_snapshot_id, snapshot.commit_sha if snapshot is not None else None, {},
+    )
+    if expected_baseline is not None and (
+        baseline.snapshot_id != expected_baseline.snapshot_id
+        or baseline.sha != expected_baseline.sha
+    ):
+        return None
+    try:
+        source = await resolve_request_source(session, ids=ids, baseline=baseline)
+    except RequestSourceRejected:
+        return None
+    message = await session.get(Message, source.message_id)
+    if (
+        message is None or not source.prompt.strip() or _is_retry_request(source.prompt)
+        or _is_continue_request(source.prompt) or is_api_only_request(source.prompt)
+    ):
+        return None
+    preference_run = run
+    if (
+        source.message_id != ids.user_message_id
+        and "owner_palette_v1" not in (run.agent_state or {})
+    ):
+        original = await session.scalar(select(GenerationRun).where(
+            GenerationRun.project_id == ids.project_id, GenerationRun.user_id == ids.user_id,
+            GenerationRun.user_message_id == source.message_id,
+        ).order_by(GenerationRun.created_at, GenerationRun.id).limit(1))
+        if original is not None:
+            preference_run = original
+    return _PreparationInput(
+        run, message, source.prompt, _preferences(project, message, preference_run),
+        _preferences(project, message, preference_run, include_project=False), baseline,
+    )
+
+
+def _ready_reference(value: Any, context: _PreparationInput) -> str:
+    """A saved input snapshot, not later generated font/theme metadata, owns reuse."""
+    if type(value) is not dict:
+        return ""
+    provenance = value.get("source")
+    if provenance is not None:
+        if (
+            type(provenance) is not dict
+            or set(provenance) != {"message_id", "description_sha256", "preferences"}
+            or provenance["message_id"] != str(context.source_message.id)
+            or provenance["description_sha256"] != hashlib.sha256(
+                context.description.encode(),
+            ).hexdigest()
+            or type(provenance["preferences"]) is not dict
+        ):
+            return ""
+        preferences = provenance["preferences"]
+        owner_preferences = {key: item for key, item in preferences.items()
+                             if key not in {"primary_family", "tone", "dark_mode"}}
+        if owner_preferences != context.owner_preferences:
+            return ""
+        return _cached(value, _fingerprint(context.description, preferences))
+    # Legacy ready entries have no preference snapshot. Accept only an exact
+    # reconstructible fingerprint for this same admitted source, never a nearest
+    # cache. The second form handles originally empty preferences followed by
+    # auto-generated discovery font/theme metadata. Explicit fonts/palette stay.
+    for preferences in (context.preferences, context.owner_preferences):
+        result = _cached(value, _fingerprint(context.description, preferences))
+        if result:
+            return result
+    return ""
+
+
+async def _cache_source(
+    session: AsyncSession, ids: GenerationIds, context: _PreparationInput, origin: GenerationRun,
+) -> Message | None:
+    if (origin.project_id != ids.project_id or origin.user_id != ids.user_id
+        or origin.user_message_id is None or origin.assistant_message_id is None):
+        return None
+    try:
+        source = await resolve_request_source(session, ids=GenerationIds(
+            origin.id, ids.project_id, ids.user_id, origin.user_message_id,
+            origin.assistant_message_id,
+        ), baseline=context.baseline)
+    except RequestSourceRejected:
+        return None
+    if source.prompt != context.description:
+        return None
+    return await session.get(Message, source.message_id)
+
+
+async def _referenced_ready(
+    session: AsyncSession, ids: GenerationIds, context: _PreparationInput, value: Any,
+) -> str:
+    keys = {"version", "request_message_id", "origin_run_id", "origin_source_message_id",
+            "input_sha256", "result_sha256", "result_chars", "owner_preferences_sha256"}
+    if (type(value) is not dict or set(value) != keys or type(value["version"]) is not int
+        or value["version"] != 1 or value["request_message_id"] != str(context.source_message.id)
+        or value["owner_preferences_sha256"] != _fingerprint("", context.owner_preferences)
+        or type(value["result_chars"]) is not int or not 0 < value["result_chars"] <= MAX_RESULT
+        or any(type(value[key]) is not str or not re.fullmatch(r"[a-f0-9]{64}", value[key])
+               for key in ("input_sha256", "result_sha256", "owner_preferences_sha256"))):
+        return ""
+    try:
+        origin_id = UUID(value["origin_run_id"])
+        if str(origin_id) != value["origin_run_id"]:
+            return ""
+    except (TypeError, ValueError, AttributeError):
+        return ""
+    origin = await session.get(GenerationRun, origin_id)
+    if origin is None:
+        return ""
+    message = await _cache_source(session, ids, context, origin)
+    if message is None or str(message.id) != value["origin_source_message_id"]:
+        return ""
+    result = _cached((origin.agent_state or {}).get(KEY), value["input_sha256"])
+    if (len(result) != value["result_chars"]
+        or hashlib.sha256(result.encode()).hexdigest() != value["result_sha256"]):
+        return ""
+    return result
+
+
+async def _write_cache_reference(
+    factory: async_sessionmaker[AsyncSession], ids: GenerationIds, value: dict[str, Any],
+) -> None:
+    async with factory() as session:
+        await session.execute(text(
+            "UPDATE generation_runs SET agent_state=jsonb_set("
+            "COALESCE(agent_state,'{}'::jsonb),'{prompt_preparation_reference_v1}',"
+            "CAST(:value AS jsonb),true) "
+            "WHERE id=:run AND project_id=:project AND user_id=:owner AND status='running' "
+            "AND user_message_id=:message AND assistant_message_id=:assistant "
+            "AND NOT (COALESCE(agent_state,'{}'::jsonb) ? :key) "
+            "AND EXISTS(SELECT 1 FROM projects p "
+            "WHERE p.id=generation_runs.project_id AND p.owner_id=:owner)"
+        ), {
+            "value": json.dumps(value), "key": REFERENCE_KEY,
+            "run": ids.run_id, "project": ids.project_id, "owner": ids.user_id,
+            "message": ids.user_message_id, "assistant": ids.assistant_message_id,
+        })
+        await session.commit()
+
+
+async def _persist_cache_reference(
+    factory: async_sessionmaker[AsyncSession], ids: GenerationIds, value: dict[str, Any],
+) -> None:
+    """An optional first-only breadcrumb never withholds an already valid cache hit."""
+    task = asyncio.create_task(_write_cache_reference(factory, ids, value))
+
+    def discard_result(done: asyncio.Future[None]) -> None:
+        if not done.cancelled():
+            done.exception()
+
+    try:
+        done, _ = await asyncio.wait({task}, timeout=_REFERENCE_WRITE_SECONDS)
+        if done:
+            task.result()
+        else:
+            task.cancel()
+            task.add_done_callback(discard_result)
+            log.info("prompt_preparation cache reference unavailable")
+    except asyncio.CancelledError:
+        task.cancel()
+        task.add_done_callback(discard_result)
+        raise
+    except Exception:
+        log.info("prompt_preparation cache reference unavailable")
+
+
+async def _remember_cache_hit(
+    session: AsyncSession, factory: async_sessionmaker[AsyncSession], ids: GenerationIds,
+    context: _PreparationInput, origin: GenerationRun, result: str,
+) -> None:
+    try:
+        value = (origin.agent_state or {}).get(KEY)
+        if type(value) is not dict or _cached(
+            value, _fingerprint(context.description, context.preferences),
+        ) != result:
+            return
+        message = await _cache_source(session, ids, context, origin)
+        if message is None:
+            return
+        await _persist_cache_reference(factory, ids, {
+            "version": 1, "request_message_id": str(context.source_message.id),
+            "origin_run_id": str(origin.id), "origin_source_message_id": str(message.id),
+            "input_sha256": value["input_sha256"],
+            "result_sha256": hashlib.sha256(result.encode()).hexdigest(),
+            "result_chars": len(result),
+            "owner_preferences_sha256": _fingerprint("", context.owner_preferences),
+        })
+    except Exception:
+        log.info("prompt_preparation cache reference unavailable")
+
+
+async def _lookup_ready_prompt_brief(
+    session: AsyncSession, ids: GenerationIds,
+    observe_request: Callable[[bool | None, bool], None],
+    baseline: SourceBaseline | None,
+) -> str:
+    context = await _load_input(
+        session, ids, observe_request=observe_request, expected_baseline=baseline,
+    )
+    if context is None:
+        return ""
+    # An unchanged first entry may observe its own cache on cold resume.
+    # A new substantive edit must never inherit another run's plan.
+    own = _ready_reference((context.run.agent_state or {}).get(KEY), context)
+    if own:
+        return own
+    own_reference = await _referenced_ready(
+        session, ids, context, (context.run.agent_state or {}).get(REFERENCE_KEY),
+    )
+    if own_reference:
+        return own_reference
+    if context.source_message.id == ids.user_message_id:
+        return ""
+    originals = await session.scalars(select(GenerationRun).where(
+        GenerationRun.project_id == ids.project_id,
+        GenerationRun.user_id == ids.user_id,
+        GenerationRun.user_message_id == context.source_message.id,
+    ).order_by(GenerationRun.created_at, GenerationRun.id).limit(20))
+    for original in originals:
+        try:
+            bound_message_request(original, context.source_message,
+                                  project_id=ids.project_id, run_id=original.id)
+        except ValueError:
+            continue
+        result = _ready_reference((original.agent_state or {}).get(KEY), context)
+        if result:
+            return result
+        result = await _referenced_ready(
+            session, ids, context, (original.agent_state or {}).get(REFERENCE_KEY),
+        )
+        if result:
+            return result
+    return ""
+
+
+async def reuse_ready_prompt_brief(
+    factory: async_sessionmaker[AsyncSession], ids: GenerationIds,
+    *, require_for_manual: bool = False, baseline: SourceBaseline | None = None,
+) -> str:
+    """SELECT-only reuse; an unknown required input yields before any coder dispatch.
+
+    Fresh optional preparation retains its existing fallback once the admitted
+    raw request is known and has no saved reference. Cold USER observation uses
+    the default fail-soft mode and never changes that already persisted task.
+    """
+    manual: bool | None = None
+    known_reference = False
+
+    def observed(kind: bool | None, saved: bool) -> None:
+        nonlocal manual, known_reference
+        manual, known_reference = kind, saved
+
+    attempts = 2 if require_for_manual else 1
+    for attempt in range(attempts):
+        try:
+            async with factory() as session:
+                return await _lookup_ready_prompt_brief(session, ids, observed, baseline)
+        except Exception as exc:
+            required = require_for_manual and (manual is not False or known_reference)
+            if required and attempt + 1 < attempts:
+                continue  # Only bounded reads; never claim, write, prepare or call a model.
+            log.info("prompt_preparation reference unavailable: %s", type(exc).__name__)
+            if required:
+                raise PromptReferenceUnavailable() from None
+            return ""
+    raise AssertionError("bounded reference lookup must return or raise")
+
+
 async def _claim(
     factory: async_sessionmaker[AsyncSession],
     ids: GenerationIds,
+    *, baseline: SourceBaseline | None = None,
 ) -> tuple[dict[str, Any] | None, str]:
     async with factory() as session:
         # Isolate this optional cache namespace, without locking another
@@ -247,83 +586,25 @@ async def _claim(
             text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
             {"key": "prompt-preparation:" + str(ids.project_id)},
         )
-        run = await session.get(GenerationRun, ids.run_id)
-        project = await session.get(Project, ids.project_id)
-        if (
-            run is None
-            or project is None
-            or project.owner_id != ids.user_id
-            or run.project_id != ids.project_id
-            or run.user_id != ids.user_id
-            or run.user_message_id != ids.user_message_id
-            or run.assistant_message_id != ids.assistant_message_id
-            or run.status != "running"
-            or run.response_mode != "build"
-            or project.template != "max_miniapp"
-        ):
+        context = await _load_input(session, ids, expected_baseline=baseline)
+        if context is None or context.run.response_mode != "build":
             return None, ""
+        run = context.run
         policy = (run.agent_state or {}).get(POLICY_KEY)
         if (
-            type(policy) is not dict
-            or set(policy) != {"version", "prompt_hash", "allow_new"}
-            or type(policy["version"]) is not int
-            or policy["version"] != 1
-            or policy["prompt_hash"] != run.prompt_hash
-            or type(policy["allow_new"]) is not bool
+            type(policy) is not dict or set(policy) != {"version", "prompt_hash", "allow_new"}
+            or type(policy["version"]) is not int or policy["version"] != 1
+            or policy["prompt_hash"] != run.prompt_hash or type(policy["allow_new"]) is not bool
         ):
             return None, ""
-        snapshot = (
-            await session.get(Snapshot, project.current_snapshot_id)
-            if project.current_snapshot_id
-            else None
-        )
-        if snapshot is not None and snapshot.project_id != project.id:
-            return None, ""
-        baseline = SourceBaseline(
-            project.current_snapshot_id, snapshot.commit_sha if snapshot is not None else None, {}
-        )
-        source = await resolve_request_source(session, ids=ids, baseline=baseline)
-        message = await session.get(Message, source.message_id)
-        if (
-            message is None
-            or not source.prompt.strip()
-            or _is_retry_request(source.prompt)
-            or _is_continue_request(source.prompt)
-            or is_api_only_request(source.prompt)
-        ):
-            return None, ""
-        preference_run = run
-        if source.message_id != ids.user_message_id and "owner_palette_v1" not in (
-            run.agent_state or {}
-        ):
-            original = await session.scalar(
-                select(GenerationRun)
-                .where(
-                    GenerationRun.project_id == ids.project_id,
-                    GenerationRun.user_id == ids.user_id,
-                    GenerationRun.user_message_id == source.message_id,
-                )
-                .order_by(GenerationRun.created_at)
-                .limit(1)
-            )
-            if original is not None:
-                preference_run = original
-        preferences = _preferences(project, message, preference_run)
-        fingerprint = hashlib.sha256(
-            json.dumps(
-                {"description": source.prompt, "preferences": preferences},
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest()
+        fingerprint = _fingerprint(context.description, context.preferences)
         state = run.agent_state or {}
         if KEY in state:
             return None, _cached(state[KEY], fingerprint)
         # Query only this owner's matching cache. No prior message/history is
         # sent to the model; manual retry resolution above selects one request.
         previous = await session.scalar(
-            select(GenerationRun.agent_state[KEY])
+            select(GenerationRun)
             .where(
                 GenerationRun.project_id == ids.project_id,
                 GenerationRun.user_id == ids.user_id,
@@ -333,7 +614,10 @@ async def _claim(
             .limit(1)
         )
         if previous is not None:
-            return None, _cached(previous, fingerprint)
+            cached = _cached((previous.agent_state or {}).get(KEY), fingerprint)
+            if cached:
+                await _remember_cache_hit(session, factory, ids, context, previous, cached)
+            return None, cached
         if not policy["allow_new"]:
             return None, ""
         claim = {
@@ -342,11 +626,18 @@ async def _claim(
             "input_sha256": fingerprint,
             "claim_id": str(uuid4()),
             "result": "",
+            "source": {
+                "message_id": str(context.source_message.id),
+                "description_sha256": hashlib.sha256(context.description.encode()).hexdigest(),
+                "preferences": context.preferences,
+            },
         }
         if not await _write(session, ids, claim):
             return None, ""
         await session.commit()  # Uncertain acknowledgement must never reach HTTP.
-        return {**claim, "messages": preparation_messages(source.prompt, preferences)}, ""
+        return {
+            **claim, "messages": preparation_messages(context.description, context.preferences),
+        }, ""
 
 
 async def _write(
@@ -461,6 +752,7 @@ async def prepare_prompt_brief(
     *,
     complete: Callable[..., Awaitable[str]] | None = None,
     emit_progress: PreparationProgress | None = None,
+    baseline: SourceBaseline | None = None,
 ) -> str:
     """At most one adjunct POST per owned input; errors never block coding."""
     from yleum_api.core.config import get_settings
@@ -472,7 +764,10 @@ async def prepare_prompt_brief(
     try:
         if not get_settings().prompt_preparation_enabled:
             return ""
-        claim, cached = await _claim(factory, ids)
+        claim, cached = (
+            await _claim(factory, ids, baseline=baseline)
+            if baseline is not None else await _claim(factory, ids)
+        )
         if claim is None:
             return cached
         # A cache hit or an excluded input never announces a model request.
@@ -513,8 +808,9 @@ async def prepare_initial_prompt_brief(
     selected_elements: list[dict[str, Any]] | None,
     *,
     emit_progress: PreparationProgress | None = None,
+    baseline: SourceBaseline | None = None,
 ) -> str:
-    """Keep optional expense in execution, outside the prompt-text builder."""
+    """Reuse trusted ready context independently of permission for a new POST."""
     if not isinstance(project_info, ProjectGenerationFacts) or not isinstance(
         turn,
         AgentTurnClassification,
@@ -522,15 +818,23 @@ async def prepare_initial_prompt_brief(
         return ""  # An incomplete legacy/test context never grants optional expense.
     if (
         project_info.template != "max_miniapp"
-        or turn.is_edit
-        or turn.is_continue
-        or turn.has_generated_snapshot
         or project_info.restoration_context
         or selected_elements
         or is_api_only_request(turn.prompt)
     ):
         return ""
-    return await prepare_prompt_brief(factory, ids, emit_progress=emit_progress)
+    cached = await reuse_ready_prompt_brief(
+        factory, ids, require_for_manual=True, baseline=baseline,
+    )
+    if cached:
+        return cached
+    if turn.is_edit or turn.is_continue or turn.has_generated_snapshot:
+        return ""
+    if baseline is None:
+        return await prepare_prompt_brief(factory, ids, emit_progress=emit_progress)
+    return await prepare_prompt_brief(
+        factory, ids, emit_progress=emit_progress, baseline=baseline,
+    )
 
 
 def render_prepared_brief(brief: str) -> str:

@@ -209,3 +209,13 @@ async def test_cached_preparation_reaches_entry_evidence_without_another_model_c
     assert value["rendered_brief_included"] is True
     assert value["rendered_brief_sha256"] == _sha(prompt_preparation.render_prepared_brief(note))
     model.assert_not_awaited()
+
+
+def test_empty_preparation_is_not_an_available_reference():
+    value = evidence.coder_entry_evidence(
+        GenerationIds(*(uuid4() for _ in range(5))), SourceBaseline(None, None, {}),
+        input_prompt="owner", coder_user="No plan", entry_kind="native", rendered_brief="",
+    )
+    assert value["prepared_reference_available"] is False
+    assert value["rendered_brief_included"] is False
+    assert value["rendered_brief_sha256"] is None and value["rendered_brief_chars"] == 0

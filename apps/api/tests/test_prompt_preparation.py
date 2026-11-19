@@ -252,6 +252,32 @@ async def test_native_new_run_same_input_reuses_success_and_manual_retry(
         )
     assert await prep.prepare_prompt_brief(factory, retry_ids, complete=call) == result
     assert call.await_count == 1
+    if retry_prompt == "Садовод. Один экран, без корзины.":
+        async with factory() as session:
+            cache_hit = await session.get(GenerationRun, retry_ids.run_id)
+            assert prep.KEY not in cache_hit.agent_state
+            reference = cache_hit.agent_state[prep.REFERENCE_KEY]
+            assert reference["origin_run_id"] == str(ids.run_id)
+            assert reference["request_message_id"] == str(retry_ids.user_message_id)
+            cache_hit.status = "failed"
+            await settle_generation_units(session, cache_hit, accepted=False, snapshot_id=None)
+            await session.commit()
+        continued = await client.post(
+            f"/api/projects/{ids.project_id}/prompt",
+            json={"prompt": "Продолжи", "skip_clarify": True, "idempotency_key": str(uuid4())},
+        )
+        assert continued.status_code == 202, continued.text
+        async with factory() as session:
+            from uuid import UUID
+
+            run = await session.get(GenerationRun, UUID(continued.json()["run_id"]))
+            run.status = "running"
+            await session.commit()
+            continue_ids = GenerationIds(
+                run.id, run.project_id, run.user_id, run.user_message_id, run.assistant_message_id,
+            )
+        assert await prep.reuse_ready_prompt_brief(factory, continue_ids) == result
+        assert call.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -449,6 +475,8 @@ async def test_execution_scope_keeps_optional_preparation_out_of_other_modes(mon
 
     call = AsyncMock(return_value="Сохранённая заметка")
     monkeypatch.setattr(prep, "prepare_prompt_brief", call)
+    reuse = AsyncMock(return_value="")
+    monkeypatch.setattr(prep, "reuse_ready_prompt_brief", reuse)
     info = ProjectGenerationFacts(
         "web" if case == "nonmax" else "max_miniapp",
         "qa",
@@ -482,3 +510,44 @@ async def test_execution_scope_keeps_optional_preparation_out_of_other_modes(mon
         call.assert_not_awaited()
         assert result == ""
     emit.assert_not_awaited()
+    if case in {"fresh", "edit", "continue", "generated"}:
+        reuse.assert_awaited_once_with(None, ids, require_for_manual=True, baseline=None)
+    else:
+        reuse.assert_not_awaited()
+
+
+async def test_native_cache_reference_first_only_preserves_other_namespaces(
+    client, db_session, test_engine, monkeypatch,
+):
+    factory, ids = await _accepted(client, db_session, test_engine, monkeypatch)
+    async with factory() as session:
+        await session.execute(text(
+            "UPDATE generation_runs SET agent_state=agent_state || "
+            "CAST(:value AS jsonb) WHERE id=:id"
+        ), {"id": ids.run_id, "value": json.dumps({
+            "independent_state": {"ready": True}, prep.KEY: {"state": "claimed"},
+        })})
+        await session.commit()
+    base = {
+        "version": 1, "request_message_id": str(ids.user_message_id),
+        "origin_run_id": str(uuid4()), "origin_source_message_id": str(uuid4()),
+        "input_sha256": "a" * 64, "result_sha256": "b" * 64, "result_chars": 200,
+        "owner_preferences_sha256": "c" * 64,
+    }
+    other = {**base, "result_sha256": "d" * 64}
+    await asyncio.gather(
+        prep._write_cache_reference(factory, ids, base),
+        prep._write_cache_reference(factory, ids, other),
+    )
+    async with factory() as session:
+        run = await session.get(GenerationRun, ids.run_id)
+        recorded = run.agent_state[prep.REFERENCE_KEY]
+        assert recorded in (base, other)
+        assert run.agent_state["independent_state"] == {"ready": True}
+        assert run.agent_state[prep.KEY] == {"state": "claimed"}
+    await prep._write_cache_reference(factory, ids, {**base, "result_sha256": "e" * 64})
+    for key in ("user_id", "project_id", "user_message_id", "assistant_message_id", "run_id"):
+        await prep._write_cache_reference(factory, replace(ids, **{key: uuid4()}), base)
+    async with factory() as session:
+        run = await session.get(GenerationRun, ids.run_id)
+        assert run.agent_state[prep.REFERENCE_KEY] == recorded

@@ -1,7 +1,9 @@
+import json
 from pathlib import Path
 from unittest.mock import Mock
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from yleum_api.services import agent_builder
@@ -40,6 +42,9 @@ async def test_max_build_edit_and_resume_receive_readability_and_completion_cont
     assert "unverified" in plan.user
     assert "when the available tools support" in plan.user
     assert "API-only and read-only" in plan.user
+    assert "of a finished product preserve its established typography.json decision" in plan.user
+    assert "An unfinished first build must still implement the original request" in plan.user
+    assert "a provisional seed is not an accepted final design" in plan.user
     assert plan.model == "~anthropic/claude-sonnet-latest"
 
 
@@ -134,3 +139,95 @@ def test_max_stack_design_skill_uses_conditional_navigation_and_owner_priority()
     assert "3–5" not in skill
     assert "Do not add a second `MaxUI`" in skill
     assert "public exports in `0.2.0`" in skill
+    assert "seed fallback or intermediate draft is not an accepted final design" in skill
+    assert "prepared visual plan" in skill
+    assert "prevent accidental page-wide horizontal overflow" in skill
+    assert "deliberately contained gallery" in skill
+
+
+@pytest.mark.parametrize("coordinator", [False, True])
+def test_actual_native_system_keeps_owner_choices_without_freezing_first_build(coordinator):
+    from yleum_api.services import agent_native
+
+    owner_skill = "Explicit owner choice: one screen, red controls, no bottom navigation."
+    system = agent_native.native_system_prompt(
+        "MAX PLATFORM CORE CONTRACT", owner_skill, coordinator_handoff=coordinator,
+    )
+    assert owner_skill in system
+    assert "текущий явный запрос" in system.lower()
+    assert "промежуточный черновик не являются принятым итоговым дизайном" in system
+    assert "доделать исходный запрос и подготовленный план" in system
+    assert "платформенные и SDK-контракты" in system
+
+
+@pytest.mark.parametrize("native", [False, True])
+async def test_prepared_plan_survives_actual_http_serialization_for_both_protocols(
+    monkeypatch, native,
+):
+    from yleum_api.core.config import get_settings
+    from yleum_api.services import agent_native, llm_client
+    from yleum_api.services.prompt_preparation import render_prepared_brief
+
+    owner_request = "Сделай питание под цель. Первый шаг — анкета, не тарифы."
+    brief = "PLAN_BEGIN\n" + "Сохрани пользовательский путь. " * 500
+    brief += "\nUNIQUE_VISUAL_MIDDLE: кольцо приёмов пищи, открытая композиция.\n"
+    brief += "Согласуй типографику и действия. " * 500 + "\nPLAN_END"
+    assert len(brief) > 12_000
+    plan, _ = await prepare_agent_prompt(
+        stack=StackPrompt("stack", "MAX PLATFORM CORE CONTRACT", None, None, "seed", False),
+        factory=Mock(side_effect=AssertionError("Prompt assembly must not access storage")),
+        ids=GenerationIds(*(uuid4() for _ in range(5))),
+        project_info=ProjectGenerationFacts(
+            "max_miniapp", "qa", "QA", None, None, False, "ru", False, "", "",
+        ),
+        prompt_text=owner_request, runtime=GenerationRuntime(), orchestrate=True,
+        selected_elements=None, _is_edit=False, _is_continue=False,
+        force_model="claude-sonnet-5.5", prepared_brief=brief,
+    )
+    requests = []
+
+    def reply(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        if native:
+            content = payload["messages"][0]["content"]
+            sent_text = content if isinstance(content, str) else "".join(
+                block["text"] for block in content if block.get("type") == "text"
+            )
+            system = payload["system"]
+            response = {"content": [{"type": "text", "text": "OK"}], "stop_reason": "end_turn"}
+        else:
+            sent_text = payload["messages"][1]["content"]
+            system = payload["messages"][0]["content"]
+            response = {"choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}]}
+        assert sent_text == plan.user
+        assert owner_request in sent_text
+        assert sent_text.count(render_prepared_brief(brief)) == 1
+        assert "PLAN_BEGIN" in sent_text and "UNIQUE_VISUAL_MIDDLE" in sent_text
+        assert "PLAN_END" in sent_text
+        assert brief not in json.dumps(system, ensure_ascii=False)
+        return httpx.Response(200, json=response)
+
+    settings = get_settings().model_copy(update={"mock_llm": False, "llm_gateway_url": "https://gateway.test"})
+    monkeypatch.setattr(llm_client, "get_settings", lambda: settings)
+    original_client = httpx.AsyncClient
+    if native:
+        async with original_client(transport=httpx.MockTransport(reply)) as client:
+            result = await agent_native._call_messages(
+                client, "https://gateway.test/v1/messages",
+                [{"role": "user", "content": plan.user}],
+                agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
+                model=plan.model, tools=[],
+            )
+        assert result["stop_reason"] == "end_turn"
+    else:
+        def isolated_client(*args, **kwargs):
+            kwargs["transport"] = httpx.MockTransport(reply)
+            return original_client(*args, **kwargs)
+
+        monkeypatch.setattr(llm_client.httpx, "AsyncClient", isolated_client)
+        assert await llm_client.complete_chat(
+            [{"role": "system", "content": plan.system}, {"role": "user", "content": plan.user}],
+            plan.model, max_tokens=None,
+        ) == "OK"
+    assert len(requests) == 1

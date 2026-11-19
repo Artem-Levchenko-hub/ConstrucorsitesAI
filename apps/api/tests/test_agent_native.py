@@ -110,7 +110,9 @@ def test_max_native_design_respects_owner_and_incumbent_without_product_recipes(
     assert owner_guide in prompt
     assert "Текущий явный запрос владельца" in prompt
     assert "цвета, шрифты и исключения" in prompt
-    assert "сохрани существующие исходники и DESIGN.md" in prompt
+    assert "При обычной правке сохраняй исходники" in prompt
+    assert "принятое оформление из DESIGN.md" in prompt
+    assert "черновик не являются принятым итоговым дизайном" in prompt
     assert "Не назначай по отрасли" in prompt
     assert "Навигацию добавляй только" in prompt
     assert "не отдельный этап или критерий остановки" in prompt
@@ -263,7 +265,8 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "unsafe_max_backend_paths" in source
     assert "max_model_write_rejection" in source
     assert "_project_cell_runtime_check" in source
-    assert "_recover_max_resume_prompt" in source
+    assert "resolve_request_source(_max_history_session, ids=ids, baseline=baseline)" in source
+    assert "prompt_text = source.prompt" in source
     assert '_starter_patch = {**_starter_files, "src/app/page.tsx": ""}' in source
     assert '"rm -f -- src/app/page.tsx"' not in source
     assert "dict(current_source)" in source

@@ -700,9 +700,9 @@ async def run_agent_generation(
                 factory, ids, project_info,
                 AgentTurnClassification(
                     prompt_text, _is_continue, _is_edit, _max_has_generated_snapshot,
-                ), selected_elements, emit_progress=_agent_emit,
+                ), selected_elements, emit_progress=_agent_emit, baseline=baseline,
             )
-            rendered_entry_brief = render_prepared_brief(brief)
+            rendered_entry_brief = render_prepared_brief(brief) or None
             return await prepare_agent_prompt(
                 stack=_stack, factory=factory, ids=ids, project_info=project_info,
                 runtime=runtime, orchestrate=orchestrate, prompt_text=prompt_text,
@@ -713,6 +713,18 @@ async def run_agent_generation(
         _prompt_plan, _build_plan = await run_bootstrap_stage(
             continuation, "prompt_prepare", prepare_prompt_plan, handle=runtime.handle,
         )
+
+    if rendered_entry_brief is None and project_info.template == "max_miniapp":
+        from yleum_api.services.prompt_preparation import (
+            render_prepared_brief,
+            reuse_ready_prompt_brief,
+        )
+
+        # Saved agent entries and cached bootstrap results keep their exact USER.
+        # Rebuild only the trusted observation reference, never append a plan here.
+        rendered_entry_brief = render_prepared_brief(
+            await reuse_ready_prompt_brief(factory, ids, baseline=baseline),
+        ) or None
 
     _render_current_max_starter_files = partial(
         render_current_max_starter,

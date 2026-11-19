@@ -72,6 +72,44 @@ async def test_repeated_inspection_switches_to_one_small_change(monkeypatch, alt
     assert files[_PAGE] == "export const title = 'New';"
 
 
+async def test_clean_max_build_nudge_allows_remaining_prepared_visual_work(monkeypatch):
+    task = full_design_task()
+    files = {_PAGE: "initial layout"}
+    requests = []
+    wrote_visual = False
+
+    async def provider(_client, _url, convo, _system, **kwargs):
+        nonlocal wrote_visual
+        requests.append(deepcopy(convo))
+        if not wrote_visual:
+            if agent_native._MAX_DONE_WHEN_GREEN_NUDGE in str(convo[-1]):
+                assert task in convo[0]["content"]
+                assert "compilation, not completion" in str(convo[-1])
+                assert "remaining requested screens, flows and visual composition" in str(convo[-1])
+                wrote_visual = True
+                return turn(("write_file", {"path": _PAGE, "content": "completed visual plan"}))
+            return turn(("build", {}))
+        return turn(("build", {}), ("runtime_check", {"path": "/"}), ("done", {}))
+
+    async def execute(action):
+        if action.name == "write_file":
+            files[action.path] = action.args["content"]
+        return {"ok": True, "status_code": 200}
+
+    async def snapshot():
+        return dict(files)
+
+    monkeypatch.setattr(agent_native, "_call_messages", provider)
+    result = await agent_native._run_native_segment(
+        system="MAX VERIFICATION OVERRIDE", task=task, execute=execute,
+        initial_files=dict(files), snapshot_files=snapshot,
+        completion_check=lambda *_: None if wrote_visual else "Implement the visual plan",
+        max_steps=agent_native._NO_WRITE_NUDGE_AT + 5,
+    )
+    assert result.done and wrote_visual
+    assert files[_PAGE] == "completed visual plan"
+
+
 async def test_output_limit_resets_context_and_narrows_next_product_milestone(monkeypatch):
     task = full_design_task()
     files = {_HELPER: "export const product = 1;"}

@@ -40,7 +40,7 @@ def coder_entry_evidence(
         "assistant_message_id": str(ids.assistant_message_id), "entry_kind": entry_kind,
         "input_sha256": _sha(input_prompt), "input_chars": len(input_prompt),
         "coder_user_sha256": _sha(coder_user), "coder_user_chars": len(coder_user),
-        "prepared_reference_available": rendered_brief is not None,
+        "prepared_reference_available": bool(fragment),
         "rendered_brief_included": bool(fragment) and fragment in coder_user,
         "rendered_brief_sha256": _sha(fragment) if fragment else None,
         "rendered_brief_chars": len(fragment),

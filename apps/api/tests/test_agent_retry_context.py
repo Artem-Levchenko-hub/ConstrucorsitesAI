@@ -88,7 +88,7 @@ def history():
         if project is None:
             project = Project(
                 id=project_id, owner_id=user_id, name="Fixture", slug="fixture",
-                template="max_miniapp", current_snapshot_id=snapshot.id,
+                template="max_miniapp", current_snapshot_id=context.baseline.snapshot_id,
             )
             session.add(project)
             session.commit()
@@ -123,7 +123,8 @@ def history():
         store_generation_dispatch(run, GenerationDispatch(
             schema_version=1, project_id=run.project_id, user_id=run.user_id,
             user_message_id=message.id, assistant_message_id=assistant.id,
-            current_snapshot_id=snapshot.id, prompt_text=text, model_id="test-no-provider",
+            current_snapshot_id=context.baseline.snapshot_id, prompt_text=text,
+            model_id="test-no-provider",
             force_model=None, is_free=False, orchestrate=mode == "build", selected_elements=None,
             reference_images=[{key: item[key] for key in ("id", "sha256")}
                               for item in references] if references else None,
@@ -142,7 +143,7 @@ def history():
             "max_miniapp", "fixture", "Fixture", None, None, False, "ru", False, "", ""
         )
         result = await classify_agent_turn(
-            baseline=baseline,
+            baseline=context.baseline,
             factory=AsyncSession,
             ids=current_ids,
             orchestrate=False,
@@ -164,10 +165,11 @@ def history():
         )
         return result, plan.user, message.content
 
-    yield SimpleNamespace(
+    context = SimpleNamespace(
         add=add, classify=classify, session=session, factory=AsyncSession, baseline=baseline,
         ids=ids, ensure_project=ensure_project, snapshot=snapshot,
     )
+    yield context
     session.close()
     engine.dispose()
 
@@ -355,6 +357,7 @@ async def test_retry_rejects_foreign_message_reference_on_own_run(history):
 
 async def test_first_build_continue_still_recovers_original_brief(history):
     history.session.execute(delete(Snapshot))
+    history.baseline = SourceBaseline(None, None, {})
     history.session.commit()
     task = "Собери приложение с журналом расчётов"
     history.add(task)
