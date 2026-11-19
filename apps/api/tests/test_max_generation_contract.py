@@ -1240,6 +1240,8 @@ def test_mutating_user_data_requires_write() -> None:
 @pytest.mark.parametrize("coordinator_handoff", [False, True])
 @pytest.mark.parametrize("prompt", [
     "Платный помощник по питанию. Тарифы ещё не настроены; нужны анкета и история.",
+    "Главное действие: Купить подписку на сервис. Работа по подписке, три тарифа; "
+    "каталог пуст. Нужны анкета, рацион, дневник и навигация.",
     "Закрытый продукт: все персональные данные только для подписчиков.",
 ])
 def test_ui_contract_separates_first_visit_setup_and_paid_authority_in_every_mode(
@@ -1251,6 +1253,11 @@ def test_ui_contract_separates_first_visit_setup_and_paid_authority_in_every_mod
     assert contract.count("Separate missing user context") == 1
     assert "Missing tariffs or an unavailable provider must not automatically replace" in contract
     assert "within their allowed access scope" in contract
+    assert "primary 'Buy a subscription' CTA alone does not prohibit" in contract
+    assert "completing the user's initial context before payment" in contract
+    assert "requires an explicit owner condition or a verified existing server contract" in contract
+    assert "Keep the purchase visually dominant" in contract
+    assert "without making an unavailable tariff choice the only permitted step" in contract
     assert "Honor an explicit owner-wide access restriction" in contract
     assert "Paid operations must remain server-enforced" in contract
     assert "order creation, a redirect, client state or a UI-only check" in contract
