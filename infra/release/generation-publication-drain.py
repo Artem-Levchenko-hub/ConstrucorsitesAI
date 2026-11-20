@@ -276,6 +276,17 @@ _PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES = {
     **_PORTABLE_QUIESCENCE_MIGRATION_INVENTORY_SOURCES,
     "routers.workspace": "cebf3ac346b7394874958af143597922f8bc764543ed3c78061982a748759ed9",
 }
+# Reviewed disk-backed temporary-file successor (e10f5490): command/service
+# wrappers prepare their project-owned home cache before the existing child.
+# Explicit temporary environment overrides remain unchanged. No Docker producer,
+# dispatch/lock/fence boundary, lifecycle or pending-command contract changes.
+# Retain the full predecessor and admit this exact complete successor only.
+_PORTABLE_QUIESCENCE_DISK_TEMP_SOURCES = {
+    **_PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES,
+    "services.docker_machine_backend": (
+        "439d0406c5a763c22958d31e2174280a5f6ec524620f60d4da796e446dd941c0"
+    ),
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -302,6 +313,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_COMMAND_STATUS_SOURCES,
     _PORTABLE_QUIESCENCE_MIGRATION_INVENTORY_SOURCES,
     _PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES,
+    _PORTABLE_QUIESCENCE_DISK_TEMP_SOURCES,
 )
 # Only these reviewed producers may attest a pending fast_check wrapper.
 _PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES = (
@@ -313,6 +325,7 @@ _PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES = (
     _PORTABLE_QUIESCENCE_COMMAND_STATUS_SOURCES,
     _PORTABLE_QUIESCENCE_MIGRATION_INVENTORY_SOURCES,
     _PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES,
+    _PORTABLE_QUIESCENCE_DISK_TEMP_SOURCES,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.

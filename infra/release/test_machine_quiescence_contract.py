@@ -179,6 +179,7 @@ class PendingFastCheckTests(unittest.TestCase):
             self.checker._PORTABLE_QUIESCENCE_COMMAND_STATUS_SOURCES,
             self.checker._PORTABLE_QUIESCENCE_MIGRATION_INVENTORY_SOURCES,
             self.checker._PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES,
+            self.checker._PORTABLE_QUIESCENCE_DISK_TEMP_SOURCES,
         ):
             self.assertEqual(
                 self.checker._pending_portable_commands(self.machine, sources=sources),
@@ -397,6 +398,76 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
         )
         self.checker._require_reviewed_portable_sources(self.connect)
         self.checker._require_reviewed_portable_sources(self.owner)
+
+    def test_disk_temp_successor_changes_only_the_reviewed_backend_and_keeps_predecessor(self):
+        previous = self.checker._PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES
+        current = self.checker._PORTABLE_QUIESCENCE_DISK_TEMP_SOURCES
+        backend = "services.docker_machine_backend"
+        self.assertEqual(
+            previous[backend],
+            "533772df280e9fd186cf97e7ce8eb631fb66e69d91557283f5dfb69ed86fd829",
+        )
+        self.assertEqual(
+            current[backend],
+            "439d0406c5a763c22958d31e2174280a5f6ec524620f60d4da796e446dd941c0",
+        )
+        self.assertEqual(len(current), 24)
+        self.assertEqual(set(current), set(previous))
+        self.assertEqual({name for name in current if current[name] != previous[name]}, {backend})
+        for sources in (previous, current):
+            before = copy.deepcopy(sources)
+            self.checker._require_reviewed_portable_sources(sources)
+            self.assertIn(sources, self.checker._PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES)
+            self.assertEqual(sources, before)
+        self.assertNotEqual(self.checker._digest(previous), self.checker._digest(current))
+
+    def test_disk_temp_bundle_rejects_every_unknown_missing_and_extra_source(self):
+        current = self.checker._PORTABLE_QUIESCENCE_DISK_TEMP_SOURCES
+        for name in current:
+            for mode in ("missing", "unknown"):
+                candidate = dict(current)
+                if mode == "missing":
+                    del candidate[name]
+                else:
+                    candidate[name] = "0" * 64
+                with self.subTest(name=name, mode=mode), self.assertRaisesRegex(
+                    self.checker.PhysicalDrainError, "quiescence_unsupported_source",
+                ):
+                    self.checker._require_reviewed_portable_sources(candidate)
+        with self.assertRaisesRegex(
+            self.checker.PhysicalDrainError, "quiescence_unsupported_source",
+        ):
+            self.checker._require_reviewed_portable_sources(
+                {**current, "services.unreviewed_producer": "0" * 64},
+            )
+
+    def test_disk_temp_backend_cannot_be_mixed_into_an_older_controller_bundle(self):
+        current = self.checker._PORTABLE_QUIESCENCE_DISK_TEMP_SOURCES
+        backend = "services.docker_machine_backend"
+        for previous in self.checker._PORTABLE_QUIESCENCE_SOURCE_BUNDLES:
+            self.checker._require_reviewed_portable_sources(previous)
+            candidate = {**previous, backend: current[backend]}
+            if candidate == current:
+                self.checker._require_reviewed_portable_sources(candidate)
+            else:
+                with self.subTest(previous=previous), self.assertRaisesRegex(
+                    self.checker.PhysicalDrainError, "quiescence_unsupported_source",
+                ):
+                    self.checker._require_reviewed_portable_sources(candidate)
+
+    def test_disk_temp_pending_fast_check_keeps_exact_existing_journal_contract(self):
+        machine, _child_id = _pending_fast_check()
+        before = copy.deepcopy(machine)
+        previous = self.checker._PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES
+        current = self.checker._PORTABLE_QUIESCENCE_DISK_TEMP_SOURCES
+        expected = self.checker._pending_portable_commands(machine, sources=previous)
+        self.assertEqual(
+            self.checker._pending_portable_commands(machine, sources=current), expected,
+        )
+        self.assertEqual(machine, before)
+        machine["operations"][COMMAND]["digest"] = "0" * 64
+        with self.assertRaises(self.checker.PhysicalDrainError):
+            self.checker._pending_portable_commands(machine, sources=current)
 
     def test_native_historical_bundle_remains_supported(self):
         self.assertEqual(self.checker._PORTABLE_QUIESCENCE_NATIVE_STARTUP_SOURCES, self.native)
@@ -624,7 +695,7 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             (Path(__file__).parent / "fixtures/source-guard-lease-quiescence-sources.json")
             .read_text()
         )
-        current = self.checker._PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES
+        current = self.checker._PORTABLE_QUIESCENCE_DISK_TEMP_SOURCES
         self.checker._require_reviewed_portable_sources(previous)
         self.checker._require_reviewed_portable_sources(previous_lease)
         baseline = json.loads(
