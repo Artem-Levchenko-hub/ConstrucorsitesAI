@@ -39,6 +39,26 @@ omit an automatic output cap and use the provider's default. This is not an
 unlimited provider response. Length/filter/refusal outcomes retain the existing
 receipt and recovery rules; partial actions are not accepted as completed work.
 
+Sol forwards the remaining caller budget to the Gateway after reservation
+waits; SQL and retries spend the original clock. The Gateway's existing cap
+and safety reserve still apply. Neither transport nor response capture grants
+unlimited time or restarts the generation deadline.
+
+Non-streaming Sol coding calls belonging to an owned, running generation
+already admitted as QA Sol use retained provider responses independently of
+full V3 executable recovery enrollment. The frozen dispatch remains the engine
+authority. Capture does not change accepted-build billing or admit another
+generation. Both `generation_provider_attempts_enabled` and
+`generation_response_retention_enabled` are required; disabling either refuses
+these calls before paid dispatch rather than falling back to an uncaptured POST.
+
+If a local body is lost while the same call still has time, the warm process
+can read or reconcile that exact owned attempt's retained response without
+another model POST. Missing or unconfirmed evidence remains an error. Capture
+alone does not enable a full cold-run resume: executable recovery still needs
+its separate admission and acceptance. Previously failed runs are not migrated
+or retroactively given retained responses by this change.
+
 The optional cached prompt preparation remains the existing shared service
 with its own role configuration. Selecting Sol changes the coding engine,
 not that service or the project's runtime AI model. No design templates,

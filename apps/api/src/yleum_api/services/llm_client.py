@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 
 from yleum_api.core.config import get_settings
-from yleum_api.services.agent_output_budget import is_sonnet55_model
+from yleum_api.services.agent_output_budget import is_sol_model, is_sonnet55_model
 from yleum_api.services.generation.provider_identity import GenerationProviderIdentity
 from yleum_api.services.generation.recovery_diagnostic import (
     diagnostic_output_budget as diagnostic_output_budget,
@@ -812,6 +812,23 @@ def _stream_error_message(error: object) -> str:
     return f"Ошибка LLM-провайдера: {raw[:200]}"
 
 
+def _chat_uses_total_deadline(model: str, identity: GenerationProviderIdentity | None) -> bool:
+    return identity is not None or is_sonnet55_model(model) or is_sol_model(model)
+
+
+def _chat_remaining_seconds(
+    deadline: float, *, timed_request: bool, legacy_seconds: float,
+    durable_seconds: float | None = None,
+) -> float:
+    """SQL waits and retries spend the original clock, never a new HTTP window."""
+    remaining = deadline - asyncio.get_running_loop().time() if timed_request else legacy_seconds
+    if durable_seconds is not None:
+        remaining = min(remaining, durable_seconds)
+    if remaining <= 0:
+        raise TimeoutError
+    return remaining
+
+
 async def _chat_stream_data(
     payload: dict[str, Any],
     url: str,
@@ -859,18 +876,17 @@ async def _chat_stream_data(
     legacy_allowance = _chat_attempt_allowance(payload) if identity is not None else 1
     outward_event = False
     accepted_headers = False
-    timed_request = identity is not None or is_sonnet55_model(payload["model"])
+    timed_request = _chat_uses_total_deadline(payload["model"], identity)
     async with asyncio.timeout_at(deadline if timed_request else None):
         for attempt in range(start_attempt, allowance):
-            remaining = (
-                deadline - asyncio.get_running_loop().time() if timed_request else 300.0
+            remaining = _chat_remaining_seconds(
+                deadline, timed_request=timed_request, legacy_seconds=300.0,
             )
-            if remaining <= 0:
-                raise TimeoutError
             wire = await reserve_generation_wire(identity, wire_attempt=attempt)
-            durable_remaining = provider_dispatch_remaining()
-            if durable_remaining is not None:
-                remaining = min(remaining, durable_remaining)
+            remaining = _chat_remaining_seconds(
+                deadline, timed_request=timed_request, legacy_seconds=remaining,
+                durable_seconds=provider_dispatch_remaining(),
+            )
             attach_identity(payload, identity)
             retry_parent = False
             refusal_failure: LLMError | None = None
@@ -1144,6 +1160,41 @@ async def _resume_chat_dispatch(
     return start_attempt, identity, overload_used, deadline
 
 
+def _stored_chat_response(value: dict[str, Any], url: str) -> httpx.Response:
+    if not isinstance(value.get("choices"), list):
+        raise LLMError(
+            "Stored generation response has a conflicting format",
+            code="generation_response_indeterminate", retry_safe=False,
+            provider_charge_ambiguous=True,
+        )
+    return httpx.Response(200, json=value, request=httpx.Request("GET", url))
+
+
+async def _wait_for_captured_chat_response(
+    identity: GenerationProviderIdentity, url: str, *, deadline: float,
+) -> httpx.Response:
+    """Read/reconcile this exact attempt within its existing clock; never dispatch."""
+    try:
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError
+        async with asyncio.timeout_at(deadline):
+            while True:
+                try:
+                    value = await require_recovered_response(identity)
+                except LLMError as error:
+                    if error.code != "generation_response_pending":
+                        raise
+                    await asyncio.sleep(2)
+                else:
+                    return _stored_chat_response(value, url)
+    except TimeoutError:
+        raise LLMError(
+            "Generation response is still pending",
+            code="generation_response_pending", retry_safe=False,
+            provider_charge_ambiguous=True,
+        ) from None
+
+
 async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.Response:
     from yleum_api.services.generation.provider_attempts import (
         attach_identity,
@@ -1164,6 +1215,7 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
     )
     identity = await prepare_generation_attempt(payload, "/v1/chat/completions")
     from yleum_api.services.generation.recovery_reconciliation import (
+        has_provider_effect_context,
         provider_reconciliation_requested,
     )
 
@@ -1177,13 +1229,14 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
                 payload, identity, failure,
             )
         else:
-            if not isinstance(retained.get("choices"), list):
-                raise LLMError(
-                    "Stored generation response has a conflicting format",
-                    code="generation_response_indeterminate", retry_safe=False,
-                    provider_charge_ambiguous=True,
-                )
-            return httpx.Response(200, json=retained, request=httpx.Request("GET", url))
+            return _stored_chat_response(retained, url)
+    # QA Sol capture deliberately does not enter full executable recovery: that
+    # contract has separate product-acceptance obligations. A lost local body
+    # can still be read from the already-owned attempt without another model call.
+    capture_only_sol = (
+        identity is not None and is_sol_model(payload["model"])
+        and not has_provider_effect_context()
+    )
     allowance = _chat_dispatch_allowance(payload) if identity is not None else 1
     if start_attempt >= allowance:
         raise LLMError("Stored provider dispatch budget is exhausted",
@@ -1191,18 +1244,19 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
                        provider_charge_ambiguous=True)
     legacy_allowance = _chat_attempt_allowance(payload) if identity is not None else 1
     accepted_headers = False
-    timed_request = identity is not None or is_sonnet55_model(payload["model"])
+    timed_request = _chat_uses_total_deadline(payload["model"], identity)
     try:
         # Use the same wall clock through SQL, both providers and any backoff.
         async with asyncio.timeout_at(deadline if timed_request else None):
             for attempt in range(start_attempt, allowance):
-                remaining = deadline - loop.time() if timed_request else budget
-                if remaining <= 0:
-                    raise TimeoutError
+                remaining = _chat_remaining_seconds(
+                    deadline, timed_request=timed_request, legacy_seconds=budget,
+                )
                 wire = await reserve_generation_wire(identity, wire_attempt=attempt)
-                durable_remaining = provider_dispatch_remaining()
-                if durable_remaining is not None:
-                    remaining = min(remaining, durable_remaining)
+                remaining = _chat_remaining_seconds(
+                    deadline, timed_request=timed_request, legacy_seconds=remaining,
+                    durable_seconds=provider_dispatch_remaining(),
+                )
                 attach_identity(payload, identity)
                 timeout = httpx.Timeout(remaining, connect=min(5.0, remaining), read=remaining)
                 try:
@@ -1267,6 +1321,9 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
         preconnect = (
             isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)) and not accepted_headers
         )
+        if (capture_only_sol and identity is not None and not preconnect
+                and loop.time() < deadline):
+            return await _wait_for_captured_chat_response(identity, url, deadline=deadline)
         raise LLMError(
             "Не удалось установить соединение с LLM-сервисом."
             if preconnect

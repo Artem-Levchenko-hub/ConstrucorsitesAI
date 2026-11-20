@@ -25,6 +25,30 @@ if TYPE_CHECKING:
     from yleum_api.services.generation.recovery_reconciliation import ColdWireContinuation
 
 
+async def _standalone_sol_capture(
+    session: AsyncSession, body: dict[str, Any], route: str, *, run_id: UUID,
+    agent_state: object,
+) -> bool:
+    """Capture an accepted QA Sol call without enrolling full recovery acceptance.
+
+    Engine authority comes from normal admission, then the frozen owned dispatch.
+    This does not mint a recovery contract, change billing or authorize a replay.
+    """
+    from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.services.generation_engines import SOL_MODEL, selected_engine
+    from yleum_api.services.generation_runs import load_generation_dispatch
+
+    if selected_engine(agent_state) != "sol":
+        return False
+    run = await session.get(GenerationRun, run_id)
+    if run is None or run.agent_state != agent_state:
+        raise ValueError("Sol capture admission changed")
+    dispatch = load_generation_dispatch(run)
+    if route != "/v1/chat/completions" or body.get("model") != dispatch.force_model:
+        raise ValueError("Sol capture request changed its accepted engine")
+    return dispatch.model_id == SOL_MODEL
+
+
 async def prepare_generation_attempt(
     body: dict[str, Any],
     route: str,
@@ -82,6 +106,9 @@ async def prepare_generation_attempt(
             # This short MVCC read also detects V2 after local context loss; it
             # takes no caller-owned run/project row locks.
             retained = requires_retained_provider(row["agent_state"])
+            sol_capture = not retained and await _standalone_sol_capture(
+                session, body, route, run_id=run_id, agent_state=row["agent_state"],
+            )
             unit_policy = await session.scalar(text(
                 "SELECT version FROM generation_billing_policies WHERE run_id=:run"
             ), {"run": run_id})
@@ -96,7 +123,7 @@ async def prepare_generation_attempt(
                 if hold is None or not settings.generation_provider_attempts_enabled:
                     raise ValueError
 
-            if retained and (
+            if (retained or sol_capture) and (
                 not settings.generation_provider_attempts_enabled
                 or not getattr(settings, "generation_response_retention_enabled", False)
             ):
@@ -106,7 +133,8 @@ async def prepare_generation_attempt(
                         or KEY in (row["agent_state"] or {})):
                     raise ValueError
                 return None
-            if not retained and not unit_registered and existing is None and parent is None:
+            if (not retained and not sol_capture and not unit_registered
+                    and existing is None and parent is None):
                 if has_provider_effect_context() or KEY in (row["agent_state"] or {}):
                     raise ValueError
                 # A global transport switch is not admission into recovery.
