@@ -702,6 +702,37 @@ async def test_legacy_repair_request_is_unchanged(monkeypatch):
     assert native.call_args.kwargs["task"] == args["task"]
 
 
+async def test_assertion_repair_can_fix_product_instead_of_only_weakening_test(
+    monkeypatch, isolated_repair,
+):
+    from yleum_api.services.agent_builder import Action
+    from yleum_api.services.generation.source_error_classification import SourceFailure
+
+    baseline = {ENTRY: "existing product", "tests/http.mjs": "assert(actual === expected);"}
+    executed = []
+
+    async def execute(action):
+        executed.append(action.path)
+        return {"ok": True}
+
+    async def native(**kwargs):
+        result = await kwargs["execute"](
+            Action("write_file", {"path": ENTRY, "content": "fixed product"}),
+        )
+        assert result["ok"] is True
+        assert kwargs["initial_files"]["tests/http.mjs"] == baseline["tests/http.mjs"]
+        return AgentResult(False, "candidate only", {ENTRY: "fixed product"}, 1)
+
+    monkeypatch.setattr(agent_native, "run_native_build", native)
+    result = await agent_finalization.run_native_source_repair(
+        **repair_arguments(baseline, execute=execute),
+        source_failure=SourceFailure("test_assertion", "tests/http.mjs", ("tests/http.mjs",)),
+    )
+    assert executed == [ENTRY]
+    assert result.files == {ENTRY: "fixed product"}
+    assert baseline["tests/http.mjs"] == "assert(actual === expected);"
+
+
 def test_context_limit_counts_complete_utf8_document_including_metadata(monkeypatch):
     from yleum_api.services.generation import source_repair_context
 

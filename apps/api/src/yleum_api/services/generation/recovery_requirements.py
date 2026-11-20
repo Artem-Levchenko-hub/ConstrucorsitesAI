@@ -431,18 +431,40 @@ async def load_compiler_witness(
               and lease.finished_at is not None, "compiler operation is not terminal or owned")
         assert lease is not None
         activity_identity_matches = lease.proof_key == proof.proof_key
-        if (not activity_identity_matches
-                and result.dimension == "full_build" and result.outcome == "green"):
-            from yleum_api.services.project_cell_executor import full_build_response_transition
-
-            status = await project_cell_agent_operation_status(workspace_id, result.operation_id)
-            response = status.terminal_response
-            transition = (
-                full_build_response_transition(response, physical, project_id=run.project_id,
-                                               owner_id=run.user_id)
-                if status.operation_id == result.operation_id and status.state == "completed"
-                and response is not None and response.operation_id == result.operation_id else None
+        if not activity_identity_matches and result.dimension == "full_build":
+            from yleum_api.services.project_cell_executor import (
+                FAILED_FULL_BUILD_ENVIRONMENT_TRANSITION,
+                FailedFullBuildEnvironmentTransition,
+                FullBuildStartupTransition,
+                failed_full_build_response_transition,
+                full_build_response_transition,
             )
+            from yleum_api.services.promotion_permit import MAX_FULL_BUILD_CONTRACT_VERSION
+
+            transition: (
+                FullBuildStartupTransition | FailedFullBuildEnvironmentTransition | None
+            ) = None
+            failed_rebind = result.outcome == "red" and result.artifact_ref is None and (
+                result.redacted_detail.startswith(
+                    f"[build-contract:{MAX_FULL_BUILD_CONTRACT_VERSION}]\n"
+                    "[source-repair:confirmed]\n" + FAILED_FULL_BUILD_ENVIRONMENT_TRANSITION + "\n"
+                )
+            )
+            if result.outcome == "green" or failed_rebind:
+                status = await project_cell_agent_operation_status(
+                    workspace_id, result.operation_id,
+                )
+                response = status.terminal_response
+                if (status.operation_id == result.operation_id and response is not None
+                        and response.operation_id == result.operation_id):
+                    if result.outcome == "green" and status.state == "completed":
+                        transition = full_build_response_transition(
+                            response, physical, project_id=run.project_id, owner_id=run.user_id,
+                        )
+                    elif failed_rebind and status.state == "failed":
+                        transition = failed_full_build_response_transition(
+                            response, physical, project_id=run.project_id, owner_id=run.user_id,
+                        )
             activity_identity_matches = bool(
                 transition is not None and transition.before.proof_key == lease.proof_key
                 and transition.operation_id == result.operation_id

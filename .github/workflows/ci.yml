@@ -125,10 +125,13 @@ jobs:
           tests/test_generation_cancellation.py
           tests/test_generation_runs.py::test_cancel_endpoint_terminalizes_queued_run_before_any_signal_or_finalizer
           tests/test_generation_worker.py::test_cancel_before_dispatch_never_executes
-      - name: Run release-critical API regressions
+      # Production acceptance requires this gate AND all six complete API shards.
+      # Check membership here; execute these unchanged tests once in those shards.
+      - name: Verify release-critical files remain in the complete API suite
         working-directory: apps/api
         run: >-
-          uv run pytest -q
+          uv run --frozen python ../../infra/ci/api-test-shards.py
+          --shards 6 --verify-coverage --require-files
           tests/test_support_unit.py
           tests/test_support_integration.py
           tests/test_support_migration.py
@@ -212,10 +215,10 @@ jobs:
           tests/test_template_registration.py
           tests/test_template_mapping.py
 
-  # The complete API suite, split into six shards by file so it runs in parallel with the
-  # gate instead of after it (16 of the gate's 24 minutes were this one step). Each shard
-  # gets its own disposable PostgreSQL/Redis. Each old NR % 3 group is split into a pair;
-  # full phase timings will support a measured future balance without omitting tests.
+  # The complete API suite runs in six measured, balanced file shards alongside the
+  # gate. Each shard owns disposable PostgreSQL/Redis. New or changed test sources
+  # receive fallback weights; scheduling never omits a file. Retained full phase
+  # timings make future scheduling changes measurable without reducing coverage.
   api-suite:
     # The locked Playwright runtime supports Ubuntu 24.04, not the moving latest image.
     runs-on: ubuntu-24.04

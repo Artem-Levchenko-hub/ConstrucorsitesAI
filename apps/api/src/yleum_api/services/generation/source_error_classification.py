@@ -15,8 +15,8 @@ from yleum_api.services.promotion_permit import workspace_revision_digest
 @dataclass(frozen=True, slots=True)
 class SourceFailure:
     kind: Literal[
-        "relative_import", "workspace_alias", "type_error", "react_effect", "infrastructure",
-        "external_package", "unknown",
+        "relative_import", "workspace_alias", "type_error", "react_effect", "test_assertion",
+        "infrastructure", "external_package", "unknown",
     ] = "unknown"
     importer: str | None = None
     allowed_paths: tuple[str, ...] = ()
@@ -65,6 +65,15 @@ _TYPE = re.compile(
 )
 _QUOTED_LITERAL = re.compile(r'''"[^"\r\n]*"|'[^'\r\n]*'|`[^`\r\n]*`''')
 _REACT_EFFECT = re.compile(r"(?m)^(?P<file>[^:\r\n]+):\d+: self-cancelling React effect:")
+_ASSERTION = re.compile(
+    r"(?m)^AssertionError \[ERR_ASSERTION\](?:[^\r\n]*)$"
+    r"|^\s*code: ['\"]ERR_ASSERTION['\"],?\s*$"
+)
+_ASSERTION_LOCATION = re.compile(
+    r"(?m)^\s+at (?:[^()\r\n]+ \()?file:///workspace/"
+    r"(?P<file>tests/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_.-]+\.(?:mjs|cjs|js|ts|tsx))"
+    r":(?P<line>[1-9]\d{0,6}):[1-9]\d{0,6}\)?[ \t]*$"
+)
 _TS_MISSING = re.compile(
     r"(?m)^(?P<file>[^\r\n]+?)\(\d+,\d+\): error TS2307: Cannot find module "
     r"(?P<quote>['\"])(?P<target>[^'\"\r\n]+)(?P=quote)"
@@ -201,4 +210,11 @@ def classify_source_failure(
         importer = _importer(match["file"], files)
         if importer:
             return SourceFailure("react_effect", importer, (importer,))
+    if _ASSERTION.search(detail):
+        for match in _ASSERTION_LOCATION.finditer(detail):
+            importer = _importer(match["file"], files)
+            if importer and int(match["line"]) <= len(files[importer].splitlines()):
+                # This identifies an owned failing test, not permission to
+                # weaken it or a claim that the application already works.
+                return SourceFailure("test_assertion", importer, (importer,))
     return SourceFailure()

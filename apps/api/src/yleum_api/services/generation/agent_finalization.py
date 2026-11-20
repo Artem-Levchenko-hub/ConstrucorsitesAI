@@ -291,6 +291,11 @@ async def run_native_source_repair(
     catalog_runtime: bool = False,
 ) -> agent_builder.AgentResult:
     """Reuse the guarded editor's progress windows without accepting proof."""
+    if source_failure is not None and source_failure.kind == "test_assertion":
+        # An owned test is diagnostic evidence, not a reason to permit changes
+        # only to that test. The normal product editor must be able to repair
+        # the implementation while preserving the assertions and data guards.
+        source_failure = None
     from yleum_api.services import agent_native
     from yleum_api.services.generation.agent_generation import (
         SourceCheckpointError,
@@ -637,6 +642,9 @@ async def finalize_max_candidate(
                     else "read-only candidate verification"
                 )
                 raise RuntimeError(f"MAX_FINALIZATION_FAILED: {reason}")
+            assertion_repair = bool(
+                source_failure is not None and source_failure.kind == "test_assertion"
+            )
             if retired_plan is not None:
                 if retired_plan.repair_path is None or detail != retired_plan.feedback:
                     raise RecoveryContractError("retired repair diagnostic changed")
@@ -704,10 +712,18 @@ async def finalize_max_candidate(
                 if retired_plan is not None and retired_plan.catalog_gap_key is not None
                 else ""
             )
+            assertion_instruction = (
+                "Investigate the failed assertion and fix the implementation or an "
+                "incorrect test assumption. Do not delete assertions, skip tests, or "
+                "replace real behavior with hardcoded success. Client-only screens "
+                "require a hydrated, authenticated browser; raw HTTP HTML is not "
+                "evidence of their rendered content. Preserve meaningful coverage.\n"
+                if assertion_repair else ""
+            )
             repaired = await run_native_source_repair(
                 task=(
                     f"{plan.user}\n\nFINAL SOURCE CHECK FEEDBACK:\n{detail}{_carry}\n"
-                    f"{strategy}{catalog_instruction}"
+                    f"{strategy}{catalog_instruction}{assertion_instruction}"
                     "Fix the existing product in this same workspace. Preserve working "
                     "features and data. Do not repeat SQL effects already completed. "
                     "Make real source changes, run build, then done."

@@ -36,6 +36,44 @@ def test_missing_css_permits_importer_and_exact_target():
     assert failure.allowed_paths == ("src/app/page.tsx", "src/app/flower.css")
 
 
+def assertion_detail(path="tests/nutrition-http.mjs", line=36):
+    return (
+        "AssertionError [ERR_ASSERTION]: The input did not match the regular expression.\n"
+        f"    at file:///workspace/{path}:{line}:10\n"
+    )
+
+
+def test_owned_http_assertion_identifies_failing_test_without_claiming_success():
+    files = {"tests/nutrition-http.mjs": "// source\n" * 40}
+    failure = classify(assertion_detail(), files=files)
+    assert failure.kind == "test_assertion"
+    assert failure.importer == "tests/nutrition-http.mjs"
+    assert failure.allowed_paths == ("tests/nutrition-http.mjs",)
+    assert not classify(assertion_detail(), files=files, finished=False).allowed_paths
+    assert not classify(assertion_detail(), files=files, digest="0" * 64).allowed_paths
+    assert not classify(assertion_detail() + "\nECONNRESET", files=files).allowed_paths
+
+
+@pytest.mark.parametrize("path", [
+    "tests/../private.mjs", "tests/.env", "tests/http.mjs?token=x", "tests/http.mjs#x",
+    "tests/https://foreign/test.mjs", "src/app/page.tsx", "tests/node_modules/http.mjs",
+    "tests/unknown.mjs", "tests/../tests/nutrition-http.mjs",
+])
+def test_assertion_never_admits_unsafe_untracked_or_non_test_frame(path):
+    files = {"tests/nutrition-http.mjs": "// source\n" * 40}
+    assert not classify(assertion_detail(path), files=files).allowed_paths
+
+
+def test_assertion_requires_real_code_and_complete_in_range_owned_location():
+    files = {"tests/nutrition-http.mjs": "// source\n" * 40}
+    wrong_code = assertion_detail().replace("ERR_ASSERTION", "OTHER")
+    assert not classify(wrong_code, files=files).allowed_paths
+    assert not classify(assertion_detail(line=41), files=files).allowed_paths
+    foreign_host = assertion_detail().replace("file:///workspace/", "file://host/workspace/")
+    assert not classify(foreign_host, files=files).allowed_paths
+    assert not classify(assertion_detail()[:-4], files=files).allowed_paths
+
+
 @pytest.mark.parametrize("kwargs", [
     {"finished": False}, {"digest": "0" * 64}, {"files": {}},
 ])

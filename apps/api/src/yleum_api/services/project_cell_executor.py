@@ -346,6 +346,19 @@ class FullBuildStartupTransition:
     operation_id: UUID
 
 
+FAILED_FULL_BUILD_ENVIRONMENT_TRANSITION = "[failed-full-build-environment-transition:v1]"
+
+
+@dataclass(frozen=True, slots=True)
+class FailedFullBuildEnvironmentTransition:
+    """A failed command changed only its environment; this certifies no success."""
+
+    before: ProofIdentity
+    after: ProofIdentity
+    operation_id: UUID
+    exit_code: int
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectCellCommandObservation:
     operation_id: UUID
@@ -357,6 +370,7 @@ class ProjectCellCommandObservation:
     after: ProofIdentity
     invalidated_dimensions: frozenset[ProofDimension]
     full_build_startup_transition: FullBuildStartupTransition | None = None
+    failed_full_build_environment_transition: FailedFullBuildEnvironmentTransition | None = None
 
 
 def invalidated_dimensions(
@@ -500,11 +514,10 @@ def full_build_startup_transition(
     return FullBuildStartupTransition(before, after, operation_id)
 
 
-def full_build_response_transition(
-    response: ProjectCellAgentExecResponse, identity: ProofIdentity, *,
-    project_id: UUID, owner_id: UUID,
-) -> FullBuildStartupTransition | None:
-    """Reload a retained authenticated response against an exact current AFTER."""
+def _full_build_response_identities(
+    response: ProjectCellAgentExecResponse, identity: ProofIdentity,
+) -> tuple[ProofIdentity, ProofIdentity] | None:
+    """Decode a retained command without normalizing its BEFORE into AFTER."""
     if (response.operation_id is None or response.before_identity is None
             or response.after_identity is None
             or response.workspace_revision != identity.workspace_revision):
@@ -524,9 +537,65 @@ def full_build_response_transition(
         return None
     if after != identity:
         return None
+    return before, after
+
+
+def full_build_response_transition(
+    response: ProjectCellAgentExecResponse, identity: ProofIdentity, *,
+    project_id: UUID, owner_id: UUID,
+) -> FullBuildStartupTransition | None:
+    """Reload a retained authenticated success against an exact current AFTER."""
+    identities = _full_build_response_identities(response, identity)
+    if identities is None:
+        return None
+    before, after = identities
+    assert response.operation_id is not None
     return full_build_startup_transition(
         before, after, response.compiled_asset_receipt, response.project_migration_receipt,
         project_id=project_id, owner_id=owner_id, operation_id=response.operation_id,
+        ok=response.ok, timed_out=response.timed_out, exit_code=response.exit_code,
+    )
+
+
+def failed_full_build_environment_transition(
+    before: ProofIdentity, after: ProofIdentity, *, operation_id: UUID,
+    ok: bool, timed_out: bool, exit_code: int | None,
+) -> FailedFullBuildEnvironmentTransition | None:
+    """Scope a terminal failure to unchanged source, never to a green build.
+
+    The caller must authenticate the owned FULL_BUILD response. The coordinator
+    still verifies current AFTER files and a repairable diagnostic before using
+    this transition. No compilation, migration or startup success is asserted.
+    """
+    if (ok is not False or timed_out is not False or type(exit_code) is not int
+            or exit_code == 0 or before == after
+            or before.base_image_digest != before.toolchain_digest
+            or after.base_image_digest != after.toolchain_digest
+            or replace(before, base_image_digest=after.base_image_digest,
+                       toolchain_digest=after.toolchain_digest) != after):
+        return None
+    return FailedFullBuildEnvironmentTransition(before, after, operation_id, exit_code)
+
+
+def failed_full_build_response_transition(
+    response: ProjectCellAgentExecResponse, identity: ProofIdentity, *,
+    project_id: UUID, owner_id: UUID,
+) -> FailedFullBuildEnvironmentTransition | None:
+    """Decode only an owned failed response; callers retain its original lease."""
+    identities = _full_build_response_identities(response, identity)
+    if identities is None:
+        return None
+    assert response.operation_id is not None
+    receipt = response.command_receipt
+    if receipt is not None and (
+        receipt.workspace_id != identity.workspace_id or receipt.project_id != project_id
+        or receipt.owner_id != owner_id or receipt.generation_run_id != identity.generation_run_id
+        or receipt.operation_id != response.operation_id
+        or receipt.dispatch_fencing_epoch != identity.fencing_epoch
+    ):
+        return None
+    return failed_full_build_environment_transition(
+        *identities, operation_id=response.operation_id,
         ok=response.ok, timed_out=response.timed_out, exit_code=response.exit_code,
     )
 
@@ -1904,6 +1973,12 @@ async def maybe_create_project_cell_executor(
                     before, after, result.compiled_asset_receipt,
                     getattr(result, "project_migration_receipt", None),
                     project_id=project_id, owner_id=user_id, operation_id=result.operation_id,
+                    ok=result.ok, timed_out=result.timed_out, exit_code=result.exit_code,
+                ) if role is ProjectCellCommandRole.FULL_BUILD else None
+            ),
+            failed_full_build_environment_transition=(
+                failed_full_build_environment_transition(
+                    before, after, operation_id=result.operation_id,
                     ok=result.ok, timed_out=result.timed_out, exit_code=result.exit_code,
                 ) if role is ProjectCellCommandRole.FULL_BUILD else None
             ),

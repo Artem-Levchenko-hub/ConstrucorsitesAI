@@ -49,6 +49,7 @@ from yleum_orchestrator.routers.runtime import (
     _EXEC_DENY,
     _MAX_PREVIEW_BOOTSTRAP_PATH,
     _MAX_PREVIEW_BOOTSTRAP_TTL,
+    _bounded_exec_output,
     _collect_workspace_text_files,
     _command_exposes_environment,
     _max_preview_bootstrap_signature,
@@ -916,7 +917,7 @@ async def _execute_agent_command_locked(
         response = WorkspaceAgentExecResponse(
             ok=result.exit_code == 0 and not result.timed_out,
             exit_code=result.exit_code,
-            detail=_redact_exec_output(result.output)[:_MAX_AGENT_EXEC_OUTPUT],
+            detail=_bounded_exec_output(result.output, max_chars=_MAX_AGENT_EXEC_OUTPUT),
             timed_out=result.timed_out,
             workspace_revision=_workspace_revision(updated_files),
             operation_id=request.operation_id,
@@ -997,7 +998,7 @@ async def _execute_agent_command_locked(
             status_code=500,
         ) from exc
     updated_files = await _read_agent_workspace_files(manager, volume_name)
-    detail = _redact_exec_output(result.output)[:_MAX_AGENT_EXEC_OUTPUT]
+    detail = _bounded_exec_output(result.output, max_chars=_MAX_AGENT_EXEC_OUTPUT)
     ok = result.exit_code == 0 and result.timed_out is False
     if restore_failure is not None:
         ok = False

@@ -105,10 +105,13 @@ from yleum_api.services.project_cell_errors import (
     ProjectCellInfrastructureError,
 )
 from yleum_api.services.project_cell_executor import (
+    FAILED_FULL_BUILD_ENVIRONMENT_TRANSITION,
+    FailedFullBuildEnvironmentTransition,
     FullBuildStartupTransition,
     ProjectCellCommandObservation,
     ProjectCellCommandRole,
     ProjectCellExecutorHandle,
+    failed_full_build_environment_transition,
 )
 from yleum_api.services.project_cell_proofs import (
     ProjectCellProofConflict,
@@ -166,6 +169,7 @@ def _completed_repair_fingerprint(
         return source_fingerprint(files)
     return None
 _FULL_BUILD_STARTUP_TRANSITION = "[full-build-startup-transition:v1]"
+_FAILED_FULL_BUILD_ENVIRONMENT_TRANSITION = FAILED_FULL_BUILD_ENVIRONMENT_TRANSITION
 
 
 class _SourceCheckOptions(TypedDict, total=False):
@@ -756,7 +760,12 @@ class MaxFinalizationCoordinator:
             refresh_dependents = refresh_dependents or identity != before_build
         else:
             await self._counter("proof_hit")
-        bundle = ProofBundle(identity=proof, bootstrap=bootstrap, full_build=build)
+        failed_rebind = build.redacted_detail.startswith(_versioned_build_detail(
+            _FAILED_FULL_BUILD_ENVIRONMENT_TRANSITION, source_repair=True,
+        ))
+        bundle = ProofBundle(
+            identity=proof, bootstrap=None if failed_rebind else bootstrap, full_build=build,
+        )
         if build.outcome != ProofOutcome.GREEN.value:
             return await self._failed(
                 identity,
@@ -2627,8 +2636,30 @@ class MaxFinalizationCoordinator:
             and transition.before == identity and transition.after == observation.after
             and transition.operation_id == observation.operation_id
         )
+        failed_transition = getattr(observation, "failed_full_build_environment_transition", None)
+        failed_source_repair = False
+        if (
+            allow_full_build_startup and dimension is ProofDimension.FULL_BUILD
+            and observation.role is ProjectCellCommandRole.FULL_BUILD
+            and not observation.ok and not observation.timed_out and observation.before == identity
+            and isinstance(failed_transition, FailedFullBuildEnvironmentTransition)
+            and failed_transition.before == identity
+            and failed_transition.after == observation.after
+            and failed_transition.operation_id == observation.operation_id
+            and failed_full_build_environment_transition(
+                observation.before, observation.after, operation_id=observation.operation_id,
+                ok=observation.ok, timed_out=observation.timed_out,
+                exit_code=failed_transition.exit_code,
+            ) == failed_transition
+        ):
+            files = await self._verified_workspace_files(observation.after)
+            failed_source_repair = bool(classify_source_failure(
+                observation.redacted_detail, files=files, command_finished=True,
+                frozen_source_sha256=observation.after.workspace_revision,
+            ).allowed_paths)
+        accepted_change = authorized_restart or failed_source_repair
         if (observation.before != identity
-                or (observation.after != identity and not authorized_restart)):
+                or (observation.after != identity and not accepted_change)):
             detail = "command changed the frozen proof identity"
             if observation.redacted_detail:
                 detail += "\n" + observation.redacted_detail
@@ -2645,6 +2676,12 @@ class MaxFinalizationCoordinator:
             identity = observation.after
             proof = await self._proof(identity)
             detail = _FULL_BUILD_STARTUP_TRANSITION + ("\n" + detail if detail else "")
+        elif failed_source_repair:
+            # Preserve the failed command and its original BEFORE activity.
+            # A new AFTER proof holds only RED; no old green or artifact crosses.
+            identity = observation.after
+            proof = await self._proof(identity)
+            detail = _FAILED_FULL_BUILD_ENVIRONMENT_TRANSITION + ("\n" + detail if detail else "")
         artifact_ref = None
         if dimension is ProofDimension.FULL_BUILD and outcome is ProofOutcome.GREEN:
             artifact_files = await self._verified_workspace_files(identity)
@@ -2652,7 +2689,7 @@ class MaxFinalizationCoordinator:
             self._last_files = artifact_files
             artifact_ref = f"build/sha256/{digest}"
         if dimension is ProofDimension.FULL_BUILD:
-            source_repair = False
+            source_repair = failed_source_repair
             if (
                 not observation.ok and not observation.timed_out
                 and observation.before == identity and observation.after == identity

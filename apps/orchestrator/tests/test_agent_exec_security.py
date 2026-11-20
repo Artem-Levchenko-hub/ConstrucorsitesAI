@@ -55,6 +55,41 @@ def test_redacts_secret_assignments_and_dsn_passwords() -> None:
     assert result.endswith("build clean")
 
 
+def test_large_command_output_keeps_assertion_and_owned_frame_together() -> None:
+    from yleum_orchestrator.routers.runtime import _bounded_exec_output
+
+    assertion = "AssertionError [ERR_ASSERTION]: unexpected HTML"
+    frame = "    at file:///workspace/tests/nutrition-http.mjs:36:10"
+    result = _bounded_exec_output(
+        "Next build passed\n" + "<html>large</html>" * 3000 + "\n"
+        + assertion + "\n" + "Input: " + "x" * 30_000 + "\n" + frame
+        + "\nactual: " + "y" * 30_000 + "\nNode.js v24\n"
+    )
+    assert len(result) <= 24_000
+    assert result.startswith("[command diagnostic]\n" + assertion + "\n" + frame)
+    assert "Next build passed" in result and result.endswith("Node.js v24\n")
+    assert "[output omitted]" in result
+
+
+def test_bounded_command_output_redacts_before_both_cuts() -> None:
+    from yleum_orchestrator.routers.runtime import _bounded_exec_output
+
+    value = "AUTH_SECRET=prefix-secret\n" + "x" * 32_000 + "\nAUTH_SECRET=tail-secret\n"
+    result = _bounded_exec_output(value)
+    assert len(result) <= 24_000
+    assert "prefix-secret" not in result and "tail-secret" not in result
+    assert result.count("[REDACTED]") == 2
+    assert _bounded_exec_output("short success") == "short success"
+
+
+@pytest.mark.parametrize("limit", [1, 18, 19, 20, 24, 100, 6_000, 24_000])
+def test_command_diagnostic_honors_small_positive_limits(limit) -> None:
+    from yleum_orchestrator.routers.runtime import _bounded_exec_output
+
+    text = "AssertionError [ERR_ASSERTION]: failed\n" + "x" * 30_000
+    assert len(_bounded_exec_output(text, max_chars=limit)) <= limit
+
+
 async def test_hot_reload_installs_changed_dependencies_without_lifecycle_scripts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1396,6 +1396,36 @@ def _redact_exec_output(value: str) -> str:
     return _EXEC_PRIVATE_KEY_RE.sub("[REDACTED PRIVATE KEY]", redacted)
 
 
+def _bounded_exec_output(value: str, *, max_chars: int = 24_000) -> str:
+    """Keep a redacted command's cause and traceback across large HTML dumps."""
+    if max_chars <= 0:
+        raise ValueError("command diagnostic limit must be positive")
+    safe = _redact_exec_output(value)
+    if len(safe) <= max_chars:
+        return safe
+    marker = "\n[output omitted]\n"
+    if max_chars <= len(marker):
+        return safe[:max_chars]
+    # Node assertions can print the entire HTML twice, separating their cause
+    # from the source frame. Keep these actual log lines together before the
+    # head/tail excerpt; no success or source ownership is inferred here.
+    diagnosis: list[str] = []
+    for line in safe.splitlines():
+        if (line.startswith("AssertionError [ERR_ASSERTION]")
+                or re.match(r"^\s+at .*file:///workspace/tests/", line)):
+            diagnosis.append(line[:500])
+            if len(diagnosis) == 8:
+                break
+    summary = "\n".join(diagnosis)
+    if summary:
+        summary = "[command diagnostic]\n" + summary + "\n"
+    summary_budget = max(0, min(max_chars // 3, max_chars - len(marker) - 1))
+    summary = summary[:summary_budget]
+    available = max_chars - len(summary) - len(marker)
+    head = available // 3
+    return summary + safe[:head] + marker + safe[-(available - head):]
+
+
 def _command_exposes_environment(cmd: str) -> bool:
     return bool(_EXEC_ENV_ENUM_RE.search(cmd.strip()))
 
