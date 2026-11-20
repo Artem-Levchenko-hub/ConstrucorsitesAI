@@ -74,7 +74,7 @@ _USERLAND_CAPS = [
 ]
 _LOG_LIMIT = 24000
 _ENVIRONMENT_INVENTORY_LIMIT = 1024 * 1024
-_ENVIRONMENT_REVISION = "project-machine-environment-v3"
+_ENVIRONMENT_REVISION = "project-machine-environment-v4-disk-temp"
 
 _ENVIRONMENT_INVENTORY_SCRIPT = r"""
 import json,subprocess
@@ -100,12 +100,34 @@ print(json.dumps(rows,sort_keys=True,separators=(",",":")))
 # A Docker exec survives the HTTP request. Output is drained continuously but
 # only a bounded tail is retained; long-running descendants remain in the same
 # container cgroup and cannot survive remove/lease transfer.
-_EXEC_WRAPPER = r"""
-import json,os,subprocess,sys
+_PROCESS_ENVIRONMENT = r"""
+def process_environment(home='/root'):
+    env=os.environ.copy()
+    default=home+'/.cache/yleum/tmp'
+    selected=env.get('TMPDIR')
+    if (selected and selected!=default) or (not selected and (env.get('TMP') or env.get('TEMP'))):
+        return env
+    # The home is an existing project-owned disk volume. Do not use the small
+    # RAM-backed /tmp for package/browser archives, or follow guest symlinks.
+    fd=os.open(home,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        for part in ('.cache','yleum','tmp'):
+            try:os.mkdir(part,mode=0o700,dir_fd=fd)
+            except FileExistsError:pass
+            child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+            os.close(fd)
+            fd=child
+    finally:os.close(fd)
+    env['TMPDIR']=default
+    return env
+"""
+
+_EXEC_WRAPPER = "import json,os,subprocess,sys\n" + _PROCESS_ENVIRONMENT + r"""
 argv,cwd,log,pidfile=json.loads(sys.argv[1])
+env=process_environment()
 open(log,'wb').close()
 p=subprocess.Popen(argv,cwd=cwd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
-                   start_new_session=True)
+                   start_new_session=True,env=env)
 with open(pidfile,'w') as f: f.write(str(p.pid))
 tail=b''
 while True:
@@ -116,13 +138,13 @@ while True:
 sys.exit(p.wait())
 """
 
-_SERVICE_WRAPPER = r"""
-import json,os,subprocess,sys,time
+_SERVICE_WRAPPER = "import json,os,subprocess,sys,time\n" + _PROCESS_ENVIRONMENT + r"""
 argv,cwd,log,restart=json.loads(sys.argv[1])
+env=process_environment()
 open(log,'wb').close()
 attempt=0
 while True:
-    p=subprocess.Popen(argv,cwd=cwd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+    p=subprocess.Popen(argv,cwd=cwd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=env)
     tail=b''
     while True:
         chunk=p.stdout.read1(8192)
