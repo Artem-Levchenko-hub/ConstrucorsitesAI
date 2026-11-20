@@ -71,6 +71,22 @@ def test_large_command_output_keeps_assertion_and_owned_frame_together() -> None
     assert "[output omitted]" in result
 
 
+def test_command_error_below_router_limit_still_preserves_cause_for_api_hop() -> None:
+    from yleum_orchestrator.routers.runtime import _bounded_exec_output
+
+    assertion = "AssertionError [ERR_ASSERTION]: unexpected HTML"
+    partial_frame = "    at file:///workspace/tests/nutriti"
+    raw = "[build] compiled successfully\n" + "x" * 6000 + "\n[final-test] running\n"
+    raw += assertion
+    raw += "\nInput: " + "y" * 7000 + "\n" + partial_frame
+    assert 4096 < len(raw) < 24_000
+    result = _bounded_exec_output(raw)
+    assert result.startswith(
+        "[command diagnostic]\n[final-test] running\n" + assertion + "\n" + partial_frame
+    )
+    assert raw in result and len(result) <= 24_000
+
+
 def test_bounded_command_output_redacts_before_both_cuts() -> None:
     from yleum_orchestrator.routers.runtime import _bounded_exec_output
 

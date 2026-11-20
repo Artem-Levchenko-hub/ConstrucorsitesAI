@@ -48,6 +48,7 @@ from yleum_api.services.generation.recovery_requirements import load_compiler_wi
 from yleum_api.services.generation.source_error_classification import (
     SourceFailure,
     classify_source_failure,
+    has_truncated_test_assertion,
     source_check_is_repairable,
 )
 from yleum_api.services.generation_deadline import (
@@ -111,6 +112,8 @@ from yleum_api.services.project_cell_executor import (
     ProjectCellCommandObservation,
     ProjectCellCommandRole,
     ProjectCellExecutorHandle,
+    ProjectCellExecutorUnavailable,
+    _full_build_response_identities,
     failed_full_build_environment_transition,
 )
 from yleum_api.services.project_cell_proofs import (
@@ -330,6 +333,10 @@ def _confirmed_build_source_error(
         observation.redacted_detail, files=files or {}, command_finished=finished,
         frozen_source_sha256=identity.workspace_revision,
     ).allowed_paths)
+
+
+def _repairable_build_failure(failure: SourceFailure) -> bool:
+    return bool(failure.allowed_paths) or failure.kind == "test_assertion"
 
 
 def _versioned_build_detail(detail: str, *, source_repair: bool = False) -> str:
@@ -1077,7 +1084,7 @@ class MaxFinalizationCoordinator:
                 if receipt is None:
                     return outcome
                 failure = await self.source_failure(receipt)
-                if failure is None or not failure.allowed_paths:
+                if failure is None or not _repairable_build_failure(failure):
                     return outcome
             elif source_preflight is not None and (check := outcome.proof.fast_check) is not None:
                 failure = await self.source_failure(check)
@@ -2436,12 +2443,74 @@ class MaxFinalizationCoordinator:
                 assert owned is not None
                 detail = owned.redacted_detail
             files = await self._verified_workspace_files(identity)
+            if owned.dimension == ProofDimension.FULL_BUILD.value:
+                return await self._full_build_source_failure(
+                    detail, identity, files, operation_id=owned.operation_id,
+                )
             return classify_source_failure(
                 detail, files=files, command_finished=True,
                 frozen_source_sha256=identity.workspace_revision,
             )
         except RecoveryContractError:
             return None
+
+    async def _full_build_source_failure(
+        self, detail: str, identity: ProofIdentity, files: Mapping[str, str], *,
+        operation_id: UUID, observation: ProjectCellCommandObservation | None = None,
+    ) -> SourceFailure:
+        """Reconcile a partial test frame through the same owned terminal GET."""
+        failure = classify_source_failure(
+            detail, files=files, command_finished=True,
+            frozen_source_sha256=identity.workspace_revision,
+        )
+        if failure.kind != "unknown" or not has_truncated_test_assertion(detail, files):
+            return failure
+        handle = getattr(self, "executor", None)
+        reader = getattr(handle, "operation_status", None)
+        replay = getattr(handle, "replay_role_response", None)
+        if reader is None or replay is None:
+            return failure
+        for delay in _VERIFICATION_RETRY_DELAYS:
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                status = await reader(operation_id)
+                if (not isinstance(status, ProjectCellAgentOperationStatus)
+                        or status.operation_id != operation_id or status.state != "failed"):
+                    return failure
+                response = status.terminal_response
+                if (response is None or response.operation_id != operation_id
+                        or response.ok or response.timed_out
+                        or type(response.exit_code) is not int or response.exit_code == 0):
+                    return failure
+                identities = _full_build_response_identities(response, identity)
+                if identities is None:
+                    return failure
+                before, _after = identities
+                decoded = await replay(ProjectCellCommandRole.FULL_BUILD, response, before)
+                if (decoded.operation_id != operation_id
+                        or decoded.role is not ProjectCellCommandRole.FULL_BUILD
+                        or decoded.ok or decoded.timed_out or decoded.after != identity
+                        or (decoded.before != identity
+                            and decoded.failed_full_build_environment_transition is None)
+                        or (observation is not None and decoded != observation)):
+                    return failure
+                # Replaying a retained response sends no command. Still reread the
+                # source after it, so a stale tree cannot grant repair eligibility.
+                current_files = await self._verified_workspace_files(identity)
+                return classify_source_failure(
+                    detail, files=current_files, command_finished=True,
+                    frozen_source_sha256=identity.workspace_revision,
+                    authenticated_task_phase=status.phase,
+                )
+            except ProjectCellExecutorUnavailable:
+                return failure
+            except OrchestratorUnavailable:
+                continue
+        raise MaxVerificationUnavailable(
+            GenerationPhase.FINAL_BUILD, "Owned full-build diagnostic temporarily unavailable",
+            operation_id=operation_id,
+        )
 
     async def _transient_source_failure(
         self, result: ProjectCellProofResult, receipt: _TransientSourceReceipt,
@@ -2653,10 +2722,10 @@ class MaxFinalizationCoordinator:
             ) == failed_transition
         ):
             files = await self._verified_workspace_files(observation.after)
-            failed_source_repair = bool(classify_source_failure(
-                observation.redacted_detail, files=files, command_finished=True,
-                frozen_source_sha256=observation.after.workspace_revision,
-            ).allowed_paths)
+            failed_source_repair = _repairable_build_failure(await self._full_build_source_failure(
+                observation.redacted_detail, observation.after, files,
+                operation_id=observation.operation_id, observation=observation,
+            ))
         accepted_change = authorized_restart or failed_source_repair
         if (observation.before != identity
                 or (observation.after != identity and not accepted_change)):
@@ -2694,9 +2763,11 @@ class MaxFinalizationCoordinator:
                 not observation.ok and not observation.timed_out
                 and observation.before == identity and observation.after == identity
             ):
-                source_repair = _confirmed_build_source_error(
-                    observation, identity, await self._verified_workspace_files(identity),
-                )
+                source_repair = _repairable_build_failure(await self._full_build_source_failure(
+                    observation.redacted_detail, identity,
+                    await self._verified_workspace_files(identity),
+                    operation_id=observation.operation_id, observation=observation,
+                ))
             detail = _versioned_build_detail(
                 detail, source_repair=source_repair,
             )

@@ -16,13 +16,14 @@ from tests.test_generation_recovery_requirements import receipt_case as receipt_
 from yleum_api.services.promotion_permit import workspace_revision_digest
 
 
-def classify(detail, *, files=None, finished=True, digest=None):
+def classify(detail, *, files=None, finished=True, digest=None, phase=None):
     module = "yleum_api.services.generation.source_error_classification"
     assert importlib.util.find_spec(module) is not None, "missing frozen source classifier"
     classifier = importlib.import_module(module).classify_source_failure
     files = files if files is not None else {"src/app/page.tsx": "import './flower.css';"}
     return classifier(detail, files=files, command_finished=finished,
-                      frozen_source_sha256=digest or workspace_revision_digest(files))
+                      frozen_source_sha256=digest or workspace_revision_digest(files),
+                      authenticated_task_phase=phase)
 
 
 def missing(target="./flower.css", importer="./src/app/page.tsx"):
@@ -72,6 +73,83 @@ def test_assertion_requires_real_code_and_complete_in_range_owned_location():
     foreign_host = assertion_detail().replace("file:///workspace/", "file://host/workspace/")
     assert not classify(foreign_host, files=files).allowed_paths
     assert not classify(assertion_detail()[:-4], files=files).allowed_paths
+
+
+def partial_assertion_files():
+    return {
+        "tests/nutrition-http.mjs": "assert.ok(rendered);\n",
+        ".omnia/cell.json": json.dumps({"version": 1, "tasks": [{
+            "name": "final-test", "role": "full_build", "cwd": ".",
+            "argv": ["sh", "-lc", "pnpm test && node tests/nutrition-http.mjs"],
+        }]}),
+    }
+
+
+PARTIAL_ASSERTION = (
+    "[final-test] \nAssertionError [ERR_ASSERTION]: wrong HTML\n"
+    "    at file:///workspace/tests/nutriti"
+)
+
+
+def test_authenticated_partial_frame_recognizes_task_without_guessing_write_paths():
+    files = partial_assertion_files()
+    failure = classify(PARTIAL_ASSERTION, files=files, phase="final-test")
+    assert failure.kind == "test_assertion"
+    assert failure.importer is None and failure.allowed_paths == ()
+    assert classify(PARTIAL_ASSERTION, files=files).kind == "unknown"
+    assert classify(
+        PARTIAL_ASSERTION, files=files, phase="final-test", finished=False,
+    ).kind == "unknown"
+    assert classify(
+        PARTIAL_ASSERTION, files=files, phase="final-test", digest="0" * 64,
+    ).kind == "unknown"
+
+
+@pytest.mark.parametrize("phase", [None, True, "", "different", "../final-test", "final-test\n"])
+def test_partial_frame_needs_exact_authenticated_task_phase(phase):
+    assert classify(
+        PARTIAL_ASSERTION, files=partial_assertion_files(), phase=phase,
+    ).kind == "unknown"
+
+
+@pytest.mark.parametrize(
+    "mutation", ["missing", "malformed", "version", "duplicate", "role", "argv", "cwd"],
+)
+def test_partial_frame_refuses_unknown_or_ambiguous_manifest(mutation):
+    files = partial_assertion_files()
+    manifest = json.loads(files[".omnia/cell.json"])
+    if mutation == "missing":
+        files.pop(".omnia/cell.json")
+    elif mutation == "malformed":
+        files[".omnia/cell.json"] = "not json"
+    else:
+        if mutation == "version":
+            manifest["version"] = True
+        elif mutation == "duplicate":
+            manifest["tasks"] *= 2
+        elif mutation == "role":
+            manifest["tasks"][0]["role"] = "fast_check"
+        elif mutation == "argv":
+            manifest["tasks"][0]["argv"] = []
+        elif mutation == "cwd":
+            manifest["tasks"][0]["cwd"] = "../foreign"
+        files[".omnia/cell.json"] = json.dumps(manifest)
+    assert classify(PARTIAL_ASSERTION, files=files, phase="final-test").kind == "unknown"
+
+
+@pytest.mark.parametrize("detail", [
+    PARTIAL_ASSERTION.replace("tests/nutriti", "tests/foreign"),
+    PARTIAL_ASSERTION.replace("tests/nutriti", "tests/../nutriti"),
+    PARTIAL_ASSERTION.replace("tests/nutriti", "tests/nutriti?token=x"),
+    PARTIAL_ASSERTION.replace("file:///workspace/", "file://foreign/workspace/"),
+    PARTIAL_ASSERTION.replace("[final-test]", "[other]"),
+    PARTIAL_ASSERTION.replace("ERR_ASSERTION", "OTHER"),
+    PARTIAL_ASSERTION + "\nECONNRESET",
+])
+def test_partial_frame_never_uses_infrastructure_or_unowned_hint(detail):
+    assert classify(
+        detail, files=partial_assertion_files(), phase="final-test",
+    ).kind != "test_assertion"
 
 
 @pytest.mark.parametrize("kwargs", [

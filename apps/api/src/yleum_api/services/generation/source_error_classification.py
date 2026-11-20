@@ -74,6 +74,10 @@ _ASSERTION_LOCATION = re.compile(
     r"(?P<file>tests/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_.-]+\.(?:mjs|cjs|js|ts|tsx))"
     r":(?P<line>[1-9]\d{0,6}):[1-9]\d{0,6}\)?[ \t]*$"
 )
+_TRUNCATED_ASSERTION_LOCATION = re.compile(
+    r"(?m)^\s+at (?:[^()\r\n]+ \()?file:///workspace/"
+    r"(?P<prefix>tests/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_][A-Za-z0-9_.-]*)[ \t]*$"
+)
 _TS_MISSING = re.compile(
     r"(?m)^(?P<file>[^\r\n]+?)\(\d+,\d+\): error TS2307: Cannot find module "
     r"(?P<quote>['\"])(?P<target>[^'\"\r\n]+)(?P=quote)"
@@ -115,6 +119,56 @@ def _importer(raw: str, files: Mapping[str, str]) -> str | None:
     return path if path is not None and path in files and (
         PurePosixPath(path).suffix in _SOURCE_SUFFIXES
     ) else None
+
+
+def has_truncated_test_assertion(detail: str, files: Mapping[str, str]) -> bool:
+    """Identify only a partial owned-test hint, never invent its missing path."""
+    if not _ASSERTION.search(detail) or source_diagnostic_has_infrastructure_error(detail):
+        return False
+    frames = [line for line in detail.splitlines() if re.match(r"^\s+at .*file://", line)]
+    if any(_TRUNCATED_ASSERTION_LOCATION.fullmatch(line) is None for line in frames):
+        return False
+    for match in _TRUNCATED_ASSERTION_LOCATION.finditer(detail):
+        prefix = match["prefix"]
+        if len(prefix) <= 1024 and any(
+            path.startswith(prefix) and path != prefix and _importer(path, files) == path
+            for path in files
+        ):
+            return True
+    return False
+
+
+def _owned_full_build_phase(
+    detail: str, files: Mapping[str, str], phase: str | None,
+) -> bool:
+    """Phase is supplied only after authenticated terminal-response replay."""
+    if (type(phase) is not str or re.fullmatch(r"[a-z][a-z0-9_-]{0,62}", phase) is None
+            or re.search(r"(?m)^\[" + re.escape(phase) + r"\](?:[ \t]|$)", detail) is None):
+        return False
+    try:
+        manifest = json.loads(files.get(".omnia/cell.json", ""))
+    except (ValueError, TypeError):
+        return False
+    if (type(manifest) is not dict or type(manifest.get("version")) is not int
+            or manifest["version"] != 1 or type(manifest.get("tasks")) is not list):
+        return False
+    tasks = manifest["tasks"]
+    if any(type(task) is not dict or type(task.get("name")) is not str for task in tasks):
+        return False
+    names = [task["name"] for task in tasks]
+    if len(names) != len(set(names)):
+        return False
+    selected = [task for task in tasks if task["name"] == phase]
+    if len(selected) != 1:
+        return False
+    task = selected[0]
+    argv, cwd = task.get("argv"), task.get("cwd", ".")
+    return bool(
+        task.get("role") == "full_build" and type(argv) is list and argv
+        and all(type(arg) is str and arg and "\x00" not in arg for arg in argv)
+        and type(cwd) is str and cwd and not cwd.startswith("/")
+        and not any(char in cwd for char in "\\:\x00") and ".." not in cwd.split("/")
+    )
 
 
 def _relative_target(importer: str, target: str) -> str | None:
@@ -188,7 +242,7 @@ def _missing_failure(importer: str, target: str, files: Mapping[str, str]) -> So
 
 def classify_source_failure(
     detail: str, *, files: Mapping[str, str], command_finished: bool,
-    frozen_source_sha256: str,
+    frozen_source_sha256: str, authenticated_task_phase: str | None = None,
 ) -> SourceFailure:
     """Never infer completion/ownership from logs; never mutate diagnostic or source."""
     if not command_finished or workspace_revision_digest(files) != frozen_source_sha256:
@@ -217,4 +271,9 @@ def classify_source_failure(
                 # This identifies an owned failing test, not permission to
                 # weaken it or a claim that the application already works.
                 return SourceFailure("test_assertion", importer, (importer,))
+        if (has_truncated_test_assertion(detail, files)
+                and _owned_full_build_phase(detail, files, authenticated_task_phase)):
+            # The exact frame is unavailable. Recognize the owned failed task
+            # without guessing an importer or granting a source write path.
+            return SourceFailure("test_assertion")
     return SourceFailure()

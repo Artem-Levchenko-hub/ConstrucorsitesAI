@@ -1401,8 +1401,6 @@ def _bounded_exec_output(value: str, *, max_chars: int = 24_000) -> str:
     if max_chars <= 0:
         raise ValueError("command diagnostic limit must be positive")
     safe = _redact_exec_output(value)
-    if len(safe) <= max_chars:
-        return safe
     marker = "\n[output omitted]\n"
     if max_chars <= len(marker):
         return safe[:max_chars]
@@ -1410,15 +1408,23 @@ def _bounded_exec_output(value: str, *, max_chars: int = 24_000) -> str:
     # from the source frame. Keep these actual log lines together before the
     # head/tail excerpt; no success or source ownership is inferred here.
     diagnosis: list[str] = []
-    for line in safe.splitlines():
-        if (line.startswith("AssertionError [ERR_ASSERTION]")
-                or re.match(r"^\s+at .*file:///workspace/tests/", line)):
-            diagnosis.append(line[:500])
-            if len(diagnosis) == 8:
-                break
+    # The next API hop keeps only 4 KiB. A 14 KiB error already needs this
+    # prefix even though it fits this router's 24K-character response budget.
+    if "ERR_ASSERTION" in safe and len(safe.encode("utf-8")) > 1024:
+        lines = safe.splitlines()
+        causes = [line[:500] for line in lines
+                  if line.startswith("AssertionError [ERR_ASSERTION]")]
+        frames = [line[:500] for line in lines
+                  if re.match(r"^\s+at .*file:///workspace/tests/", line)]
+        before_cause = safe.split("AssertionError [ERR_ASSERTION]", 1)[0]
+        labels = [line[:200] for line in before_cause.splitlines()
+                  if re.match(r"^\[[A-Za-z0-9_.:-]{1,64}\](?:[ \t]|$)", line)]
+        diagnosis = labels[-1:] + causes[:1] + frames[:2]
     summary = "\n".join(diagnosis)
     if summary:
         summary = "[command diagnostic]\n" + summary + "\n"
+    if len(summary) + len(safe) <= max_chars:
+        return summary + safe
     summary_budget = max(0, min(max_chars // 3, max_chars - len(marker) - 1))
     summary = summary[:summary_budget]
     available = max_chars - len(summary) - len(marker)

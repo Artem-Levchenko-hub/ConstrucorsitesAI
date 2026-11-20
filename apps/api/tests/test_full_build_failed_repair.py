@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -30,7 +31,9 @@ from yleum_api.services.generation import recovery_requirements as requirements
 from yleum_api.services.generation.recovery_actions import recovery_binding
 from yleum_api.services.generation.recovery_contract import RecoveryContractError
 from yleum_api.services.orchestrator_client import (
+    OrchestratorUnavailable,
     ProjectCellAgentExecResponse,
+    ProjectCellAgentOperationStatus,
     ProjectCellWorkspaceIdentity,
 )
 from yleum_api.services.project_cell_proofs import ProofDimension
@@ -39,9 +42,23 @@ from yleum_api.services.promotion_permit import workspace_revision_digest
 FILES = {
     "src/app/page.tsx": "export default function Page() { return null; }",
     "tests/page-smoke.mjs": "import assert from 'node:assert/strict';\nassert.ok(false);\n",
+    ".omnia/cell.json": json.dumps(
+        {
+            "version": 1,
+            "tasks": [
+                {
+                    "name": "final-test",
+                    "role": "full_build",
+                    "cwd": ".",
+                    "argv": ["sh", "-lc", "pnpm test && node tests/page-smoke.mjs"],
+                }
+            ],
+        }
+    ),
 }
 DETAIL = "src/app/page.tsx(1,1): error TS2322: Type 'string' is not assignable to type 'number'."
 ASSERTION = "AssertionError [ERR_ASSERTION]: wrong rendered page\n    at file:///workspace/tests/page-smoke.mjs:2:3"
+PARTIAL_ASSERTION = "[final-test] \nAssertionError [ERR_ASSERTION]: wrong rendered page\n    at file:///workspace/tests/page-sm"
 
 
 def identities():
@@ -90,6 +107,20 @@ def response(before, after, operation, **changes):
             "environment_mutated": before != after,
             **changes,
         }
+    )
+
+
+def terminal_status(result, *, phase="final-test", state="failed"):
+    now = datetime.now(UTC)
+    return ProjectCellAgentOperationStatus(
+        operation_id=result.operation_id,
+        state=state,
+        phase=phase,
+        started_at=now,
+        deadline_at=now + timedelta(minutes=5),
+        heartbeat_at=now,
+        log_bytes=len(result.detail.encode()),
+        terminal_response=result,
     )
 
 
@@ -168,6 +199,14 @@ def coordinator(before, after, operation, *, detail=DETAIL, witnessed=True):
         else None,
     )
     c._execute_role = AsyncMock(return_value=observation)
+    c.executor = SimpleNamespace(
+        operation_status=AsyncMock(
+            return_value=terminal_status(
+                response(before, after, operation, detail=detail),
+            )
+        ),
+        replay_role_response=AsyncMock(return_value=observation),
+    )
     return c
 
 
@@ -203,6 +242,107 @@ async def test_owned_smoke_failure_can_request_repair_but_never_success():
     )
     assert outcome.status is max_finalization.MaxFinalizationStatus.NEEDS_EDIT
     assert identity == after and result.outcome == "red" and result.artifact_ref is None
+
+
+async def test_partial_frame_reconciles_terminal_task_without_granting_file_paths():
+    before, after, _project, _owner, operation = identities()
+    c = coordinator(before, after, operation, detail=PARTIAL_ASSERTION)
+    result, identity, proof = await c._run_full_build_result(await c._proof(before), before)
+    assert identity == after and proof.proof_key == after.proof_key
+    assert result.outcome == "red" and result.artifact_ref is None
+    assert "[source-repair:confirmed]" in result.redacted_detail
+    c.executor.operation_status.assert_awaited_once_with(operation)
+    c.executor.replay_role_response.assert_awaited_once()
+    assert c._verified_workspace_files.await_count == 2
+    failure = await c._full_build_source_failure(
+        result.redacted_detail,
+        after,
+        FILES,
+        operation_id=operation,
+    )
+    assert failure.kind == "test_assertion" and failure.importer is None
+    assert failure.allowed_paths == () and max_finalization._repairable_build_failure(failure)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["phase", "operation", "running", "timeout", "exit", "response", "replay"]
+)
+async def test_partial_frame_requires_exact_failed_terminal_replay(mutation):
+    before, after, _project, _owner, operation = identities()
+    c = coordinator(before, after, operation, detail=PARTIAL_ASSERTION)
+    status = c.executor.operation_status.return_value
+    if mutation == "phase":
+        status = replace(status, phase="build")
+    elif mutation == "operation":
+        status = replace(status, operation_id=uuid4())
+    elif mutation == "running":
+        status = replace(status, state="running")
+    elif mutation == "timeout":
+        status = replace(
+            status, terminal_response=replace(status.terminal_response, timed_out=True)
+        )
+    elif mutation == "exit":
+        status = replace(status, terminal_response=replace(status.terminal_response, exit_code=0))
+    elif mutation == "response":
+        status = replace(status, terminal_response=None)
+    elif mutation == "replay":
+        c.executor.replay_role_response.return_value = replace(
+            c._execute_role.return_value, ok=True
+        )
+    c.executor.operation_status.return_value = status
+    result, identity, _ = await c._run_full_build_result(await c._proof(before), before)
+    assert identity == before and "[source-repair:unconfirmed]" in result.redacted_detail
+    c.executor.operation_status.assert_awaited_once()
+
+
+@pytest.mark.parametrize("lookup", ["status", "replay", "source"])
+async def test_partial_frame_transient_lookup_retries_reads_not_the_command(monkeypatch, lookup):
+    before, after, _project, _owner, operation = identities()
+    c = coordinator(before, after, operation, detail=PARTIAL_ASSERTION)
+    sleep = AsyncMock()
+    monkeypatch.setattr(max_finalization.asyncio, "sleep", sleep)
+    unavailable = OrchestratorUnavailable("temporary diagnostic transport503")
+    if lookup == "status":
+        c.executor.operation_status.side_effect = [
+            unavailable,
+            c.executor.operation_status.return_value,
+        ]
+    elif lookup == "replay":
+        c.executor.replay_role_response.side_effect = [unavailable, c._execute_role.return_value]
+    else:
+        c._verified_workspace_files.side_effect = [FILES, unavailable, FILES]
+    result, identity, _ = await c._run_full_build_result(await c._proof(before), before)
+    assert identity == after and result.outcome == "red" and result.artifact_ref is None
+    assert "[source-repair:confirmed]" in result.redacted_detail
+    assert c._execute_role.await_count == 1 and c._record.await_count == 1
+    assert c.executor.operation_status.await_count == 2
+    sleep.assert_awaited_once_with(1.0)
+
+
+@pytest.mark.parametrize("lookup", ["status", "replay", "source"])
+async def test_partial_frame_unavailable_lookup_waits_without_rejecting_candidate(
+    monkeypatch, lookup
+):
+    before, after, _project, _owner, operation = identities()
+    c = coordinator(before, after, operation, detail=PARTIAL_ASSERTION)
+    sleep = AsyncMock()
+    monkeypatch.setattr(max_finalization.asyncio, "sleep", sleep)
+    unavailable = OrchestratorUnavailable("private transport503 AUTH_SECRET=not-for-output")
+    if lookup == "status":
+        c.executor.operation_status.side_effect = unavailable
+    elif lookup == "replay":
+        c.executor.replay_role_response.side_effect = unavailable
+    else:
+        c._verified_workspace_files.side_effect = [FILES, unavailable, unavailable, unavailable]
+    with pytest.raises(max_finalization.MaxVerificationUnavailable) as caught:
+        await c._run_full_build_result(await c._proof(before), before)
+    assert caught.value.phase is max_finalization.GenerationPhase.FINAL_BUILD
+    assert caught.value.operation_id == operation
+    assert "not-for-output" not in str(caught.value)
+    assert [call.args[0] for call in sleep.await_args_list] == [1.0, 3.0]
+    assert c.executor.operation_status.await_count == 3
+    c._record.assert_not_awaited()
+    assert c._execute_role.await_count == 1  # only the original, already-failed command
 
 
 @pytest.mark.parametrize(
@@ -253,7 +393,10 @@ async def test_typed_transition_does_not_override_non_environment_identity_guard
     c._verified_workspace_files.assert_not_awaited()
 
 
-@pytest.fixture(params=[DETAIL, ASSERTION], ids=["typescript", "smoke-assertion"])
+@pytest.fixture(
+    params=[DETAIL, ASSERTION, PARTIAL_ASSERTION],
+    ids=["typescript", "smoke-assertion", "partial-assertion"],
+)
 async def witness_case(monkeypatch, request):
     """Real ORM rows/queries; only owning physical reads are synthetic."""
     before, after, project_id, owner, operation = identities()
@@ -358,16 +501,16 @@ async def witness_case(monkeypatch, request):
         factory=factory,
         response=response(before, after, operation, detail=request.param),
         reads=0,
+        observation=c._execute_role.return_value,
     )
 
     async def status(workspace_id, operation_id):
         assert workspace_id == before.workspace_id and operation_id == operation
         case.reads += 1
-        return SimpleNamespace(
-            operation_id=operation, state=case.status, terminal_response=case.response
-        )
+        return terminal_status(case.response, state=case.status)
 
     case.status = "failed"
+    case.operation_status = lambda op: status(before.workspace_id, op)
     monkeypatch.setattr(requirements, "project_cell_agent_operation_status", status)
     monkeypatch.setattr(
         requirements,
@@ -406,11 +549,20 @@ async def test_owned_after_red_witness_and_cold_source_failure_keep_before_lease
         cold._identity = AsyncMock(return_value=c.after)
         cold._verified_workspace_files = AsyncMock(return_value=FILES)
         cold._execute_role = AsyncMock(side_effect=AssertionError("must not replay build"))
+        cold.executor = SimpleNamespace(
+            operation_status=c.operation_status,
+            replay_role_response=AsyncMock(return_value=c.observation),
+        )
         failure = await cold.source_failure(c.row)
         expected = "tests/page-smoke.mjs" if c.response.detail == ASSERTION else "src/app/page.tsx"
-        assert failure is not None and failure.allowed_paths == (expected,)
+        assert failure is not None
+        if c.response.detail == PARTIAL_ASSERTION:
+            assert failure.kind == "test_assertion" and failure.allowed_paths == ()
+        else:
+            assert failure.allowed_paths == (expected,)
         cold._execute_role.assert_not_awaited()
-    assert c.reads == 3 and c.row.outcome == "red" and c.row.artifact_ref is None
+    assert c.reads == (5 if c.response.detail == PARTIAL_ASSERTION else 3)
+    assert c.row.outcome == "red" and c.row.artifact_ref is None
 
 
 @pytest.mark.parametrize(
