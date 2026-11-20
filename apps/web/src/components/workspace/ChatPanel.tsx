@@ -16,6 +16,7 @@ import {
 } from "@/lib/api/product-advice";
 import type {
   AgentStep,
+  GenerationRun,
   DesignPreview,
   SelectedElement,
   SurveyQuestion,
@@ -43,7 +44,7 @@ import { FREE_CHAT_UPGRADE_MESSAGE } from "@/lib/owner-chat-quota";
 import { OwnerChatQuotaNotice } from "./OwnerChatQuotaNotice";
 import { useChatScroll } from "@/hooks/useChatScroll";
 import { Button } from "@/components/ui/button";
-import { bindMessageGeneration, isGenerationActive } from "@/lib/generation-lifecycle";
+import { bindMessageGeneration, generationContinuationForMessage, isGenerationActive } from "@/lib/generation-lifecycle";
 import { isChatMessageStreaming } from "@/lib/chat-message-status";
 import { readMaxLaunch } from "@/lib/max-launch-runner";
 import type { MaxAdaptationAttachment } from "@/lib/use-max-adaptation";
@@ -168,7 +169,7 @@ export function ChatPanel({
     ): Promise<boolean> => {
       // Capture fresh choices before async work. A legacy stable-key replay with
       // no choice must let the server recover its original accepted engine.
-      if (opts?.generationEngine === undefined && !replay) {
+      if (opts?.generationEngine === undefined && !opts?.continuation && !replay) {
         opts = { ...opts, generationEngine: engine };
       }
       // An explicit stable key may be an already accepted request whose response
@@ -348,8 +349,24 @@ export function ChatPanel({
   const streamingId = isStreaming ? last?.id : null;
   const generationActive = latest.data?.project_id === projectId && isGenerationActive(latest.data);
   const retryAvailable = !quota.exhausted && !isPending && !pendingPrompt && !isStreaming && !generationActive;
-  const retryLatestRequest = () => submitWithCredentialIntake("Попробуй ещё раз", [],
-    canChooseEngine ? { generationEngine: last?.model_id === "gpt-6.2-sol" ? "sol" : "claude" } : undefined);
+  const continuation = generationContinuationForMessage(latest.data, last, projectId);
+  const retryLatestRequest = () => {
+    if (!continuation) return submitWithCredentialIntake("Попробуй ещё раз", []);
+    const current = generationContinuationForMessage(
+      qc.getQueryData<GenerationRun>(["generation", projectId]),
+      qc.getQueryData<Message[]>(["messages", projectId])?.at(-1), projectId,
+    );
+    if (!current || JSON.stringify(current) !== JSON.stringify(continuation)) {
+      toast.info("Черновик изменился. Дождитесь обновления и выберите продолжение заново.");
+      return Promise.resolve(false);
+    }
+    // The exact source reference has one logical continuation, even after F5.
+    // The server recovers its accepted engine; the QA selector cannot restyle it.
+    return submitWithCredentialIntake("Продолжи сборку", [], {
+      continuation: current,
+      idempotencyKey: `continue:${current.run_id}:${current.assistant_message_id}:${current.expected_snapshot_id ?? "none"}`,
+    });
+  };
   const returnToPrompt = () => inputRef.current?.focus();
 
   // Progressive-discovery quick replies (P1): chips belong to the LATEST
@@ -514,6 +531,7 @@ export function ChatPanel({
               projectId={projectId}
               onFix={quota.exhausted ? undefined : handleFix}
               onRetry={retryAvailable && m.id === last?.id ? retryLatestRequest : undefined}
+              continueFromDraft={Boolean(continuation && m.id === last?.id)}
               onReturnToPrompt={!isPending && m.id === last?.id ? returnToPrompt : undefined}
               onSuggest={quota.exhausted ? undefined : handleSuggest}
               presentation="studio"

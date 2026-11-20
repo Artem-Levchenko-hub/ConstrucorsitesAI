@@ -59,8 +59,11 @@ async def classify_agent_turn(
         )
         recover_retry = _is_retry_request(prompt_text)
         retry_message = _is_retry_request(request_prompt)
+        from yleum_api.services.generation.draft_continuation import marker
+
+        run = await _max_history_session.get(GenerationRun, ids.run_id)
+        explicit_continue = run is not None and marker(run) is not None
         if wants_continue or retry_message:
-            run = await _max_history_session.get(GenerationRun, ids.run_id)
             _is_continue = wants_continue and await can_continue_generation(
                 _max_history_session, run, ids, baseline,
             )
@@ -71,6 +74,10 @@ async def classify_agent_turn(
                     run is not None and isinstance(run.agent_state, dict)
                     and "source_checkpoint_resume" not in run.agent_state
                 )
+        if explicit_continue:
+            # adjacent_checkpoint already re-proved and restored its exact source.
+            # Its full saved brief is not a new first-build request.
+            _is_continue = True
         recovered_source = False
         if recover_retry or continue_message:
             source = await resolve_request_source(_max_history_session, ids=ids, baseline=baseline)
@@ -87,7 +94,8 @@ async def classify_agent_turn(
             )
         )
         _is_edit = not orchestrate and not _is_continue
-        if continue_message and recovered_source and not _max_has_generated_snapshot:
+        if (continue_message and recovered_source and not _max_has_generated_snapshot
+                and not explicit_continue):
             _is_continue = False
             _is_edit = False
 

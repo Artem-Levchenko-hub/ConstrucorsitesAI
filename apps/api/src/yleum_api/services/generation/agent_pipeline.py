@@ -703,11 +703,15 @@ async def run_agent_generation(
                 ), selected_elements, emit_progress=_agent_emit, baseline=baseline,
             )
             rendered_entry_brief = render_prepared_brief(brief) or None
+            from yleum_api.services.generation.draft_continuation import continuation_feedback
+
+            remaining_work = await continuation_feedback(factory, ids) if _is_continue else ""
             return await prepare_agent_prompt(
                 stack=_stack, factory=factory, ids=ids, project_info=project_info,
                 runtime=runtime, orchestrate=orchestrate, prompt_text=prompt_text,
                 selected_elements=selected_elements, _is_edit=_is_edit,
                 _is_continue=_is_continue, force_model=force_model, prepared_brief=brief,
+                remaining_work=remaining_work,
             )
 
         _prompt_plan, _build_plan = await run_bootstrap_stage(
@@ -741,11 +745,16 @@ async def run_agent_generation(
     )
     defer_starter_check = (
         continuation is not None and prepared_entry is None and saved_source is not None
-        and orchestrate and not _max_has_generated_snapshot
+        and orchestrate and not _max_has_generated_snapshot and not _is_continue
         and can_isolate_bootstrap_starter(continuation)
     )
     if prepared_entry is not None:
         _max_seed_files, _agent_res = prepared_entry.seed_files, prepared_entry.initial_result
+    elif saved_source is not None and _is_continue:
+        # The admitted saved product is the source of this attempt. Platform
+        # runtime/configuration was prepared above; a product starter would
+        # overwrite that work and spend a build before restoring it again.
+        _max_seed_files = {}
     else:
         _max_seed_files, _agent_res = await run_bootstrap_stage(
             continuation, "starter_apply", lambda: stage_max_starter(

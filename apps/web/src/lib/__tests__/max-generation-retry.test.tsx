@@ -3,7 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ChatPanel } from "@/components/workspace/ChatPanel";
-import type { GenerationRun, Message } from "@/lib/api/types";
+import type { GenerationContinuationReference, GenerationRun, Message } from "@/lib/api/types";
 
 const mocks = vi.hoisted(() => ({
   submit: vi.fn(), history: vi.fn(), profile: vi.fn(), pendingPrompt: null as string | null,
@@ -24,6 +24,15 @@ const failure: Message = {
   created_at: "2026-11-06T04:00:00Z", generation_status: "failed",
   generation_failure: { code: "provider_unavailable", message: "Провайдер отклонил запрос (HTTP 422). Автоматический повтор остановлен.", retryable: false },
 };
+const continuation: GenerationContinuationReference = {
+  run_id: "failed-run", assistant_message_id: failure.id, expected_snapshot_id: "saved-draft",
+};
+const failedRun = (overrides: Partial<GenerationRun> = {}): GenerationRun => ({
+  id: continuation.run_id, project_id: "p", assistant_message_id: failure.id,
+  status: "failed", response_mode: "build", created_at: failure.created_at,
+  started_at: failure.created_at, finished_at: "2026-11-06T04:02:00Z", continuation,
+  ...overrides,
+});
 let client: QueryClient, root: Root, container: HTMLDivElement;
 const button = (text: string) => [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === text);
 
@@ -67,7 +76,7 @@ it("a provider rejection requires an explicit click and uses the unchanged norma
   mocks.submit.mockImplementation(() => new Promise<boolean>(resolve => { finish = resolve; }));
   await render();
   const input = await draft("Мой несохранённый черновик");
-  const retry = button("Продолжить сборку")!;
+  const retry = button("Повторить запрос")!;
   expect(retry).toBeDefined();
   expect(mocks.submit).not.toHaveBeenCalled();
   expect(fetch).not.toHaveBeenCalled();
@@ -80,6 +89,83 @@ it("a provider rejection requires an explicit click and uses the unchanged norma
   expect(retry.disabled).toBe(false);
   expect(input.value).toBe("Мой несохранённый черновик");
   expect(fetch).not.toHaveBeenCalled();
+});
+
+it.each(["gpt-6.2-sol", "claude-sonnet", "legacy-model"])(
+  "continues the exact server draft without inferring an engine from %s", async model => {
+    mocks.history.mockResolvedValue([{ ...failure, model_id: model }]);
+    client.setQueryData(["generation", "p"], failedRun());
+    let finish!: (accepted: boolean) => void;
+    mocks.submit.mockImplementation(() => new Promise<boolean>(resolve => { finish = resolve; }));
+    await render();
+    const input = await draft("Мой новый черновик пока не отправляй");
+    expect(container.textContent).toContain("Продолжим с сохранённого черновика");
+    expect(button("Повторить запрос")).toBeUndefined();
+    const proceed = button("Продолжить сборку")!;
+    await act(async () => { proceed.click(); proceed.click(); });
+    expect(mocks.submit).toHaveBeenCalledTimes(1);
+    expect(mocks.submit).toHaveBeenCalledWith("Продолжи сборку", "topmix-v1", [], {
+      continuation, idempotencyKey: "continue:failed-run:failed-message:saved-draft",
+    });
+    await act(async () => finish(false));
+    await act(async () => proceed.click());
+    expect(mocks.submit.mock.calls[1]).toEqual(mocks.submit.mock.calls[0]);
+    expect(input.value).toBe("Мой новый черновик пока не отправляй");
+    await act(async () => finish(false));
+    expect(fetch).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps the same addressed identity after remount and preserves a null source snapshot", async () => {
+  client.setQueryData(["generation", "p"], failedRun({ continuation: { ...continuation, expected_snapshot_id: null } }));
+  mocks.submit.mockResolvedValue(false);
+  await render();
+  await act(async () => button("Продолжить сборку")!.click());
+  const first = mocks.submit.mock.calls[0];
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  client.setQueryData(["generation", "p"], failedRun({ continuation: { ...continuation, expected_snapshot_id: null } }));
+  await render();
+  await act(async () => button("Продолжить сборку")!.click());
+  expect(mocks.submit.mock.calls[1]).toEqual(first);
+  expect(first[3]).toEqual({ continuation: { ...continuation, expected_snapshot_id: null },
+    idempotencyKey: "continue:failed-run:failed-message:none" });
+});
+
+it.each([
+  { project_id: "foreign" }, { assistant_message_id: "different-message" },
+  { continuation: { ...continuation, run_id: "older-run" } },
+  { continuation: { ...continuation, assistant_message_id: "older-message" } },
+  { continuation: null }, { continuation: undefined },
+])("does not advertise an unbound or missing server draft %j", async override => {
+  client.setQueryData(["generation", "p"], failedRun(override));
+  await render();
+  expect(button("Продолжить сборку")).toBeUndefined();
+  expect(button("Повторить запрос")).toBeDefined();
+  expect(mocks.submit).not.toHaveBeenCalled();
+});
+
+it("refuses a stale clicked descriptor without sending or changing the composed draft", async () => {
+  client.setQueryData(["generation", "p"], failedRun());
+  await render();
+  const input = await draft("Не теряй мой текст");
+  const proceed = button("Продолжить сборку")!;
+  await act(async () => {
+    client.setQueryData(["generation", "p"], failedRun({ continuation: { ...continuation, expected_snapshot_id: "new-head" } }));
+    proceed.click();
+  });
+  expect(mocks.submit).not.toHaveBeenCalled();
+  expect(input.value).toBe("Не теряй мой текст");
+});
+
+it("does not derive continuation authority from an optimistic assistant row", async () => {
+  const optimistic = { ...failure, id: "__opt_asst_pending" };
+  mocks.history.mockResolvedValue([optimistic]);
+  client.setQueryData(["generation", "p"], failedRun({ assistant_message_id: optimistic.id,
+    continuation: { ...continuation, assistant_message_id: optimistic.id } }));
+  await render();
+  expect(button("Продолжить сборку")).toBeUndefined();
+  expect(mocks.submit).not.toHaveBeenCalled();
 });
 
 it("a recovery-required failure returns focus without sending or changing the draft", async () => {

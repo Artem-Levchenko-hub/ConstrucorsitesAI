@@ -8,6 +8,7 @@ import type {
   AgentStep,
   GenerationEventEnvelope,
   GenerationRun,
+  GenerationContinuationReference,
   Message,
   PassProgress,
   PromptResponse,
@@ -65,6 +66,7 @@ export type PromptSubmitOptions = {
   /** Stable for one logical submit so an F5 replay cannot create a new run. */
   idempotencyKey?: string;
   restorationAdaptation?: RestorationAdaptationReference;
+  continuation?: GenerationContinuationReference;
   referenceImages?: ReferenceImage[];
   fontSelections?: MessageFontSelection[];
   /** Only a definitive pre-acceptance refusal may replace uploaded image IDs. */
@@ -900,10 +902,12 @@ export function usePromptStream(projectId: string, projectSlug: string, ownerId?
         if (activeSubmitSignatureRef.current === submitSignature) {
           return false;
         }
-        if (opts?.restorationAdaptation) {
+        if (opts?.restorationAdaptation || opts?.continuation) {
           // Its historical source is bound to the reviewed HEAD. A volatile
           // browser queue must not acknowledge/clear the durable attachment.
-          toast.info("Дождитесь текущей генерации и снова отправьте запрос на адаптацию.");
+          toast.info(opts.continuation
+            ? "Дождитесь текущей генерации и снова выберите продолжение черновика."
+            : "Дождитесь текущей генерации и снова отправьте запрос на адаптацию.");
           return false;
         }
         const previous = pendingRef.current;
@@ -1120,7 +1124,7 @@ export function usePromptStream(projectId: string, projectSlug: string, ownerId?
         if (
           e instanceof ApiError &&
           e.code === "generation_active" &&
-          !opts?.restorationAdaptation
+          !opts?.restorationAdaptation && !opts?.continuation
         ) {
           // Another tab/remount already submitted this project. Drop only this
           // optimistic duplicate and keep the project WS attached to the

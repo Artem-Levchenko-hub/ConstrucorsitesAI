@@ -13,7 +13,7 @@ vi.mock("@/lib/api/messages", () => ({
   cancelGeneration: vi.fn(), getLatestGeneration: vi.fn(), sendPrompt: vi.fn(),
 }));
 vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn(), dismiss: vi.fn() } }));
 class Socket {
   static OPEN = 1; static CONNECTING = 0;
   readyState = 1;
@@ -31,6 +31,10 @@ let attachment: ReturnType<typeof useMaxAdaptation>;
 const options = {
   restorationAdaptation: { operation_id: "op", expected_draft_snapshot_id: "head" },
   idempotencyKey: "restoration-adapt:op", skipClarify: true,
+};
+const continuationOptions = {
+  continuation: { run_id: "old-run", assistant_message_id: "old-message", expected_snapshot_id: "head" },
+  idempotencyKey: "generation-continue:old-run",
 };
 function Harness() {
   const value = usePromptStream("p", "fixture");
@@ -74,6 +78,52 @@ it("passes the exact structured reference and stable key through the real stream
   await mount();
   await act(async () => { expect(await stream.submit("Adapt", "model", [], options)).toBe(true); });
   expect(sendPrompt).toHaveBeenCalledWith("p", "Adapt", "model", [], options);
+});
+it("refuses an addressed continuation instead of queueing it behind an active build", async () => {
+  client.setQueryData<Message[]>(["messages", "p"], [{
+    id: "m", project_id: "p", role: "assistant", content: "Running", model_id: "model",
+    snapshot_id: null, tokens_in: null, tokens_out: null, generation_status: "running",
+    created_at: "2026-09-10T00:00:00Z",
+  }]);
+  vi.mocked(getLatestGeneration).mockResolvedValue({ id: "run", project_id: "p",
+    assistant_message_id: "m", status: "running", response_mode: "edit",
+    created_at: "2026-09-10T00:00:00Z", started_at: null, finished_at: null });
+  await mount();
+  await act(async () => {
+    expect(await stream.submit("Продолжи сборку", "model", [], continuationOptions)).toBe(false);
+  });
+  expect(sendPrompt).not.toHaveBeenCalled();
+  expect(stream.pendingPrompt).toBeNull();
+});
+it("keeps the exact continuation reference/key on uncertain-reply retry without queueing a new command", async () => {
+  vi.mocked(sendPrompt).mockRejectedValueOnce(new Error("lost response"));
+  await mount();
+  await act(async () => {
+    expect(await stream.submit("Продолжи сборку", "model", [], continuationOptions)).toBe(false);
+  });
+  vi.mocked(sendPrompt).mockResolvedValue({ run_id: "r", message_id: "m", snapshot_id: null,
+    replayed: true, run_status: "completed" });
+  await act(async () => {
+    expect(await stream.submit("Продолжи сборку", "model", [], continuationOptions)).toBe(true);
+  });
+  expect(vi.mocked(sendPrompt).mock.calls).toEqual([
+    ["p", "Продолжи сборку", "model", [], continuationOptions],
+    ["p", "Продолжи сборку", "model", [], continuationOptions],
+  ]);
+  expect(stream.pendingPrompt).toBeNull();
+});
+it("does not follow another generation after an addressed continuation admission conflict", async () => {
+  vi.mocked(sendPrompt).mockRejectedValue(new ApiError(409, {
+    code: "generation_active", message: "Already running",
+  }));
+  await mount();
+  const reads = vi.mocked(getLatestGeneration).mock.calls.length;
+  await act(async () => {
+    expect(await stream.submit("Продолжи сборку", "model", [], continuationOptions)).toBe(false);
+  });
+  expect(getLatestGeneration).toHaveBeenCalledTimes(reads);
+  expect(stream.pendingPrompt).toBeNull();
+  expect(toast.info).not.toHaveBeenCalledWith("Генерация уже запущена", expect.anything());
 });
 it("retains the attachment and safe actionable error after a rejected historical source, including a pending duplicate", async () => {
   let reject!: (reason: Error) => void;

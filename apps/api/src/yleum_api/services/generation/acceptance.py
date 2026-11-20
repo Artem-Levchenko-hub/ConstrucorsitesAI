@@ -39,6 +39,7 @@ from yleum_api.services.discovery import (
     wants_build_now,
     zero_question_build,
 )
+from yleum_api.services.generation.draft_continuation import DraftContinuation
 from yleum_api.services.generation.lightweight_turns import _failed_build_explanation
 from yleum_api.services.generation.onboarding import (
     _batch_discovery_turn,
@@ -148,6 +149,7 @@ class PromptAcceptance:
         self.pilot_model: str | None = None
         self.readonly_source = False
         self.readonly_source_sha: str | None = None
+        self.draft_continuation: DraftContinuation | None = None
 
     async def accept(self) -> PromptResponse:
         from yleum_api.services.phone_verification import (
@@ -183,7 +185,8 @@ class PromptAcceptance:
             self.unit_free_first_build = bool(context.plan and context.plan.code == "free")
         await self.prepare_adaptation()
         await self.check_admission()
-        if not self.readonly_source and self.generation_engine != "sol":
+        if (not self.readonly_source and self.generation_engine != "sol"
+                and self.draft_continuation is None):
             await self.prepare_model_pilot()
         from yleum_api.services.generation_billing import admit_policy
         from yleum_api.services.llm_client import set_generation_billing_context
@@ -229,6 +232,23 @@ class PromptAcceptance:
             GenerationRun.project_id == self.project_id,
             GenerationRun.idempotency_key == idempotency_key,
         ).execution_options(populate_existing=True))
+        from yleum_api.services.generation.draft_continuation import prepare
+
+        self.draft_continuation = await prepare(
+            self.session, project=self.project, user_id=self.current_user.id,
+            payload=self.payload, existing=existing,
+        )
+        if self.draft_continuation is not None and existing is None:
+            parent = await self.session.get(
+                GenerationRun, self.draft_continuation.predecessor_run_id,
+            )
+            if parent is None or parent.user_id != self.current_user.id:
+                raise ApiError("source_changed", "Continuation parent disappeared", 409)
+            inherited_engine = selected_engine(parent.agent_state)
+            if ("generation_engine" in self.payload.model_fields_set
+                    and self.generation_engine != inherited_engine):
+                raise ApiError("source_changed", "Continuation engine conflicts", 409)
+            self.generation_engine = inherited_engine
         if existing is not None:
             accepted_engine = selected_engine(existing.agent_state)
             if "generation_engine" not in self.payload.model_fields_set:
@@ -291,6 +311,14 @@ class PromptAcceptance:
                 **(self.generation_run.agent_state or {}),
                 **engine_selection(self.generation_engine),
             }
+            if self.draft_continuation is not None:
+                from yleum_api.services.generation.draft_continuation import KEY
+
+                self.generation_run.agent_state = {
+                    **self.generation_run.agent_state,
+                    KEY: self.draft_continuation.model_dump(mode="json"),
+                    "source_checkpoint_resume": self.draft_continuation.source_reference(),
+                }
         if replayed:
             if self.generation_run.response_payload is not None:
                 response = PromptResponse.model_validate(self.generation_run.response_payload)
@@ -441,6 +469,7 @@ class PromptAcceptance:
         self.readonly_source = (
             not self.credential_redirect
             and not self.explain_failed_build
+            and self.draft_continuation is None
             and self.payload.restoration_adaptation is None
             and self.payload.max_config_version is None
             and self.payload.supersedes_run_id is None
@@ -598,6 +627,7 @@ class PromptAcceptance:
         )
         interview_eligible = (
             self.is_first_build
+            and self.draft_continuation is None
             and not getattr(self, "free_chat_limited", False)
             and not getattr(self, "unit_free_first_build", False)
             and self.pilot_model is None
@@ -721,7 +751,8 @@ class PromptAcceptance:
             and not self.credential_redirect
             and not self.explain_failed_build
             and not self.readonly_source
-            and (intent == ORCHESTRATE or bool(self.font_selections or self.resolved_fonts))
+            and (self.draft_continuation is not None or intent == ORCHESTRATE
+                 or bool(self.font_selections or self.resolved_fonts))
         )
 
         # Kimi must come from the persisted pilot admission. A generic admin

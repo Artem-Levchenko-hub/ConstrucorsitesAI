@@ -124,6 +124,17 @@ it("sends immutable IDs only and preserves the supplied idempotency key", async 
   expect(JSON.parse(init.body as string)).toMatchObject({ prompt: "use this", reference_image_ids: ["image-1"], idempotency_key: "same-key" });
   expect(init.body).not.toContain(image.url); expect(init.body).not.toContain(image.filename);
 });
+it.each(["draft-snapshot", null])("sends an exact continuation source %s and never a selector engine override", async snapshot => {
+  const continuation = { run_id: "prior-run", assistant_message_id: "prior-message", expected_snapshot_id: snapshot };
+  await sendPrompt("p", "Продолжи сборку", "optimistic-only-model", [], {
+    continuation, generationEngine: "claude", idempotencyKey: "generation-continue:prior-run",
+  });
+  const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string);
+  expect(body).toEqual({ prompt: "Продолжи сборку", continuation,
+    idempotency_key: "generation-continue:prior-run" });
+  expect(body).not.toHaveProperty("generation_engine");
+  expect(body).not.toHaveProperty("model_id");
+});
 it("rehydrates history through authenticated project-scoped bytes, ignoring supplied URLs", async () => {
   vi.mocked(fetch).mockResolvedValue({ ok: true, blob: async () => new Blob(["png"], { type: "image/png" }) } as Response);
   await act(async () => root.render(<ReferenceImageThumbnail projectId="p" image={{ ...image, url: "https://untrusted.invalid/private" }} />));

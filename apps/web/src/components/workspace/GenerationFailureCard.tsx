@@ -5,10 +5,11 @@ import { ArrowLeft, ArrowRight, Loader2, Pause } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Message } from "@/lib/api/types";
 
-export function GenerationFailureCard({ failure, onRetry, onReturnToPrompt }: {
+export function GenerationFailureCard({ failure, onRetry, onReturnToPrompt, continueFromDraft = false }: {
   failure: NonNullable<Message["generation_failure"]>;
   /** Explicit new user request through normal admission, never an automatic replay. */
   onRetry?: () => Promise<boolean>;
+  continueFromDraft?: boolean;
   onReturnToPrompt?: () => void;
 }) {
   const submitting = useRef(false);
@@ -18,7 +19,7 @@ export function GenerationFailureCard({ failure, onRetry, onReturnToPrompt }: {
   // submit a new request; the usual server quota/access/recovery checks still own it.
   const manualProviderRequest = !failure.retryable
     && (failure.code === "provider_unavailable" || failure.code === "provider_access");
-  const canRetry = Boolean(onRetry && (failure.retryable || manualProviderRequest));
+  const canRetry = Boolean(onRetry && (continueFromDraft || failure.retryable || manualProviderRequest));
   const retry = async () => {
     if (!canRetry || !onRetry || submitting.current) return;
     submitting.current = true;
@@ -35,16 +36,19 @@ export function GenerationFailureCard({ failure, onRetry, onReturnToPrompt }: {
     }
   };
   return <div role="status" className="generation-failure-card rounded-xl border border-border-default bg-surface-raised p-4 space-y-3">
-    <p className="flex items-center gap-2 font-medium text-fg-primary"><Pause aria-hidden="true" className="size-5 shrink-0 text-fg-secondary" />Продолжим сборку</p>
-    <p className="text-sm text-fg-secondary">{canRetry
-      ? "Работу над приложением можно продолжить, когда будете готовы."
+    <p className="flex items-center gap-2 font-medium text-fg-primary"><Pause aria-hidden="true" className="size-5 shrink-0 text-fg-secondary" />{continueFromDraft ? "Продолжим сборку" : "Повторим запрос"}</p>
+    <p className="text-sm text-fg-secondary">{continueFromDraft
+      ? "Продолжим с сохранённого черновика"
+      : canRetry ? "Запрос можно отправить повторно, когда будете готовы."
       : "Можно вернуться к запросу и уточнить следующий шаг."}</p>
     {error && <p className="text-sm text-fg-secondary">Запрос пока не принят. Попробуйте продолжить чуть позже.</p>}
     {canRetry ? <div className="space-y-2">
-      {manualProviderRequest && <p className="text-sm text-fg-secondary">Продолжение отправляется как новый запрос и использует лимит генераций или правок.</p>}
+      {manualProviderRequest && <p className="text-sm text-fg-secondary">{continueFromDraft
+        ? "Продолжение использует лимит генераций или правок."
+        : "Повтор отправляется как новый запрос и использует лимит генераций или правок."}</p>}
       <Button type="button" disabled={pending} onClick={() => { void retry(); }} className="generation-failure-action gap-2">
         {pending ? <Loader2 aria-hidden="true" className="size-4 animate-spin" /> : <ArrowRight aria-hidden="true" className="size-4" />}
-        {pending ? "Продолжаю…" : "Продолжить сборку"}
+        {pending ? (continueFromDraft ? "Продолжаю…" : "Отправляю…") : (continueFromDraft ? "Продолжить сборку" : "Повторить запрос")}
       </Button>
     </div> : onReturnToPrompt && <Button type="button" variant="outline" onClick={onReturnToPrompt} className="generation-failure-action gap-2">
       <ArrowLeft aria-hidden="true" className="size-4" />Вернуться к запросу

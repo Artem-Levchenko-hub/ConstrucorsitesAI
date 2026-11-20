@@ -477,6 +477,12 @@ export type GenerationAcceptanceView = {
   current_request_complete: boolean;
 };
 
+export type GenerationContinuationReference = {
+  run_id: Uuid;
+  assistant_message_id: Uuid;
+  expected_snapshot_id: Uuid | null;
+};
+
 export type GenerationRun = {
   id: Uuid;
   project_id: Uuid;
@@ -489,6 +495,7 @@ export type GenerationRun = {
   recovery?: GenerationRecoveryView | null;
   recovery_unavailable?: boolean;
   acceptance?: GenerationAcceptanceView | null;
+  continuation?: GenerationContinuationReference | null;
 };
 
 // One question in the upfront onboarding survey popup (owner 2026-06-19).

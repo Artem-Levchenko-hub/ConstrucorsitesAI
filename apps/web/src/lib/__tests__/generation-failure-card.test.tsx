@@ -1,7 +1,9 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { GenerationFailureCard } from "@/components/workspace/GenerationFailureCard";
+
+beforeEach(() => Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }));
 
 it("renders durable failure and prevents duplicate retry submits", async () => {
   const host = document.createElement("div");
@@ -16,7 +18,8 @@ it("renders durable failure and prevents duplicate retry submits", async () => {
   expect(host.querySelector('[role="alert"]')).toBeNull();
   const card = host.querySelector('[role="status"]')!;
   expect(card.className).not.toMatch(/danger|red-/);
-  expect(card.textContent).toContain("Продолжим сборку");
+  expect(card.textContent).toContain("Повторим запрос");
+  expect(card.querySelector("button")?.textContent).toContain("Повторить запрос");
   expect(card.textContent).not.toContain("Генерация не завершена");
   const details = card.querySelector("details")!;
   expect(details.open).toBe(false);
@@ -57,14 +60,29 @@ it.each(["provider_access", "provider_unavailable"])("allows only an explicit ne
   await act(async () => root.render(<GenerationFailureCard failure={failure} onRetry={retry} />));
   expect(retry).not.toHaveBeenCalled();
   expect(host.querySelector('[role="status"]')?.classList.contains("generation-failure-card")).toBe(true);
-  expect(host.querySelector("button")?.textContent).toContain("Продолжить сборку");
-  expect(host.textContent).toContain("Продолжение отправляется как новый запрос");
+  expect(host.querySelector("button")?.textContent).toContain("Повторить запрос");
+  expect(host.textContent).toContain("Повтор отправляется как новый запрос");
   expect(host.textContent).toContain("лимит генераций или правок");
   await act(async () => host.querySelector("button")!.click());
   expect(retry).toHaveBeenCalledOnce();
   expect(failure.retryable).toBe(false);
   expect(host.textContent).toContain("Запрос пока не принят");
   expect(host.querySelector("button")!.disabled).toBe(false);
+  await act(async () => root.unmount());
+});
+
+it("offers saved-draft continuation only when explicitly supplied by the caller", async () => {
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  const retry = vi.fn().mockResolvedValue(false);
+  await act(async () => root.render(<GenerationFailureCard
+    failure={{ code: "runtime_unavailable", message: "Проверка остановилась", retryable: false }}
+    continueFromDraft onRetry={retry} />));
+  expect(host.textContent).toContain("Продолжим с сохранённого черновика");
+  expect(host.querySelector("button")?.textContent).toBe("Продолжить сборку");
+  expect(retry).not.toHaveBeenCalled();
+  await act(async () => host.querySelector("button")!.click());
+  expect(retry).toHaveBeenCalledOnce();
   await act(async () => root.unmount());
 });
 

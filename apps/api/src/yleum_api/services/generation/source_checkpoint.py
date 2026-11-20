@@ -253,6 +253,10 @@ async def adjacent_checkpoint(
     """
     async with factory() as session:
         current = await session.get(GenerationRun, ids.run_id, with_for_update=True)
+        from yleum_api.services.generation.draft_continuation import KEY, restore
+
+        if current is not None and KEY in (current.agent_state or {}):
+            return await restore(session, run=current, ids=ids, baseline=baseline)
         if (
             current is None or current.user_id != ids.user_id
             or current.project_id != ids.project_id

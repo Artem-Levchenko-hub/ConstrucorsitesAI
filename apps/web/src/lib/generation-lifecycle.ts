@@ -1,5 +1,6 @@
 import type {
   GenerationRun,
+  GenerationContinuationReference,
   GenerationRunStatus,
   Message,
   Uuid,
@@ -27,6 +28,25 @@ export function isActiveGenerationForMessage(
     isGenerationActive(generation) &&
     generation?.assistant_message_id === messageId
   );
+}
+
+/** Only the latest server-owned assistant/run pair may offer an addressed draft. */
+export function generationContinuationForMessage(
+  generation: GenerationRun | null | undefined,
+  message: Message | null | undefined,
+  projectId: string,
+): GenerationContinuationReference | null {
+  if (!generation || !message || isGenerationActive(generation)
+    || generation.project_id !== projectId || message.project_id !== projectId
+    || message.role !== "assistant" || message.id.startsWith("__opt_")
+    || generation.assistant_message_id !== message.id) return null;
+  const reference = generation.continuation;
+  if (!reference || typeof reference !== "object"
+    || reference.run_id !== generation.id || reference.assistant_message_id !== message.id
+    || (reference.expected_snapshot_id !== null
+      && (typeof reference.expected_snapshot_id !== "string" || !reference.expected_snapshot_id))) return null;
+  return { run_id: reference.run_id, assistant_message_id: reference.assistant_message_id,
+    expected_snapshot_id: reference.expected_snapshot_id };
 }
 
 /** Return the assistant message whose stream received meaningful activity.

@@ -146,7 +146,15 @@ async def heartbeat_activity(
     if heartbeat_at < lease.heartbeat_at:
         raise ValueError("heartbeat_at must be monotonic")
     lease.heartbeat_at = heartbeat_at
-    if phase is not None:
+    compiler_phase_is_bound = (
+        lease.kind == ActivityKind.COMMAND.value
+        and lease.proof_key is not None
+        and lease.phase in {"fast_check", "final_build"}
+    )
+    # Controller task progress (e.g. typecheck/final-test) is returned and
+    # emitted separately. It cannot replace the compiler role admitted with
+    # this proof: receipt validation must still see that same semantic phase.
+    if phase is not None and not compiler_phase_is_bound:
         lease.phase = phase
     if log_bytes is not None:
         if log_bytes < 0:

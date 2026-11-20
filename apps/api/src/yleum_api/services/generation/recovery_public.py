@@ -162,6 +162,9 @@ async def project_loaded(
         run_id=run.id, assistant_message_id=run.assistant_message_id
     )
     view.acceptance = acceptance
+    from yleum_api.services.generation.draft_continuation import public_reference
+
+    view.continuation = public_reference(run, project, snapshot)
     if run.agent_state is not None and not isinstance(run.agent_state, dict):
         view.recovery_unavailable = True
         return view

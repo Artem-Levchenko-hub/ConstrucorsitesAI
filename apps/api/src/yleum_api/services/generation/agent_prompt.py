@@ -39,6 +39,7 @@ async def prepare_agent_prompt(
     _is_continue: bool,
     force_model: str | None,
     prepared_brief: str = "",
+    remaining_work: str = "",
 ) -> tuple[AgentPromptPlan, BuildPlan | None]:
     _seed_block = stack.seed_context
     if (_is_edit or _is_continue) and runtime.handle is not None:
@@ -318,6 +319,8 @@ async def prepare_agent_prompt(
     guidance = named_ui_guidance(named_contract)
     if guidance:
         _agent_user += "\n\n" + guidance
+    if _is_continue and remaining_work:
+        _agent_user += remaining_work
     _prompt_plan = AgentPromptPlan(
         system=_agent_system,
         user=_agent_user,

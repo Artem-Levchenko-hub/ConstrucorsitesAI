@@ -3,6 +3,7 @@ import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { usePromptStream } from "@/hooks/usePromptStream";
+import { readQueuedPrompt, writeQueuedPrompt } from "@/lib/studio-prompt-queue";
 import { getLatestGeneration, sendPrompt } from "@/lib/api/messages";
 import { ApiError } from "@/lib/api/client";
 import type { GenerationRun, WsEvent } from "@/lib/api/types";
@@ -22,6 +23,20 @@ let client: QueryClient; let root: Root; let host: HTMLDivElement;
 let stream: ReturnType<typeof usePromptStream>;
 const references = { referenceImages: [{ id: "i", filename: "x.png", mime_type: "image/png", size_bytes: 4, width: 1, height: 1, url: "/private" }], idempotencyKey: "stable-image-key" };
 const fonts = { fontSelections: [{ id: "f", family: "Onest", filename: "x.woff2", size_bytes: 4, sha256: "a".repeat(64), weight: 400, style: "normal" as const, source: "upload" as const, license: null, role: "all" as const }], idempotencyKey: "stable-font-key" };
+it.each([
+  { continuation: { run_id: "old-run", assistant_message_id: "old-message", expected_snapshot_id: "head" } },
+  { restorationAdaptation: { operation_id: "op", expected_draft_snapshot_id: "head" } },
+])("never persists or rehydrates an addressed request in the future-HEAD queue %j", async addressed => {
+  const key = "fixture-addressed-queue";
+  sessionStorage.setItem(key, "keep-existing-value");
+  const entry = { text: "Addressed", modelId: "model", phase: "waiting" as const,
+    opts: { ...addressed, idempotencyKey: "stable-key" } };
+  expect(writeQueuedPrompt(key, entry)).toBe(false);
+  expect(sessionStorage.getItem(key)).toBe("keep-existing-value");
+  sessionStorage.setItem(key, JSON.stringify(entry));
+  expect(readQueuedPrompt(key)).toBeNull();
+  expect(sendPrompt).not.toHaveBeenCalled();
+});
 function Harness({ owner = "owner-a", project = "p" }: { owner?: string; project?: string }) {
   const value = usePromptStream(project, project, owner);
   useEffect(() => { stream = value; }, [value]);

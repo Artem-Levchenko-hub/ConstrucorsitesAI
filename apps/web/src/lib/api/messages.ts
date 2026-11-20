@@ -3,6 +3,7 @@ import { mockApi, USE_MOCKS } from "./mocks";
 import type { GenerationEngine } from "@/lib/generation-engine";
 import type {
   GenerationRun,
+  GenerationContinuationReference,
   Message,
   PromptResponse,
   SelectedElement,
@@ -57,6 +58,7 @@ export async function sendPrompt(
     idempotencyKey?: string;
     maxConfigVersion?: number;
     restorationAdaptation?: RestorationAdaptationReference;
+    continuation?: GenerationContinuationReference;
     referenceImages?: ReferenceImage[];
     fontSelections?: MessageFontSelection[];
   },
@@ -90,12 +92,13 @@ export async function sendPrompt(
     // behaviour byte-identical and the backend field optional.
     json: {
       prompt,
-      ...(opts?.generationEngine ? { generation_engine: opts.generationEngine } : {}),
+      ...(opts?.generationEngine && !opts.continuation ? { generation_engine: opts.generationEngine } : {}),
       idempotency_key: idempotencyKey,
       ...(opts?.referenceImages?.length ? { reference_image_ids: opts.referenceImages.map((image) => image.id) } : {}),
       ...(opts?.fontSelections?.length ? { font_selections: opts.fontSelections.map((font) => ({ asset_id: font.id, role: font.role })) } : {}),
       ...(opts?.restorationAdaptation
         ? { restoration_adaptation: opts.restorationAdaptation } : {}),
+      ...(opts?.continuation ? { continuation: opts.continuation } : {}),
       ...(opts?.maxConfigVersion !== undefined ? { max_config_version: opts.maxConfigVersion } : {}),
       ...(selectedElements && selectedElements.length
         ? { selected_elements: selectedElements }

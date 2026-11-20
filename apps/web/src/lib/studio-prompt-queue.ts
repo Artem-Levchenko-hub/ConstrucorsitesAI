@@ -33,6 +33,8 @@ export function readQueuedPrompt(key: string): QueuedPrompt | null {
       (entry.opts.referenceImages && !Array.isArray(entry.opts.referenceImages)) ||
       (entry.opts.fontSelections && !Array.isArray(entry.opts.fontSelections))) return null;
     if (entry.opts.generationEngine !== undefined && !isGenerationEngine(entry.opts.generationEngine)) return null;
+    // Addressed requests belong to one reviewed source, never to a future HEAD.
+    if (entry.opts.continuation !== undefined || entry.opts.restorationAdaptation !== undefined) return null;
     // An interrupted POST might have reached the server. Resume only explicitly,
     // with the original request key and exact uploaded attachment identities.
     return { ...entry, phase: entry.phase === "sending" ? "retry" : entry.phase };
@@ -44,6 +46,7 @@ export function readQueuedPrompt(key: string): QueuedPrompt | null {
 export function writeQueuedPrompt(key: string, entry: QueuedPrompt | null): boolean {
   try {
     if (entry) {
+      if (entry.opts.continuation !== undefined || entry.opts.restorationAdaptation !== undefined) return false;
       const { text, modelId, selections, opts, phase } = entry;
       const { idempotencyKey, skipClarify, designPresetId, referenceImages, fontSelections, generationEngine } = opts;
       // Files stay in the live composer. Only already-uploaded attachment
