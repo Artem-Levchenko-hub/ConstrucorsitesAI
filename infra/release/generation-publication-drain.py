@@ -269,6 +269,13 @@ _PORTABLE_QUIESCENCE_MIGRATION_INVENTORY_SOURCES = {
     "routers.workspace": "ac3c84971e20fcfd78de9eeef47bc73de5d6bf3ff6e6e9f7fc68620f47bc461e",
     "schemas.workspace": "bcfa4ea78b749842de52a99406a963da385d1394851976f3fc845de174e9bb16",
 }
+# Reviewed command diagnostics only: two existing response callers use bounded,
+# redacted output. No producer, lock or lifecycle behavior changes. Keep the
+# complete migration-inventory predecessor and admit this whole successor.
+_PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES = {
+    **_PORTABLE_QUIESCENCE_MIGRATION_INVENTORY_SOURCES,
+    "routers.workspace": "cebf3ac346b7394874958af143597922f8bc764543ed3c78061982a748759ed9",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -294,6 +301,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES,
     _PORTABLE_QUIESCENCE_COMMAND_STATUS_SOURCES,
     _PORTABLE_QUIESCENCE_MIGRATION_INVENTORY_SOURCES,
+    _PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES,
 )
 # Only these reviewed producers may attest a pending fast_check wrapper.
 _PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES = (
@@ -304,6 +312,7 @@ _PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES = (
     _PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES,
     _PORTABLE_QUIESCENCE_COMMAND_STATUS_SOURCES,
     _PORTABLE_QUIESCENCE_MIGRATION_INVENTORY_SOURCES,
+    _PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.

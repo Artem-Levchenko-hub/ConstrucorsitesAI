@@ -29,7 +29,8 @@ class NextTypeSourceClosureTests(unittest.TestCase):
         self.release_environment = self.checker._PORTABLE_QUIESCENCE_RELEASE_ENVIRONMENT_SOURCES
         self.resilient_release = self.checker._PORTABLE_QUIESCENCE_RESILIENT_RELEASE_SOURCES
         self.command_status = self.checker._PORTABLE_QUIESCENCE_COMMAND_STATUS_SOURCES
-        self.current = self.checker._PORTABLE_QUIESCENCE_MIGRATION_INVENTORY_SOURCES
+        self.migration_inventory = self.checker._PORTABLE_QUIESCENCE_MIGRATION_INVENTORY_SOURCES
+        self.current = self.checker._PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES
 
     def test_historical_complete_bundle_is_preserved_and_still_supported(self):
         old_fixture = json.loads((self.directory / "fixtures/platform-bootstrap-v2-quiescence-sources.json").read_bytes())
@@ -146,17 +147,39 @@ class NextTypeSourceClosureTests(unittest.TestCase):
         )
 
     def test_migration_inventory_requires_the_router_and_schema_as_a_pair(self):
-        self.checker._require_reviewed_portable_sources(self.current)
-        self.assertEqual(set(self.current), set(self.command_status))
-        changed = {name for name in self.current if self.current[name] != self.command_status[name]}
+        self.checker._require_reviewed_portable_sources(self.migration_inventory)
+        self.assertEqual(set(self.migration_inventory), set(self.command_status))
+        changed = {name for name in self.migration_inventory
+                   if self.migration_inventory[name] != self.command_status[name]}
         self.assertEqual(changed, {"routers.workspace", "schemas.workspace"})
         for name in changed:
             with self.subTest(historical_module=name), self.assertRaisesRegex(
                 self.checker.PhysicalDrainError, "quiescence_unsupported_source"
             ):
                 self.checker._require_reviewed_portable_sources(
-                    {**self.current, name: self.command_status[name]},
+                    {**self.migration_inventory, name: self.command_status[name]},
                 )
+
+    def test_redacted_output_successor_changes_only_workspace_and_retains_complete_predecessor(self):
+        self.assertEqual(self.migration_inventory["routers.workspace"],
+                         "ac3c84971e20fcfd78de9eeef47bc73de5d6bf3ff6e6e9f7fc68620f47bc461e")
+        self.assertEqual(self.current["routers.workspace"],
+                         "cebf3ac346b7394874958af143597922f8bc764543ed3c78061982a748759ed9")
+        self.assertEqual(set(self.current), set(self.migration_inventory))
+        self.assertEqual({name for name in self.current
+                          if self.current[name] != self.migration_inventory[name]},
+                         {"routers.workspace"})
+        for sources in (self.migration_inventory, self.current):
+            self.checker._require_reviewed_portable_sources(sources)
+            self.assertIn(sources, self.checker._PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES)
+        # The old router plus its complete old bundle is still reviewed. Mixing
+        # this new router with any partial earlier transition grants no authority.
+        for previous in (self.command_status, self.resilient_release, self.guard_lease):
+            candidate = {**previous, "routers.workspace": self.current["routers.workspace"]}
+            with self.subTest(previous=previous), self.assertRaisesRegex(
+                self.checker.PhysicalDrainError, "quiescence_unsupported_source"
+            ):
+                self.checker._require_reviewed_portable_sources(candidate)
 
     def test_current_committed_source_closure_matches_linux_git_bytes(self):
         root = self.directory.parents[1] / "apps/orchestrator/src/yleum_orchestrator"
