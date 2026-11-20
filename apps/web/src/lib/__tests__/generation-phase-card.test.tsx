@@ -192,7 +192,7 @@ it("provides a static reduced-motion path and inherits light/dark shell tokens",
   expect(css).toContain('font-size: 14px');
   expect(css).toContain('overflow-wrap: anywhere');
   expect(css).toContain('grid-template-columns: 28px minmax(0, 1fr)');
-  expect(css).toMatch(/\.logo\s*\{\s*animation: none; transform: none/);
+  expect(css).toMatch(/\.dot\s*\{\s*animation: none; transform: none/);
   expect(css).not.toMatch(/text-overflow|line-clamp|\.estimate|\.milestones|\.cursor/);
   expect(css).not.toMatch(/#[a-fA-F0-9]{3,8}\b|gradient\(|box-shadow/);
 });
@@ -246,22 +246,26 @@ it("keeps observed fact updates outside the single stable live announcement", as
   expect(container.querySelector('[data-generation-indicator]')!.getAttribute("aria-hidden")).toBe("true");
 });
 
-it("reuses one monochrome Yleum mark without a phone illustration or progress geometry", async () => {
+it("keeps three decorative loading dots outside the live announcement and pauses them at completion", async () => {
   const phase = { id: "creating" as const, active: true, title: "Создаю приложение",
     explanation: "Собираю экраны и действия", milestones: [] as string[] };
   await act(async () => root.render(<GenerationPhaseCard phase={phase} motionActive />));
-  const mark = container.querySelector('[data-generation-indicator]')!;
-  expect(mark.querySelectorAll("svg")).toHaveLength(1);
-  expect(mark.querySelector("svg")!.getAttribute("viewBox")).toBe("49 56 540 540");
-  expect(mark.querySelector("svg")!.getAttribute("fill")).toBe("currentColor");
-  expect(mark.querySelectorAll("path")).toHaveLength(3);
-  expect(mark.querySelector("rect, g, defs, text, title, [role=progressbar]")).toBeNull();
-  expect(container.querySelectorAll("svg")).toHaveLength(1);
+  const indicator = container.querySelector('[data-generation-indicator]')!;
+  const dots = Array.from(indicator.children);
+  expect(dots).toHaveLength(3);
+  expect(dots.every(dot => dot.tagName === "SPAN" && dot.childNodes.length === 0)).toBe(true);
+  expect(indicator.getAttribute("aria-hidden")).toBe("true");
+  expect(indicator.closest('[aria-live], [role="status"]')).toBeNull();
+  expect(indicator.querySelector("svg, button, [tabindex], [role=progressbar]")).toBeNull();
+  expect(card().dataset.motion).toBe("running");
+  expect(card().querySelector('[role="status"]')!.textContent).toBe(phase.title);
   expect(container.querySelector('[aria-label="Подтверждённые этапы"]')).toBeNull();
   await act(async () => root.render(<GenerationPhaseCard phase={{ ...phase, id: "ready", active: false,
     title: "Приложение готово" }} motionActive />));
   expect(card().dataset.motion).toBe("paused");
-  expect(container.querySelector('[data-generation-indicator]')).toBe(mark);
+  expect(container.querySelector('[data-generation-indicator]')).toBe(indicator);
+  expect(Array.from(indicator.children)).toEqual(dots);
+  expect(card().querySelector('[role="status"]')!.textContent).toBe("Приложение готовоСобираю экраны и действия");
   expect(container.querySelector("[data-generation-background-notice]")).toBeNull();
 });
 

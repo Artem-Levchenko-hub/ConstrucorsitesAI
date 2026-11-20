@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, type RefObject } from "react";
-import { YleumMark } from "@/components/brand/YleumMark";
 import type { GenerationPhase } from "@/lib/generation-phase";
 import styles from "./GenerationPhaseCard.module.css";
 
@@ -37,8 +36,10 @@ export function GenerationPhaseCard({ phase, motionActive }: {
       : null;
   return <div className={styles.phase} data-generation-phase={phase.id}
     data-motion={phase.active && motionActive ? "running" : "paused"}>
-    <span className={styles.mark} data-generation-indicator aria-hidden="true">
-      <YleumMark tone="mono" className={styles.logo} />
+    <span className={styles.dots} data-generation-indicator aria-hidden="true">
+      <span className={styles.dot} />
+      <span className={styles.dot} />
+      <span className={styles.dot} />
     </span>
     <div className={styles.content}>
       <div role="status" aria-live="polite" aria-atomic="true">
