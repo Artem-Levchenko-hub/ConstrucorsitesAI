@@ -687,14 +687,17 @@ def max_source_completion_gap(
         management_source_gap,
     )
 
-    # Checked before anything else: a product that lost the migrations creating
-    # its platform tables looks finished and answers 500 on its first real
-    # request. Nothing further in this contract can compensate for that.
-    from yleum_api.services.max_starter_artifacts import starter_artifact_gap
+    # Legacy apps host the platform tables themselves. Portable apps use the
+    # separate trusted core; their schema.ts exports are compatibility types,
+    # and the product migration controller deliberately skips core 0000/0001.
+    # Requiring those files here sends an otherwise valid portable draft back
+    # to the model for a repair that cannot affect its actual product database.
+    if not portable:
+        from yleum_api.services.max_starter_artifacts import starter_artifact_gap
 
-    starter_gap = starter_artifact_gap(files)
-    if starter_gap:
-        return starter_gap
+        starter_gap = starter_artifact_gap(files)
+        if starter_gap:
+            return starter_gap
     management_gap = management_source_gap(files)
     if management_gap:
         return management_gap

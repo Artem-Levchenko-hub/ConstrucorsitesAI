@@ -101,6 +101,34 @@ def test_portable_crm_history_passes_the_actual_finalization_path() -> None:
     ))
 
 
+@pytest.mark.parametrize("legacy_sql", [None, "", "-- obsolete core SQL"])
+def test_portable_compatibility_schema_does_not_require_legacy_core_sql(
+    legacy_sql: str | None,
+) -> None:
+    files = _portable_crm_files()
+    files["src/lib/db/schema.ts"] = 'export const maxUsers = pgTable("max_users", {});'
+    files["drizzle/0100_product.sql"] = "CREATE TABLE product_records (subject text);"
+    if legacy_sql is not None:
+        files["drizzle/0000_max_core.sql"] = legacy_sql
+        files["drizzle/0001_business_core.sql"] = legacy_sql
+
+    assert max_source_completion_gap("История заявок.", files, portable=True) is None
+    # The same declaration still requires its physical tables in a legacy app.
+    legacy_gap = max_source_completion_gap("История заявок.", files, portable=False)
+    assert legacy_gap is not None and "drizzle/0000_max_core.sql" in legacy_gap
+
+
+def test_portable_starter_exception_does_not_accept_a_missing_product_screen() -> None:
+    files = _portable_crm_files()
+    files["src/lib/db/schema.ts"] = 'export const maxUsers = pgTable("max_users", {});'
+    files.pop("src/app/page.tsx")
+    files["src/app/layout.tsx"] = "export default function Layout({children}) { return children; }"
+
+    gap = max_source_completion_gap("История заявок.", files, portable=True)
+
+    assert gap is not None and "src/app/page.tsx" in gap
+
+
 def test_portable_next_draft_with_helpers_but_no_root_screen_is_incomplete() -> None:
     files = _portable_crm_files()
     page = files.pop("src/app/page.tsx")
