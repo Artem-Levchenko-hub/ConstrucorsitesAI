@@ -15,6 +15,26 @@ AVAILABLE = importlib.util.find_spec("yleum_orchestrator") is not None
 WORKSPACE = "11111111-1111-4111-8111-111111111111"
 OPERATION = "22222222-2222-4222-8222-222222222222"
 
+# Exact bdf2 backend533772df service producer, retained across a controller rollout.
+_LEGACY_SERVICE_WRAPPER = r"""
+import json,os,subprocess,sys,time
+argv,cwd,log,restart=json.loads(sys.argv[1])
+open(log,'wb').close()
+attempt=0
+while True:
+    p=subprocess.Popen(argv,cwd=cwd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+    tail=b''
+    while True:
+        chunk=p.stdout.read1(8192)
+        if not chunk: break
+        tail=(tail+chunk)[-24000:]
+        with open(log,'wb') as f: f.write(tail)
+    code=p.wait()
+    if restart=='never' or (restart=='on-failure' and code==0) or attempt>=5: sys.exit(code)
+    attempt+=1
+    time.sleep(min(2**attempt,30))
+"""
+
 
 @unittest.skipUnless(AVAILABLE, "requires cached orchestrator contract dependencies")
 class PhysicalContractTests(unittest.TestCase):
@@ -216,15 +236,19 @@ class PhysicalContractTests(unittest.TestCase):
             ):
                 self.module.require_physical_writers_drained(Path(tmp), client)
 
-    def kernel_fixture(self, root, *, service=True, extra_parent=None, group=None):
+    def kernel_fixture(
+        self, root, *, service=True, extra_parent=None, group=None, service_wrapper=None
+    ):
         group = group or "a" * 64
         from docker.errors import NotFound
         from requests import Response
+
         from yleum_orchestrator.services.docker_machine_backend import (
             _SERVICE_WRAPPER,
             _USERLAND_CAPS,
         )
 
+        wrapper = _SERVICE_WRAPPER if service_wrapper is None else service_wrapper
         state, proc, groups = root / "state", root / "proc", root / "groups"
         self.machine(state)
         (proc / "1/ns").mkdir(parents=True)
@@ -272,7 +296,7 @@ class PhysicalContractTests(unittest.TestCase):
                 "entrypoint": "python3",
                 "arguments": [
                     "-c",
-                    _SERVICE_WRAPPER,
+                    wrapper,
                     json.dumps(service_args),
                 ],
             },
@@ -309,7 +333,7 @@ class PhysicalContractTests(unittest.TestCase):
                 {
                     101: (
                         99,
-                        ["python3", "-c", _SERVICE_WRAPPER, json.dumps(service_args)],
+                        ["python3", "-c", wrapper, json.dumps(service_args)],
                     ),
                     102: (101, ["node", "server.js"]),
                 }
@@ -372,6 +396,51 @@ class PhysicalContractTests(unittest.TestCase):
                         groups,
                         create=True,
                     ),
+                ):
+                    self.module.require_physical_writers_drained(state, client)
+
+    def test_forgotten_terminal_exec_accepts_exact_legacy_service_producer(self):
+        self.assertEqual(len(_LEGACY_SERVICE_WRAPPER), 547)
+        self.assertEqual(
+            hashlib.sha256(_LEGACY_SERVICE_WRAPPER.encode()).hexdigest(),
+            "7cfa441715cb1aab5738e6ad07fc70f2b444e8d3b4275547cac9921e5967fd06",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            state, proc, groups, client, _container, execution = self.kernel_fixture(
+                Path(tmp), service_wrapper=_LEGACY_SERVICE_WRAPPER,
+            )
+            original = copy.deepcopy(execution)
+            with (
+                patch.object(self.module, "_PROC_ROOT", proc),
+                patch.object(self.module, "_CGROUP_ROOT", groups),
+            ):
+                self.module.require_physical_writers_drained(state, client)
+            self.assertEqual(execution, original)
+
+    def test_legacy_service_keeps_wrapper_manifest_process_and_security_guards(self):
+        for damage in ("wrapper", "manifest", "pid", "security", "cmdline", "labels"):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as tmp:
+                wrapper = _LEGACY_SERVICE_WRAPPER + ("\n" if damage == "wrapper" else "")
+                state, proc, groups, client, container, execution = self.kernel_fixture(
+                    Path(tmp), service_wrapper=wrapper,
+                )
+                if damage == "manifest":
+                    arguments = execution["ProcessConfig"]["arguments"]
+                    service_args = json.loads(arguments[-1])
+                    service_args[0] = ["node", "another-service.js"]
+                    arguments[-1] = json.dumps(service_args)
+                elif damage == "pid":
+                    execution["Pid"] = 999
+                elif damage == "security":
+                    container.attrs["HostConfig"]["Privileged"] = True
+                elif damage == "cmdline":
+                    (proc / "101/cmdline").write_bytes(b"unconfirmed-service\0")
+                elif damage == "labels":
+                    container.attrs["Config"]["Labels"]["omnia.owner_id"] = None
+                with (
+                    patch.object(self.module, "_PROC_ROOT", proc),
+                    patch.object(self.module, "_CGROUP_ROOT", groups),
+                    self.assertRaises(self.module.PhysicalDrainError),
                 ):
                     self.module.require_physical_writers_drained(state, client)
 

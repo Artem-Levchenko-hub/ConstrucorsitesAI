@@ -1265,6 +1265,21 @@ def _missing_service_execs(client, services: set[str]) -> tuple[str, ...]:
     return missing
 
 
+def _service_wrapper_supported(wrapper: object, current: str) -> bool:
+    """Recognize the exact supervisor already running before a rolling update.
+
+    The disk-temp update changed only the supervisor's child environment. Its
+    predecessor (backend source 533772df280e9fd186cf97e7ce8eb631fb66e69d91557283f5dfb69ed86fd829)
+    can remain alive in an otherwise unchanged development container. All
+    manifest, process, namespace and service-forest checks still apply below.
+    """
+    return isinstance(wrapper, str) and (
+        wrapper == current
+        or hashlib.sha256(wrapper.encode()).hexdigest()
+        == "7cfa441715cb1aab5738e6ad07fc70f2b444e8d3b4275547cac9921e5967fd06"
+    )
+
+
 def _command_absence_sample(client, state_parent, container):
     from yleum_orchestrator.services.docker_machine_backend import (
         _SERVICE_WRAPPER,
@@ -1419,7 +1434,8 @@ def _command_absence_sample(client, state_parent, container):
             and process.get("entrypoint") == "python3"
             and isinstance(arguments, list)
             and len(arguments) == 3
-            and arguments[:2] == ["-c", _SERVICE_WRAPPER],
+            and arguments[0] == "-c"
+            and _service_wrapper_supported(arguments[1], _SERVICE_WRAPPER),
             "live_service_binding",
         )
         _kernel_need(
