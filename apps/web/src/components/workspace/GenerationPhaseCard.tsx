@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type RefObject } from "react";
-import { Check, Clock3 } from "lucide-react";
+import { YleumMark } from "@/components/brand/YleumMark";
 import type { GenerationPhase } from "@/lib/generation-phase";
 import styles from "./GenerationPhaseCard.module.css";
 
@@ -25,54 +25,27 @@ export function useGenerationPhaseActivity(ref: RefObject<HTMLElement | null>, a
   return active && visible;
 }
 
-/** A single fitted part signals ongoing work; the geometry encodes no stage order. */
-function PhaseMark({ ready }: { ready: boolean }) {
-  return <svg className={styles.mark} viewBox="0 0 80 80" fill="none" aria-hidden="true" focusable="false"
-    data-generation-indicator>
-    <rect className={styles.frame} x="14" y="8" width="54" height="64" rx="8"
-      stroke="currentColor" strokeWidth="1.5" />
-    <path className={styles.rails} d="M23 18h16m-16 0h-1m1 37h14v8H23v-8Zm22 0h14v8H45v-8Z"
-      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    {ready ? <path className={styles.ready} d="m26 36 9 9 18-20" stroke="currentColor"
-      strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-      : <>
-        <rect className={styles.slot} x="22" y="27" width="38" height="20" rx="4"
-          stroke="currentColor" strokeWidth="1.5" />
-        <g className={styles.cursor}>
-          <rect x="8" y="27" width="36" height="20" rx="4" fill="currentColor" />
-          <path className={styles.tileDetail} d="M15 34h22m-22 6h13" stroke="currentColor"
-            strokeWidth="1.5" strokeLinecap="round" />
-        </g>
-      </>}
-  </svg>;
-}
-
 export function GenerationPhaseCard({ phase, motionActive }: {
   phase: GenerationPhase;
   motionActive: boolean;
 }) {
+  const explanation = phase.active ? phase.detail : phase.explanation;
   const backgroundNotice = phase.active
-    ? "Можно закрыть вкладку — работа продолжится на сервере."
+    ? "20–30 мин, иногда дольше. Вкладку можно закрыть."
     : phase.id === "queued" || phase.id === "waiting"
-      ? "Можно закрыть вкладку — задача сохранена на сервере."
+      ? "Вкладку можно закрыть — задача сохранена на сервере."
       : null;
   return <div className={styles.phase} data-generation-phase={phase.id}
     data-motion={phase.active && motionActive ? "running" : "paused"}>
-    <div className={styles.main}>
-      <PhaseMark ready={phase.id === "ready"} />
-      <div className={styles.content}>
-        <div role="status" aria-live="polite" aria-atomic="true">
-          <p className={styles.title}>{phase.title}</p>
-          <p className={styles.explanation}>{phase.explanation}</p>
-        </div>
+    <span className={styles.mark} data-generation-indicator aria-hidden="true">
+      <YleumMark tone="mono" className={styles.logo} />
+    </span>
+    <div className={styles.content}>
+      <div role="status" aria-live="polite" aria-atomic="true">
+        <p className={styles.title}>{phase.title}</p>
+        {explanation && <p className={styles.helper}>{explanation}</p>}
       </div>
-      {phase.milestones.length > 0 && <ul className={styles.milestones} aria-label="Подтверждённые этапы">
-        {phase.milestones.map(label => <li key={label}><Check size={13} aria-hidden="true" />{label}</li>)}
-      </ul>}
+      {backgroundNotice && <p className={styles.helper} data-generation-background-notice>{backgroundNotice}</p>}
     </div>
-    {backgroundNotice && <p className={styles.backgroundNotice} data-generation-background-notice>
-      <Clock3 className={styles.noticeMark} size={13} strokeWidth={1.5} aria-hidden="true" />
-      <span><span className={styles.estimate}>20–30 минут, иногда дольше.</span> {backgroundNotice}</span>
-    </p>}
   </div>;
 }

@@ -229,6 +229,10 @@ export function AgentTranscript({
           Подробности работы
         </summary>
         <div className="border-t border-border-subtle">
+          {phase.milestones.length > 0 && <p data-generation-milestones
+            className="px-3 pt-3 text-xs text-fg-secondary">
+            {phase.milestones.join(". ")}.
+          </p>}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 pt-3 pb-1 text-[11px] tabular-nums text-fg-tertiary">
             {showElapsed && (streaming || elapsed > 0) && <span>{streaming ? "Время работы: " : "за "}{formatElapsed(elapsed)}</span>}
             <span>{actionCount === null ? "Число шагов недоступно"

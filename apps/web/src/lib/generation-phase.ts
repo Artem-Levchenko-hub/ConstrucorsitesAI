@@ -10,6 +10,8 @@ export type GenerationPhase = {
   id: GenerationPhaseId;
   title: string;
   explanation: string;
+  /** Specific context that stays visible when routine active-phase copy is condensed. */
+  detail?: string;
   active: boolean;
   milestones: string[];
 };
@@ -96,8 +98,8 @@ export function projectGenerationPhase({ steps, runId, status, streaming, recove
     milestones.push("Сборка проверена");
   }
   const active = streaming || status === "pending" || status === "running";
-  const view = (id: GenerationPhaseId, working = false, explanation?: string): GenerationPhase => ({
-    id, title: COPY[id][0], explanation: explanation ?? COPY[id][1], active: working, milestones,
+  const view = (id: GenerationPhaseId, working = false, detail?: string): GenerationPhase => ({
+    id, title: COPY[id][0], explanation: detail ?? COPY[id][1], detail, active: working, milestones,
   });
   if (status === "completed") {
     if (historical) return view("history");

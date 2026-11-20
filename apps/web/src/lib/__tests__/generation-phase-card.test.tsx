@@ -6,7 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AgentTranscript } from "@/components/workspace/AgentTranscript";
 import { GenerationPhaseCard } from "@/components/workspace/GenerationPhaseCard";
-import type { GenerationPhaseId } from "@/lib/generation-phase";
+import { projectGenerationPhase, type GenerationPhaseId } from "@/lib/generation-phase";
 import type { AgentStep, GenerationRun } from "@/lib/api/types";
 
 const api = vi.hoisted(() => ({ latest: vi.fn() }));
@@ -84,7 +84,8 @@ it("keeps rejected done out of the preview announcement and revokes a shell-stal
       { ...build, step: 4, actionCount: 4 }, { ...rejected, step: 5, ok: true, actionCount: 5 }]);
     await vi.waitFor(() => expect(card().dataset.generationPhase).toBe("preview"));
   });
-  expect(card().textContent).toContain("Сборка проверена");
+  expect(card().textContent).not.toContain("Сборка проверена");
+  expect(container.querySelector("details [data-generation-milestones]")!.textContent).toBe("Сборка проверена.");
   expect(container.querySelector("details")!.textContent).toContain("5 шаг.");
 });
 
@@ -127,8 +128,12 @@ it("runs the elapsed interval only for visible, open details and clears it when 
   expect(elapsedCalls()).toHaveLength(0);
   act(() => observed([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver));
   expect(elapsedCalls()).toHaveLength(0);
-  await act(async () => container.querySelector("summary")!.click());
-  await vi.waitFor(() => expect(elapsedCalls()).toHaveLength(1));
+  await act(async () => {
+    container.querySelector("summary")!.click();
+    // jsdom schedules the native toggle event; let React observe it inside act.
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+  expect(elapsedCalls()).toHaveLength(1);
   const index = timer.mock.calls.findIndex(([, delay]) => delay === 1000);
   const timerId = timer.mock.results[index].value;
   act(() => { visibility = "hidden"; document.dispatchEvent(new Event("visibilitychange")); });
@@ -138,22 +143,31 @@ it("runs the elapsed interval only for visible, open details and clears it when 
 
 it.each([
   ["workspace", true], ["prompt", true], ["creating", true], ["checking", true],
-  ["preview", true], ["recovering", true], ["queued", false], ["waiting", false],
-] as const)("explains background work quietly during %s", async (id, active) => {
+  ["preview", true], ["recovering", true],
+] as const)("condenses routine active copy during %s into one uniform helper", async (id, active) => {
   await act(async () => root.render(<GenerationPhaseCard
     phase={{ id, active, title: "Current phase", explanation: "Current explanation", milestones: [] }} motionActive={false} />));
   const notice = container.querySelector("[data-generation-background-notice]")!;
-  expect(notice.textContent).toContain("20–30 минут, иногда дольше");
-  expect(notice.textContent).toContain("Можно закрыть вкладку");
-  expect(notice.textContent).toContain(active ? "работа продолжится на сервере" : "задача сохранена на сервере");
+  expect(notice.textContent).toBe("20–30 мин, иногда дольше. Вкладку можно закрыть.");
   expect(notice.tagName).toBe("P");
-  expect(notice.querySelectorAll("p")).toHaveLength(0);
-  expect(notice.textContent).toBe(`20–30 минут, иногда дольше. Можно закрыть вкладку — ${active
-    ? "работа продолжится на сервере." : "задача сохранена на сервере."}`);
-  expect(notice.querySelectorAll("svg")).toHaveLength(1);
+  expect(notice.children).toHaveLength(0);
   expect(notice.closest('[aria-live], [role="status"]')).toBeNull();
+  expect(card().querySelectorAll("p")).toHaveLength(2);
+  expect(card().querySelector('[role="status"]')!.textContent).toBe("Current phase");
+  expect(card().textContent).not.toContain("Current explanation");
   expect(card().dataset.motion).toBe("paused");
   expect(container.querySelector('[role="progressbar"]')).toBeNull();
+});
+
+it.each(["queued", "waiting"] as const)("keeps the reason for %s without claiming active work or an ETA", async id => {
+  const explanation = "Ожидаю нужный сервис. Работа сохранена.";
+  await act(async () => root.render(<GenerationPhaseCard
+    phase={{ id, active: false, title: "Ожидаю продолжения", explanation, milestones: [] }} motionActive />));
+  expect(card().querySelector('[role="status"]')!.textContent).toContain(explanation);
+  expect(card().querySelector("[data-generation-background-notice]")!.textContent)
+    .toBe("Вкладку можно закрыть — задача сохранена на сервере.");
+  expect(card().textContent).not.toMatch(/20–30|продолжится/);
+  expect(card().dataset.motion).toBe("paused");
 });
 
 it.each<GenerationPhaseId>(["ready", "history", "paused", "stopping", "stopped", "unconfirmed", "idle"])(
@@ -161,6 +175,7 @@ it.each<GenerationPhaseId>(["ready", "history", "paused", "stopping", "stopped",
     await act(async () => root.render(<GenerationPhaseCard
       phase={{ id, active: false, title: "Current phase", explanation: "Current explanation", milestones: [] }} motionActive={false} />));
     expect(container.querySelector("[data-generation-background-notice]")).toBeNull();
+    expect(card().querySelector('[role="status"]')!.textContent).toBe("Current phaseCurrent explanation");
   },
 );
 
@@ -172,61 +187,95 @@ it("provides a static reduced-motion path and inherits light/dark shell tokens",
   expect(css).toContain('[data-motion="running"]');
   expect(css).toContain('var(--color-surface)');
   expect(css).toContain('minmax(0, 1fr)');
-  expect(css).toContain('container: generation-phase / inline-size');
-  expect(css).toContain('@container generation-phase (min-width: 660px)');
-  expect(css).toContain('@container generation-phase (max-width: 479px)');
-  expect(css).toMatch(/\.cursor\s*\{\s*animation: none/);
+  expect(css).toContain('font-family: var(--font-sans)');
+  expect(css.match(/font-size:/g)).toHaveLength(1);
+  expect(css).toContain('font-size: 14px');
+  expect(css).toContain('overflow-wrap: anywhere');
+  expect(css).toContain('grid-template-columns: 28px minmax(0, 1fr)');
+  expect(css).toMatch(/\.logo\s*\{\s*animation: none; transform: none/);
+  expect(css).not.toMatch(/text-overflow|line-clamp|\.estimate|\.milestones|\.cursor/);
   expect(css).not.toMatch(/#[a-fA-F0-9]{3,8}\b|gradient\(|box-shadow/);
 });
 
 
-it("renders only observed facts even when real phase order goes backwards", async () => {
-  await act(async () => root.render(<GenerationPhaseCard phase={{ id: "workspace", active: true,
-    title: "Готовлю рабочую среду", explanation: "Текущая фаза", milestones: ["Промпт подготовлен"] }} motionActive />));
-  expect([...container.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Промпт подготовлен"]);
+it("keeps only observed facts inside native details even when real phase order goes backwards", async () => {
+  const prepared: AgentStep = { runId: run.id, step: 1, kind: "heartbeat", tool: "prompt_preparation",
+    action: "Промпт подготовлен", path: "", ok: true };
+  const workspace: AgentStep = { runId: run.id, step: 2, kind: "heartbeat",
+    action: "Подготавливаю среду", path: "", ok: null };
+  await mount([prepared, workspace]);
+  expect(card().dataset.generationPhase).toBe("workspace");
+  const facts = container.querySelector("[data-generation-milestones]")!;
+  expect(facts.textContent).toBe("Промпт подготовлен.");
+  expect(facts.tagName).toBe("P");
+  expect(facts.closest("details")!.open).toBe(false);
+  expect(facts.closest('[aria-live], [role="status"]')).toBeNull();
+  expect(facts.querySelector("svg, ol, ul")).toBeNull();
+  expect(card().textContent).not.toContain("Промпт подготовлен");
   expect(card().textContent).not.toContain("Среда подготовлена");
   const status = card().querySelector('[role="status"]')!;
   expect(status.textContent).not.toContain("Промпт подготовлен");
-  await act(async () => root.render(<GenerationPhaseCard phase={{ id: "creating", active: true,
-    title: "Создаю приложение", explanation: "Работа продолжается после проверки", milestones: [] }} motionActive />));
+  await act(async () => {
+    client.setQueryData(["agent-steps", "p", "m"], [prepared, workspace,
+      { ...prepared, step: 3, ok: false, action: "Продолжаю по исходному запросу" }]);
+    await vi.waitFor(() => expect(card().dataset.generationPhase).toBe("creating"));
+  });
   expect(card().dataset.generationPhase).toBe("creating");
   expect(container.querySelector('[aria-label="Подтверждённые этапы"]')).toBeNull();
+  expect(container.querySelector('[data-generation-milestones]')).toBeNull();
   expect(card().textContent).not.toContain("Сборка проверена");
   expect(container.querySelector('[role="progressbar"]')).toBeNull();
 });
 
 it("keeps observed fact updates outside the single stable live announcement", async () => {
-  const phase = { id: "creating" as const, active: true, title: "Создаю приложение",
-    explanation: "Собираю экраны и действия", milestones: [] as string[] };
-  await act(async () => root.render(<GenerationPhaseCard phase={phase} motionActive />));
+  const build: AgentStep = { runId: run.id, step: 1, kind: "step", action: "build", tool: "build", path: "", ok: null };
+  await mount([build]);
   const status = card().querySelector('[role="status"]')!;
   const copy = status.textContent;
-  await act(async () => root.render(<GenerationPhaseCard
-    phase={{ ...phase, milestones: ["Промпт подготовлен"] }} motionActive />));
+  await act(async () => {
+    client.setQueryData(["agent-steps", "p", "m"], [{ ...build, ok: true }]);
+    await vi.waitFor(() => expect(container.querySelector('[data-generation-milestones]')!.textContent).toBe("Сборка проверена."));
+  });
   expect(card().querySelector('[role="status"]')).toBe(status);
   expect(status.textContent).toBe(copy);
   expect(status.getAttribute("aria-live")).toBe("polite");
   expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
-  expect(container.querySelector("li")!.closest('[aria-live]')).toBeNull();
-  const facts = container.querySelector('[aria-label="Подтверждённые этапы"]')!;
-  expect(facts.parentElement).toBe(status.parentElement!.parentElement);
+  expect(container.querySelector('[data-generation-milestones]')!.closest('[aria-live]')).toBeNull();
+  expect(card().textContent).not.toContain("Сборка проверена");
+  expect(container.querySelector("details")!.open).toBe(false);
   expect(container.querySelector('[data-generation-indicator]')!.getAttribute("aria-hidden")).toBe("true");
 });
 
-it("uses one substantial fitted app pane without turning its geometry into progress", async () => {
+it("reuses one monochrome Yleum mark without a phone illustration or progress geometry", async () => {
   const phase = { id: "creating" as const, active: true, title: "Создаю приложение",
     explanation: "Собираю экраны и действия", milestones: [] as string[] };
   await act(async () => root.render(<GenerationPhaseCard phase={phase} motionActive />));
   const mark = container.querySelector('[data-generation-indicator]')!;
-  const fittedPane = mark.querySelector("g > rect")!;
-  expect(fittedPane.getAttribute("width")).toBe("36");
-  expect(fittedPane.getAttribute("height")).toBe("20");
-  expect(mark.querySelectorAll("g")).toHaveLength(1);
-  expect(mark.querySelector("text, title, [role=progressbar]")).toBeNull();
+  expect(mark.querySelectorAll("svg")).toHaveLength(1);
+  expect(mark.querySelector("svg")!.getAttribute("viewBox")).toBe("49 56 540 540");
+  expect(mark.querySelector("svg")!.getAttribute("fill")).toBe("currentColor");
+  expect(mark.querySelectorAll("path")).toHaveLength(3);
+  expect(mark.querySelector("rect, g, defs, text, title, [role=progressbar]")).toBeNull();
+  expect(container.querySelectorAll("svg")).toHaveLength(1);
   expect(container.querySelector('[aria-label="Подтверждённые этапы"]')).toBeNull();
   await act(async () => root.render(<GenerationPhaseCard phase={{ ...phase, id: "ready", active: false,
     title: "Приложение готово" }} motionActive />));
   expect(card().dataset.motion).toBe("paused");
-  expect(mark.querySelector("g")).toBeNull();
+  expect(container.querySelector('[data-generation-indicator]')).toBe(mark);
   expect(container.querySelector("[data-generation-background-notice]")).toBeNull();
+});
+
+it("preserves explicit active context by semantics, including the actual prompt fallback", async () => {
+  const fallback = projectGenerationPhase({ steps: [{ runId: run.id, step: 1, kind: "heartbeat",
+    action: "Продолжаю по исходному запросу", tool: "prompt_preparation", path: "", ok: false }],
+  runId: run.id, status: "running", streaming: true });
+  await act(async () => root.render(<GenerationPhaseCard phase={fallback} motionActive />));
+  expect(card().querySelector('[role="status"]')!.textContent)
+    .toBe("Создаю приложениеСоздаю приложение по вашему исходному запросу.");
+  const exact = "Специальное пояснение: " + "длинный текст ".repeat(80);
+  await act(async () => root.render(<GenerationPhaseCard phase={{ ...fallback, detail: exact }} motionActive />));
+  expect(card().querySelector('[role="status"] p:last-child')!.textContent).toBe(exact);
+  expect(card().querySelector('[role="status"] p:last-child')!.className)
+    .toBe(card().querySelector('[data-generation-background-notice]')!.className);
+  expect(card().textContent).not.toContain(fallback.explanation);
 });

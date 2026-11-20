@@ -29,6 +29,7 @@ describe("semantic generation phase from existing observations", () => {
   ] as const)("projects observed steps into %s / %s without inventing progress", (steps, id) => {
     expect(project([...steps]).id).toBe(id);
     expect(project([...steps]).active).toBe(true);
+    expect(project([...steps]).detail).toBeUndefined();
     expect(project([...steps]).milestones).toEqual([]);
   });
 
@@ -38,8 +39,20 @@ describe("semantic generation phase from existing observations", () => {
     const view = project([failed]);
     expect(view.id).toBe("creating");
     expect(view.explanation).toContain("исходному запросу");
+    expect(view.detail).toBe(view.explanation);
     expect(view.milestones).not.toContain("Промпт подготовлен");
     expect(failed.ok).toBe(false);
+  });
+
+  it("marks exact historical and needs-input context without changing the explanation contract", () => {
+    const historical = project([], { historical: true });
+    expect(historical.detail).toBe("Это сохранённая работа предыдущего запроса. Его текущий статус здесь не подтверждён.");
+    const needsInput = project([], { recovery: recovery("needs_input") });
+    expect(needsInput.detail).toBe("Нужно уточнение, чтобы продолжить. Можно остановить работу и отправить уточнённый запрос.");
+    for (const view of [historical, needsInput]) {
+      expect(view.explanation).toBe(view.detail);
+      expect(view.active).toBe(false);
+    }
   });
 
   it("shows only confirmed own milestones and keeps failed/skipped/foreign checks out", () => {
