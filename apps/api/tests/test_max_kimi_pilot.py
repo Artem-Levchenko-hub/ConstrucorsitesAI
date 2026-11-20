@@ -112,6 +112,7 @@ async def test_single_fresh_funded_or_internal_qa_build_in_owned_pilot_project(
         ),
         payload=PromptRequest(
             prompt="Build the verified Notes app",
+            generation_engine="claude",  # Exercise the existing legacy pilot branch explicitly.
             reference_image_ids=[uuid4()] if case == "images" else [],
         ),
     )

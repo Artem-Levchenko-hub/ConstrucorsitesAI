@@ -59,7 +59,7 @@ from yleum_api.services.generation.supervisor import (
 )
 from yleum_api.services.generation_engines import (
     SOL_MODEL,
-    can_choose_generation_engine,
+    GenerationEngine,
     engine_selection,
     selected_engine,
 )
@@ -140,6 +140,7 @@ class PromptAcceptance:
     ) -> None:
         self.project_id = project_id
         self.payload = payload
+        self.generation_engine: GenerationEngine = payload.generation_engine
         self.session = session
         self.current_user = current_user
         self.project = project
@@ -182,7 +183,7 @@ class PromptAcceptance:
             self.unit_free_first_build = bool(context.plan and context.plan.code == "free")
         await self.prepare_adaptation()
         await self.check_admission()
-        if not self.readonly_source and self.payload.generation_engine != "sol":
+        if not self.readonly_source and self.generation_engine != "sol":
             await self.prepare_model_pilot()
         from yleum_api.services.generation_billing import admit_policy
         from yleum_api.services.llm_client import set_generation_billing_context
@@ -207,14 +208,10 @@ class PromptAcceptance:
         return await self.present_response()
 
     async def check_engine_access(self) -> None:
-        if self.payload.generation_engine == "claude":
-            return
-        if (
-            self.project.template != "max_miniapp"
-            or self.project.owner_id != self.current_user.id
-            or not await can_choose_generation_engine(self.session, self.current_user)
-        ):
-            raise ApiError("forbidden", "Выбор модели доступен только QA-аккаунтам", 403)
+        # Engine selection grants neither project access nor private QA credits.
+        # Both closed choices use the normal phone, budget and admission gates.
+        if self.project.owner_id != self.current_user.id:
+            raise ApiError("forbidden", "not your project", 403)
 
     async def reserve_or_replay(self) -> PromptResponse | None:
         from yleum_api.services.font_assets import pin_named_request, resolve_selections
@@ -232,11 +229,12 @@ class PromptAcceptance:
             GenerationRun.project_id == self.project_id,
             GenerationRun.idempotency_key == idempotency_key,
         ).execution_options(populate_existing=True))
-        if (
-            existing is not None
-            and selected_engine(existing.agent_state) != self.payload.generation_engine
-        ):
-            raise ApiError("idempotency_conflict", "Request engine identity conflicts", 409)
+        if existing is not None:
+            accepted_engine = selected_engine(existing.agent_state)
+            if "generation_engine" not in self.payload.model_fields_set:
+                self.generation_engine = accepted_engine
+            elif accepted_engine != self.generation_engine:
+                raise ApiError("idempotency_conflict", "Request engine identity conflicts", 409)
         message = (
             await self.session.get(Message, existing.user_message_id)
             if existing is not None and existing.user_message_id else None
@@ -291,7 +289,7 @@ class PromptAcceptance:
         if not replayed:
             self.generation_run.agent_state = {
                 **(self.generation_run.agent_state or {}),
-                **engine_selection(self.payload.generation_engine),
+                **engine_selection(self.generation_engine),
             }
         if replayed:
             if self.generation_run.response_payload is not None:
@@ -734,7 +732,7 @@ class PromptAcceptance:
         }:
             force_model = ""
         self.force_model = (
-            SOL_MODEL if self.payload.generation_engine == "sol"
+            SOL_MODEL if self.generation_engine == "sol" and not self.readonly_source
             else self.pilot_model or force_model or None
         )
         self.routing_model = self.force_model or model_for_role(

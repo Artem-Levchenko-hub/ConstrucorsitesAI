@@ -45,26 +45,52 @@ async function mount(allowed: boolean) {
   await act(async () => vi.waitFor(() => expect(client.getQueryState(["owner-profile"])?.status).toBe("success")));
 }
 
-it("QA defaults to Claude; selecting Sol sends nothing and only explicit submit freezes Sol", async () => {
-  await mount(true);
-  const select = host.querySelector("select")!;
-  expect(select.value).toBe("claude");
-  await act(async () => { select.value = "sol"; select.dispatchEvent(new Event("change", { bubbles: true })); });
-  expect(mocks.submit).not.toHaveBeenCalled();
+async function typePrompt(text: string) {
   const input = host.querySelector("textarea")!;
   await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "Создай дневник растений");
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, text);
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
+}
+
+async function clickSend() {
   await act(async () => [...host.querySelectorAll("button")].find(b => b.textContent?.trim() === "Отправить")!.click());
+}
+
+it("QA defaults to Sol; selecting Claude sends nothing and only explicit submit freezes Claude", async () => {
+  await mount(true);
+  const select = host.querySelector("select")!;
+  expect(select.value).toBe("sol");
+  await act(async () => { select.value = "claude"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(mocks.submit).not.toHaveBeenCalled();
+  await typePrompt("Создай дневник растений");
+  await clickSend();
   expect(mocks.submit).toHaveBeenCalledTimes(1);
-  expect(mocks.submit.mock.calls[0][3]).toMatchObject({ generationEngine: "sol", idempotencyKey: expect.any(String) });
+  expect(mocks.submit.mock.calls[0][3]).toMatchObject({ generationEngine: "claude", idempotencyKey: expect.any(String) });
 });
 
-it("ordinary users do not see the QA selector", async () => {
+it("ordinary users send the captured Sol default without a QA selector", async () => {
   await mount(false);
   expect(host.querySelector("select")).toBeNull();
   expect(mocks.submit).not.toHaveBeenCalled();
+  await typePrompt("Создай дневник питания");
+  await clickSend();
+  expect(mocks.submit).toHaveBeenCalledTimes(1);
+  expect(mocks.submit.mock.calls[0][3]).toMatchObject({ generationEngine: "sol" });
+});
+
+it("explicit client capability revocation hides the selector and restores the normal next-request default", async () => {
+  await mount(true);
+  const select = host.querySelector("select")!;
+  await act(async () => { select.value = "claude"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  await act(async () => {
+    client.setQueryData(["owner-profile"], { id: "owner", can_choose_generation_engine: false });
+    await vi.waitFor(() => expect(host.querySelector("select")).toBeNull());
+  });
+  expect(mocks.submit).not.toHaveBeenCalled();
+  await typePrompt("Создай дневник питания");
+  await clickSend();
+  expect(mocks.submit.mock.calls[0][3]).toMatchObject({ generationEngine: "sol" });
 });
 
 it("a previous QA login's cached profile cannot expose the selector in an ordinary server session", async () => {
@@ -95,8 +121,7 @@ it("server-authorized QA can choose Sol before the first wizard brief is sent, r
   expect(host.querySelector("textarea")?.value).toBe(brief);
   expect(mocks.submit).not.toHaveBeenCalled();
   const select = host.querySelector("select")!;
-  expect(select.value).toBe("claude");
-  await act(async () => { select.value = "sol"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(select.value).toBe("sol");
   expect(mocks.submit).not.toHaveBeenCalled();
   const send = [...host.querySelectorAll("button")].find(b => b.textContent?.trim() === "Отправить")!;
   await act(async () => send.click());
@@ -112,7 +137,7 @@ it("server-authorized QA can choose Sol before the first wizard brief is sent, r
   expect(location.search).toBe("");
 });
 
-it("an ordinary wizard handoff still auto-submits once without waiting for the profile or selecting a model", async () => {
+it("an ordinary stable wizard handoff preserves omission for server-side old/new resolution without waiting for the profile", async () => {
   const brief = "Создай дневник растений";
   window.history.replaceState(null, "", "/max/p?starter=1");
   sessionStorage.setItem("omnia:max:starter:p", brief);
@@ -127,11 +152,12 @@ it("an ordinary wizard handoff still auto-submits once without waiting for the p
   expect(host.querySelector("select")).toBeNull();
 });
 
-it("a queued submit retains engine and stable key across reload", () => {
+it.each(["sol", "claude", undefined] as const)("a queued submit retains its exact %s engine identity across reload", generationEngine => {
   writeQueuedPrompt("test-queue", { text: "Build", modelId: "topmix-v1", phase: "sending",
-    opts: { generationEngine: "sol", idempotencyKey: "stable-request-key" } });
+    opts: { ...(generationEngine ? { generationEngine } : {}), idempotencyKey: "stable-request-key" } });
   expect(readQueuedPrompt("test-queue")).toMatchObject({ phase: "retry",
-    opts: { generationEngine: "sol", idempotencyKey: "stable-request-key" } });
+    opts: { idempotencyKey: "stable-request-key" } });
+  expect(readQueuedPrompt("test-queue")!.opts.generationEngine).toBe(generationEngine);
   const corrupted = JSON.parse(sessionStorage.getItem("test-queue")!);
   corrupted.opts.generationEngine = "arbitrary-model";
   sessionStorage.setItem("test-queue", JSON.stringify(corrupted));
@@ -149,7 +175,7 @@ it("wire sends only the closed engine choice, preserving the ignored legacy mode
   });
 });
 
-it("an unresolved QA profile becoming default Claude keeps an unconfirmed submit key; Sol changes it", async () => {
+it("an unresolved QA profile becoming default Sol keeps an unconfirmed submit key; Claude changes it", async () => {
   const submit = vi.fn(async (..._args: unknown[]) => false);
   const renderComposer = async (generationEngine?: GenerationEngine) => {
     await act(async () => root.render(<PromptInput projectId="p" generationEngine={generationEngine}
@@ -164,11 +190,11 @@ it("an unresolved QA profile becoming default Claude keeps an unconfirmed submit
   });
   const send = async () => act(async () => [...host.querySelectorAll("button")].find(b => b.textContent?.trim() === "Отправить")!.click());
   await send();
-  await renderComposer("claude");
+  await renderComposer("sol");
   await send();
   expect(submit.mock.calls[1][2]).toMatchObject(submit.mock.calls[0][2] as object);
   expect(submit.mock.calls[1][3]).toBe(true);
-  await renderComposer("sol");
+  await renderComposer("claude");
   await send();
   expect(submit.mock.calls[2][2]).not.toMatchObject(submit.mock.calls[0][2] as object);
   expect(submit.mock.calls[2][3]).toBe(false);

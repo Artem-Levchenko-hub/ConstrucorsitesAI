@@ -17,7 +17,7 @@ import { useInspectorStore, type PickedElement } from "@/store/inspector";
 import type { QueuedPromptDraft, QueuedPromptPhase } from "@/lib/studio-prompt-queue";
 import { SelectedChips } from "./SelectedChips";
 import { FontAttachmentChips, FontAttachmentPanel } from "./FontAttachments";
-import type { GenerationEngine } from "@/lib/generation-engine";
+import { DEFAULT_GENERATION_ENGINE, type GenerationEngine } from "@/lib/generation-engine";
 
 export type PromptInputHandle = { insertDraft: (text: string) => boolean };
 export type PromptReferenceSubmit = { referenceImages: ReferenceImage[]; fontSelections?: MessageFontSelection[]; idempotencyKey: string; generationEngine?: GenerationEngine };
@@ -157,7 +157,7 @@ function ProjectPromptInput({
           : references.items.length ? "Используй прикреплённые изображения как визуальный референс для приложения." : "");
     const images = references.items.flatMap((item) => item.image ? [item.image] : []);
     const fontSelections = fonts.items.flatMap(item => item.asset ? [{ ...item.asset, role: item.role }] : []);
-    const signature = JSON.stringify([finalText, wire, images.map((image) => image.id), fontSelections.map(font => [font.id, font.role]), generationEngine ?? "claude"]);
+    const signature = JSON.stringify([finalText, wire, images.map((image) => image.id), fontSelections.map(font => [font.id, font.role]), generationEngine ?? DEFAULT_GENERATION_ENGINE]);
     return { text: finalText, wire, images, fontSelections, signature, generationEngine };
   }, [value, references.items, fonts.items, generationEngine]);
 

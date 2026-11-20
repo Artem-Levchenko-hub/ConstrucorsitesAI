@@ -50,7 +50,7 @@ import type { MaxAdaptationAttachment } from "@/lib/use-max-adaptation";
 import type { Message, Snapshot } from "@/lib/api/types";
 import { getOwnerProfile } from "@/lib/api/owner-profile";
 import { OWNER_PROFILE_QUERY_KEY } from "@/lib/owner-chat-quota";
-import type { GenerationEngine } from "@/lib/generation-engine";
+import { DEFAULT_GENERATION_ENGINE, type GenerationEngine } from "@/lib/generation-engine";
 import { GenerationEngineSelect } from "./GenerationEngineSelect";
 
 export type ChatPanelAdaptationHandle = {
@@ -92,8 +92,7 @@ export function ChatPanel({
   adaptationRef?: Ref<ChatPanelAdaptationHandle>;
   initialCanChooseGenerationEngine?: boolean;
 }) {
-  // Ordinary clients retain server routing. The explicit QA option is separate
-  // from this historical optimistic label and is authorized again by the API.
+  // This historical optimistic label is separate from the captured coding engine.
   const modelId = "topmix-v1";
   const quota = useOwnerChatQuota();
   const profile = useQuery({ queryKey: OWNER_PROFILE_QUERY_KEY, queryFn: getOwnerProfile,
@@ -102,7 +101,8 @@ export function ChatPanel({
   const canChooseEngine = initialCanChooseGenerationEngine
     && profile.data?.can_choose_generation_engine !== false;
   const [engineChoice, setEngineChoice] = useState<{ projectId: string; engine: GenerationEngine } | null>(null);
-  const engine = engineChoice?.projectId === projectId ? engineChoice.engine : "claude";
+  const engine = canChooseEngine && engineChoice?.projectId === projectId
+    ? engineChoice.engine : DEFAULT_GENERATION_ENGINE;
   const authoredPending = useRef(false);
   const { submit, cancel, cancelPending, retryPending, restoreExpiredPending, pendingPrompt, pendingPhase } = usePromptStream(
     projectId,
@@ -166,8 +166,9 @@ export function ChatPanel({
       opts?: PromptSubmitOptions,
       replay = Boolean(opts?.idempotencyKey),
     ): Promise<boolean> => {
-      // Capture once per submission; the queue/replay retains this exact choice.
-      if (canChooseEngine && opts?.generationEngine === undefined) {
+      // Capture fresh choices before async work. A legacy stable-key replay with
+      // no choice must let the server recover its original accepted engine.
+      if (opts?.generationEngine === undefined && !replay) {
         opts = { ...opts, generationEngine: engine };
       }
       // An explicit stable key may be an already accepted request whose response
@@ -259,7 +260,7 @@ export function ChatPanel({
         credentialSubmitPending.current = false;
       }
     },
-    [modelId, projectId, qc, submit, quota.exhausted, quota.limited, canChooseEngine, engine],
+    [modelId, projectId, qc, submit, quota.exhausted, quota.limited, engine],
   );
 
   const handleSubmit = async (text: string, selections: SelectedElement[], { idempotencyKey, referenceImages, fontSelections, generationEngine }: PromptReferenceSubmit, replay: boolean): Promise<PromptInputSubmitResult> => {
@@ -448,7 +449,7 @@ export function ChatPanel({
       if (initialCanChooseGenerationEngine) {
         if (pendingPrompt) return;
         // Server session already supplied QA authority before hydration. Keep
-        // this first brief reviewable so choosing Sol precedes the paid call.
+        // this first brief reviewable so choosing an alternative precedes the paid call.
         // Retain the handoff/key through F5 or unknown acceptance until success.
         if (composerDraftRef.current?.insertDraft(p.trim())) {
           autoFiredRef.current = true;
@@ -554,7 +555,7 @@ export function ChatPanel({
           draftRef={composerDraftRef}
           projectId={projectId}
           snapshotId={adviceSnapshotId}
-          generationEngine={canChooseEngine ? engine : undefined}
+          generationEngine={engine}
           contextVersion={currentConfig?.config_version}
           onSubmit={handleSubmit}
           sendDisabled={quota.exhausted || (quota.limited && isStreaming)}

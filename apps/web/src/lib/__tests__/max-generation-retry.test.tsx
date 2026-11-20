@@ -73,7 +73,7 @@ it("a provider rejection requires an explicit click and uses the unchanged norma
   expect(fetch).not.toHaveBeenCalled();
   await act(async () => { retry.click(); retry.click(); });
   expect(mocks.submit).toHaveBeenCalledTimes(1);
-  expect(mocks.submit).toHaveBeenCalledWith("Попробуй ещё раз", "topmix-v1", [], undefined);
+  expect(mocks.submit).toHaveBeenCalledWith("Попробуй ещё раз", "topmix-v1", [], { generationEngine: "sol" });
   expect(retry.disabled).toBe(true);
   await act(async () => finish(false));
   expect(container.textContent).toContain("Запрос пока не принят");

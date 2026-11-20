@@ -29,12 +29,13 @@ async def _standalone_sol_capture(
     session: AsyncSession, body: dict[str, Any], route: str, *, run_id: UUID,
     agent_state: object,
 ) -> bool:
-    """Capture an accepted QA Sol call without enrolling full recovery acceptance.
+    """Capture an accepted Sol coding call without enrolling full recovery acceptance.
 
     Engine authority comes from normal admission, then the frozen owned dispatch.
     This does not mint a recovery contract, change billing or authorize a replay.
     """
     from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.services.generation.source_intent import READONLY_SOURCE_TURN_KEY
     from yleum_api.services.generation_engines import SOL_MODEL, selected_engine
     from yleum_api.services.generation_runs import load_generation_dispatch
 
@@ -43,6 +44,11 @@ async def _standalone_sol_capture(
     run = await session.get(GenerationRun, run_id)
     if run is None or run.agent_state != agent_state:
         raise ValueError("Sol capture admission changed")
+    # A persisted source question deliberately has no coding dispatch. Require
+    # all three facts; a missing/corrupt build or edit dispatch must still fail.
+    if (isinstance(agent_state, dict) and agent_state.get(READONLY_SOURCE_TURN_KEY) is True
+            and run.response_mode == "clarify" and "dispatch" not in agent_state):
+        return False
     dispatch = load_generation_dispatch(run)
     if route != "/v1/chat/completions" or body.get("model") != dispatch.force_model:
         raise ValueError("Sol capture request changed its accepted engine")

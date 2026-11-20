@@ -1,4 +1,4 @@
-"""Standalone admitted QA Sol capture; PostgreSQL cases run only in owned local QA."""
+"""Standalone admitted Sol coding capture; PostgreSQL cases use owned local QA."""
 
 import asyncio
 import json
@@ -32,6 +32,7 @@ from yleum_api.services.generation.provider_identity import (
     request_digest,
 )
 from yleum_api.services.generation.response_auth import HEADER, verify_generation_response_token
+from yleum_api.services.generation.source_intent import READONLY_SOURCE_TURN_KEY
 from yleum_api.services.generation_runs import load_generation_dispatch
 
 MODEL = "gpt-6.2-sol"
@@ -212,17 +213,21 @@ async def policy_snapshot(session, run_id):
 
 
 @pytest.fixture
-async def admitted_sol(client, db_session, test_engine, monkeypatch):
+async def admitted_sol(client, db_session, test_engine, monkeypatch, request):
     settings = capture_settings(monkeypatch)
-    plan = BillingPlan(
-        id=uuid4(), code="qa_internal", version=1, name="QA capture",
-        price_rub=Decimal(0), included_credit_rub=Decimal(0), billing_interval="month",
-        is_active=False, entitlements={"qa_unlimited_generations": True},
-    )
-    db_session.add(plan)
-    await db_session.commit()
-    owner, projects, _account = await owner_projects(db_session, plan_id=plan.id, count=1)
-    owner.role = "admin"
+    ordinary = getattr(request, "param", "qa") == "ordinary"
+    if ordinary:
+        owner, projects, _account = await owner_projects(db_session, count=1)
+    else:
+        plan = BillingPlan(
+            id=uuid4(), code="qa_internal", version=1, name="QA capture",
+            price_rub=Decimal(0), included_credit_rub=Decimal(0), billing_interval="month",
+            is_active=False, entitlements={"qa_unlimited_generations": True},
+        )
+        db_session.add(plan)
+        await db_session.commit()
+        owner, projects, _account = await owner_projects(db_session, plan_id=plan.id, count=1)
+        owner.role = "admin"
     projects[0].template = "max_miniapp"
     await db_session.commit()
     jobs = no_providers(monkeypatch, owner)
@@ -230,7 +235,8 @@ async def admitted_sol(client, db_session, test_engine, monkeypatch):
     try:
         response = await client.post(f"/api/projects/{projects[0].id}/prompt", json={
             "prompt": "Создай дневник растений", "skip_clarify": True,
-            "generation_engine": "sol", "idempotency_key": "QA_SOL_CAPTURE_ONCE",
+            "idempotency_key": "SOL_CAPTURE_ONCE",
+            **({} if ordinary else {"generation_engine": "sol"}),
         })
         assert response.status_code == 202, response.text
         run = await db_session.get(GenerationRun, UUID(response.json()["run_id"]))
@@ -241,7 +247,9 @@ async def admitted_sol(client, db_session, test_engine, monkeypatch):
         assert "recovery_v1" not in run.agent_state
         run.status = "running"  # Fixture promotes the normally admitted job; no worker/provider.
         await db_session.commit()
-        assert (await policy_snapshot(db_session, run.id))[0] == "accepted-build-v1"
+        assert (await policy_snapshot(db_session, run.id))[0] == (
+            "accepted-units-v2" if ordinary else "accepted-build-v1"
+        )
         body = {"model": MODEL, "messages": [{"role": "user", "content": "Frozen coding task"}],
                 "stream": False, "user": str(owner.id), "metadata": {
                     "run_id": str(run.id), "project_id": str(run.project_id),
@@ -253,6 +261,50 @@ async def admitted_sol(client, db_session, test_engine, monkeypatch):
         )
     finally:
         app.dependency_overrides.pop(get_current_user, None)
+
+
+async def test_readonly_source_without_coding_dispatch_is_not_a_sol_coding_capture():
+    state = {**generation_engines.engine_selection("sol"), READONLY_SOURCE_TURN_KEY: True}
+    run = SimpleNamespace(agent_state=state, response_mode="clarify")
+    session = SimpleNamespace(get=AsyncMock(return_value=run))
+    assert not await provider_attempts._standalone_sol_capture(
+        session, {"model": "claude-sonnet-5.5"}, ROUTE, run_id=uuid4(), agent_state=state,
+    )
+
+
+@pytest.mark.parametrize("mode, marker, dispatch", [
+    ("build", True, None), ("edit", True, None), ("clarify", "true", None),
+    ("clarify", True, {}), ("clarify", False, None),
+])
+async def test_readonly_exception_never_hides_missing_or_corrupt_coding_dispatch(
+    mode, marker, dispatch,
+):
+    state = {**generation_engines.engine_selection("sol"), READONLY_SOURCE_TURN_KEY: marker}
+    if dispatch is not None:
+        state["dispatch"] = dispatch
+    run = SimpleNamespace(agent_state=state, response_mode=mode)
+    with pytest.raises(ValueError):
+        await provider_attempts._standalone_sol_capture(
+            SimpleNamespace(get=AsyncMock(return_value=run)), {"model": MODEL}, ROUTE,
+            run_id=uuid4(), agent_state=state,
+        )
+
+
+@pytest.mark.parametrize("admitted_sol", ["ordinary"], indirect=True)
+async def test_postgres_ordinary_default_sol_retains_owned_unit_call_without_v3(
+    admitted_sol, db_session,
+):
+    case = admitted_sol
+    assert case.owner.role != "admin" and "recovery_v1" not in case.state
+    before = await policy_snapshot(db_session, case.run.id)
+    identity = await provider_attempts.prepare_generation_attempt(deepcopy(case.body), ROUTE)
+    assert identity is not None
+    assert (identity.run_id, identity.project_id, identity.user_id) == (
+        case.run.id, case.project.id, case.owner.id,
+    )
+    assert await policy_snapshot(db_session, case.run.id) == before
+    assert await db_session.scalar(select(func.count()).select_from(GenerationProviderAttempt)) == 1
+    assert await db_session.scalar(select(func.count()).select_from(GenerationRecoveryEffect)) == 0
 
 
 async def test_postgres_http_admission_captures_distinct_identical_logical_calls_without_v2(

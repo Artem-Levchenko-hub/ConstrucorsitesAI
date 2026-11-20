@@ -1,4 +1,4 @@
-"""Internal QA engine selection; accepted dispatches retain their own model."""
+"""Coding engine bindings and private QA selector authority are independent."""
 
 from __future__ import annotations
 

@@ -91,10 +91,10 @@ it("Free0 keeps history and hides manual retry/fix/suggestion/discovery/survey a
  await render();await act(async()=>{await vi.waitFor(()=>expect(container.textContent).not.toContain("Что ещё?"));});expect(container.textContent).toContain("Моё первое описание");expect(container.textContent).toContain("Готовое приложение");
  expect(button("Повторить вручную")).toBeUndefined();expect(button("Починить")).toBeUndefined();expect(button("Добавить идею")).toBeUndefined();expect(container.textContent).not.toContain("Что ещё?");expect(container.textContent).not.toContain("Добавить ещё");expect(mocks.submit).not.toHaveBeenCalled();
 });
-it.each(["Pro","Business","no-plan"])("%s null quota leaves ordinary manual alternatives and sends unchanged",async()=>{
+it.each(["Pro","Business","no-plan"])("%s null quota leaves ordinary manual alternatives and captures the default coding engine",async()=>{
  profile={...base,user_chat_messages_limit:null,user_chat_messages_remaining:null};mocks.messages.mockResolvedValue([{id:"a",role:"assistant",content:"История",tokens_out:0}]);
  await render();expect(container.textContent).not.toContain("Осталось сообщений");expect(button("Починить")).toBeDefined();expect(button("Повторить вручную")).toBeDefined();
- await draft("Новое пожелание");await act(async()=>button("Отправить")!.click());expect(mocks.submit).toHaveBeenCalledWith("Новое пожелание","topmix-v1",[],{idempotencyKey:expect.any(String)});
+ await draft("Новое пожелание");await act(async()=>button("Отправить")!.click());expect(mocks.submit).toHaveBeenCalledWith("Новое пожелание","topmix-v1",[],{generationEngine:"sol",idempotencyKey:expect.any(String)});
 });
 it("Free0 permits explicit stable starter replay after unknown outcome and sends the same idempotency key",async()=>{
  profile={...profile,user_chat_messages_remaining:0};sessionStorage.setItem("omnia:max:starter:p","Сохранённое первое описание");window.history.replaceState(null,"","/max/p?starter=1");client.setQueryData(OWNER_PROFILE_QUERY_KEY,profile);

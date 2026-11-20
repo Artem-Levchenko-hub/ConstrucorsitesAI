@@ -54,8 +54,9 @@ afterEach(async () => {
   sessionStorage.clear(); window.history.replaceState(null, "", "/");
 });
 
-async function render() {
-  await act(async () => root.render(<QueryClientProvider client={client}><ChatPanel projectId="p" projectSlug="p" /></QueryClientProvider>));
+async function render(qa = false) {
+  await act(async () => root.render(<QueryClientProvider client={client}><ChatPanel projectId="p" projectSlug="p"
+    initialCanChooseGenerationEngine={qa} /></QueryClientProvider>));
 }
 
 const button = (name: string) => [...host.querySelectorAll("button")].find(candidate =>
@@ -82,7 +83,7 @@ async function sendFromComposer() {
   return input;
 }
 
-function expectRedactedSubmission() {
+function expectRedactedSubmission(capturedFreshEngine = true) {
   expect(mocks.connect).toHaveBeenCalledExactlyOnceWith("p", "aitunnel", { api_key: token });
   expect(mocks.submit).toHaveBeenCalledOnce();
   const [text, , selections] = mocks.submit.mock.calls[0];
@@ -90,6 +91,7 @@ function expectRedactedSubmission() {
   expect(text).toContain("Интеграция AITUNNEL уже проверена и подключена");
   expect(text.includes(token)).toBe(false);
   expect(selections).toEqual([]);
+  expect(mocks.submit.mock.calls[0][3].generationEngine).toBe(capturedFreshEngine ? "sol" : undefined);
 }
 
 it("verifies a composer credential before generation and clears the accepted draft", async () => {
@@ -119,9 +121,25 @@ it("also verifies and redacts a credential from the saved starter before replay"
   window.history.replaceState(null, "", "/max/p?starter=1");
   await render();
   await act(async () => { await vi.waitFor(() => expect(mocks.submit).toHaveBeenCalledOnce()); });
-  expectRedactedSubmission();
+  expectRedactedSubmission(false);
   expect(mocks.submit.mock.calls[0][3]).toEqual({ skipClarify: true, idempotencyKey: "max-starter-p" });
   expect(sessionStorage.getItem(starterKey)).toBeNull();
+});
+
+it("captures the coding engine before credential verification even if the next-request selector changes", async () => {
+  let finish!: () => void;
+  mocks.connect.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+  await render(true);
+  await sendFromComposer();
+  expect(mocks.connect).toHaveBeenCalledOnce();
+  expect(mocks.submit).not.toHaveBeenCalled();
+  const select = host.querySelector("select")!;
+  expect(select.value).toBe("sol");
+  await act(async () => { select.value = "claude"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(mocks.submit).not.toHaveBeenCalled();
+  await act(async () => finish());
+  expectRedactedSubmission();
+  expect(select.value).toBe("claude");
 });
 
 it("verifies and redacts a credential typed into an inline discovery answer", async () => {

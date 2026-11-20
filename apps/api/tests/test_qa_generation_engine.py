@@ -22,14 +22,17 @@ from yleum_api.services.generation_runs import (
     store_generation_dispatch,
 )
 
+OMITTED = object()
 
-def admission(engine="claude"):
+
+def admission(engine=OMITTED):
     user_id, project_id = uuid4(), uuid4()
     owner = SimpleNamespace(id=user_id, role="admin")
     project = SimpleNamespace(id=project_id, owner_id=user_id, template="max_miniapp")
     return acceptance.PromptAcceptance(
         project_id=project_id,
-        payload=PromptRequest(prompt="Build a journal", generation_engine=engine),
+        payload=(PromptRequest(prompt="Build a journal") if engine is OMITTED else
+                 PromptRequest(prompt="Build a journal", generation_engine=engine)),
         session=SimpleNamespace(scalar=AsyncMock()),
         current_user=owner,
         project=project,
@@ -42,29 +45,34 @@ def test_only_closed_engine_choices_are_accepted(engine):
         PromptRequest(prompt="Build", generation_engine=engine)
 
 
-@pytest.mark.parametrize("case", ["qa", "ordinary", "wrong_owner", "wrong_template"])
-async def test_sol_requires_owned_max_project_and_server_qa_authority(monkeypatch, case):
-    request = admission("sol")
-    allowed = AsyncMock(return_value=case != "ordinary")
-    monkeypatch.setattr(acceptance, "can_choose_generation_engine", allowed)
-    if case == "wrong_owner":
-        request.project.owner_id = uuid4()
-    if case == "wrong_template":
-        request.project.template = "blank"
-    if case == "qa":
-        await request.check_engine_access()
-        allowed.assert_awaited_once_with(request.session, request.current_user)
-    else:
-        with pytest.raises(ApiError) as error:
-            await request.check_engine_access()
-        assert error.value.status_code == 403
-
-
-async def test_default_claude_needs_no_pilot_authorization(monkeypatch):
+@pytest.mark.parametrize("engine", [OMITTED, "sol", "claude"])
+async def test_normal_engine_choices_do_not_grant_or_require_private_qa_authority(
+    monkeypatch, engine,
+):
     allowed = AsyncMock(side_effect=AssertionError("ordinary client must remain unchanged"))
-    monkeypatch.setattr(acceptance, "can_choose_generation_engine", allowed)
-    await admission().check_engine_access()
+    monkeypatch.setattr(generation_engines, "can_choose_generation_engine", allowed)
+    request = admission(engine)
+    request.current_user.role = "user"
+    request.project.template = "blank"
+    await request.check_engine_access()
     allowed.assert_not_awaited()
+    assert request.generation_engine == ("sol" if engine is OMITTED else engine)
+
+
+@pytest.mark.parametrize("engine", ["sol", "claude"])
+async def test_engine_choice_never_grants_project_ownership(engine):
+    request = admission(engine)
+    request.project.owner_id = uuid4()
+    with pytest.raises(ApiError) as error:
+        await request.check_engine_access()
+    assert error.value.status_code == 403
+
+
+def test_new_default_and_historical_missing_marker_have_distinct_meanings():
+    assert PromptRequest(prompt="Build").generation_engine == "sol"
+    assert "generation_engine" not in PromptRequest(prompt="Build").model_fields_set
+    assert generation_engines.selected_engine({}) == "claude"
+    assert generation_engines.selected_engine(None) == "claude"
 
 
 @pytest.mark.parametrize("role", ["user", None, "ADMIN"])
@@ -95,6 +103,36 @@ async def test_same_key_cannot_change_engine_before_any_upload_or_reservation(
     assert error.value.code == "idempotency_conflict"
 
 
+@pytest.mark.parametrize("stored", ["claude", "sol"])
+async def test_omitted_same_key_replay_adopts_frozen_engine_under_project_lock(monkeypatch, stored):
+    from yleum_api.schemas.message import PromptResponse
+
+    request = admission()
+    run_id, message_id = uuid4(), uuid4()
+    existing = SimpleNamespace(
+        agent_state=generation_engines.engine_selection(stored), user_message_id=uuid4(),
+        user_id=request.current_user.id, assistant_message_id=message_id, status="running",
+        response_payload={"message_id": str(message_id), "run_id": str(run_id), "mode": "build"},
+    )
+    request.session.scalar.return_value = existing
+    request.session.get = AsyncMock(return_value=SimpleNamespace(
+        reference_images=[], font_selections=[], resolved_fonts=[], role="user",
+        project_id=request.project_id,
+    ))
+    lock = AsyncMock()
+    reserve = AsyncMock(return_value=(existing, True))
+    monkeypatch.setattr(acceptance, "_try_prompt_project_lock", lock)
+    monkeypatch.setattr(acceptance, "reserve_generation_run", reserve)
+    response = await request.reserve_or_replay()
+    lock.assert_awaited_once_with(request.session, request.project_id)
+    assert request.generation_engine == stored
+    assert request.payload.generation_engine == "sol"  # Incoming omission was not rewritten.
+    assert isinstance(response, PromptResponse) and response.replayed is True
+    assert response.run_id == run_id
+    assert existing.agent_state == generation_engines.engine_selection(stored)
+    reserve.assert_awaited_once()
+
+
 @pytest.mark.parametrize(
     "engine, override, expected",
     [
@@ -118,10 +156,25 @@ async def test_qa_choice_becomes_dispatch_model_without_global_override(engine, 
         assert request.routing_model == "gpt-6.2-sol"
 
 
-def test_cold_dispatch_load_retains_model_and_rejects_mismatched_engine():
+async def test_readonly_source_keeps_shared_role_routing_instead_of_the_coding_default():
+    request = admission()
+    request.settings = get_settings().model_copy(update={"force_model": ""})
+    request.effective_prompt = "Объясни текущие исходники"
+    request.is_first_build = False
+    request.selected_dump = None
+    request.credential_redirect = request.explain_failed_build = False
+    request.font_selections = request.resolved_fonts = []
+    request.readonly_source = True
+    await request.select_intent_and_model()
+    assert request.force_model is None
+    assert request.routing_model == acceptance.model_for_role("edit")
+
+
+@pytest.mark.parametrize("engine", ["claude", "sol"])
+def test_cold_dispatch_load_retains_model_and_rejects_mismatched_engine(engine):
     owner, project = uuid4(), uuid4()
     run = SimpleNamespace(
-        user_id=owner, project_id=project, agent_state=generation_engines.engine_selection("sol")
+        user_id=owner, project_id=project, agent_state=generation_engines.engine_selection(engine)
     )
     dispatch = GenerationDispatch(
         1,
@@ -131,15 +184,17 @@ def test_cold_dispatch_load_retains_model_and_rejects_mismatched_engine():
         uuid4(),
         None,
         "Build",
-        "gpt-6.2-sol",
-        "gpt-6.2-sol",
+        "gpt-6.2-sol" if engine == "sol" else "claude-sonnet-5.5",
+        "gpt-6.2-sol" if engine == "sol" else None,
         True,
         True,
         None,
     )
     store_generation_dispatch(run, dispatch)
     assert load_generation_dispatch(run) == dispatch
-    run.agent_state["dispatch"]["force_model"] = "claude-sonnet-5.5"
+    run.agent_state["dispatch"]["force_model"] = (
+        "claude-sonnet-5.5" if engine == "sol" else "gpt-6.2-sol"
+    )
     with pytest.raises(ValueError, match="engine binding"):
         load_generation_dispatch(run)
 
@@ -251,7 +306,9 @@ async def test_sol_finalization_repair_uses_same_model_and_authorized_executor(
     execute.assert_not_awaited()
 
 
-async def test_http_qa_choice_is_frozen_replayed_and_revocable(client, db_session, monkeypatch):
+async def test_http_qa_selector_capability_is_revocable_without_changing_accepted_sol(
+    client, db_session, monkeypatch,
+):
     from decimal import Decimal
     from uuid import UUID
 
@@ -309,9 +366,56 @@ async def test_http_qa_choice_is_frozen_replayed_and_revocable(client, db_sessio
         subscription.status = "paused"
         await db_session.commit()
         assert (await client.get("/api/auth/me")).json()["can_choose_generation_engine"] is False
-        denied = await client.post(
-            url, json={**payload, "idempotency_key": "QA_SOL_REVOKED_SUBMIT"}
-        )
-        assert denied.status_code == 403 and len(jobs) == 1
+        replay_after_revocation = await client.post(url, json=payload)
+        assert replay_after_revocation.status_code == 202
+        assert replay_after_revocation.json()["replayed"] is True and len(jobs) == 1
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.mark.parametrize("engine", [None, "sol", "claude"])
+async def test_http_normal_default_and_explicit_choices_preserve_replay_and_budget(
+    client, db_session, monkeypatch, engine,
+):
+    from uuid import UUID
+
+    from tests.test_free_chat_allowance import no_providers, owner_projects
+    from yleum_api.core.deps import get_current_user
+    from yleum_api.main import app
+    from yleum_api.models.generation_run import GenerationRun
+
+    owner, projects, _ = await owner_projects(db_session)
+    jobs = no_providers(monkeypatch, owner)
+    payload = {"prompt": "Build a nutrition journal", "skip_clarify": True,
+               "idempotency_key": "NORMAL_ENGINE_DEFAULT"}
+    if engine is not None:
+        payload["generation_engine"] = engine
+    expected = engine or "sol"
+    try:
+        assert (await client.get("/api/auth/me")).json()["can_choose_generation_engine"] is False
+        url = f"/api/projects/{projects[0].id}/prompt"
+        first = await client.post(url, json=payload)
+        assert first.status_code == 202, first.text
+        run = await db_session.get(GenerationRun, UUID(first.json()["run_id"]))
+        assert generation_engines.selected_engine(run.agent_state) == expected
+        assert "recovery_v1" not in run.agent_state
+        assert (load_generation_dispatch(run).force_model == "gpt-6.2-sol") is (expected == "sol")
+        # A pre-default client may omit its old choice while replaying a stable key.
+        replay = await client.post(url, json={
+            k: v for k, v in payload.items() if k != "generation_engine"
+        })
+        assert replay.status_code == 202 and replay.json()["replayed"] is True
+        assert replay.json()["run_id"] == first.json()["run_id"] and len(jobs) == 1
+        conflict = await client.post(url, json={
+            **payload, "generation_engine": "claude" if expected == "sol" else "sol",
+        })
+        assert conflict.status_code == 409
+        assert conflict.json()["error"]["code"] == "idempotency_conflict"
+        exhausted = await client.post(f"/api/projects/{projects[1].id}/prompt", json={
+            **payload, "idempotency_key": "NORMAL_ENGINE_SECOND",
+        })
+        assert exhausted.status_code == 402
+        assert exhausted.json()["error"]["code"] == "generation_credits_exhausted"
+        assert len(jobs) == 1
     finally:
         app.dependency_overrides.pop(get_current_user, None)

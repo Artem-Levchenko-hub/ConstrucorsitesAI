@@ -5,11 +5,14 @@ The MAX editor exposes Claude Sonnet 5.5 / GPT-6.2 Sol only when
 the existing active, private `qa_internal` plan together with the persisted
 admin role. An email, browser flag or ordinary paid plan does not grant access.
 
-Claude remains the default. The selector controls the **next request**; changing
-it does not start a generation. Each explicit submit sends the closed
+Sol is the default for new coding requests. The QA selector initially shows Sol
+and offers Claude as an alternative for the **next request**; changing it does
+not start a generation. Each new editor submit captures the closed
 `generation_engine: "claude" | "sol"` option. The legacy `model_id` input remains
-ignored. A Sol request for an ordinary account or an unowned/non-MAX project
-is refused before reservation or model work.
+ignored. Ordinary Sol requests use the same phone, project ownership, budget
+and admission checks; they receive no private QA entitlement or extra credits.
+Existing explicit Claude API requests remain supported for ordinary clients.
+Only the editor selector, rather than either API choice, needs QA authority.
 
 For a QA project's first wizard handoff, the editor stages the description in
 the composer instead of starting a paid call before the engine can be chosen.
@@ -19,9 +22,14 @@ acceptance retains that handoff until success. Ordinary starter auto-submit
 keeps its existing behavior.
 
 Admission saves the Sol selection in `GenerationRun.agent_state` and freezes
-`gpt-6.2-sol` in the existing dispatch's `model_id` and `force_model`. Replaying
-the same submit key with another engine produces an identity conflict.
-The browser queue also preserves the choice and key across reload. A worker
+`gpt-6.2-sol` in the existing dispatch's `model_id` and `force_model`. An omitted
+engine on the same accepted submit key adopts its saved choice under the
+project lock; an explicit opposite engine produces an identity conflict.
+The browser queue preserves explicit choices and legacy omissions with the
+same key across reload. Fresh manual choices are captured before credential
+intake or queueing. An ordinary stable wizard handoff without an engine keeps
+that omission: the server resolves a new request to Sol or replays its previous
+choice. A worker
 continuation reads the accepted dispatch, independently of the current UI
 selection. Historical runs without an engine selection keep their prior routing.
 
@@ -45,10 +53,10 @@ and safety reserve still apply. Neither transport nor response capture grants
 unlimited time or restarts the generation deadline.
 
 Non-streaming Sol coding calls belonging to an owned, running generation
-already admitted as QA Sol use retained provider responses independently of
+already admitted as Sol use retained provider responses independently of
 full V3 executable recovery enrollment. The frozen dispatch remains the engine
 authority. Capture does not change accepted-build billing or admit another
-generation. Both `generation_provider_attempts_enabled` and
+generation, and ordinary unit reservations remain unchanged. Both `generation_provider_attempts_enabled` and
 `generation_response_retention_enabled` are required; disabling either refuses
 these calls before paid dispatch rather than falling back to an uncaptured POST.
 
@@ -63,6 +71,12 @@ The optional cached prompt preparation remains the existing shared service
 with its own role configuration. Selecting Sol changes the coding engine,
 not that service or the project's runtime AI model. No design templates,
 parallel product agents or extra visual review calls are introduced.
+
+A read-only question about committed source keeps its existing shared role
+and text-only behavior. Its persisted readonly marker, clarify mode and absence
+of a coding dispatch exclude it from Sol coding capture. A build or edit with
+a missing or invalid dispatch still fails closed; this exception cannot enroll
+full recovery or authorize another coding POST.
 
 Deploy API, workers, Web and Gateway together after the exact revision's CI:
 
