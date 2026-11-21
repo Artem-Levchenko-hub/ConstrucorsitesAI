@@ -57,7 +57,9 @@ async def checkpoint_before_rollback(operations: Any) -> None:
     """A failed draft save must never block restoration of the accepted source."""
     from yleum_api.services.agent_builder import AgentResult
 
-    callback = getattr(operations, "checkpoint", None)
+    callback = getattr(operations, "rollback_checkpoint", None) or getattr(
+        operations, "checkpoint", None
+    )
     if callback is None:
         return
     try:
@@ -211,7 +213,7 @@ async def persist_checkpoint(
     baseline: SourceBaseline, files: dict[str, str],
     original_prompt: str = "",
     verification_proof_key: str | None = None,
-) -> None:
+) -> str:
     if verification_proof_key is not None and not re.fullmatch(
         r"[0-9a-f]{64}", verification_proof_key,
     ):
@@ -239,6 +241,7 @@ async def persist_checkpoint(
             checkpoint["verification_proof_key"] = verification_proof_key
         run.agent_state = {**(run.agent_state or {}), "source_checkpoint": checkpoint}
         await session.commit()
+    return digest
 
 
 async def adjacent_checkpoint(

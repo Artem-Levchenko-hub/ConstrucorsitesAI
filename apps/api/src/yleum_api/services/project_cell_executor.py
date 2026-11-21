@@ -776,6 +776,8 @@ class ProjectCellExecutorHandle:
     prove_environment_recovery: (
         Callable[[UUID], Awaitable[ProjectCellEnvironmentRecoveryProof | None]] | None
     ) = None
+    # Inspect the existing fenced runtime without syncing files, waking or building.
+    existing_preview_session: Callable[[], Awaitable[ProjectCellPreviewSession]] | None = None
 
 
 # Оркестратор отвечает этой фразой из трёх мест (routers/workspace.py), с кодом
@@ -2523,15 +2525,18 @@ async def maybe_create_project_cell_executor(
             failure=None,
         )
 
-    async def _create_preview_session() -> ProjectCellPreviewSession:
-        sync = await _sync_preview()
-        if sync.failure:
-            raise ProjectCellExecutorUnavailable(sync.failure)
+    async def _existing_preview_session() -> ProjectCellPreviewSession:
         return await project_cell_create_preview_session(
             agent_workspace_id,
             generation_run_id=leased_run_id,
             fencing_epoch=fencing_epoch,
         )
+
+    async def _create_preview_session() -> ProjectCellPreviewSession:
+        sync = await _sync_preview()
+        if sync.failure:
+            raise ProjectCellExecutorUnavailable(sync.failure)
+        return await _existing_preview_session()
 
     async def _execute_action(action: Action) -> dict[str, Any]:
         nonlocal dirty, workspace_revision
@@ -2877,6 +2882,7 @@ async def maybe_create_project_cell_executor(
         export_files=_export_files,
         workspace_id=agent_workspace_id,
         create_preview_session=_create_preview_session,
+        existing_preview_session=_existing_preview_session if not restoration_adaptation else None,
         release=_release,
         seed_business_config=_seed_business_config,
         release_for_completion=(

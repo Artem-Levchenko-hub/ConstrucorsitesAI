@@ -12,7 +12,9 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-export default async function MaxPreviewPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function MaxPreviewPage({ params, searchParams }: {
+  params: Promise<{ id: string }>; searchParams?: Promise<{ attempt?: string | string[] }>;
+}) {
   const { id } = await params;
   const canonicalPath = `/max/${id}/preview`;
   const requestTarget = (await headers()).get("x-omnia-return-to");
@@ -21,5 +23,6 @@ export default async function MaxPreviewPage({ params }: { params: Promise<{ id:
   // Preserve admission if this page resolves before its outer app layout.
   if (!await getSession()) redirect(`/login?next=${encodeURIComponent(nextPath)}`);
   const project = await loadMaxProject(id, nextPath);
-  return <MaxOwnerPreviewPage project={project} />;
+  const attempt = (await searchParams)?.attempt;
+  return <MaxOwnerPreviewPage project={project} initialDraftRunId={typeof attempt === "string" ? attempt : undefined} />;
 }

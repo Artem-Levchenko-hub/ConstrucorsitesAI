@@ -159,20 +159,16 @@ async def get_runtime(
 
 @router.post("/{project_id}/runtime/start", response_model=RuntimeStatus)
 async def start_runtime(
-    project_id: UUID, session: SessionDep, current_user: CurrentUserDep
+    project_id: UUID, session: SessionDep, current_user: CurrentUserDep,
+    working_run_id: UUID | None = None,
 ) -> RuntimeStatus:
-    """Start (or provision-and-start) the project's dev container.
-
-    Goes through orchestrator `provision`, which is idempotent — calling it for an
-    existing project returns the live container info without rebuilding, and
-    provisions on first call. (Wake-on-request is wired separately at the ingress
-    layer, so a sleeping preview self-revives on the first visitor hit.)
-    """
+    """Wake the owner runtime. A working preview can only resume retained compute."""
     project = await _project_owned_by(session, project_id, current_user.id)
     cell_status = await project_cell_runtime.start_project_cell_runtime(
         session,
         project,
         owner=current_user,
+        working_run_id=working_run_id,
     )
     if cell_status is None:
         _raise_no_cell()

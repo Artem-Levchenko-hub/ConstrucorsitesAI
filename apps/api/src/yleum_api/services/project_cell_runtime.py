@@ -164,6 +164,7 @@ async def start_project_cell_runtime(
     project: Project,
     *,
     owner: User | None = None,
+    working_run_id: UUID | None = None,
 ) -> RuntimeStatus | None:
     # Do not queue browser requests behind a minutes-long cold start. Keep the
     # same transaction/fencing boundary, but let a competing viewer retry.
@@ -182,6 +183,18 @@ async def start_project_cell_runtime(
     )
     if not selection.selected:
         return None
+    if working_run_id is not None:
+        latest = await session.scalar(
+            select(GenerationRun.id)
+            .where(
+                GenerationRun.project_id == locked_project.id,
+                GenerationRun.user_id == selection.owner.id,
+            )
+            .order_by(GenerationRun.created_at.desc(), GenerationRun.id.desc())
+            .limit(1)
+        )
+        if latest != working_run_id:
+            raise ApiError("conflict", "Состояние черновика изменилось. Обновите превью.", 409)
     active_generation = await _active_generation(session, locked_project.id)
     if selection.workspace is None:
         if active_generation is not None:
@@ -227,7 +240,11 @@ async def start_project_cell_runtime(
     )
     if status.state == "running":
         return status
-    if active_generation is not None:
+    if active_generation is not None or (
+        working_run_id is not None and selection.workspace.generation_run_id is not None
+    ):
+        # Viewing a working draft must never borrow a leftover generation lease
+        # to bootstrap or apply source, even after its run has already stopped.
         return _pending_status(True, workspace=selection.workspace, resources=resources)
     if selection.workspace.generation_run_id is None:
         preview = await orchestrator_client.project_cell_start_owner_preview(

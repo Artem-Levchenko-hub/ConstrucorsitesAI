@@ -139,6 +139,7 @@ class AgentOperations:
     take_verified_progress: ProgressReader | None = None
     pure_check: PureCheckReader | None = None
     continuation: ExecutionDriver | None = None
+    rollback_checkpoint: Callable[[AgentResult], Awaitable[None]] | None = None
 
 
 class FinalizedAgentSource(NamedTuple):

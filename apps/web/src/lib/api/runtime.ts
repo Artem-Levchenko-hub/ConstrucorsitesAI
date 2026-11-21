@@ -16,8 +16,9 @@ export async function getRuntime(projectId: Uuid): Promise<RuntimeStatus> {
   return apiFetch<RuntimeStatus>(`/api/projects/${projectId}/runtime`);
 }
 
-export async function startRuntime(projectId: Uuid): Promise<RuntimeStatus> {
-  return apiFetch<RuntimeStatus>(`/api/projects/${projectId}/runtime/start`, {
+export async function startRuntime(projectId: Uuid, workingRunId?: Uuid): Promise<RuntimeStatus> {
+  const query = workingRunId ? `?working_run_id=${encodeURIComponent(workingRunId)}` : "";
+  return apiFetch<RuntimeStatus>(`/api/projects/${projectId}/runtime/start${query}`, {
     method: "POST",
   });
 }

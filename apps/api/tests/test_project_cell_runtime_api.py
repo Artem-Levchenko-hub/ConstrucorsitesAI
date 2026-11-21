@@ -530,10 +530,11 @@ async def test_resource_identity_mismatch_is_rejected(monkeypatch):
         await runtime._get_cell_resources(uuid4())
 
 
+@pytest.mark.parametrize("working_preview", [False, True])
 async def test_released_owner_can_restart_preview_without_agent_bootstrap(
-    client, db_session, monkeypatch,
+    client, db_session, monkeypatch, working_preview,
 ):
-    owner, project, _run, workspace = await _seed(db_session, monkeypatch)
+    owner, project, run, workspace = await _seed(db_session, monkeypatch)
     workspace.generation_run_id = None
     await db_session.commit()
     _deny_legacy(monkeypatch)
@@ -544,13 +545,43 @@ async def test_released_owner_can_restart_preview_without_agent_bootstrap(
     bootstrap = AsyncMock(side_effect=AssertionError("owner restart must not bootstrap source"))
     monkeypatch.setattr(oc, "project_cell_start_owner_preview", start)
     monkeypatch.setattr(oc, "project_cell_agent_bootstrap", bootstrap)
-    response = await client.post(f"/api/projects/{project.id}/runtime/start")
+    response = await client.post(
+        f"/api/projects/{project.id}/runtime/start",
+        params={"working_run_id": str(run.id)} if working_preview else {},
+    )
     assert response.status_code == 200, response.text
     assert response.json()["state"] == "running"
     start.assert_awaited_once_with(workspace.id, project_id=project.id, owner_id=owner.id)
     bootstrap.assert_not_awaited()
     await db_session.refresh(workspace)
     assert workspace.generation_run_id is None
+
+
+@pytest.mark.parametrize("current_run", [True, False])
+async def test_working_preview_never_borrows_a_generation_lease(
+    client, db_session, monkeypatch, current_run,
+):
+    _, project, run, workspace = await _seed(db_session, monkeypatch)
+    run.status = "failed"
+    await db_session.commit()
+    resources = AsyncMock(return_value=_resources(workspace, running=False))
+    bootstrap, apply, wake = AsyncMock(), AsyncMock(), AsyncMock()
+    monkeypatch.setattr(oc, "_request", resources)
+    monkeypatch.setattr(oc, "project_cell_agent_bootstrap", bootstrap)
+    monkeypatch.setattr(oc, "project_cell_apply_draft", apply)
+    monkeypatch.setattr(oc, "project_cell_start_owner_preview", wake)
+    response = await client.post(
+        f"/api/projects/{project.id}/runtime/start",
+        params={"working_run_id": str(run.id if current_run else uuid4())},
+    )
+    if current_run:
+        assert response.status_code == 200, response.text
+        assert response.json()["state"] == "provisioning"
+    else:
+        assert response.status_code == 409, response.text
+        resources.assert_not_awaited()
+    for mutation in (bootstrap, apply, wake):
+        mutation.assert_not_awaited()
 
 
 @pytest.mark.parametrize("paused_state", ["resources_paused", "retained"])

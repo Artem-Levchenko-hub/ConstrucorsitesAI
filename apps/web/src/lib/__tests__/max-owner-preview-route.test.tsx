@@ -30,6 +30,14 @@ describe("stable owner preview route", () => {
     expect(mocks.load).not.toHaveBeenCalled();
   });
 
+  it("passes the requested attempt to the authenticated owner shell", async () => {
+    mocks.session.mockResolvedValue({ email: "owner@example.invalid" });
+    mocks.load.mockResolvedValue(project);
+    const result = await MaxPreviewPage({ params: Promise.resolve({ id: project.id }),
+      searchParams: Promise.resolve({ attempt: "latest-run" }) });
+    expect(result.props).toEqual({ project, initialDraftRunId: "latest-run" });
+  });
+
   it.each([401, 403, 404, "non-max"])("propagates owner admission rejection %s without rendering", async (status) => {
     mocks.session.mockResolvedValue({ email: "owner@example.invalid" });
     const denied = new Error(`admission:${status}`);

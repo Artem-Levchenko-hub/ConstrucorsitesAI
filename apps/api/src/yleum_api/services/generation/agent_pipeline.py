@@ -589,8 +589,12 @@ async def run_agent_generation(
             runtime.coordinator.continuation = continuation
 
     _checkpoint_source_files: dict[str, str] = {}
+    last_preview_attempt: str | None = None
 
-    async def save_source_checkpoint(result: agent_builder.AgentResult) -> None:
+    async def save_source_checkpoint(
+        result: agent_builder.AgentResult, *, capture_view: bool = False,
+    ) -> None:
+        nonlocal last_preview_attempt
         # Keep all known paths even if the next snapshot or private save fails.
         _checkpoint_source_files.update(result.files)
         snapshot_files = getattr(runtime.handle, "snapshot_files", None)
@@ -600,7 +604,7 @@ async def run_agent_generation(
         _checkpoint_source_files.update(candidate_files)
         if candidate_files == runtime.migration_baseline:
             return
-        await persist_checkpoint(
+        digest = await persist_checkpoint(
             factory=factory, ids=ids, baseline=baseline, files=candidate_files,
             original_prompt=prompt_text,
         )
@@ -608,6 +612,11 @@ async def run_agent_generation(
             "step": result.steps, "human": "Сохраняю черновик, чтобы работа не потерялась",
             "ok": True,
         })
+        if capture_view and runtime.handle is not None and digest != last_preview_attempt:
+            from yleum_api.services.generation.draft_preview_image import capture_before_rollback
+
+            last_preview_attempt = digest
+            await capture_before_rollback(factory, ids, digest, candidate_files, runtime.handle)
 
     def make_agent_operations() -> AgentOperations:
         progress_collector = getattr(runtime, "verified_progress", None)
@@ -616,6 +625,7 @@ async def run_agent_generation(
             take_verified_progress=(progress_collector.take if progress_collector else None),
             snapshot_files=getattr(runtime.handle, "snapshot_files", None),
             checkpoint=save_source_checkpoint,
+            rollback_checkpoint=partial(save_source_checkpoint, capture_view=True),
             continuation=continuation,
             execute=bindings.execute,
             emit=_agent_emit,

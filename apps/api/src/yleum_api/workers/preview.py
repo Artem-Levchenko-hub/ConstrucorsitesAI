@@ -21,10 +21,13 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from playwright.async_api import (
+    APIRequestContext,
+    APIResponse,
     Page,
+    Route,
     async_playwright,
 )
 from playwright.async_api import (
@@ -285,6 +288,116 @@ def _live_capture_issue(
     else:
         reason = f"{type(exc).__name__}: {_redact_text(str(exc))}"
     return LiveCaptureIssue(stage=stage, reason=reason, viewport_width=viewport_width)
+
+
+def _draft_target(url: str, origin: tuple[str, str]) -> bool:
+    if "\\" in url or any(ord(char) < 32 for char in url):
+        return False
+    parsed = urlsplit(url)
+    return (
+        (parsed.scheme, parsed.netloc) == origin and parsed.username is None
+        and parsed.password is None and parsed.path != "/api/omnia/preview-session"
+    )
+
+
+async def _draft_get(
+    client: APIRequestContext, url: str, origin: tuple[str, str], accept: str,
+) -> tuple[str, APIResponse]:
+    # Automatic redirects would send a browser request before we checked its
+    # destination. Preserve the real landing URL for the application's router.
+    for _ in range(6):
+        if not _draft_target(url, origin):
+            break
+        response = await client.get(
+            url, headers={"Accept": accept}, max_redirects=0, timeout=4000,
+        )
+        if not 300 <= response.status < 400:
+            return url, response
+        location = response.headers.get("location")
+        await response.dispose()
+        if not location:
+            break
+        url = urljoin(url, location)
+    raise ValueError("Draft route redirect unavailable")
+
+
+@dataclass(frozen=True)
+class PrivateDraftCapture:
+    png: bytes
+    server_action_blocked: bool
+
+
+async def capture_private_draft_png(
+    bootstrap_url: str, product_url: str, width: int, height: int,
+) -> PrivateDraftCapture:
+    """Render one viewport through the existing owner lease without exercising product actions."""
+    target = urlsplit(product_url)
+    origin = (target.scheme, target.netloc)
+    bootstrap = urlsplit(bootstrap_url)
+    if origin != (bootstrap.scheme, bootstrap.netloc) or target.scheme != "https":
+        raise ValueError("Draft preview origin mismatch")
+
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        try:
+            context = await browser.new_context(
+                viewport={"width": width, "height": height}, reduced_motion="reduce",
+                service_workers="block", accept_downloads=False,
+            )
+            # The same signed endpoint supports JSON renewal. This seeds only
+            # this disposable cookie jar and keeps the capability out of page URLs.
+            auth = await context.request.get(
+                bootstrap_url, headers={"Accept": "application/json"},
+                max_redirects=0, timeout=4000,
+            )
+            if auth.status != 200 or (await auth.json()).get("mode") != "preview":
+                raise ValueError("Draft preview session unavailable")
+
+            landing, document = await _draft_get(context.request, product_url, origin, "text/html")
+            if not document.ok:
+                raise ValueError("Draft route unavailable")
+
+            blocked_server_action = False
+
+            async def read_only(route: Route) -> None:
+                nonlocal blocked_server_action
+                request = route.request
+                if request.method != "GET" or not _draft_target(request.url, origin):
+                    if (request.method == "POST" and "next-action" in request.headers
+                            and _draft_target(request.url, origin)):
+                        # Next uses POST even for profile reads. The viewer should
+                        # know when the isolated capture could not load this data.
+                        blocked_server_action = True
+                    await route.abort()
+                    return
+                if request.url == landing and request.is_navigation_request():
+                    await route.fulfill(response=document)
+                    return
+                try:
+                    _, resource = await _draft_get(
+                        context.request, request.url, origin, request.headers.get("accept", "*/*"),
+                    )
+                    try:
+                        await route.fulfill(response=resource)
+                    finally:
+                        await resource.dispose()
+                except Exception:
+                    await route.abort()
+
+            await context.route("**/*", read_only)
+            await context.route_web_socket("**/*", lambda socket: socket.close())
+            page = await context.new_page()
+            response = await page.goto(landing, wait_until="domcontentloaded", timeout=7000)
+            if response is None or not response.ok or not _draft_target(page.url, origin):
+                raise ValueError("Draft route unavailable")
+            await _await_content(page)
+            await _await_paint(page)
+            png = await page.screenshot(timeout=3500)
+            if not _draft_target(page.url, origin):
+                raise ValueError("Draft route changed during capture")
+            return PrivateDraftCapture(png, server_action_blocked=blocked_server_action)
+        finally:
+            await browser.close()
 
 
 async def capture_live_url_report(

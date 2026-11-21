@@ -10,6 +10,7 @@ from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, Depends, Header, Request, Response, status
+from minio.error import S3Error
 from sqlalchemy import case, func, literal, select, text
 
 from yleum_api.core.deps import CurrentUserDep, SessionDep
@@ -43,6 +44,8 @@ from yleum_api.schemas.max_studio import (
 from yleum_api.services import max_content_images, orchestrator_client, project_cell_runtime
 from yleum_api.services import repo as repo_svc
 from yleum_api.services.deploy_attestation import ensure_current_release_proof
+from yleum_api.services.generation.draft_preview_image import KEY as DRAFT_PREVIEW_IMAGE_KEY
+from yleum_api.services.generation.draft_preview_image import preview_digest, read_draft_png
 from yleum_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
 from yleum_api.services.max_catalog_delivery import deliver_catalog_now, schedule_catalog_delivery
 from yleum_api.services.max_content_delivery import (
@@ -242,6 +245,38 @@ async def create_max_preview_session(
         url=cell_preview.bootstrap_url,
         expires_at=_coerce_preview_expiry(cell_preview.expires_at),
     )
+
+
+@router.get("/{project_id}/max/runs/{run_id}/preview-image", response_class=Response)
+async def get_draft_preview_image(
+    project_id: UUID, run_id: UUID, session: SessionDep, current_user: CurrentUserDep,
+) -> Response:
+    await _owned_max_project(session, project_id, current_user.id)
+    run = await session.get(GenerationRun, run_id)
+    missing = ApiError("not_found", "Снимок черновика недоступен", 404)
+    if (run is None or run.project_id != project_id or run.user_id != current_user.id
+            or run.status not in {"failed", "cancelled"}):
+        raise missing
+    digest = preview_digest(run)
+    if digest is None:
+        raise missing
+    try:
+        data = await asyncio.to_thread(read_draft_png, project_id, run_id, digest)
+    except S3Error as exc:
+        if exc.code in {"NoSuchKey", "NoSuchBucket"}:
+            raise missing from exc
+        raise ApiError("unavailable", "Снимок черновика временно недоступен", 503) from exc
+    if data is None:
+        raise missing
+    headers = {
+        "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+    }
+    saved_view = run.agent_state[DRAFT_PREVIEW_IMAGE_KEY]
+    if isinstance(saved_view, dict) and saved_view.get("limited") is True:
+        headers["X-Yleum-Preview-Partial"] = "1"
+        headers["Access-Control-Expose-Headers"] = "X-Yleum-Preview-Partial"
+    return Response(data, media_type="image/png", headers=headers)
 
 
 @router.patch(

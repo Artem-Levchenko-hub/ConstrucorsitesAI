@@ -8,7 +8,7 @@ import { MaxLivePreview } from "./MaxLivePreview";
 import "./max-editor.css";
 
 /** Stable authenticated parent for the mutable draft and its renewable owner session. */
-export function MaxOwnerPreviewPage({ project }: { project: Project }) {
+export function MaxOwnerPreviewPage({ project, initialDraftRunId }: { project: Project; initialDraftRunId?: string }) {
   const { currentSnapshotId, versions, historyCurrent, history } = useMaxPreviewHistory(project);
   return (
     <main data-product-shell data-max-editor className="flex h-full min-h-0 flex-col bg-surface-base">
@@ -32,6 +32,7 @@ export function MaxOwnerPreviewPage({ project }: { project: Project }) {
           onSelectVersion={() => {}}
           restoringSnapshot={false}
           showOpenSeparately={false}
+          initialDraftRunId={initialDraftRunId}
         />
       </div>
     </main>
