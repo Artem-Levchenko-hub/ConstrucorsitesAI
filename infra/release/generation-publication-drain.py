@@ -300,6 +300,12 @@ _PORTABLE_QUIESCENCE_CHECKPOINT_PREVIEW_SOURCES = {
     "services.hibernate": "756fc8ee9b207839f76f9f3725cef1f37626b294cff22847f5296315ece6e31c",
     "main": "920c872b4b77b56bf0a26e0bbd1484fe8813848e50eafbc5d3924fe2923520ea",
 }
+# The isolated migration parent now records the native shell role. Its lock,
+# command identity, fencing and retirement protocol remain those of fde2.
+_PORTABLE_QUIESCENCE_CHECKPOINT_MIGRATION_SOURCES = {
+    **_PORTABLE_QUIESCENCE_CHECKPOINT_PREVIEW_SOURCES,
+    "services.checkpoint_preview_runtime": "80114bc367084efbfd8eb250efe612b33269d207538eb197c4e969b7170c5d4d",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -328,6 +334,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES,
     _PORTABLE_QUIESCENCE_DISK_TEMP_SOURCES,
     _PORTABLE_QUIESCENCE_CHECKPOINT_PREVIEW_SOURCES,
+    _PORTABLE_QUIESCENCE_CHECKPOINT_MIGRATION_SOURCES,
 )
 # Only these reviewed producers may attest a pending fast_check wrapper.
 _PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES = (
@@ -341,6 +348,7 @@ _PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES = (
     _PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES,
     _PORTABLE_QUIESCENCE_DISK_TEMP_SOURCES,
     _PORTABLE_QUIESCENCE_CHECKPOINT_PREVIEW_SOURCES,
+    _PORTABLE_QUIESCENCE_CHECKPOINT_MIGRATION_SOURCES,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.

@@ -51,7 +51,7 @@ async def _migrate_empty_database(
     manifest: MachineManifest,
     request: WorkspaceAgentExecRequest,
 ) -> None:
-    """The migration journal requires its own fenced parent, even for a script-only app."""
+    """Open a generic machine request for migrations, independently of bootstrap."""
     machine, _ = runtime.parts(state)
     mutation = LifecycleMutation(
         request.operation_id, request.fencing_epoch, runtime._request_digest(manifest, request)
@@ -59,7 +59,10 @@ async def _migrate_empty_database(
     await machine.ensure(manifest, mutation)
     result = await machine.request_start(
         mutation,
-        phase="preview-migrations",
+        # request_start persists this as the startup role. Untyped requests
+        # use the same generic role as MachineAdapter._execute. The request
+        # digest already identifies the preview-specific migration command.
+        phase="shell",
         deadline_at=datetime.now(UTC) + timedelta(seconds=request.timeout_seconds),
     )
     if result is None:

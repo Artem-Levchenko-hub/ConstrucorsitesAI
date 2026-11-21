@@ -11,7 +11,11 @@ from uuid import uuid4, uuid5
 import pytest
 from pydantic import ValidationError
 
-from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+from yleum_orchestrator.core.cell_resources import (
+    CellFenceRejected,
+    CellIdentityConflict,
+    CellResourceError,
+)
 from yleum_orchestrator.core.errors import OrchestratorError
 from yleum_orchestrator.routers.runtime import _workspace_revision
 from yleum_orchestrator.schemas.workspace import (
@@ -20,7 +24,7 @@ from yleum_orchestrator.schemas.workspace import (
 )
 from yleum_orchestrator.services import checkpoint_preview as slots
 from yleum_orchestrator.services import checkpoint_preview_runtime as driver
-from yleum_orchestrator.services.project_machine import MachineOperationResult
+from yleum_orchestrator.services.project_machine import ProjectMachine
 
 
 @pytest.fixture
@@ -242,34 +246,71 @@ def test_uses_explicit_build_but_skips_final_acceptance():
     assert driver._build_commands(SimpleNamespace(tasks=[]), {}) == []
 
 
-async def test_empty_database_migration_owns_a_separate_request_without_bootstrap(setup):
-    s = setup
-    machine = SimpleNamespace(
-        ensure=AsyncMock(),
-        request_start=AsyncMock(return_value=None),
-        request_finish=AsyncMock(side_effect=lambda _, result: result),
+@pytest.mark.parametrize("sql_succeeds", [True, False])
+async def test_empty_database_migration_journal_allows_recovery_and_replays_once(
+    setup, tmp_path, monkeypatch, sql_succeeds
+):
+    from yleum_orchestrator.core.project_machine import MachineManifest
+    from yleum_orchestrator.services import applied_migration_sources, machine_adapter
+    from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend
+    from yleum_orchestrator.services.machine_startup import require_startup_history_clear
+
+    candidate, lease = uuid4(), uuid4()
+    state = SimpleNamespace(workspace_id=candidate, active_generation_run_id=lease, operations=[])
+    manifest = MachineManifest.model_validate({
+        "version": 1,
+        "services": [{"name": "app", "argv": ["node", "app.js"]}],
+        "routes": [{"path": "/", "service": "app", "port": 3000}],
+    })
+    backend = SimpleNamespace(
+        root=tmp_path / "project-machines", workspace_id=candidate, _metadata=dict, ensure=Mock()
     )
-    runtime = SimpleNamespace(
-        parts=lambda _: (machine, None),
-        _request_digest=lambda *_: "1" * 64,
-        _project_migrations=AsyncMock(),
+    machine = ProjectMachine(backend.root, candidate, backend, lease_epoch=lambda: 1)
+    runtime = machine_adapter.MachineAdapter(setup.manager, SimpleNamespace())
+    migrations = {"drizzle/0001.sql": "select 1;"}
+    # Keep the real pre-SQL recovery guard and persisted machine journal. Only
+    # Docker/SQL and the disposable source/DB backing stores are substitutes.
+    backend.prepare_project_database_migrations = Mock(
+        side_effect=lambda _: DockerMachineBackend._require_recovery_access(backend, "exec")
     )
+    monkeypatch.setattr(runtime, "parts", lambda _: (machine, backend))
+    monkeypatch.setattr(runtime, "_migration_inventory", AsyncMock(return_value=migrations))
+    save_intent = Mock()
+    apply_sql = Mock(return_value={"contract": "project-migrations-v1"})
+    if not sql_succeeds:
+        apply_sql.side_effect = CellResourceError("isolated database rejected migration")
+    monkeypatch.setattr(applied_migration_sources, "save_migration_intent", save_intent)
+    monkeypatch.setattr(machine_adapter, "run_project_migrations", apply_sql)
     req = WorkspaceAgentExecRequest(
-        generation_run_id=uuid4(),
-        operation_id=uuid4(),
+        generation_run_id=lease,
+        operation_id=uuid5(lease, "migrations"),
         fencing_epoch=1,
         expected_revision="2" * 64,
         cmd="omnia:owner-preview-migrations",
     )
-    await driver._migrate_empty_database(runtime, s.state, SimpleNamespace(tasks=[]), req)
-    assert machine.request_start.await_args.args[0].operation_id == req.operation_id
-    runtime._project_migrations.assert_awaited_once_with(s.state, req, verify_applied=False)
-    assert machine.request_finish.await_args.args[1].exit_code == 0
-    machine.request_start.return_value = MachineOperationResult(
-        operation_id=str(req.operation_id), state="completed", exit_code=0
-    )
-    await driver._migrate_empty_database(runtime, s.state, SimpleNamespace(tasks=[]), req)
-    assert runtime._project_migrations.await_count == 1
+    for attempt in range(2):
+        if sql_succeeds:
+            await driver._migrate_empty_database(runtime, state, manifest, req)
+        else:
+            reason = "database rejected" if attempt == 0 else "isolated migration failed"
+            with pytest.raises(CellResourceError, match=reason):
+                await driver._migrate_empty_database(runtime, state, manifest, req)
+        require_startup_history_clear(tmp_path / "project-cells", candidate)
+    row = machine.state()["operations"][str(req.operation_id)]
+    assert row["startup_role"] == "shell" and row["kind"] == "request"
+    assert row["result"]["exit_code"] == (0 if sql_succeeds else 1)
+    receipt = runtime.migration_receipt(state, req.operation_id)
+    if sql_succeeds:
+        assert receipt["workspace_id"] == str(candidate)
+        assert receipt["source_revision"] == req.expected_revision
+    else:
+        assert receipt is None
+    with pytest.raises(CellFenceRejected, match="replay envelope mismatch"):
+        await driver._migrate_empty_database(
+            runtime, state, manifest, req.model_copy(update={"expected_revision": "a" * 64})
+        )
+    save_intent.assert_called_once_with(backend, migrations)
+    apply_sql.assert_called_once_with(backend, migrations, verify_only=False, verify_applied=False)
 
 
 def test_signed_session_uses_real_product_id_in_private_host(setup):

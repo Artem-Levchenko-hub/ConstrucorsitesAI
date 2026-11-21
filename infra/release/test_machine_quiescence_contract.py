@@ -181,6 +181,7 @@ class PendingFastCheckTests(unittest.TestCase):
             self.checker._PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES,
             self.checker._PORTABLE_QUIESCENCE_DISK_TEMP_SOURCES,
             self.checker._PORTABLE_QUIESCENCE_CHECKPOINT_PREVIEW_SOURCES,
+            self.checker._PORTABLE_QUIESCENCE_CHECKPOINT_MIGRATION_SOURCES,
         ):
             self.assertEqual(
                 self.checker._pending_portable_commands(self.machine, sources=sources),
@@ -399,6 +400,18 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
         )
         self.checker._require_reviewed_portable_sources(self.connect)
         self.checker._require_reviewed_portable_sources(self.owner)
+
+    def test_checkpoint_migration_keeps_the_complete_fde2_predecessor(self):
+        previous = self.checker._PORTABLE_QUIESCENCE_CHECKPOINT_PREVIEW_SOURCES
+        current = self.checker._PORTABLE_QUIESCENCE_CHECKPOINT_MIGRATION_SOURCES
+        runtime = "services.checkpoint_preview_runtime"
+        self.assertEqual(previous[runtime], "f012f2517c64a9449a5ef785ba701cf7855e20f42f1fe30f8a280b7131bf4b17")
+        self.assertEqual(current.keys(), previous.keys())
+        self.assertEqual({name for name in previous if current[name] != previous[name]}, {runtime})
+        for cohort in (previous, current):
+            self.checker._require_reviewed_portable_sources(cohort)
+        with self.assertRaisesRegex(self.checker.PhysicalDrainError, "quiescence_unsupported_source"):
+            self.checker._require_reviewed_portable_sources({**current, runtime: "0" * 64})
 
     def test_disk_temp_successor_changes_only_the_reviewed_backend_and_keeps_predecessor(self):
         previous = self.checker._PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES
@@ -696,7 +709,7 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             (Path(__file__).parent / "fixtures/source-guard-lease-quiescence-sources.json")
             .read_text()
         )
-        current = self.checker._PORTABLE_QUIESCENCE_CHECKPOINT_PREVIEW_SOURCES
+        current = self.checker._PORTABLE_QUIESCENCE_CHECKPOINT_MIGRATION_SOURCES
         self.checker._require_reviewed_portable_sources(previous)
         self.checker._require_reviewed_portable_sources(previous_lease)
         baseline = json.loads(
