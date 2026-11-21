@@ -77,8 +77,10 @@ def origin_site(origin_app, site, monkeypatch):
     async def sessions():
         yield session
 
-    async def start_runtime(actual_session, actual_project, *, owner):
+    async def start_runtime(actual_session, actual_project, *, owner, working_run_id=None):
         assert actual_session is session and actual_project is project and owner is user
+        assert working_run_id is None or working_run_id == run.id
+        effects.working_run_id = working_run_id
         effects.runtime_state = "running"
         return RuntimeStatus(state="running", dev_url="https://qa.dev.example.test")
 
@@ -124,6 +126,19 @@ def action_path(state, action):
     if action == "logout":
         return "/api/auth/logout"
     return f"/api/projects/{state.project.id}/{action}"
+
+
+async def test_trusted_origin_passes_requested_working_run_to_owner_wake(origin_site):
+    state = origin_site
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=state.app), base_url=TRUSTED_ORIGIN,
+    ) as client:
+        response = await client.post(
+            action_path(state, "runtime/start"), params={"working_run_id": str(state.run.id)},
+            headers={"Cookie": f"omnia_session={state.token}", "Origin": TRUSTED_ORIGIN},
+        )
+    assert response.status_code == 200, response.text
+    assert state.effects.working_run_id == state.run.id
 
 
 def observed_effects(state):
