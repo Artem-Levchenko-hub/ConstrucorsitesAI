@@ -77,9 +77,9 @@ PROVIDERS: tuple[IntegrationProvider, ...] = (
         ),
         available=False,
         requirement="Текстовый ИИ теперь работает через встроенный LLMGW.",
-        docs_url="https://docs.aitunnel.ru/",
+        docs_url="https://aitunnel.ru/docs",
         recommended=False,
-        docs_pages=("/api/authentication", "/api/reference"),
+        docs_pages=("/docs/keys", "/docs/api-reference"),
     ),
     IntegrationProvider(
         key="yookassa",

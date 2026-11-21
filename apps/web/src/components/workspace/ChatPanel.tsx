@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import {
   connectAppIntegration,
   getIntegrationCatalog,
+  setNutritionAiKey,
 } from "@/lib/api/app-integrations";
 import { getLatestGeneration, listMessages } from "@/lib/api/messages";
 import { getMaxProjectConfig } from "@/lib/api/max-studio";
@@ -184,7 +185,8 @@ export function ChatPanel({
         .filter((value): value is string => typeof value === "string")
         .join("\n");
       const credentialSource = [text, selectionText].filter(Boolean).join("\n");
-      if (!containsChatSecret(credentialSource)) {
+      let resolution = resolveChatCredential(credentialSource, [], text);
+      if (resolution.kind === "none") {
         if (quota.limited) authoredPending.current = true;
         try { return await submit(text, modelId, selections, opts); }
         finally { authoredPending.current = false; }
@@ -196,16 +198,14 @@ export function ChatPanel({
 
       credentialSubmitPending.current = true;
       try {
-        const catalog = await qc.fetchQuery({
-          queryKey: ["app-integrations", projectId],
-          queryFn: () => getIntegrationCatalog(projectId),
-          staleTime: 60_000,
-        });
-        const resolution = resolveChatCredential(
-          credentialSource,
-          catalog.providers,
-          text,
-        );
+        if (resolution.kind === "needs_provider") {
+          const catalog = await qc.fetchQuery({
+            queryKey: ["app-integrations", projectId],
+            queryFn: () => getIntegrationCatalog(projectId),
+            staleTime: 60_000,
+          });
+          resolution = resolveChatCredential(credentialSource, catalog.providers, text);
+        }
         if (resolution.kind === "needs_provider") {
           toast.error("Не понял, к какому провайдеру относится ключ", {
             description:
@@ -222,29 +222,28 @@ export function ChatPanel({
           });
           return false;
         }
-        if (resolution.kind !== "match") return false;
-
-        const { provider, secretField, secret, safePrompt } = resolution.value;
-        await connectAppIntegration(projectId, provider.key, {
-          [secretField.key]: secret,
-        });
-        await qc.invalidateQueries({
-          queryKey: ["app-integrations", projectId],
-        });
-        toast.success(`${provider.name} подключён`, {
-          description:
-            "Ключ проверен и зашифрован. Агент получил только безопасную ссылку на интеграцию.",
-        });
+        if (resolution.kind === "none") return false;
+        const { secret, safePrompt } = resolution.value;
+        if (resolution.kind === "aitunnel_key") {
+          const { enabled } = await setNutritionAiKey(projectId, secret);
+          if (!enabled) throw new Error("Не удалось сохранить ключ AITunnel");
+          toast.success("Ключ AITunnel сохранён");
+        } else {
+          const { provider, secretField } = resolution.value;
+          await connectAppIntegration(projectId, provider.key, {
+            [secretField.key]: secret,
+          });
+          toast.success(`${provider.name} подключён`, {
+            description:
+              "Ключ проверен и зашифрован. Агент получил только безопасную ссылку на интеграцию.",
+          });
+        }
+        void qc.invalidateQueries({ queryKey: ["app-integrations", projectId] });
         const safeSelections = selections.map((selection) =>
           Object.fromEntries(
             Object.entries(selection).map(([key, value]) => [
               key,
-              typeof value === "string"
-                ? redactChatSecrets(value).replaceAll(
-                    secret,
-                    "[ключ сохранён в Yleum]",
-                  )
-                : value,
+              typeof value === "string" ? redactChatSecrets(value, secret) : value,
             ]),
           ) as SelectedElement,
         );
@@ -253,7 +252,7 @@ export function ChatPanel({
         toast.error("Ключ не подключён", {
           description:
             error instanceof Error
-              ? error.message
+              ? redactChatSecrets(error.message)
               : "Проверьте данные и повторите отправку.",
         });
         return false;

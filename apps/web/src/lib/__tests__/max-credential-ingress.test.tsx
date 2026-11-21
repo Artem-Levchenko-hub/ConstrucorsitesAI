@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ChatPanel } from "@/components/workspace/ChatPanel";
 import type { IntegrationCatalog, Message } from "@/lib/api/types";
 
-const mocks = vi.hoisted(() => ({ connect: vi.fn(), submit: vi.fn(), history: vi.fn() }));
+const mocks = vi.hoisted(() => ({ catalog: vi.fn(), connect: vi.fn(), submit: vi.fn(), history: vi.fn() }));
 const catalog: IntegrationCatalog = {
   providers: [{
     key: "aitunnel", name: "AITUNNEL", category: "ai", description: "ИИ", capabilities: [],
@@ -16,8 +16,9 @@ const catalog: IntegrationCatalog = {
   connections: [],
   recommended_pack: { key: "qa", title: "", description: "", provider_keys: [], bound_count: 0, reusable_count: 0 },
 };
-vi.mock("@/lib/api/app-integrations", () => ({
-  getIntegrationCatalog: async () => catalog, connectAppIntegration: mocks.connect,
+vi.mock("@/lib/api/app-integrations", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/api/app-integrations")>(),
+  getIntegrationCatalog: mocks.catalog, connectAppIntegration: mocks.connect,
 }));
 vi.mock("@/hooks/usePromptStream", () => ({ usePromptStream: () => ({
   submit: mocks.submit, pendingPrompt: null,
@@ -38,6 +39,7 @@ let client: QueryClient, root: Root, host: HTMLDivElement;
 
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.catalog.mockResolvedValue(catalog);
   mocks.connect.mockResolvedValue(undefined);
   mocks.submit.mockResolvedValue(true);
   mocks.history.mockResolvedValue([]);
@@ -62,10 +64,10 @@ async function render(qa = false) {
 const button = (name: string) => [...host.querySelectorAll("button")].find(candidate =>
   candidate.textContent?.trim() === name || candidate.getAttribute("aria-label") === name);
 
-async function enterPrompt(input: HTMLInputElement | HTMLTextAreaElement) {
+async function enterPrompt(input: HTMLInputElement | HTMLTextAreaElement, text = prompt) {
   await act(async () => {
     const prototype = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(input, prompt);
+    Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(input, text);
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
@@ -76,9 +78,9 @@ async function click(name: string) {
   await act(async () => send!.click());
 }
 
-async function sendFromComposer() {
+async function sendFromComposer(text = prompt) {
   const input = host.querySelector("textarea")!;
-  await enterPrompt(input);
+  await enterPrompt(input, text);
   await click("Отправить");
   return input;
 }
@@ -114,6 +116,51 @@ it("keeps the credential draft and never submits it if verification fails", asyn
   expect(mocks.connect).toHaveBeenCalledOnce();
   expect(mocks.submit).not.toHaveBeenCalled();
   expect(input.value === prompt).toBe(true);
+});
+
+it("accepts a chat key for the nutritionist without opening the integration catalog", async () => {
+  const secret = `sk-aitunnel-${"x".repeat(24)}`;
+  const text = `Добавь ИИ-нутрициолога. AITunnel — ключ ${secret}.`;
+  mocks.catalog.mockRejectedValue(new Error("Catalog unavailable"));
+  let confirmKey!: (response: Response) => void;
+  const fetchKey = vi.fn(() => new Promise<Response>(resolve => { confirmKey = resolve; }));
+  vi.stubGlobal("fetch", fetchKey);
+
+  await render();
+  const input = await sendFromComposer(text);
+  expect(fetchKey).toHaveBeenCalledExactlyOnceWith("/api/projects/p/nutrition-ai", expect.objectContaining({
+    method: "PUT",
+    credentials: "include",
+    body: JSON.stringify({ api_key: secret }),
+  }));
+  expect(mocks.catalog).not.toHaveBeenCalled();
+  expect(mocks.connect).not.toHaveBeenCalled();
+  expect(mocks.submit).not.toHaveBeenCalled();
+
+  await act(async () => confirmKey(Response.json({ enabled: true })));
+  expect(mocks.submit).toHaveBeenCalledOnce();
+  const [safePrompt] = mocks.submit.mock.calls[0];
+  expect(safePrompt).toContain("Добавь ИИ-нутрициолога");
+  expect(safePrompt).toContain("provider_docs");
+  expect(safePrompt).not.toContain(secret);
+  expect(input.value).toBe("");
+});
+
+it("keeps the AITunnel task as a draft when the key is rejected", async () => {
+  const secret = `sk-aitunnel-${"x".repeat(24)}`;
+  const text = `Добавь ИИ-нутрициолога. AITunnel — ключ ${secret}.`;
+  const fetchKey = vi.fn().mockResolvedValue(Response.json({
+    error: { code: "integration_credentials_invalid", message: "AITunnel отклонил ключ" },
+  }, { status: 422 }));
+  vi.stubGlobal("fetch", fetchKey);
+
+  await render();
+  const input = await sendFromComposer(text);
+  expect(fetchKey).toHaveBeenCalledOnce();
+  expect(mocks.catalog).not.toHaveBeenCalled();
+  expect(mocks.connect).not.toHaveBeenCalled();
+  expect(mocks.submit).not.toHaveBeenCalled();
+  expect(input.value).toBe(text);
 });
 
 it("also verifies and redacts a credential from the saved starter before replay", async () => {

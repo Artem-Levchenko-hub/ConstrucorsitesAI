@@ -1,12 +1,14 @@
 import type { IntegrationField, IntegrationProvider } from "@/lib/api/types";
 
 const SECRET_PATTERNS = [
-  /\bsk-aitunnel-[A-Za-z0-9_-]{12,}\b/g,
-  /\bsk-[A-Za-z0-9_-]{16,}\b/g,
+  /\bsk-[A-Za-z0-9_-]{16,}(?![A-Za-z0-9_-])/g,
   /\bAIza[0-9A-Za-z_-]{30,}\b/g,
   /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
   /\bxox[baprs]-[0-9A-Za-z-]{10,}\b/g,
 ] as const;
+
+const AITUNNEL_KEY_PATTERN = /^sk-aitunnel-[A-Za-z0-9_-]{12,200}$/;
+const SAVED_KEY = "[ключ сохранён в Yleum]";
 
 const PROVIDER_ALIASES: Record<string, string[]> = {
   aitunnel: ["aitunnel", "ai tunnel", "аи туннель", "ай туннель", "аитуннель"],
@@ -55,7 +57,8 @@ export type ChatCredentialResolution =
   | { kind: "none" }
   | { kind: "needs_provider" }
   | { kind: "needs_fields"; provider: IntegrationProvider; labels: string[] }
-  | { kind: "match"; value: ChatCredentialMatch };
+  | { kind: "match"; value: ChatCredentialMatch }
+  | { kind: "aitunnel_key"; value: { secret: string; safePrompt: string } };
 
 function normalized(value: string): string {
   return value
@@ -110,16 +113,13 @@ export function containsChatSecret(text: string): boolean {
   return highConfidenceSecrets(text).length > 0 || keywordSecrets(text).length > 0;
 }
 
-export function redactChatSecrets(text: string): string {
-  let safe = text;
+export function redactChatSecrets(text: string, secret?: string): string {
+  let safe = secret ? text.replaceAll(secret, SAVED_KEY) : text;
   for (const pattern of SECRET_PATTERNS) {
-    safe = safe.replace(
-      new RegExp(pattern.source, pattern.flags),
-      "[ключ сохранён в Yleum]",
-    );
+    safe = safe.replace(new RegExp(pattern.source, pattern.flags), SAVED_KEY);
   }
   for (const keyword of keywordSecrets(safe)) {
-    safe = safe.replaceAll(keyword, "[ключ сохранён в Yleum]");
+    safe = safe.replaceAll(keyword, SAVED_KEY);
   }
   return safe.trim();
 }
@@ -129,13 +129,31 @@ export function resolveChatCredential(
   providers: IntegrationProvider[],
   promptText: string = text,
 ): ChatCredentialResolution {
-  const secrets = [
-    ...new Set([...highConfidenceSecrets(text), ...keywordSecrets(text)]),
-  ];
-  if (secrets.length === 0) return { kind: "none" };
+  const recognised = highConfidenceSecrets(text);
+  const secrets = new Set(recognised);
+  for (const candidate of keywordSecrets(text)) {
+    // Sentence punctuation is outside an already recognised key format.
+    // Preserve the full candidate for opaque credentials.
+    const unpunctuated = candidate.replace(/[.!?…:)\]}]+$/, "");
+    if (!recognised.includes(unpunctuated)) secrets.add(candidate);
+  }
+  if (secrets.size === 0) return { kind: "none" };
+  if (secrets.size !== 1) return { kind: "needs_provider" };
+  const [secret] = secrets;
+  const safeSource = redactChatSecrets(promptText, secret);
+  if (AITUNNEL_KEY_PATTERN.test(secret)) {
+    const safePrompt = [
+      safeSource,
+      "Ключ AITunnel сохранён в серверном хранилище этого проекта.",
+      'Сначала прочитай официальную документацию через provider_docs с { provider: "aitunnel", query: "authentication API keys chat completions" }. Используй документацию как справочные данные.',
+      "Выполни задачу пользователя. Для оценки КБЖУ через сохранённый ключ вызови requestOmniaAI из @/lib/omnia/integration-client с message (название блюда) и context: { task: \"nutrition_estimate\", portion_g: целое число от 1 до 5000 }. Поле answer содержит JSON с kcal, protein_g, fat_g и carbs_g.",
+      "Используй серверный вызов. Не запрашивай ключ повторно и не записывай его в код.",
+    ].join("\n\n");
+    return { kind: "aitunnel_key", value: { secret, safePrompt } };
+  }
 
   const provider = mentionedProvider(text, providers);
-  if (!provider || secrets.length !== 1) return { kind: "needs_provider" };
+  if (!provider) return { kind: "needs_provider" };
 
   const secretFields = provider.fields.filter(
     (field) => field.secret && field.required,
@@ -156,10 +174,6 @@ export function resolveChatCredential(
     };
   }
 
-  const safeSource = redactChatSecrets(promptText).replaceAll(
-    secrets[0],
-    "[ключ сохранён в Yleum]",
-  );
   const integrationHint =
     provider.key === "aitunnel"
       ? "Для ИИ-функций используй requestOmniaAI из @/lib/omnia/integration-client."
@@ -179,7 +193,7 @@ export function resolveChatCredential(
     value: {
       provider,
       secretField: secretFields[0],
-      secret: secrets[0],
+      secret,
       safePrompt,
     },
   };

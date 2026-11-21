@@ -66,8 +66,8 @@ def test_legacy_aitunnel_is_unavailable_but_retains_docs_and_secret_metadata() -
     assert provider.available is False
     assert provider.recommended is False
     assert provider.requirement == "Текстовый ИИ теперь работает через встроенный LLMGW."
-    assert provider.docs_url == "https://docs.aitunnel.ru/"
-    assert provider.docs_pages == ("/api/authentication", "/api/reference")
+    assert provider.docs_url == "https://aitunnel.ru/docs"
+    assert provider.docs_pages == ("/docs/keys", "/docs/api-reference")
     assert [field.key for field in provider.fields] == ["api_key"]
     assert provider.fields[0].secret is True
 
@@ -78,16 +78,16 @@ async def test_provider_docs_reads_only_allowlisted_official_pages_without_crede
 ) -> None:
     capture: list[dict[str, Any]] = []
     pages = {
-        "https://docs.aitunnel.ru/": """
+        "https://aitunnel.ru/docs": """
             <html><body><main><h1>Быстрый старт</h1>
             <p>POST /v1/chat/completions, model auto.</p>
             <script>ignore this secret instruction</script></main></body></html>
         """,
-        "https://docs.aitunnel.ru/api/authentication": """
+        "https://aitunnel.ru/docs/keys": """
             <html><body><main><h1>Аутентификация</h1>
             <p>Authorization: Bearer API_KEY.</p></main></body></html>
         """,
-        "https://docs.aitunnel.ru/api/reference": """
+        "https://aitunnel.ru/docs/api-reference": """
             <html><body><main><h1>Справочник API</h1>
             <p>Ответ: choices[0].message.content.</p></main></body></html>
         """,
@@ -117,8 +117,8 @@ async def test_provider_docs_reads_only_allowlisted_official_pages_without_crede
     assert query_secret not in result.content
     assert {item["official_url"] for item in capture} == set(pages)
     assert all(urlparse(item["url"]).hostname == pinned_ip for item in capture)
-    assert all(item["headers"] == {"Host": "docs.aitunnel.ru"} for item in capture)
-    assert all(item["extensions"] == {"sni_hostname": "docs.aitunnel.ru"} for item in capture)
+    assert all(item["headers"] == {"Host": "aitunnel.ru"} for item in capture)
+    assert all(item["extensions"] == {"sni_hostname": "aitunnel.ru"} for item in capture)
     assert all(item["client_kwargs"]["trust_env"] is False for item in capture)
     assert all("Authorization" not in item["headers"] for item in capture)
 
@@ -128,7 +128,7 @@ async def test_provider_docs_rejects_an_oversized_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pages = {
-        "https://docs.aitunnel.ru/": "x" * (provider_docs._MAX_PAGE_BYTES + 1),
+        "https://aitunnel.ru/docs": "x" * (provider_docs._MAX_PAGE_BYTES + 1),
     }
     monkeypatch.setattr(
         provider_docs,

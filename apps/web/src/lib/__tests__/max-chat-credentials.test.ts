@@ -88,20 +88,36 @@ describe("MAX chat credential intake", () => {
     expect(redactChatSecrets(prompt)).not.toContain(secret);
   });
 
-  it("extracts AITUNNEL key and creates a secretless docs-first agent prompt", () => {
-    const secret = `sk-aitunnel-${"a".repeat(24)}`;
+  it.each(["", ".", "!", ")"])("accepts an AITunnel key outside the catalog with suffix %j", (suffix) => {
+    const secret = `sk-aitunnel-${"a".repeat(24)}-`;
     const result = resolveChatCredential(
-      `Подключи AITUNNEL, ключ ${secret}, и сделай AI-тренера`,
-      [aitunnel],
+      `Добавь ИИ-нутрициолога. AITunnel — ключ ${secret}${suffix}`,
+      [],
     );
 
-    expect(result.kind).toBe("match");
-    if (result.kind !== "match") return;
+    expect(result.kind).toBe("aitunnel_key");
+    if (result.kind !== "aitunnel_key") return;
     expect(result.value.secret).toBe(secret);
     expect(result.value.safePrompt).not.toContain(secret);
     expect(result.value.safePrompt).toContain("provider_docs");
     expect(result.value.safePrompt).toContain('provider: "aitunnel"');
+    expect(result.value.safePrompt).toContain("nutrition_estimate");
     expect(result.value.safePrompt).toContain("requestOmniaAI");
+  });
+
+  it("does not route a message with two different credentials to AITunnel", () => {
+    const secret = `sk-aitunnel-${"a".repeat(24)}`;
+    const otherSecret = `sk-${"b".repeat(24)}`;
+    expect(resolveChatCredential(`AITunnel — ключ ${secret}. Другой ключ ${otherSecret}`, [])).toEqual({
+      kind: "needs_provider",
+    });
+  });
+
+  it("does not merge opaque tokens that differ by punctuation", () => {
+    const secret = "synthetic_opaque_credential_123456";
+    expect(resolveChatCredential(`AITUNNEL token: ${secret}; token: ${secret}.`, [aitunnel])).toEqual({
+      kind: "needs_provider",
+    });
   });
 
   it("does not send a key when provider is absent or ambiguous", () => {

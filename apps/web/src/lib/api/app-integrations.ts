@@ -26,6 +26,17 @@ export function connectAppIntegration(
   });
 }
 
+export function setNutritionAiKey(
+  projectId: Uuid,
+  apiKey: string,
+): Promise<{ enabled: boolean }> {
+  return apiFetch(`/api/projects/${projectId}/nutrition-ai`, {
+    method: "PUT",
+    json: { api_key: apiKey },
+    timeoutMs: 30_000,
+  });
+}
+
 export type MoyskladInstallInfo = {
   available: boolean;
   install_url: string | null;
