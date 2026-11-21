@@ -248,18 +248,17 @@ export function MaxLivePreview({
     && currentRun && currentRun.response_mode !== "clarify"
     ? currentRun : null;
   const hasSavedVersion = Boolean(acceptedSnapshotId || builtSnapshots.size);
-  // Some older histories expose the assistant turn but no GenerationRun.
-  // Their current, already-running workspace can be viewed without a wake.
-  const legacyPhase = terminalMessageStatus ?? (activeVersion || lastMessage?.generation_status === "running" ? "running" : null);
+  // Older histories may expose only an assistant turn. An active workspace
+  // can be observed, but a stopped attempt needs a run ID to identify its code.
   const legacyAttempt = !viewingHistorical && !initialPreviewMetadataPending && !hasSavedVersion
-    && latestGeneration.data === null && historyCurrent && !historyError && !hasOlder && legacyPhase
-    && !lastMessage?.id.startsWith("__opt_") && (firstBuildTerminal || firstBuildWaiting)
-    ? { id: null, status: activeVersion ? "running" as const : legacyPhase } : null;
+    && latestGeneration.data === null && historyCurrent && !historyError && !hasOlder && firstBuildWaiting
+    && lastMessage?.generation_status === "running" && !lastMessage.id.startsWith("__opt_")
+    ? { id: null, status: "running" as const } : null;
   const workingRun = candidate && (!hasSavedVersion || selectedAttempt === candidate.id) ? candidate : legacyAttempt;
   const draft = useMaxPreviewDraft(workingRun ? {
     projectId: project.id, runId: workingRun.id, messageId: candidate?.assistant_message_id ?? lastMessage?.id ?? null,
     phase: workingRun.status,
-    canWake: Boolean(workingRun.id) && !isGenerationActive(workingRun) && !activeVersion && !isChatMessageStreaming(lastMessage),
+    canOpenSavedDraft: Boolean(workingRun.id) && !isGenerationActive(workingRun) && !activeVersion && !isChatMessageStreaming(lastMessage),
   } : null);
   // Never sync the managed kit into an unaccepted working tree. Its separate
   // owner session can still serve an available screen during generation.
@@ -518,24 +517,26 @@ export function MaxLivePreview({
   const displayPreviewUrl = workingRun ? (draft.source?.kind === "live" ? draft.source.url : null)
     : firstBuildHidden ? null : previewUrl ?? lastWorking?.url ?? null;
   const displayDocumentKey = workingRun ? workingRun.id : previewUrl ? previewDocumentKey : lastWorking?.documentKey;
+  const savedDraftRunId = workingRun?.id && !isGenerationActive(workingRun) ? workingRun.id : undefined;
   useEffect(() => {
     if (!displayPreviewUrl || viewingHistorical) return;
     return installPreviewSessionRenewal({
       window,
       origin: new URL(displayPreviewUrl).origin,
       frame: () => previewFrame.current?.contentWindow,
-      mint: () => createMaxPreviewSession(project.id),
+      mint: () => createMaxPreviewSession(project.id, savedDraftRunId),
     });
-  }, [project.id, activity, displayPreviewUrl, viewingHistorical]);
+  }, [project.id, activity, displayPreviewUrl, savedDraftRunId, viewingHistorical]);
 
   const connected = Boolean(displayPreviewUrl);
+  const openingDraft = draft.isFetching || draft.preparing;
   const currentPreviewReady = !previewDisabled && !snapshotsLoading && runtimeRunning &&
     !runtime.isFetching && !start.isPending && managedKit.isSuccess && !managedKit.isFetching &&
     previewSession.isSuccess && !previewSession.isFetching && Boolean(previewUrl);
   const sourceLabel = workingRun
-    ? draftPreviewLabel(draft.source, draft.triedWorkspace, draft.isFetching, Boolean(firstBuildTerminal))
+    ? draftPreviewLabel(draft.source, openingDraft, Boolean(firstBuildTerminal))
     : acceptanceLabel;
-  const connectionLabel = connected ? "Подключено" : draft.source?.kind === "capture" ? "Сохранённый кадр" : firstBuildTerminal ? "На паузе"
+  const connectionLabel = connected ? "Подключено" : draft.source?.kind === "capture" ? "Сохранённый кадр" : workingRun && openingDraft ? "Подключается" : firstBuildTerminal ? "На паузе"
     : firstBuildState === "generating" ? "Собирается"
       : firstBuildState === "unconfirmed" ? "Подтверждается" : "Запускается";
   // A cold provision can outlive an earlier start request. Once polling sees
@@ -573,13 +574,13 @@ export function MaxLivePreview({
   const showPreviewActions = viewingHistorical || showOpenSeparately;
 
   function openSeparatePreview() {
-    if (!draft.source && (!currentPreviewReady || activityBlocked())) return;
+    if (draft.source?.kind !== "live" && (!currentPreviewReady || activityBlocked())) return;
     const query = workingRun?.id && hasSavedVersion ? `?attempt=${encodeURIComponent(workingRun.id)}` : "";
     window.open(`/max/${project.id}/preview${query}`, "_blank", "noopener,noreferrer");
   }
 
   function retryPreview() {
-    if (workingRun) { void draft.refetch(); return; }
+    if (workingRun) { draft.retryWorkspace(); return; }
     recoverPreview.mutate();
   }
 
@@ -608,7 +609,7 @@ export function MaxLivePreview({
       <div className="flex min-h-11 shrink-0 items-center justify-between gap-2 px-3 sm:px-4" data-testid="max-preview-header">
         <div className="min-w-0 flex-1">
           <p className="omnia-kicker text-fg-tertiary">
-            {viewingHistorical ? "История версий" : "Живое превью"}
+            {viewingHistorical ? "История версий" : draft.source?.kind === "capture" ? "Снимок черновика" : "Живое превью"}
           </p>
           {MAX_CUSTOMER_VERSIONING && displayedVersion ? (
             <div className="max-version-header-summary">
@@ -812,7 +813,9 @@ export function MaxLivePreview({
                     </>
                   ) : (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-raised px-10 text-center">
-                      {firstBuildTerminal ? (
+                      {savedDraftRunId && openingDraft ? (
+                        <Loader2 className="size-7 animate-spin text-accent" />
+                      ) : firstBuildTerminal ? (
                         <Pause className="size-7 text-fg-secondary" />
                       ) : firstBuildWaiting ? (
                         <Loader2 className="size-7 animate-spin text-accent" />
@@ -824,8 +827,8 @@ export function MaxLivePreview({
                         <Play className="size-7 text-accent" />
                       )}
                       <p className="mt-5 text-[15px] font-medium text-fg-primary">
-                        {workingRun && !draft.isFetching && !draft.source && !isGenerationActive(workingRun)
-                          ? "Рабочее превью пока недоступно"
+                        {savedDraftRunId
+                          ? openingDraft ? "Открываем черновик" : "Рабочее превью пока недоступно"
                           : firstBuildTerminal
                           ? "Подготовка на паузе"
                           : firstBuildState === "generating"
@@ -839,8 +842,8 @@ export function MaxLivePreview({
                             : preparationLabel}
                       </p>
                       <p className="mt-2 text-[12px] leading-5 text-fg-tertiary">
-                        {workingRun && !draft.isFetching && !draft.source && !isGenerationActive(workingRun)
-                          ? "Обновите превью, чтобы снова проверить рабочую среду."
+                        {savedDraftRunId
+                          ? openingDraft ? "Готовим тестовую копию приложения." : "Можно ещё раз открыть рабочее превью."
                           : firstBuildTerminal
                           ? "Продолжите сборку в чате — готовая версия откроется здесь."
                           : firstBuildState === "generating"
@@ -893,9 +896,12 @@ export function MaxLivePreview({
             </div>
           </div>}
         </div>
-        {draft.source?.kind === "capture" && <button type="button" onClick={draft.tryWorkspace}
-          disabled={draft.isFetching} className="min-h-9 shrink-0 px-3 text-xs font-medium text-accent"
-          data-testid="max-open-working-environment">Открыть рабочую среду</button>}
+        {draft.captureAvailable && <button type="button" disabled={draft.isFetching}
+          onClick={draft.source?.kind === "capture" ? draft.retryWorkspace : draft.showCapture}
+          className="min-h-9 shrink-0 px-3 text-xs font-medium text-accent"
+          data-testid="max-toggle-draft-screenshot">
+          {draft.source?.kind === "capture" ? "Открыть рабочее превью" : "Посмотреть снимок экрана"}
+        </button>}
         {showPreviewActions && <div className="mt-1 flex min-h-9 shrink-0 items-center justify-center text-center" data-testid="max-preview-actions">
           {viewingHistorical ? (
             <div className="flex min-h-11 flex-wrap items-center justify-center gap-1.5 px-2">
@@ -931,10 +937,10 @@ export function MaxLivePreview({
             <button
               type="button"
               onClick={openSeparatePreview}
-              disabled={!currentPreviewReady && !draft.source}
+              disabled={!currentPreviewReady && draft.source?.kind !== "live"}
               className="inline-flex min-h-9 items-center gap-1.5 text-[11px] font-medium text-fg-tertiary transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
               data-testid="max-open-preview-separate"
-              title={currentPreviewReady || draft.source ? undefined : "Сначала дождитесь запуска предпросмотра"}
+              title={currentPreviewReady || draft.source?.kind === "live" ? undefined : "Сначала дождитесь запуска предпросмотра"}
             >
               <ExternalLink className="size-3" />
               Открыть отдельно

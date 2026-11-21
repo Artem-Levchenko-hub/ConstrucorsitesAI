@@ -2827,6 +2827,30 @@ async def project_cell_create_owner_preview_session(
     return response
 
 
+async def project_cell_checkpoint_preview(
+    workspace_id: UUID, *, project_id: UUID, owner_id: UUID, run_id: UUID,
+    checkpoint_digest: str, files: dict[str, str] | None = None,
+) -> ProjectCellPreviewSession:
+    """Resolve only the private sandbox derived from this workspace and exact checkpoint."""
+    from yleum_api.services.promotion_permit import workspace_revision_digest
+
+    _validate_request_digest(checkpoint_digest)
+    request: dict[str, Any] = {
+        "project_id": str(project_id), "owner_id": str(owner_id),
+        "run_id": str(run_id), "checkpoint_digest": checkpoint_digest,
+    }
+    if files is not None:
+        request.update(files=files, source_revision=workspace_revision_digest(files))
+    payload = await _request(
+        "POST", f"/internal/workspaces/{workspace_id}/draft/checkpoint-preview", json=request,
+    )
+    response = ProjectCellPreviewSession.from_json(payload)
+    expected_id = uuid5(workspace_id, f"owner-draft-preview:{run_id}:{checkpoint_digest}")
+    if response.workspace_id != expected_id:
+        raise OrchestratorUnavailable("Orchestrator returned a different checkpoint preview")
+    return response
+
+
 async def project_cell_start_owner_preview(
     workspace_id: UUID,
     *,

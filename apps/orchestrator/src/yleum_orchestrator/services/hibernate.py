@@ -315,6 +315,9 @@ async def _sweep_loop() -> None:
         try:
             await asyncio.to_thread(readers.require_if_configured)
             await _sweep_once()
+            from yleum_orchestrator.services.checkpoint_preview import sweep_previews
+
+            await sweep_previews()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # never let a bug kill the loop

@@ -287,6 +287,19 @@ _PORTABLE_QUIESCENCE_DISK_TEMP_SOURCES = {
         "439d0406c5a763c22958d31e2174280a5f6ec524620f60d4da796e446dd941c0"
     ),
 }
+# The owner-preview producer/retirer runs in a separate Project Cell. Bind its
+# dispatch, background sweep and lifecycle together with the named lock probe.
+_PORTABLE_QUIESCENCE_CHECKPOINT_PREVIEW_SOURCES = {
+    **_PORTABLE_QUIESCENCE_DISK_TEMP_SOURCES,
+    "routers.workspace": "264786b1899b3a0e7b1eb540265e8283bfc723294583fe0bbaef8c4f388d4b0d",
+    "schemas.workspace": "cb6e1136d80d60c85f04ed63b767d52070bf37fa60949055eb024cc7f1a7aaf3",
+    "services.docker_cell_resources": "a6769ca0e6653626c886a3c91bea32ef46d564b7a866c4e8d44e9270694d3a42",
+    "services.machine_adapter": "01304a2fe555c01c6ddf6e312be032a4568fb2eae23f642569c31999e627ca16",
+    "services.checkpoint_preview": "29e331cbf57be34ce78c1355802d123e5dabc53d720f54560788d92187618e73",
+    "services.checkpoint_preview_runtime": "f012f2517c64a9449a5ef785ba701cf7855e20f42f1fe30f8a280b7131bf4b17",
+    "services.hibernate": "756fc8ee9b207839f76f9f3725cef1f37626b294cff22847f5296315ece6e31c",
+    "main": "920c872b4b77b56bf0a26e0bbd1484fe8813848e50eafbc5d3924fe2923520ea",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -314,6 +327,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_MIGRATION_INVENTORY_SOURCES,
     _PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES,
     _PORTABLE_QUIESCENCE_DISK_TEMP_SOURCES,
+    _PORTABLE_QUIESCENCE_CHECKPOINT_PREVIEW_SOURCES,
 )
 # Only these reviewed producers may attest a pending fast_check wrapper.
 _PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES = (
@@ -326,6 +340,7 @@ _PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES = (
     _PORTABLE_QUIESCENCE_MIGRATION_INVENTORY_SOURCES,
     _PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES,
     _PORTABLE_QUIESCENCE_DISK_TEMP_SOURCES,
+    _PORTABLE_QUIESCENCE_CHECKPOINT_PREVIEW_SOURCES,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.
@@ -338,6 +353,10 @@ _PORTABLE_QUIESCENCE_CONDITIONAL_SOURCE_NAMES = frozenset(
         "services.command_receipts",
         "services.docker_owner_canary_provider",
         "services.project_migrations",
+        "services.checkpoint_preview",
+        "services.checkpoint_preview_runtime",
+        "services.hibernate",
+        "main",
     }
 )
 _PORTABLE_QUIESCENCE_SOURCE_NAMES = tuple(
@@ -1740,10 +1759,55 @@ def _startup_prepare_journals(
     return observed
 
 
+def _idle_checkpoint_preview_locks(state_parent: Path) -> dict[str, tuple[int, int]]:
+    """Probe the native lifetime locks, including startup before a resource exists."""
+    locks = state_parent / "locks"
+    try:
+        directory = locks.lstat()
+    except FileNotFoundError:
+        return {}
+    if not stat.S_ISDIR(directory.st_mode):
+        raise PhysicalDrainError("checkpoint preview lock directory is unsafe")
+    found = {}
+    try:
+        for path in locks.iterdir():
+            if not path.name.startswith("checkpoint-preview-"):
+                continue
+            import fcntl
+
+            identity = path.name.removeprefix("checkpoint-preview-").removesuffix(".lock")
+            if path.name != f"checkpoint-preview-{UUID(identity)}.lock":
+                raise ValueError("invalid checkpoint preview lock")
+            expected = path.lstat()
+            if (not stat.S_ISREG(expected.st_mode) or expected.st_nlink != 1
+                    or expected.st_uid != directory.st_uid or stat.S_IMODE(expected.st_mode) != 0o600):
+                raise ValueError("unsafe checkpoint preview lock")
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+            try:
+                info = os.fstat(fd)
+                if not os.path.samestat(expected, info):
+                    raise ValueError("checkpoint preview lock replaced")
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise PhysicalDrainError("checkpoint preview operation is active") from exc
+                if not os.path.samestat(info, path.lstat()):
+                    raise ValueError("checkpoint preview lock replaced")
+                found[path.name] = (info.st_dev, info.st_ino)
+            finally:
+                os.close(fd)
+        if not os.path.samestat(directory, locks.lstat()):
+            raise ValueError("checkpoint preview lock directory changed")
+    except (OSError, ValueError) as exc:
+        raise PhysicalDrainError("checkpoint preview lock inventory is unknown") from exc
+    return found
+
+
 def require_physical_writers_drained(
     state_parent: Path, client: object
 ) -> dict[str, int]:
     """Read actual helper/exec state in addition to historical terminal SQL proof."""
+    checkpoint_locks = _idle_checkpoint_preview_locks(state_parent)
     containers = client.containers.list(all=True)
     startup_prepares = _startup_prepare_journals(state_parent)
     by_name = {}
@@ -1921,6 +1985,8 @@ def require_physical_writers_drained(
         raise PhysicalDrainError(
             "physical startup preparation changed during inspection"
         )
+    if _idle_checkpoint_preview_locks(state_parent) != checkpoint_locks:
+        raise PhysicalDrainError("checkpoint preview lock inventory changed")
     return {"affected_containers": len(by_name), "physical_journals": journals}
 
 

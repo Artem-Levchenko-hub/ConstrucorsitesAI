@@ -237,6 +237,19 @@ class WorkspaceOwnerPreviewSessionRequest(BaseModel):
     owner_id: UUID
 
 
+class WorkspaceCheckpointPreviewRequest(WorkspaceOwnerPreviewSessionRequest):
+    run_id: UUID
+    checkpoint_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    files: dict[str, str] | None = Field(default=None, repr=False)
+
+    @model_validator(mode="after")
+    def complete_source(self) -> Self:
+        if (self.source_revision is None) != (self.files is None) or self.files == {}:
+            raise ValueError("a complete preview source and its revision must be supplied together")
+        return self
+
+
 class WorkspaceDraftPreviewSessionResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -1268,5 +1268,72 @@ class PhysicalContractTests(unittest.TestCase):
                 self.module.require_physical_writers_drained(root, client)
 
 
+@unittest.skipUnless(os.name == "posix", "requires native flock")
+class CheckpointPreviewDrainTests(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location(
+            "checkpoint_preview_drain",
+            Path(__file__).with_name("generation-publication-drain.py"),
+        )
+        self.gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.gate)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.client = SimpleNamespace(containers=SimpleNamespace(list=lambda **_: []))
+
+    def lock_path(self, root):
+        locks = root / "locks"
+        locks.mkdir(mode=0o700, parents=True)
+        lock = locks / f"checkpoint-preview-{WORKSPACE}.lock"
+        lock.touch(mode=0o600)
+        return lock
+
+    def test_each_host_probes_native_lock_even_before_first_slot_or_container(self):
+        import fcntl
+
+        for busy, other in (("core", "commerce"), ("commerce", "core")):
+            with self.subTest(busy=busy):
+                state = self.root / busy
+                lock = self.lock_path(state)
+                with lock.open("rb") as held:
+                    fcntl.flock(held, fcntl.LOCK_EX)
+                    self.gate.require_physical_writers_drained(self.root / other, self.client)
+                    with self.assertRaisesRegex(self.gate.PhysicalDrainError, "operation is active"):
+                        self.gate.require_physical_writers_drained(state, self.client)
+                self.gate.require_physical_writers_drained(state, self.client)
+                self.assertTrue(lock.exists())
+
+    def test_idle_slots_and_crashed_phase_do_not_hold_the_release(self):
+        lock = self.lock_path(self.root)
+        slots = self.root / "owner-checkpoint-previews"
+        slots.mkdir()
+        for phase in ("preparing", "retiring", "ready"):
+            with self.subTest(phase=phase):
+                (slots / f"{WORKSPACE}.json").write_text(json.dumps({"phase": phase}))
+                self.gate.require_physical_writers_drained(self.root, self.client)
+        self.assertEqual(lock.read_bytes(), b"")
+
+    def test_inventory_changed_while_sampling_is_not_an_idle_proof(self):
+        def containers(**_):
+            if not (self.root / "locks").exists():
+                self.lock_path(self.root)
+            return []
+
+        self.client.containers.list = containers
+        with self.assertRaisesRegex(self.gate.PhysicalDrainError, "inventory changed"):
+            self.gate.require_physical_writers_drained(self.root, self.client)
+
+    def test_unsafe_lock_is_unknown(self):
+        lock = self.lock_path(self.root)
+        lock.chmod(0o644)
+        with self.assertRaisesRegex(self.gate.PhysicalDrainError, "inventory is unknown"):
+            self.gate.require_physical_writers_drained(self.root, self.client)
+        lock.unlink()
+        lock.symlink_to(self.root / "missing-target")
+        with self.assertRaisesRegex(self.gate.PhysicalDrainError, "inventory is unknown"):
+            self.gate.require_physical_writers_drained(self.root, self.client)
+
+
 if __name__ == "__main__":
     unittest.main()

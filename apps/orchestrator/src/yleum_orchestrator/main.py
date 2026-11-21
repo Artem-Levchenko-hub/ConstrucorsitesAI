@@ -123,6 +123,9 @@ async def _operational_lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
         await get_code_restoration_service().close()
         await stop_hibernate_loop()
+        from yleum_orchestrator.services.checkpoint_preview import stop_preview_tasks
+
+        await stop_preview_tasks()
 
 
 @asynccontextmanager

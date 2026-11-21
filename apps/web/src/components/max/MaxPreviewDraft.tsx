@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, apiUrl } from "@/lib/api/client";
 import { createMaxPreviewSession } from "@/lib/api/max-studio";
-import { getRuntime, startRuntime } from "@/lib/api/runtime";
+import { getRuntime } from "@/lib/api/runtime";
 import { isGenerationActive } from "@/lib/generation-lifecycle";
 import { isChatMessageStreaming } from "@/lib/chat-message-status";
 import type { GenerationRun, GenerationRunStatus, Message } from "@/lib/api/types";
@@ -14,19 +14,18 @@ export type DraftTarget = {
   runId: string | null;
   messageId: string | null;
   phase: GenerationRunStatus;
-  canWake: boolean;
+  canOpenSavedDraft: boolean;
 };
 
-type DraftSource = { kind: "capture"; image: Blob; partial: boolean } | { kind: "live"; url: string };
+type DraftSource = { kind: "capture"; image: Blob; partial: boolean } | { kind: "live"; url: string; isolated: boolean };
+type DraftResult = DraftSource | "waiting" | "preparing" | null;
 
-export function draftPreviewLabel(source: DraftSource | null | undefined, triedWorkspace: boolean, loading: boolean, paused: boolean) {
+export function draftPreviewLabel(source: DraftSource | null | undefined, loading: boolean, paused: boolean) {
   if (source?.kind === "capture") {
-    const label = ["Сохранённый вид черновика."];
-    if (source.partial) label.push("Часть данных на экране могла не загрузиться.");
-    if (triedWorkspace) label.push("Рабочая среда пока недоступна.");
-    return label.join(" ");
+    return source.partial ? "Снимок экрана. Часть данных могла не загрузиться." : "Снимок экрана. Кнопки доступны в рабочем превью.";
   }
-  if (source?.kind === "live") return "Рабочее превью. Среда может показывать ранее восстановленную версию.";
+  if (source?.kind === "live") return source.isolated
+    ? "Тестовая копия с отдельными данными." : "Рабочее превью черновика.";
   if (loading) return "Открываем рабочее превью.";
   return paused ? "Подготовка на паузе." : "Итоговая версия ещё не подтверждена.";
 }
@@ -57,81 +56,74 @@ async function getCapture(target: DraftTarget, signal: AbortSignal): Promise<Dra
   }
 }
 
-async function getWorkspace(target: DraftTarget, signal: AbortSignal, stillCurrent: () => boolean): Promise<DraftSource | "waiting" | null> {
+async function openDraft(target: DraftTarget, signal: AbortSignal, stillCurrent: () => boolean): Promise<DraftResult> {
   signal.throwIfAborted();
   if (!stillCurrent()) return null;
-  let runtime = await getRuntime(target.projectId);
-  signal.throwIfAborted();
-  if (!stillCurrent()) return null;
-  if (target.runId && target.canWake && ["paused", "stopped", "failed"].includes(runtime.state)) {
-    runtime = await startRuntime(target.projectId, target.runId);
-    signal.throwIfAborted();
-  }
-  // A wake can return before the app starts serving. Read status for up to a
-  // minute, without starting another environment or changing project files.
-  for (let check = 0; target.canWake && runtime.state === "provisioning" && check < 12; check += 1) {
-    await new Promise(resolve => setTimeout(resolve, 5_000));
+  if (isGenerationActive({ status: target.phase })) {
+    // During generation, only observe the server the builder already started.
+    const runtime = await getRuntime(target.projectId);
     signal.throwIfAborted();
     if (!stillCurrent()) return null;
-    runtime = await getRuntime(target.projectId);
+    if (runtime.state !== "running") return "waiting";
+    const session = await createMaxPreviewSession(target.projectId, undefined, signal);
+    signal.throwIfAborted();
+    return stillCurrent() ? { kind: "live", url: session.url, isolated: false } : null;
   }
-  signal.throwIfAborted();
-  if (!stillCurrent()) return null;
-  if (runtime.state !== "running") return "waiting";
-  const session = await createMaxPreviewSession(target.projectId);
-  signal.throwIfAborted();
-  return { kind: "live", url: session.url };
+  // The generic environment may already have reverted to the starter or a
+  // previous release. Only a run-bound session can serve this saved attempt.
+  if (!target.canOpenSavedDraft || !target.runId) return null;
+  try {
+    const session = await createMaxPreviewSession(target.projectId, target.runId, signal);
+    signal.throwIfAborted();
+    return stillCurrent() ? { kind: "live", url: session.url, isolated: true } : null;
+  } catch (error) {
+    signal.throwIfAborted();
+    if (accessDenied(error)) throw error;
+    if (!stillCurrent()) return null;
+    if (error instanceof ApiError && error.status === 409 && error.details?.reason === "draft_preview_preparing") return "preparing";
+    if (target.phase !== "failed" && target.phase !== "cancelled") return null;
+    return getCapture(target, signal);
+  }
 }
 
 export function useMaxPreviewDraft(target: DraftTarget | null) {
   const queryClient = useQueryClient();
   const [brokenCapture, setBrokenCapture] = useState<string | null>(null);
-  const [requestedWorkspace, setRequestedWorkspace] = useState<string | null>(null);
+  const [requestedCapture, setRequestedCapture] = useState<string | null>(null);
   const captureKey = target ? `${target.projectId}:${target.runId}` : null;
-  const skipCapture = !!captureKey && brokenCapture === captureKey;
-  const preferWorkspace = !!captureKey && requestedWorkspace === captureKey;
   const result = useQuery({
-    queryKey: ["max-working-preview", target?.projectId, target?.runId, target?.messageId, target?.phase, target?.canWake, skipCapture, preferWorkspace],
+    queryKey: ["max-working-preview", target?.projectId, target?.runId, target?.messageId, target?.phase, target?.canOpenSavedDraft],
     enabled: target !== null,
-    queryFn: async ({ signal }): Promise<DraftSource | "waiting" | null> => {
+    queryFn: async ({ signal }): Promise<DraftResult> => {
       if (!target) return null;
-      // An interrupted run may have rolled its live workspace back. Its own
-      // captured screen is stronger evidence, and avoids waking the environment.
-      const canShowCapture = Boolean(target.runId) && !skipCapture && (target.phase === "failed" || target.phase === "cancelled");
-      const captureFirst = canShowCapture && !preferWorkspace;
-      if (captureFirst) {
-        const captured = await getCapture(target, signal);
-        if (captured) return captured;
-      }
-      try {
-        const workspace = await getWorkspace(target, signal, () => {
-          const run = queryClient.getQueryData<GenerationRun | null>(["generation", target.projectId]);
-          const message = queryClient.getQueryData<Message[]>(["messages", target.projectId])?.at(-1);
-          if (!target.runId) return run === null && (message?.id ?? null) === target.messageId;
-          return run?.project_id === target.projectId && run.id === target.runId && run.status === target.phase
-            && !(isChatMessageStreaming(message) && message?.id !== run.assistant_message_id);
-        });
-        if (workspace !== "waiting" || !canShowCapture || captureFirst) return workspace;
-        return (await getCapture(target, signal)) ?? "waiting";
-      } catch (error) {
-        signal.throwIfAborted();
-        if (accessDenied(error) || !canShowCapture || captureFirst) throw error;
-      }
-      return getCapture(target, signal);
+      return openDraft(target, signal, () => {
+        const run = queryClient.getQueryData<GenerationRun | null>(["generation", target.projectId]);
+        const message = queryClient.getQueryData<Message[]>(["messages", target.projectId])?.at(-1);
+        if (!target.runId) return run === null && (message?.id ?? null) === target.messageId;
+        return run?.project_id === target.projectId && run.id === target.runId && run.status === target.phase
+          && !(isChatMessageStreaming(message) && message?.id !== run.assistant_message_id);
+      });
     },
     retry: false, gcTime: 0, staleTime: Infinity,
     refetchOnWindowFocus: false, refetchOnReconnect: false,
-    // Only retry a read of a still-starting active workspace. Mutations, errors
-    // and session refusals are never placed on this timer.
-    refetchInterval: query => target && isGenerationActive({ status: target.phase })
-      && query.state.data === "waiting" && !query.state.error ? 10_000 : false,
+    // Poll only a workspace that is starting or a run-bound preview build the
+    // server has already acknowledged. A refusal never triggers a retry loop.
+    refetchInterval: query => !query.state.error && (query.state.data === "waiting" || query.state.data === "preparing") ? 10_000 : false,
   });
+  const data = target && !result.isError && typeof result.data === "object" ? result.data : null;
+  const captureAvailable = data?.kind === "capture" && captureKey !== brokenCapture;
   return {
     ...result,
-    source: target && !result.isError && result.data !== "waiting" ? result.data : null,
+    preparing: result.data === "preparing",
+    source: data?.kind === "live" || (captureAvailable && requestedCapture === captureKey) ? data : null,
+    captureAvailable,
+    showCapture: () => setRequestedCapture(captureKey),
     onBrokenImage: () => setBrokenCapture(captureKey),
-    triedWorkspace: preferWorkspace,
-    tryWorkspace: () => { if (preferWorkspace) void result.refetch(); else setRequestedWorkspace(captureKey); },
+    retryWorkspace: () => {
+      setRequestedCapture(null);
+      setBrokenCapture(null);
+      void result.refetch();
+    },
   };
 }
 

@@ -225,13 +225,17 @@ async def create_max_preview_session(
     response: Response,
     session: SessionDep,
     current_user: CurrentUserDep,
+    working_run_id: UUID | None = None,
 ) -> MaxPreviewSessionPublic:
     project = await _owned_max_project(session, project_id, current_user.id)
-    cell_preview = await project_cell_runtime.create_project_cell_preview_session(
-        session,
-        project,
-        owner=current_user,
-    )
+    if working_run_id is None:
+        cell_preview = await project_cell_runtime.create_project_cell_preview_session(
+            session, project, owner=current_user,
+        )
+    else:
+        from yleum_api.services.working_draft_preview import open_checkpoint_preview
+
+        cell_preview = await open_checkpoint_preview(session, project, current_user, working_run_id)
     response.headers["Cache-Control"] = "no-store"
     if cell_preview is None:
         # The preview lives in the project's cell; the legacy dev-container

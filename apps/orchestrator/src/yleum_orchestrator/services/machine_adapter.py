@@ -1783,10 +1783,12 @@ class MachineAdapter:
         machine_remaining_seconds(timeout)
         raise CellResourceError("trusted preview HTTP readiness is unverified")
 
-    def preview(self, state: Any) -> tuple[str, str] | None:
+    def preview(self, state: Any, *, signing_secret: str | None = None) -> tuple[str, str] | None:
         if not self.exists(state.workspace_id):
             return None
-        _machine, backend = self.parts(state)
+        _machine, backend = (
+            self.parts(state, readonly=True) if signing_secret is not None else self.parts(state)
+        )
         gateway = backend._lookup(
             backend.client.containers, backend.stem + "-gateway", "max-gateway"
         )
@@ -1825,6 +1827,10 @@ class MachineAdapter:
             if (core.status != "running"
                     or env.get("OMNIA_OWNER_PREVIEW") != "1"
                     or env.get("OMNIA_PUBLIC_APP_ORIGIN")
+                    or (signing_secret is not None and (
+                        env.get("AUTH_SECRET") != signing_secret
+                        or env.get("OMNIA_PROJECT_ID") != str(state.project_id)
+                    ))
                     or (preview_image and core.attrs.get("Image") != preview_image)):
                 return "stopped", address
             identity = backend.trusted_container_identity(gateway, "max-gateway")

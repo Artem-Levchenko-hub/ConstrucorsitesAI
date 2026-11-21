@@ -17,9 +17,7 @@ import type {
   Snapshot,
 } from "@/lib/api/types";
 
-const createMaxPreviewSession = vi.fn<
-  (projectId: string) => Promise<MaxPreviewSession>
->();
+const createMaxPreviewSession = vi.fn<typeof import("@/lib/api/max-studio").createMaxPreviewSession>();
 const syncMaxManagedKit = vi.fn<
   (projectId: string) => Promise<MaxProjectConfig>
 >();
@@ -36,8 +34,7 @@ vi.mock("@/lib/api/messages", () => ({
 }));
 
 vi.mock("@/lib/api/max-studio", () => ({
-  createMaxPreviewSession: (projectId: string) =>
-    createMaxPreviewSession(projectId),
+  createMaxPreviewSession: (...args: Parameters<typeof createMaxPreviewSession>) => createMaxPreviewSession(...args),
   syncMaxManagedKit: (projectId: string) => syncMaxManagedKit(projectId),
 }));
 
@@ -327,57 +324,86 @@ describe("MAX live preview recovery", () => {
     return revoke;
   }
 
-  it.each([false, true])("shows the protected capture (partial=%s) and tries the live workspace on request", async partial => {
+  it("opens the run-bound app on entry even if its normal environment is stopped and a photo exists", async () => {
+    const run = seedAttempt();
+    provideCapture();
+    getRuntime.mockResolvedValue(runtime("stopped"));
+    createMaxPreviewSession.mockResolvedValue(session("https://draft.example/api/omnia/preview-session?token=first"));
+    renderPreview("seed-snapshot");
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    expect(frame.src).toContain("https://draft.example/");
+    expect(createMaxPreviewSession).toHaveBeenCalledWith(PROJECT.id, run.id, expect.any(AbortSignal));
+    expect(container.querySelector("[data-testid='max-draft-capture']")).toBeNull();
+    expect(getRuntime).not.toHaveBeenCalled();
+    expect(startRuntime).not.toHaveBeenCalled();
+    expect(syncMaxManagedKit).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    // Renew within the same attempt, never in the unscoped starter workspace.
+    const nonce = "7a9fd1cc34be43929d86ab931c418bdd";
+    act(() => window.dispatchEvent(new MessageEvent("message", {
+      source: frame.contentWindow, origin: "https://draft.example", data: { type: "omnia:preview-session:renew", nonce },
+    })));
+    await waitForValue(() => createMaxPreviewSession.mock.calls.length === 2);
+    expect(createMaxPreviewSession).toHaveBeenLastCalledWith(PROJECT.id, run.id);
+  });
+
+  it("waits for an acknowledged draft environment and opens the isolated app on the same run", async () => {
+    vi.useFakeTimers();
+    const run = seedAttempt();
+    createMaxPreviewSession.mockRejectedValueOnce(new ApiError(409, {
+      code: "conflict", message: "preparing", details: { reason: "draft_preview_preparing" },
+    })).mockResolvedValue(session("https://draft.example"));
+    renderPreview("seed-snapshot");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(container.textContent).toContain("Открываем черновик");
+    expect(container.textContent).not.toContain("Рабочее превью пока недоступно");
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(container.querySelector("iframe")?.src).toBe("https://draft.example/");
+    expect(container.textContent).toContain("Тестовая копия с отдельными данными.");
+    expect(createMaxPreviewSession.mock.calls.map(([, id]) => id)).toEqual([run.id, run.id]);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(startRuntime).not.toHaveBeenCalled();
+    expect(syncMaxManagedKit).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("only shows the protected screenshot on request when the interactive app is unavailable (partial=%s)", async partial => {
     const run = seedAttempt();
     const revoke = provideCapture(partial);
-    getRuntime.mockResolvedValue(runtime("stopped"));
-    startRuntime.mockResolvedValue(runtime());
-    createMaxPreviewSession.mockResolvedValue(session("https://restored-workspace.example"));
+    createMaxPreviewSession.mockRejectedValueOnce(new ApiError(503, { code: "orchestrator_unavailable", message: "unavailable" }))
+      .mockResolvedValue(session("https://draft.example"));
     renderPreview("seed-snapshot");
+    const toggle = await waitForValue(() => container.querySelector<HTMLButtonElement>("[data-testid='max-toggle-draft-screenshot']"));
+    expect(container.querySelector("iframe, [data-testid='max-draft-capture']")).toBeNull();
+    expect(container.textContent).toContain("Рабочее превью пока недоступно");
+    act(() => toggle.click());
     const picture = await waitForValue(() => container.querySelector<HTMLImageElement>("[data-testid='max-draft-capture']"));
     expect(picture.src).toBe("blob:owner-capture");
     expect(globalThis.fetch).toHaveBeenCalledWith(`/api/projects/${PROJECT.id}/max/runs/${run.id}/preview-image`,
       expect.objectContaining({ credentials: "include", cache: "no-store" }));
-    expect(container.textContent).toContain("Сохранённый вид черновика");
-    expect(container.textContent?.includes("Часть данных на экране могла не загрузиться")).toBe(partial);
-    expect(getRuntime).not.toHaveBeenCalled();
-    act(() => container.querySelector<HTMLButtonElement>("[data-testid='max-open-working-environment']")!.click());
+    expect(container.textContent).toContain("Снимок экрана");
+    expect(container.textContent?.includes("Часть данных могла не загрузиться")).toBe(partial);
+    expect(container.querySelector<HTMLButtonElement>("[data-testid='max-open-preview-separate']")?.disabled).toBe(true);
+    act(() => toggle.click());
     const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
-    expect(frame.src).toBe("https://restored-workspace.example/");
-    expect(container.textContent).toContain("Среда может показывать ранее восстановленную версию.");
-    expect(startRuntime).toHaveBeenCalledTimes(1);
-    expect(startRuntime).toHaveBeenCalledWith(PROJECT.id, run.id);
-    expect(syncMaxManagedKit).not.toHaveBeenCalled();
+    expect(frame.src).toBe("https://draft.example/");
     expect(revoke).toHaveBeenCalledWith("blob:owner-capture");
-  });
-
-  it("retains the capture during an explicit live workspace refusal", async () => {
-    seedAttempt();
-    provideCapture(true);
-    getRuntime.mockResolvedValue(runtime("failed"));
-    startRuntime.mockRejectedValue(new ApiError(503, { code: "orchestrator_unavailable", message: "unavailable" }));
-    renderPreview("seed-snapshot");
-    await waitForValue(() => container.querySelector("[data-testid='max-draft-capture']"));
-    act(() => container.querySelector<HTMLButtonElement>("[data-testid='max-open-working-environment']")!.click());
-    await waitForValue(() => container.textContent?.includes("Рабочая среда пока недоступна."));
-    expect(container.textContent).toContain("Часть данных на экране могла не загрузиться.");
-    expect(container.querySelector("[data-testid='max-draft-capture']")).not.toBeNull();
-    expect(startRuntime).toHaveBeenCalledTimes(1);
-    expect(createMaxPreviewSession).not.toHaveBeenCalled();
+    expect(startRuntime).not.toHaveBeenCalled();
+    expect(createMaxPreviewSession.mock.calls.map(([, id]) => id)).toEqual([run.id, run.id]);
   });
 
   it("opens an interrupted edit separately and returns to the accepted version", async () => {
     const run = seedAttempt("failed", "edit");
     provideCapture();
     syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
-    createMaxPreviewSession.mockResolvedValue(session("https://approved.example"));
+    createMaxPreviewSession.mockImplementation(async (_, id) => session(id ? "https://attempt.example" : "https://approved.example"));
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     renderPreview("snapshot-1", { versions: [{ ...buildVersion("ready"), snapshot_id: "snapshot-1" }] });
     await waitForValue(() => container.querySelector("iframe"));
     expect(globalThis.fetch).not.toHaveBeenCalled();
     const toggle = () => container.querySelector<HTMLButtonElement>("[data-testid='max-switch-attempt-preview']")!.click();
     act(toggle);
-    await waitForValue(() => container.querySelector("[data-testid='max-draft-capture']"));
+    await waitForValue(() => container.querySelector("iframe")?.getAttribute("src") === "https://attempt.example");
     act(() => container.querySelector<HTMLButtonElement>("[data-testid='max-open-preview-separate']")!.click());
     expect(open).toHaveBeenCalledWith(`/max/${PROJECT.id}/preview?attempt=${run.id}`, "_blank", "noopener,noreferrer");
     act(toggle);
@@ -401,38 +427,40 @@ describe("MAX live preview recovery", () => {
     expect(syncMaxManagedKit).not.toHaveBeenCalled();
   });
 
-  it("never wakes or mints after an ownership refusal for the run capture", async () => {
+  it("never falls back to another runtime or a capture after an ownership refusal for the run", async () => {
     seedAttempt();
-    vi.mocked(globalThis.fetch).mockResolvedValue(new Response(null, { status: 403 }));
+    createMaxPreviewSession.mockRejectedValue(new ApiError(403, { code: "forbidden", message: "refused" }));
     renderPreview(null);
     await waitForValue(() => container.textContent?.includes("Рабочее превью пока недоступно"));
     expect(getRuntime).not.toHaveBeenCalled();
     expect(startRuntime).not.toHaveBeenCalled();
-    expect(createMaxPreviewSession).not.toHaveBeenCalled();
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
-  it("can view an already-running legacy workspace without inventing a run or waking it", async () => {
+  it("does not present an unbound legacy workspace as a failed attempt", async () => {
     const messages = [buildMessage("failed")];
     listMessages.mockResolvedValue(messages);
     queryClient.setQueryData(["messages", PROJECT.id], messages);
     createMaxPreviewSession.mockResolvedValue(session("https://legacy-workspace.example"));
     renderPreview("seed-snapshot", { versions: [buildVersion()] });
-    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
-    expect(frame.src).toBe("https://legacy-workspace.example/");
-    expect(container.textContent).toContain("Среда может показывать ранее восстановленную версию.");
+    await waitForValue(() => container.textContent?.includes("Подготовка на паузе"));
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(createMaxPreviewSession).not.toHaveBeenCalled();
+    expect(getRuntime).not.toHaveBeenCalled();
     expect(globalThis.fetch).not.toHaveBeenCalled();
     expect(startRuntime).not.toHaveBeenCalled();
     expect(syncMaxManagedKit).not.toHaveBeenCalled();
   });
 
-  it("sends the immutable working run only for an unaccepted wake", async () => {
-    const client = await vi.importActual<typeof import("@/lib/api/runtime")>("@/lib/api/runtime");
-    vi.mocked(globalThis.fetch).mockImplementation(async () => Response.json(runtime()));
-    await client.startRuntime(PROJECT.id, "work-run");
-    await client.startRuntime(PROJECT.id);
-    expect(globalThis.fetch).toHaveBeenNthCalledWith(1, `/api/projects/${PROJECT.id}/runtime/start?working_run_id=work-run`,
+  it("sends the run identity for the draft session and keeps the existing accepted-session contract", async () => {
+    const client = await vi.importActual<typeof import("@/lib/api/max-studio")>("@/lib/api/max-studio");
+    vi.mocked(globalThis.fetch).mockImplementation(async () => Response.json(session("https://draft.example")));
+    await client.createMaxPreviewSession(PROJECT.id, "work-run");
+    await client.createMaxPreviewSession(PROJECT.id);
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(1, `/api/projects/${PROJECT.id}/max/preview-session?working_run_id=work-run`,
       expect.objectContaining({ method: "POST", credentials: "include" }));
-    expect(globalThis.fetch).toHaveBeenNthCalledWith(2, `/api/projects/${PROJECT.id}/runtime/start`,
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(2, `/api/projects/${PROJECT.id}/max/preview-session`,
       expect.objectContaining({ method: "POST", credentials: "include" }));
   });
 
@@ -550,11 +578,11 @@ describe("MAX live preview recovery", () => {
     renderPreview("seed-snapshot");
     await waitForValue(() => container.querySelector("iframe"));
     expect(container.querySelector("[data-testid='max-accepted-preview-status']")?.textContent)
-      .toContain("Среда может показывать ранее восстановленную версию.");
+      .toContain("Тестовая копия с отдельными данными.");
     expect(container.textContent).not.toContain("Запрос завершён. Версия сохранена.");
-    expect(getRuntime).toHaveBeenCalledTimes(1);
+    expect(getRuntime).not.toHaveBeenCalled();
     expect(syncMaxManagedKit).not.toHaveBeenCalled();
-    expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
+    expect(createMaxPreviewSession).toHaveBeenCalledWith(PROJECT.id, current.id, expect.any(AbortSignal));
   });
 
   it.each(["pending", "queued_for_capacity", "running"] as const)(
@@ -904,6 +932,19 @@ describe("MAX live preview recovery", () => {
     expect(container.querySelector("[data-testid='max-preview-actions']")).toBeNull();
   });
 
+  it("opens the interactive draft directly on the standalone owner page", async () => {
+    const run = seedAttempt();
+    createMaxPreviewSession.mockResolvedValue(session("https://draft.example"));
+    act(() => root.render(<QueryClientProvider client={queryClient}>
+      <MaxOwnerPreviewPage project={PROJECT} initialDraftRunId={run.id} />
+    </QueryClientProvider>));
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    expect(frame.src).toBe("https://draft.example/");
+    expect(createMaxPreviewSession).toHaveBeenCalledWith(PROJECT.id, run.id, expect.any(AbortSignal));
+    expect(container.querySelector("[data-testid='max-draft-capture']")).toBeNull();
+    expect(getRuntime).not.toHaveBeenCalled();
+  });
+
   it("mounts the actual owner frame and renews its session without replacing the frame or replaying application requests", async () => {
     syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
     createMaxPreviewSession.mockResolvedValue(session("https://preview.dev.local/api/omnia/preview-session?token=initial"));
@@ -1125,8 +1166,7 @@ describe("MAX live preview recovery", () => {
   it.each(["failed", "cancelled"] as const)(
     "keeps a durable %s first draft parked during optimistic prompt admission",
     async (status) => {
-      const capture = deferred<Response>();
-      vi.mocked(globalThis.fetch).mockReturnValueOnce(capture.promise);
+      const oldSession = deferred<MaxPreviewSession>();
       const terminal: GenerationRun = {
         id: "old-terminal", project_id: PROJECT.id, assistant_message_id: "build-1",
         status, response_mode: "build", created_at: "2026-11-09T12:00:00Z",
@@ -1143,17 +1183,19 @@ describe("MAX live preview recovery", () => {
         return runtime();
       });
       syncMaxManagedKit.mockResolvedValue(managedKit("built-snapshot"));
-      createMaxPreviewSession.mockResolvedValue(session("https://admitted-first-build.example"));
+      createMaxPreviewSession.mockImplementationOnce(() => oldSession.promise)
+        .mockResolvedValue(session("https://admitted-first-build.example"));
       renderPreview("seed-snapshot", { versions: [buildVersion(status)] });
       await flushPromises();
       const optimistic = buildMessage(null, "__opt_asst_new-request");
       listMessages.mockResolvedValue([failed, optimistic]);
       act(() => queryClient.setQueryData(["messages", PROJECT.id], [failed, optimistic]));
-      capture.resolve(new Response(null, { status: 404 }));
+      oldSession.resolve(session("https://retired-draft.example"));
       await flushPromises();
       expect(startRuntime).not.toHaveBeenCalled();
       expect(syncMaxManagedKit).not.toHaveBeenCalled();
-      expect(createMaxPreviewSession).not.toHaveBeenCalled();
+      expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
+      expect(createMaxPreviewSession).toHaveBeenCalledWith(PROJECT.id, terminal.id, expect.any(AbortSignal));
       expect(container.querySelector("iframe")).toBeNull();
 
       const admitted: GenerationRun = { ...terminal, id: "new-admitted", status: "running",
@@ -1209,6 +1251,7 @@ describe("MAX live preview recovery", () => {
     const sessions = createMaxPreviewSession.mock.calls.length;
     const syncs = syncMaxManagedKit.mock.calls.length;
     const terminal: GenerationRun = { ...running, status: "failed", finished_at: "2026-11-09T12:10:00Z" };
+    createMaxPreviewSession.mockResolvedValue(session("https://pinned-old-attempt.example"));
     getLatestGeneration.mockResolvedValue(terminal);
     const failed = buildMessage("failed");
     listMessages.mockResolvedValue([failed]);
@@ -1217,7 +1260,7 @@ describe("MAX live preview recovery", () => {
       queryClient.setQueryData(["messages", PROJECT.id], [failed]);
     });
     renderPreview("seed-snapshot", { versions: [buildVersion()] });
-    await waitForValue(() => getRuntime.mock.calls.length >= 2);
+    await waitForValue(() => container.querySelector("iframe")?.src === "https://pinned-old-attempt.example/");
     const checkedSessions = createMaxPreviewSession.mock.calls.length;
     const optimistic = buildMessage(null, "__opt_asst_new-request");
     listMessages.mockResolvedValue([failed, optimistic]);
@@ -1297,11 +1340,10 @@ describe("MAX live preview recovery", () => {
     act(() => queryClient.setQueryData(["messages", PROJECT.id], [failed]));
     renderPreview("seed-snapshot", { versions: [buildVersion()] });
     await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
-    // The old sync/session retry is retired. A fresh owner-only probe may
-    // mint once for the legacy stopped turn, without synchronising its files.
-    expect(target).toHaveBeenCalledTimes(stage === "session" ? 2 : 1);
+    // The old retry is retired. No run identity exists for this stopped turn.
+    expect(target).toHaveBeenCalledTimes(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
-    expect(target).toHaveBeenCalledTimes(stage === "session" ? 2 : 1);
+    expect(target).toHaveBeenCalledTimes(1);
     expect(container.textContent).toContain("Подготовка на паузе");
   });
 
@@ -1764,9 +1806,7 @@ describe("MAX live preview recovery", () => {
     pendingRuntime.resolve(runtime("stopped"));
     await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
     expect(container.textContent).toContain("Подготовка на паузе");
-    // One fresh read for the unbound legacy preview. The retired activity
-    // cannot start the stopped runtime or synchronise the working tree.
-    expect(getRuntime).toHaveBeenCalledTimes(3);
+    expect(getRuntime).toHaveBeenCalledTimes(2);
     expect(startRuntime).not.toHaveBeenCalled();
     expect(syncMaxManagedKit).not.toHaveBeenCalled();
     expect(createMaxPreviewSession).not.toHaveBeenCalled();

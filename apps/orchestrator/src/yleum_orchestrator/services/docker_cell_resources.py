@@ -674,8 +674,12 @@ class DockerCellResourceManager:
         return await self._observe_state(state)
 
     async def inspect_by_project(self, project_id: UUID) -> CellBundleObservation:
+        # An owner-only preview uses the same product identity at the app
+        # boundary. Project-wide inspection must continue to select the owner cell.
+        members = self.state_store.root.parent / "owner-checkpoint-members"
         state = next(
-            (item for item in self.state_store.all_states() if item.project_id == project_id),
+            (item for item in self.state_store.all_states() if item.project_id == project_id
+             and not (members / f"{item.workspace_id}.json").exists()),
             None,
         )
         if state is None or state.resource_names is None:

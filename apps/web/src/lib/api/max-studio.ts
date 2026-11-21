@@ -75,9 +75,12 @@ export function getMaxReadiness(projectId: Uuid): Promise<MaxReadiness> {
 
 export function createMaxPreviewSession(
   projectId: Uuid,
+  workingRunId?: Uuid,
+  signal?: AbortSignal,
 ): Promise<MaxPreviewSession> {
-  return apiFetch<MaxPreviewSession>(`${path(projectId)}/preview-session`, {
-    method: "POST",
+  const query = workingRunId ? `?working_run_id=${encodeURIComponent(workingRunId)}` : "";
+  return apiFetch<MaxPreviewSession>(`${path(projectId)}/preview-session${query}`, {
+    method: "POST", signal,
   });
 }
 

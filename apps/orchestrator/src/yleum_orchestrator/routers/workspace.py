@@ -74,6 +74,7 @@ from yleum_orchestrator.schemas.workspace import (
     WorkspaceAgentWriteResponse,
     WorkspaceAgentWriteStatusResponse,
     WorkspaceCapabilityResponse,
+    WorkspaceCheckpointPreviewRequest,
     WorkspaceControlRequest,
     WorkspaceDraftApplyRequest,
     WorkspaceDraftApplyResponse,
@@ -1356,6 +1357,12 @@ async def prepare_workspace_agent_environment(
 ) -> dict[str, Any]:
     """Explicit lifecycle effect; GET identity never authorizes a container start."""
     verify_internal_token(x_internal_token)
+    return await prepare_bound_workspace_environment(workspace_id, request)
+
+
+async def prepare_bound_workspace_environment(
+    workspace_id: UUID, request: WorkspaceAgentPrepareRequest,
+) -> dict[str, Any]:
     manager = _require_docker_resource_manager(_workspace_provider(workspace_id))
     async with manager.operation_lock.hold(workspace_id):
         state, volume = await _workspace_volume_identity(manager, workspace_id)
@@ -1759,6 +1766,14 @@ async def _draft_preview_session(
             manager.credential_store.load_or_create(workspace_id).postgres_password
         )
         preview_url = _draft_preview_url(workspace_id)
+    return _sign_draft_preview_session(
+        workspace_id, exec_spec.spec.project_id, preview_url, auth_secret,
+    )
+
+
+def _sign_draft_preview_session(
+    workspace_id: UUID, project_id: UUID, preview_url: str, auth_secret: str,
+) -> WorkspaceDraftPreviewSessionResponse:
     if not preview_url.startswith("https://"):
         raise OrchestratorError(
             code="container_failure",
@@ -1769,7 +1784,7 @@ async def _draft_preview_session(
     expires = int(expires_at.timestamp())
     signature = _max_preview_bootstrap_signature(
         auth_secret,
-        str(exec_spec.spec.project_id),
+        str(project_id),
         expires,
     )
     bootstrap_url = signed_preview_session_url(
@@ -1800,6 +1815,22 @@ async def _ready_portable_draft_preview(
     await _publish_draft_preview(manager, state.workspace_id)
     secret: str = runtime.secret(state.workspace_id)
     return _draft_preview_url(state.workspace_id), secret
+
+
+@router.post(
+    "/workspaces/{workspace_id}/draft/checkpoint-preview",
+    response_model=WorkspaceDraftPreviewSessionResponse,
+)
+async def checkpoint_preview_session(
+    workspace_id: UUID, request: WorkspaceCheckpointPreviewRequest, response: Response,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> WorkspaceDraftPreviewSessionResponse:
+    """Open a stopped run in its own isolated Project Cell."""
+    verify_internal_token(x_internal_token)
+    response.headers["Cache-Control"] = "no-store"
+    from yleum_orchestrator.services.checkpoint_preview import checkpoint_session
+
+    return await checkpoint_session(workspace_id, request)
 
 
 @router.post(
