@@ -550,9 +550,7 @@ async def _restore_max_core(
     source_only: bool = False,
 ) -> dict[str, Any]:
     """Restore the core and remove product importers in one fenced source patch."""
-    # The starter renderer omits the machine manifest. Reuse the pre-agent
-    # seed/accepted source so rollback cannot keep the rejected draft's commands.
-    core_files = include_portable_manifest(await render_core(), trusted_files)
+    core_files = include_portable_manifest(await render_core(), trusted_files, restoring_core=True)
     applied = await _applied_migration_paths(handle)
     core_files = {path: source for path, source in core_files.items() if path not in applied}
     removed_paths = sorted(

@@ -712,14 +712,47 @@ def enable_catalog_runtime_manifest(content: str) -> str:
 def include_portable_manifest(
     starter_files: Mapping[str, str],
     workspace_files: Mapping[str, str],
+    *,
+    restoring_core: bool = False,
 ) -> dict[str, str]:
-    """Preserve platform runtime metadata without adopting pre-existing product code."""
+    """Pair the freshly rendered core with the workspace's portable settings."""
     files = dict(starter_files)
-    if ".omnia/cell.json" in workspace_files:
-        files[".omnia/cell.json"] = enable_catalog_runtime_manifest(
-            workspace_files[".omnia/cell.json"]
-        )
+    path = ".omnia/cell.json"
+    if path in workspace_files:
+        manifest = enable_catalog_runtime_manifest(workspace_files[path])
+        if restoring_core:
+            manifest = _core_test_manifest(manifest, files.get("package.json", ""))
+        files[path] = manifest
     return files
+
+
+def _core_test_manifest(manifest_source: str, package_source: str) -> str:
+    # A resumed first build may still carry the product's final-test script.
+    # Its tests and dependencies are absent from the rendered core. Verify this
+    # tree using its actual test script; never rewrite an accepted product.
+    try:
+        manifest = json.loads(manifest_source)
+        package = json.loads(package_source)
+    except (ValueError, TypeError):
+        return manifest_source
+    scripts = package.get("scripts") if isinstance(package, dict) else None
+    if not (
+        isinstance(manifest, dict) and manifest.get("app_config_protocol") == 1
+        and isinstance(manifest.get("tasks"), list)
+        and isinstance(scripts, dict) and scripts.get("test")
+    ):
+        return manifest_source
+    if "test:full" in scripts:
+        return manifest_source
+    for task in manifest["tasks"]:
+        if (
+            isinstance(task, dict) and task.get("role") == "full_build"
+            and task.get("name") == "final-test" and task.get("cwd", ".") == "."
+            and task.get("argv") in (["pnpm", "test:full"], ["pnpm", "run", "test:full"])
+        ):
+            task["argv"] = ["pnpm", "test"]
+            return json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+    return manifest_source
 
 
 _PORTABLE_MAX_IDENTITY_CATALOG_SQL = (

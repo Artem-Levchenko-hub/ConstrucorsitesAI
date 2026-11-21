@@ -5,6 +5,7 @@ import importlib
 import importlib.util
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -233,6 +234,59 @@ async def test_first_portable_max_rollback_restores_trusted_manifest(
         )
         assert result.agent_result.stop_reason == "verification_rolled_back"
     assert trace == ["stage", "restore", "rollback_event"]
+
+
+async def test_core_rollback_verifies_its_own_tests_after_discarding_product_suite():
+    from yleum_api.schemas.max_studio import MaxProjectConfigPayload
+    from yleum_api.services.max_project_kit import (
+        include_portable_manifest,
+        render_max_starter_files,
+    )
+
+    core = render_max_starter_files(
+        MaxProjectConfigPayload(app_name="Nutrition", app_type="custom", summary="Nutrition"),
+        uuid4(), portable=True,
+    )
+    path = ".omnia/cell.json"
+    test_path = "tests/nutrition.e2e.mjs"
+    migration = "drizzle/0100_nutrition.sql"
+    final_task = {"name": "final-test", "role": "full_build", "argv": ["pnpm", "test:full"]}
+    build_task = {"name": "build", "role": "full_build", "argv": ["pnpm", "build"]}
+    manifest = {"version": 1, "app_config_protocol": 1, "tasks": [build_task, final_task],
+                "services": [{"name": "web", "argv": ["pnpm", "start"]}], "routes": []}
+    product_package = json.loads(core["package.json"])
+    product_package["scripts"]["test:full"] = "pnpm test && node --test " + test_path
+    draft = {path: json.dumps(manifest), "package.json": json.dumps(product_package),
+             test_path: "product scenario", migration: "applied SQL", "src/app/page.tsx": "draft"}
+    assert json.loads(include_portable_manifest(core, draft)[path]) == manifest
+    tree = dict(draft)
+
+    async def stage(writes, deletes):
+        assert migration not in writes and migration not in deletes
+        tree.update(writes)
+        for deleted in deletes:
+            tree.pop(deleted, None)
+
+    async def verify_restored(role, operation_id):
+        assert role.value == "restore_runtime"
+        assert migration in tree and test_path not in tree and "src/app/page.tsx" not in tree
+        actual = json.loads(tree[path])
+        expected = {**final_task, "argv": ["pnpm", "test"]}
+        assert actual == {**manifest, "tasks": [build_task, expected]}
+        scripts = json.loads(tree["package.json"])["scripts"]
+        assert scripts[actual["tasks"][-1]["argv"][1]] == "node --test tests/*.test.mjs"
+        assert "tests/starter.test.mjs" in tree
+        return SimpleNamespace(ok=False, redacted_detail="core test failed")
+
+    result = await agent_recovery._restore_max_core(
+        handle=SimpleNamespace(stage_patch=stage, run_role=verify_restored,
+                               applied_migration_paths=AsyncMock(return_value={migration})),
+        touched_files=draft, render_core=AsyncMock(return_value=core), trusted_files=draft,
+        probe_build=AsyncMock(side_effect=AssertionError("unexpected preview sync")),
+        source_only=True,
+    )
+    assert result["ok"] is False and result["detail"] == "core test failed"
+    assert json.loads(draft[path]) == manifest
 
 
 @pytest.mark.parametrize("kind", ["snapshot", "max_core"])

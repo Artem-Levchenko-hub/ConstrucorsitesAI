@@ -1674,9 +1674,12 @@ async def _run_agent_segment(
                 needs_finalization=coordinator_handoff,
             )
 
-        # Failed/noop writes cannot evade the bounded no-progress limit.
-        # The previous observation has already reached this model turn.
-        if no_write_streak >= _NO_WRITE_ABORT_AT and not (
+        # Judge the proposed edit by its result. A failed or unchanged edit at
+        # the boundary ends this segment without another request to the model.
+        file_edit = action.name in {"write_file", "edit_file"}
+        exploration_exhausted = no_write_streak >= _NO_WRITE_ABORT_AT
+        boundary_edit = file_edit and no_write_streak == _NO_WRITE_ABORT_AT
+        if exploration_exhausted and not boundary_edit and not (
             action.name == "build" and pending_source_build
         ):
             await _step_result(
@@ -1784,7 +1787,7 @@ async def _run_agent_segment(
         # many actions in a row that produce no file means the model is exploring,
         # not building. Nudge HARD to write; if it still won't, abort early (with a
         # distinct stop_reason) rather than burning the whole budget reading.
-        if action.name in ("write_file", "edit_file"):
+        if file_edit:
             # Build-pressure / rotation guard. The model sometimes WRITES forever
             # without ever running `build` — rewriting the same files in rotation
             # with slight content variations (observed live: a messenger churned the
@@ -1849,10 +1852,7 @@ async def _run_agent_segment(
         # generic executors get one bounded fresh BEFORE read for a tracked file.
         # Once a valid receipt proves support, skip that fallback read. No model
         # call/step is added; unavailable/truncated evidence earns no reset.
-        write_path = (
-            _safe_file_path(action.path)
-            if action.name in {"write_file", "edit_file"} else None
-        )
+        write_path = _safe_file_path(action.path) if file_edit else None
         before_content = None
         if snapshot_files is None and write_path in read_sigs and not content_receipts_seen:
             before_action = Action(name="read_file", args={"path": write_path})
@@ -2000,7 +2000,7 @@ async def _run_agent_segment(
             flush=True,
         )
         # Track files the agent actually committed to the container.
-        if action.name in ("write_file", "edit_file") and obs.get("ok"):
+        if file_edit and obs.get("ok"):
             if "content" in obs and isinstance(obs["content"], str):
                 written[action.path] = obs["content"]
             wrote_since_check = True  # a new write is unverified until re-checked
@@ -2078,6 +2078,8 @@ async def _run_agent_segment(
                 )
         if repeated_managed_gap and managed_gap is not None:
             return _managed_source_stop(managed_gap, step)
+        if boundary_edit and no_write_streak:
+            return _ship_green_or(_exploration_failure(step), step, "explore")
         if no_write_streak == (_EDIT_NO_WRITE_NUDGE_AT if edit_mode else _NO_WRITE_NUDGE_AT):
             await _nudge_exploration(step)
 

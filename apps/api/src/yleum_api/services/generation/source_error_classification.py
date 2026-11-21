@@ -69,10 +69,26 @@ _ASSERTION = re.compile(
     r"(?m)^AssertionError \[ERR_ASSERTION\](?:[^\r\n]*)$"
     r"|^\s*code: ['\"]ERR_ASSERTION['\"],?\s*$"
 )
+_TEST_PATH = r"tests/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_.-]+\.(?:mjs|cjs|js|ts|tsx)"
 _ASSERTION_LOCATION = re.compile(
     r"(?m)^\s+at (?:[^()\r\n]+ \()?file:///workspace/"
-    r"(?P<file>tests/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_.-]+\.(?:mjs|cjs|js|ts|tsx))"
+    rf"(?P<file>{_TEST_PATH})"
     r":(?P<line>[1-9]\d{0,6}):[1-9]\d{0,6}\)?[ \t]*$"
+)
+_TAP_FAILED_TEST = re.compile(
+    r"(?ms)^not ok \d+ - [^\r\n]*\r?\n(?P<body>.*?)"
+    r"(?=^(?:not ok |ok |# Subtest:|1\.\.|  \.\.\.)|\Z)"
+)
+_TAP_TEST_LOCATION = re.compile(
+    rf"(?m)^  location: '/workspace/(?P<file>{_TEST_PATH}):[1-9]\d{{0,6}}:[1-9]\d{{0,6}}'\r?$"
+)
+_LOCATOR_TIMEOUT = re.compile(
+    r"(?m)^    locator\.[A-Za-z]+: Timeout [1-9]\d{0,8}ms exceeded\.\r?\n"
+    r"    Call log:\r?\n      - waiting for [^\r\n]+"
+)
+_PLAYWRIGHT_TEST_FRAME = re.compile(
+    rf"(?m)^    (?:at )?TestContext\.<anonymous> \((?:file://)?/workspace/(?P<file>{_TEST_PATH})"
+    r":(?P<line>[1-9]\d{0,6}):[1-9]\d{0,6}\)\r?$"
 )
 _TRUNCATED_ASSERTION_LOCATION = re.compile(
     r"(?m)^\s+at (?:[^()\r\n]+ \()?file:///workspace/"
@@ -136,6 +152,24 @@ def has_truncated_test_assertion(detail: str, files: Mapping[str, str]) -> bool:
         ):
             return True
     return False
+
+
+def _locator_timeout_test(detail: str, files: Mapping[str, str]) -> str | None:
+    """Bind a Playwright action timeout to its own failed Node test and source frame."""
+    if "locator." not in detail:
+        return None
+    for failed in _TAP_FAILED_TEST.finditer(detail):
+        body = failed["body"]
+        if ("  failureType: 'testCodeFailure'" not in body
+                or "  code: 'ERR_TEST_FAILURE'" not in body or not _LOCATOR_TIMEOUT.search(body)):
+            continue
+        location = _TAP_TEST_LOCATION.search(body)
+        frame = _PLAYWRIGHT_TEST_FRAME.search(body)
+        if location and frame and location["file"] == frame["file"]:
+            path = _importer(frame["file"], files)
+            if path and int(frame["line"]) <= len(files[path].splitlines()):
+                return path
+    return None
 
 
 def _owned_full_build_phase(
@@ -276,4 +310,9 @@ def classify_source_failure(
             # The exact frame is unavailable. Recognize the owned failed task
             # without guessing an importer or granting a source write path.
             return SourceFailure("test_assertion")
+    test_path = _locator_timeout_test(detail, files)
+    if test_path:
+        # Route to the product editor. A failing locator does not by itself
+        # establish which source file needs changing.
+        return SourceFailure("test_assertion", importer=test_path)
     return SourceFailure()

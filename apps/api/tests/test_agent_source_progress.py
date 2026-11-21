@@ -60,6 +60,73 @@ async def test_threshold_bash_executes_and_returns_real_source_change_to_model()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("edit", ["write_file", "edit_file"])
+@pytest.mark.parametrize("changed", [True, False])
+async def test_late_edit_executes_and_only_verified_change_renews_exploration(edit, changed):
+    path = "tests/nutrition.e2e.mjs"
+    state = {path: "before"}
+    content = "after" if changed else "before"
+    args = (
+        {"content": content} if edit == "write_file" else {"search": "before", "replace": content}
+    )
+    replies = iter([
+        *[action("read_file", path=f"missing-{i}.ts") for i in range(ab._NO_WRITE_ABORT_AT)],
+        action(edit, path=path, **args),
+        *([action("build"), action("done")] if changed else []),
+    ])
+    actions = []
+
+    async def complete(*_args, **_kwargs):
+        return next(replies)
+
+    async def snapshot():
+        return dict(state)
+
+    async def execute(tool):
+        actions.append(tool.name)
+        if tool.name == edit:
+            state[path] = content
+            return {"ok": True, "content": content}
+        if tool.name == "build":
+            return {"ok": True}
+        return {"ok": False, "error": "missing file"}
+
+    result = await ab.run_agent_build(
+        system_prompt="sys", user_prompt="continue draft", model="test", complete=complete,
+        execute=execute, snapshot_files=snapshot, coordinator_handoff=True,
+        ship_green_on_abort=False, max_steps=40,
+    )
+    assert actions.count(edit) == 1 and result.done is changed
+    assert result.stop_reason == ("done" if changed else "exploring")
+    assert ("build" in actions) is changed
+
+
+@pytest.mark.asyncio
+async def test_repeat_guard_consumes_final_edit_opportunity():
+    rejected = action("edit_file", path="page.tsx", search="missing", replace="new")
+    replies = iter([
+        *[action("read_file", path=f"missing-{i}.ts") for i in range(ab._NO_WRITE_ABORT_AT - 2)],
+        rejected, rejected, rejected,
+        action("write_file", path="page.tsx", content="unexpected extra write"),
+    ])
+    edits = []
+
+    async def complete(*_args, **_kwargs):
+        return next(replies)
+
+    async def execute(tool):
+        if tool.name != "read_file":
+            edits.append(tool.name)
+        return {"ok": False, "error": "missing"}
+
+    result = await ab.run_agent_build(
+        system_prompt="sys", user_prompt="edit", model="test", complete=complete,
+        execute=execute, max_steps=40, ship_green_on_abort=False,
+    )
+    assert edits == ["edit_file", "edit_file"] and result.stop_reason == "exploring"
+
+
+@pytest.mark.asyncio
 async def test_unique_failed_edits_do_not_reset_no_progress_streak():
     calls = 0
     observations = []

@@ -315,7 +315,7 @@ def test_failed_patch_feedback_does_not_earn_source_progress_or_budget(edit_muta
     )
     assert result.stop_reason == "exploring" and not result.done
     assert len(calls) == ab._NO_WRITE_ABORT_AT + 1
-    assert len(executed) == ab._NO_WRITE_ABORT_AT
+    assert len(executed) == len(calls)  # The final proposed edit ran and failed.
     assert snapshots == 2 * len(executed)
     assert all(context_from(messages)["content"] == page_source() for messages in calls[1:])
 

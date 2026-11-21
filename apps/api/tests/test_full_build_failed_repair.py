@@ -59,6 +59,37 @@ FILES = {
 DETAIL = "src/app/page.tsx(1,1): error TS2322: Type 'string' is not assignable to type 'number'."
 ASSERTION = "AssertionError [ERR_ASSERTION]: wrong rendered page\n    at file:///workspace/tests/page-smoke.mjs:2:3"
 PARTIAL_ASSERTION = "[final-test] \nAssertionError [ERR_ASSERTION]: wrong rendered page\n    at file:///workspace/tests/page-sm"
+LOCATOR_TIMEOUT = """not ok 1 - opens a saved entry
+  ---
+  location: '/workspace/tests/page-smoke.mjs:1:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    locator.click: Timeout 30000ms exceeded.
+    Call log:
+      - waiting for getByRole('button', { name: 'История', exact: true })
+  code: 'ERR_TEST_FAILURE'
+  name: 'TimeoutError'
+  stack: |-
+    TestContext.<anonymous> (/workspace/tests/page-smoke.mjs:2:3)
+  ...
+"""
+
+
+@pytest.mark.parametrize("detail", [
+    LOCATOR_TIMEOUT.replace("locator.click:", "page.goto:"),
+    LOCATOR_TIMEOUT.replace("ERR_TEST_FAILURE", "ERR_WORKER_UNAVAILABLE"),
+    LOCATOR_TIMEOUT.replace("<anonymous> (/workspace/tests/", "<anonymous> (/tmp/tests/"),
+    LOCATOR_TIMEOUT.replace("page-smoke.mjs:2:3", "page-smoke.mjs:99:3"),
+    LOCATOR_TIMEOUT.replace("page-smoke.mjs:1:1", "foreign.mjs:1:1"),
+    LOCATOR_TIMEOUT.replace("  stack:", "  ...\nnot ok 2 - a different test\n  stack:"),
+    LOCATOR_TIMEOUT + "ECONNRESET",
+])
+def test_navigation_transport_and_unowned_test_timeouts_do_not_request_a_ui_repair(detail):
+    failure = max_finalization.classify_source_failure(
+        detail, files=FILES, command_finished=True,
+        frozen_source_sha256=workspace_revision_digest(FILES),
+    )
+    assert not max_finalization._repairable_build_failure(failure)
 
 
 def identities():
@@ -394,8 +425,8 @@ async def test_typed_transition_does_not_override_non_environment_identity_guard
 
 
 @pytest.fixture(
-    params=[DETAIL, ASSERTION, PARTIAL_ASSERTION],
-    ids=["typescript", "smoke-assertion", "partial-assertion"],
+    params=[DETAIL, ASSERTION, PARTIAL_ASSERTION, LOCATOR_TIMEOUT],
+    ids=["typescript", "smoke-assertion", "partial-assertion", "locator-timeout"],
 )
 async def witness_case(monkeypatch, request):
     """Real ORM rows/queries; only owning physical reads are synthetic."""
@@ -558,6 +589,9 @@ async def test_owned_after_red_witness_and_cold_source_failure_keep_before_lease
         assert failure is not None
         if c.response.detail == PARTIAL_ASSERTION:
             assert failure.kind == "test_assertion" and failure.allowed_paths == ()
+        elif c.response.detail == LOCATOR_TIMEOUT:
+            assert failure.kind == "test_assertion" and failure.importer == "tests/page-smoke.mjs"
+            assert failure.allowed_paths == ()
         else:
             assert failure.allowed_paths == (expected,)
         cold._execute_role.assert_not_awaited()
