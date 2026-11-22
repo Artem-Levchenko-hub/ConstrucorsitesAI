@@ -68,7 +68,7 @@ export function MaxChatComposer({ projectId, snapshotId, contextVersion, draftRe
       <Button ref={triggerRef} type="button" variant="secondary" size="sm"
         className="max-chat-advice-trigger" aria-expanded={open} aria-controls={open ? panelId : undefined}
         onClick={() => setOpen((value) => !value)}>
-        <Lightbulb aria-hidden="true" /> Подсказки
+        <Lightbulb aria-hidden="true" /> <span>Подсказки</span>
       </Button>
       {open && <section id={panelId} role="region" aria-labelledby={`${panelId}-title`} className="max-chat-advice-panel">
         <header className="max-chat-advice-heading">

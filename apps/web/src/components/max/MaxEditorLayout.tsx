@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { ArrowUpRight, PanelRightOpen, Plug, SlidersHorizontal, X } from "lucide-react";
@@ -32,18 +32,47 @@ export function MaxEditorLayout({ project, email, children, navigation, preview 
 }) {
   const [entry, setEntry] = useState<keyof typeof titles | null>(null);
   const desktop = useSyncExternalStore(subscribeViewport, isDesktop, serverViewport);
+  const editor = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLElement | null>(null);
   const projectHref = `/max/${project.id}`;
   const modal = entry === "preview" && desktop ? null : entry;
   const previewContent = typeof preview === "function"
     ? preview(modal === "preview" ? () => setEntry(null) : undefined)
     : preview;
-  function open(next: keyof typeof titles, target: HTMLElement) {
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const element = editor.current;
+    if (!viewport || !element || desktop) return;
+
+    const resetViewport = () => {
+      element.style.removeProperty("--max-editor-visual-height");
+      element.style.removeProperty("--max-editor-visual-top");
+    };
+    const updateViewport = () => {
+      if (viewport.scale !== 1) {
+        resetViewport();
+        return;
+      }
+      element.style.setProperty("--max-editor-visual-height", `${Math.floor(viewport.height)}px`);
+      element.style.setProperty("--max-editor-visual-top", `${Math.round(viewport.offsetTop)}px`);
+    };
+
+    updateViewport();
+    viewport.addEventListener("resize", updateViewport);
+    viewport.addEventListener("scroll", updateViewport);
+    return () => {
+      viewport.removeEventListener("resize", updateViewport);
+      viewport.removeEventListener("scroll", updateViewport);
+      resetViewport();
+    };
+  }, [desktop]);
+
+  function openPreview(target: HTMLElement) {
     trigger.current = target;
-    setEntry(next);
+    setEntry("preview");
   }
   return (
-    <div data-product-shell data-max-editor className="max-editor">
+    <div ref={editor} data-product-shell data-max-editor className="max-editor">
       <header className="max-editor-header max-shared-project-header">
         <MaxProjectHeader projectId={project.id} projectName={project.name} active="editor" email={email} navigation={navigation} />
         <div className="max-editor-header-actions">
@@ -54,7 +83,11 @@ export function MaxEditorLayout({ project, email, children, navigation, preview 
           <Button asChild variant="outline" className="max-editor-section-link">
             <Link data-learning="editor-services" href={`${projectHref}/integrations?tab=services`} data-testid="max-integrations-open"><Plug aria-hidden="true" />Интеграции</Link>
           </Button>
-          <Button data-learning="editor-preview" variant="outline" size="icon" onClick={event => open("preview", event.currentTarget)} className="max-editor-mobile-preview-trigger" aria-label="Открыть живое превью" data-testid="max-mobile-preview-open"><PanelRightOpen className="size-4" /></Button>
+          <Button data-learning="editor-preview" variant="outline" onClick={event => openPreview(event.currentTarget)}
+            className="max-editor-mobile-preview-trigger" aria-label="Открыть живое превью" aria-haspopup="dialog"
+            aria-expanded={modal === "preview"} data-testid="max-mobile-preview-open">
+            <PanelRightOpen aria-hidden="true" /> <span>Превью</span>
+          </Button>
           <Button asChild className="max-editor-publish">
             <Link data-learning="editor-publish" data-testid="max-launch-open" href={`${projectHref}/publish`}>Публикация <ArrowUpRight aria-hidden="true" /></Link>
           </Button>
@@ -81,7 +114,7 @@ export function MaxEditorLayout({ project, email, children, navigation, preview 
             }}>
             <div className="max-editor-modal-heading">
               <div><span className="max-editor-modal-project">{project.name}</span><Dialog.Title>{modal ? titles[modal] : undefined}</Dialog.Title></div>
-              <div className="flex items-center gap-2"><LearningButton /><Dialog.Close asChild><Button variant="outline" size="icon" aria-label="Закрыть окно"><X className="size-5" /></Button></Dialog.Close></div>
+              <div className="max-editor-modal-actions flex items-center gap-2"><LearningButton /><Dialog.Close asChild><Button variant="outline" size="icon" aria-label="Закрыть окно"><X aria-hidden="true" className="size-5" /></Button></Dialog.Close></div>
             </div>
             <div data-learning="editor-panel" className="max-editor-modal-scroll" key={modal}>
               {modal === "preview" && <div className="max-editor-modal-preview-content">{previewContent}</div>}

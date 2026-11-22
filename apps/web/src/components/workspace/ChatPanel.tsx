@@ -558,7 +558,7 @@ export function ChatPanel({
         </div>
       </div>
 
-      <div className="relative shrink-0">
+      <div className="max-chat-footer relative shrink-0">
         {canChooseEngine && <GenerationEngineSelect value={engine}
           disabled={isStreaming || !!pendingPrompt}
           onChange={value => setEngineChoice({ projectId, engine: value })} />}

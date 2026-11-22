@@ -156,6 +156,30 @@ describe("MAX chat suggestions and draft", () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 
+  it("keeps typed line breaks and unfinished composition in a narrow MAX editor draft", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(max-width: 1023px)",
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+    }));
+    render();
+    const input = typeDraft("Добавь описание товара");
+    const pressEnter = async (options: KeyboardEventInit = {}) => {
+      const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...options });
+      await act(async () => input.dispatchEvent(event));
+      return event;
+    };
+
+    expect((await pressEnter()).defaultPrevented).toBe(false);
+    expect((await pressEnter({ ctrlKey: true, isComposing: true })).defaultPrevented).toBe(false);
+    expect(sent).toEqual([]);
+    expect(input.value).toBe("Добавь описание товара");
+    expect((await pressEnter({ ctrlKey: true })).defaultPrevented).toBe(true);
+    expect(sent).toEqual(["Добавь описание товара"]);
+  });
+
   it("loads only on explicit open and inserts an editable draft without submitting", async () => {
     render();
     expect(button("Подсказки")).toBeDefined();

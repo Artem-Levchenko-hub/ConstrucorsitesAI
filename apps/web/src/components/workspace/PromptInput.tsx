@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useId, useImperativeHandle, useRef, useState, type ComponentProps, type ReactNode, type Ref } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Clock, ImagePlus, Loader2, Mic, Send, Square, StopCircle, Type, X } from "lucide-react";
+import { Clock, ImagePlus, Loader2, Mic, Plus, Send, Square, StopCircle, Type, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useMaxWorkspaceDraftGuard } from "@/components/max/use-max-workspace-draft-guard";
 import { useVoiceInput } from "@/hooks/useVoiceInput";
 import { EASE_OUT } from "@/lib/motion";
@@ -248,12 +249,20 @@ function ProjectPromptInput({
   }, [send, value, hasAttachments]);
 
   const onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      e.stopPropagation();
-      void send();
-    }
+    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+    if (compact && !e.ctrlKey && !e.metaKey && window.matchMedia?.("(max-width: 1023px)").matches) return;
+    e.preventDefault();
+    e.stopPropagation();
+    void send();
   };
+
+  const imagesDisabled = isSubmitting || references.busy || references.items.length >= REFERENCE_IMAGE_LIMITS.count;
+  const fontsDisabled = isSubmitting || fonts.busy || fonts.items.length >= FONT_LIMITS.count;
+  const pickImages = () => filesRef.current?.click();
+  const toggleFonts = () => setFontPanelOpen(open => !open);
+  const queuedPlaceholder = compact
+    ? "Напишите следующую правку…"
+    : "Можно писать следующий — отправится после текущей генерации";
 
   return (
     <div
@@ -271,9 +280,9 @@ function ProjectPromptInput({
     >
       {quotaNotice}
       {(references.error || fonts.error || submitError) && <p role="alert" className="text-xs text-danger">{references.error || fonts.error || submitError}</p>}
-      {projectId && fontPanelOpen && <div id={fontPanelId}><FontAttachmentPanel key={projectId} fonts={fonts} disabled={isSubmitting} /></div>}
+      {projectId && fontPanelOpen && <div id={fontPanelId} className="prompt-input-font-panel"><FontAttachmentPanel key={projectId} fonts={fonts} disabled={isSubmitting} /></div>}
       <FontAttachmentChips fonts={fonts} disabled={isSubmitting} />
-      {!!references.items.length && <ul aria-label="Изображения к запросу" className="flex flex-wrap gap-2">
+      {!!references.items.length && <ul aria-label="Изображения к запросу" className="prompt-input-references flex flex-wrap gap-2">
         {references.items.map((item) => <li key={item.key} className="relative w-28 rounded-lg border border-border-subtle p-1">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={item.preview} alt={item.file.name} className="h-20 w-full rounded object-cover" />
@@ -343,7 +352,7 @@ function ProjectPromptInput({
           }}
           placeholder={
             isStreaming
-              ? "Можно писать следующий — отправится после текущей генерации"
+              ? queuedPlaceholder
               : selections.length
                 ? "Общий комментарий (необязательно) — правки по элементам уже заданы…"
                 : placeholder ?? "Опишите, что изменить или добавить…"
@@ -352,31 +361,49 @@ function ProjectPromptInput({
           className="w-full bg-transparent px-3.5 py-3 text-sm text-fg-primary placeholder:text-fg-tertiary resize-none focus:outline-none"
         />
 
-        <div className="flex items-center justify-between px-2.5 pb-2.5 gap-2">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <div className="prompt-input-toolbar flex items-center justify-between px-2.5 pb-2.5 gap-2">
+          <div className="prompt-input-tools flex min-w-0 flex-wrap items-center gap-2">
           {projectId && <><input ref={filesRef} type="file" multiple accept={REFERENCE_IMAGE_ACCEPT} className="sr-only" tabIndex={-1} aria-label="Выбрать изображения"
             onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void references.add(files); }} />
             <Button type="button" variant="secondary" size="sm" aria-label="Прикрепить изображения" title={`PNG, JPEG, WebP · до ${REFERENCE_IMAGE_LIMITS.count} файлов по ${REFERENCE_IMAGE_LIMITS.bytes / 1024 / 1024} МБ`} className="prompt-input-attachment h-11 px-2.5 sm:h-8"
-              disabled={isSubmitting || references.busy || references.items.length >= REFERENCE_IMAGE_LIMITS.count} onClick={() => filesRef.current?.click()}>
+              disabled={imagesDisabled} onClick={pickImages}>
               {references.busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
             </Button></>}
           {projectId && <Button type="button" variant="secondary" size="sm" aria-label="Прикрепить шрифт" title="Выбрать шрифт или загрузить файл"
             aria-expanded={fontPanelOpen} aria-controls={fontPanelOpen ? fontPanelId : undefined}
-            disabled={isSubmitting || fonts.busy || fonts.items.length >= FONT_LIMITS.count}
-            onClick={() => setFontPanelOpen(open => !open)} className="prompt-input-attachment h-11 px-2.5 sm:h-8"><Type aria-hidden="true" className="h-4 w-4" /></Button>}
+            disabled={fontsDisabled} onClick={toggleFonts}
+            className="prompt-input-attachment h-11 px-2.5 sm:h-8"><Type aria-hidden="true" className="h-4 w-4" /></Button>}
+          {compact && projectId && (
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="secondary" size="icon" aria-label="Добавить вложение"
+                  className="prompt-input-add hidden" disabled={imagesDisabled && fontsDisabled}>
+                  <Plus aria-hidden="true" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent side="top" align="start" data-product-shell data-max-editor className="max-chat-attachment-menu">
+                <DropdownMenuItem disabled={imagesDisabled} onSelect={pickImages}>
+                  <ImagePlus aria-hidden="true" className="size-4" />Изображения
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={fontsDisabled} onSelect={toggleFonts}>
+                  <Type aria-hidden="true" className="size-4" />Шрифт
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           {toolbarAction}
           {voice.state === "recording" ? (
-            <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-danger">
+            <span className="prompt-input-voice-status flex min-w-0 items-center gap-1.5 text-[11px] text-danger">
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger animate-pulse" />
               Запись… нажмите стоп
             </span>
           ) : voice.state === "transcribing" ? (
-            <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-fg-tertiary">
+            <span className="prompt-input-voice-status flex min-w-0 items-center gap-1.5 text-[11px] text-fg-tertiary">
               <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
               Распознаю речь…
             </span>
           ) : voice.error ? (
-            <span className="min-w-0 truncate text-[11px] text-danger" title={voice.error}>
+            <span className="prompt-input-voice-status min-w-0 truncate text-[11px] text-danger" title={voice.error}>
               {voice.error}
             </span>
           ) : !toolbarAction ? (
@@ -395,7 +422,7 @@ function ProjectPromptInput({
           ) : null}
           </div>
 
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="prompt-input-actions flex items-center gap-1.5 shrink-0">
             {voice.supported && (
               <Button
                 type="button"
@@ -444,7 +471,7 @@ function ProjectPromptInput({
               disabled={
                 quotaBlocksDraft || isSubmitting || attachmentsBlocked || !currentDraft.text
               }
-              className="h-11 gap-1.5 rounded-full px-3.5 sm:h-8"
+              className="prompt-input-send h-11 gap-1.5 rounded-full px-3.5 sm:h-8"
               title={
                 isStreaming
                   ? "Будет отправлено после текущей генерации"
@@ -456,7 +483,7 @@ function ProjectPromptInput({
               ) : (
                 <Send className="h-3.5 w-3.5" />
               )}
-              <span>
+              <span className="prompt-input-send-label">
                 {isSubmitting
                   ? "Отправляю…"
                   : isStreaming

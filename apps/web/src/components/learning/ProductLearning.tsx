@@ -31,7 +31,7 @@ const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce
 export function LearningButton({ label = "Обучение", className = "" }: { label?: string; className?: string }) {
   const gate = useLearningGate();
   return (
-    <Button type="button" variant="secondary" size="nav" className={`learning-launch ${className}`}
+    <Button type="button" variant="secondary" size="nav" className={`learning-launch ${className}`} aria-label={label}
       onClick={event => requestLearning(gate?.userKey, event.currentTarget)}>
       <BookOpen aria-hidden="true" />
       <span>{label}</span>
