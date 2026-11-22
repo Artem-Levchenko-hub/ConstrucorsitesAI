@@ -131,6 +131,19 @@ def is_llmgw_model(model_id: str) -> bool:
     return model_id in _MODEL_SLUG
 
 
+def _chat_slug(model: str, provider_scope: str) -> str:
+    if provider_scope == "aitunnel":
+        from yleum_gateway.services.text_failover import CHAT_MODELS
+
+        if model not in CHAT_MODELS:
+            raise ValidationFailedError("Unsupported backup model")
+        return model
+    slug = _MODEL_SLUG.get(model)
+    if slug is None:
+        raise ValidationFailedError(f"unsupported llmgw model: {model}")
+    return slug
+
+
 def native_slug(model_id: str) -> str:
     """Catalog slug for the native `/v1/messages` surface (identity if unknown)."""
     return _MODEL_SLUG.get(model_id, model_id)
@@ -327,19 +340,23 @@ def _refusal_category(response: httpx.Response) -> str | None:
     error = body.get("error") if isinstance(body, dict) else None
     if not isinstance(error, dict):
         return None
-    # LLMGW sends this balance refusal inside the same envelope as auth errors.
-    if (
-        response.status_code == HTTPStatus.UNAUTHORIZED
-        and error.get("type") == "auth_error" and error.get("code") == "401"
-        and isinstance(message := error.get("message"), str)
-        and re.match(r"Недостаточно средств на балансе\. Пополните баланс\b", message)
-    ):
-        return "funds"
     categories = {
         _REFUSAL_CATEGORIES[value]
         for key in ("code", "type")
         if isinstance(value := error.get(key), str) and value in _REFUSAL_CATEGORIES
     }
+    # LLMGW reports balance and per-request budget refusals as auth errors.
+    if error.get("type") == "auth_error" and isinstance(message := error.get("message"), str):
+        balance_rejected = (
+            response.status_code == HTTPStatus.UNAUTHORIZED and error.get("code") == "401"
+            and re.match(r"Недостаточно средств на балансе\. Пополните баланс\b", message)
+        )
+        budget_rejected = (
+            response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+            and re.match(r"Недостаточно доступного бюджета для запроса\b", message)
+        )
+        if balance_rejected or budget_rejected:
+            categories.add("funds")
     # Contradictory structured evidence must stay unknown.
     return next(iter(categories)) if len(categories) == 1 else None
 
@@ -434,17 +451,11 @@ async def astream(
     """
     if timeout <= 0:
         raise DispatchDeadlineError()
-    slug = _MODEL_SLUG.get(model)
-    if slug is None:
-        raise ValidationFailedError(f"unsupported llmgw model: {model}")
+    slug = _chat_slug(model, provider_scope)
     def failure_details(data: object, headers: object = None, **details: Any) -> dict[str, Any]:
         return _failure_details(data, headers, provider_scope=provider_scope, **details)
 
     key, url = _key_and_url(provider_scope)
-    if provider_scope == "aitunnel":
-        if model != "claude-sonnet-5.5":
-            raise ValidationFailedError("Unsupported backup model")
-        slug = model
 
     payload = _chat_payload(
         model, slug, messages, temperature=temperature, max_tokens=max_tokens, stream=True,
@@ -723,17 +734,11 @@ async def acompletion(
     deadline = provider_deadline
     if provider_scope == "aitunnel" and deadline is None:
         deadline = asyncio.get_running_loop().time() + (response_budget or timeout)
-    slug = _MODEL_SLUG.get(model)
-    if slug is None:
-        raise ValidationFailedError(f"unsupported llmgw model: {model}")
+    slug = _chat_slug(model, provider_scope)
     def failure_details(data: object, headers: object = None, **details: Any) -> dict[str, Any]:
         return _failure_details(data, headers, provider_scope=provider_scope, **details)
 
     key, url = _key_and_url(provider_scope)
-    if provider_scope == "aitunnel":
-        if model != "claude-sonnet-5.5":
-            raise ValidationFailedError("Unsupported backup model")
-        slug = model
 
     payload = _chat_payload(
         model, slug, messages, temperature=temperature, max_tokens=max_tokens, stream=False,

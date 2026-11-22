@@ -483,8 +483,9 @@ async def test_native_exhaustion_uses_only_the_last_confirmed_refusal(monkeypatc
     scope = "aitunnel" if status is None else "llmgw"
     monkeypatch.setattr(text_failover, "select_scope", AsyncMock(return_value=scope))
 
-    async def previous_rate_refusal(cooldown_identity, backup_call):
+    async def previous_rate_refusal(cooldown_identity, backup_call, model):
         assert cooldown_identity == identity and backup_call == call_id
+        assert model == text_failover.MODEL
         finish.assert_awaited_once()
         assert finish.await_args.kwargs["reason"] == "preconnect"
         return 30 if chain == "cooldown" else None

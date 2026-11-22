@@ -159,6 +159,14 @@ async def test_durable_aitunnel_preconnect_allows_one_return_without_ping_pong(p
     ({"basis": "provider_catalog_estimate", "reported_cost_rub": None,
       "calculated_cost_rub": "0.3"}, "estimated"),
     ({"basis": "provider_catalog_estimate", "reported_cost_rub": None}, "unknown"),
+    ({
+        "tariff_source": "aitunnel-gpt-6.2-sol-usage-cost-rub",
+        "rub_source": "usage:cost_rub", "tariff": None, "tariff_revision": None,
+    }, "confirmed"),
+    ({
+        "tariff_source": "aitunnel-gpt-6.2-sol-usage-cost-rub",
+        "rub_source": "header:x-cost-rub", "tariff": None, "tariff_revision": None,
+    }, "unknown"),
 ])
 async def test_python_and_sql_classification_agree_for_provider_v2(pool, changes, expected):
     proof = {"schema_version": 2, "provider_scope": "aitunnel",
@@ -176,9 +184,13 @@ async def test_python_and_sql_classification_agree_for_provider_v2(pool, changes
     assert result == expected
 
 
-@pytest.mark.parametrize("scope", ["llmgw", "aitunnel"])
+@pytest.mark.parametrize(("scope", "model", "route"), [
+    ("llmgw", "claude-sonnet-5.5", "/v1/messages"),
+    ("aitunnel", "claude-sonnet-5.5", "/v1/messages"),
+    ("llmgw", "gpt-6.2-sol", "/v1/chat/completions"),
+])
 async def test_retained_refusal_cold_read_and_sql_child_authority(
-    pool, database_url, monkeypatch, scope,
+    pool, database_url, monkeypatch, scope, model, route,
 ):
     from yleum_gateway.core import db
     from yleum_gateway.services import billing
@@ -200,7 +212,7 @@ async def test_retained_refusal_cold_read_and_sql_child_authority(
         expires_at=int(datetime.now(UTC).timestamp()) + 30))
     admitted = await attempts.reserve_generation_attempt(identity)
     call = await attempts.mark_attempt_dispatching(identity.attempt_id,
-        dispatch_token=admitted.dispatch_token, route="/v1/messages", model="claude-sonnet-5.5",
+        dispatch_token=admitted.dispatch_token, route=route, model=model,
         user_id=identity.user_id, run_id=identity.run_id, project_id=identity.project_id,
         provider_scope=scope)
     await attempts.finish(identity, call, status="failed", reason="upstream_refused",
@@ -212,7 +224,7 @@ async def test_retained_refusal_cold_read_and_sql_child_authority(
         yield payload
 
     await ChunkWriter(identity.attempt_id, objects, writer, chunk_bytes=19).store(
-        body(), finish_reason="error", route="/v1/messages")
+        body(), finish_reason="error", route=route)
     reads_after_write_verification = objects.reads
     async with pool.acquire() as conn:
         attempt = await conn.fetchrow("SELECT * FROM generation_provider_attempts WHERE attempt_id=$1",
@@ -256,8 +268,8 @@ async def test_retained_refusal_cold_read_and_sql_child_authority(
                 "parent_attempt_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", child.attempt_id,
                 child.run_id, child.project_id, child.user_id, child.prompt_hash,
                 child.request_sha256, uuid4(), identity.attempt_id)
-        assert await text_failover.select_scope(child, "claude-sonnet-5.5") == "aitunnel"
-        assert await text_failover.select_scope(child, "claude-sonnet-5.5") == "aitunnel"
+        assert await text_failover.select_scope(child, model) == "aitunnel"
+        assert await text_failover.select_scope(child, model) == "aitunnel"
         async with pool.acquire() as conn:
             assert await conn.fetchval("SELECT count(*) FROM provider_calls WHERE run_id=$1",
                                       identity.run_id) == 1

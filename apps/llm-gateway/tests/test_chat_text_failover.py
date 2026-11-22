@@ -28,10 +28,14 @@ def client(neutralize_lifespan, neutralize_side_effects, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("route", "stream"),
+    ("route", "stream", "model"),
     [
-        ("/v1/chat/completions", False), ("/v1/chat/completions", True),
-        ("/v1/messages", False), ("/v1/project-cell/messages", False),
+        ("/v1/chat/completions", False, "claude-sonnet-5.5"),
+        ("/v1/chat/completions", True, "claude-sonnet-5.5"),
+        ("/v1/messages", False, "claude-sonnet-5.5"),
+        ("/v1/project-cell/messages", False, "claude-sonnet-5.5"),
+        ("/v1/chat/completions", False, "gpt-6.2-sol"),
+        ("/v1/chat/completions", True, "gpt-6.2-sol"),
     ],
 )
 @pytest.mark.parametrize(
@@ -43,6 +47,10 @@ def client(neutralize_lifespan, neutralize_side_effects, monkeypatch):
             "type": "auth_error", "code": "401", "param": "balance",
             "message": "Недостаточно средств на балансе. Пополните баланс для продолжения.",
         }, True, id="llmgw-balance-401"),
+        pytest.param(422, {
+            "type": "auth_error", "code": "422",
+            "message": "Недостаточно доступного бюджета для запроса. Пополните баланс.",
+        }, True, id="llmgw-budget-422"),
         pytest.param(402, None, True, id="bare-payment"),
         pytest.param(401, {"code": "authentication_error"}, False, id="auth"),
         pytest.param(401, {
@@ -54,7 +62,7 @@ def client(neutralize_lifespan, neutralize_side_effects, monkeypatch):
     ],
 )
 def test_confirmed_balance_refusal_routes_following_steps_of_the_same_generation(
-    client, monkeypatch, route, stream, status, error, stays_on_backup,
+    client, monkeypatch, route, stream, model, status, error, stays_on_backup,
 ):
     calls = {}
     hosts = []
@@ -99,11 +107,17 @@ def test_confirmed_balance_refusal_routes_following_steps_of_the_same_generation
 
     def upstream(request):
         hosts.append(request.url.host)
+        payload = json.loads(request.content)
+        if request.url.host == "api.aitunnel.ru":
+            assert payload["model"] == model
+            if model == "gpt-6.2-sol":
+                assert payload["reasoning_effort"] == "medium"
+                assert payload["max_completion_tokens"] == 128
         if request.url.host == "api.llmgw.ru" and b"new generation" not in request.content:
             return httpx.Response(status, json={"error": error} if error is not None else None)
-        identity = {"id": str(uuid4()), "model": "claude-sonnet-5.5"}
+        identity = {"id": str(uuid4()), "model": model}
         usage = {"prompt_tokens": 10, "completion_tokens": 2, "cost_rub": 0.2}
-        if json.loads(request.content).get("stream"):
+        if payload.get("stream"):
             data = [
                 {**identity, "choices": [{"finish_reason": None, "delta": {"content": "OK"}}]},
                 {**identity, "choices": [{"finish_reason": "stop", "delta": {}}], "usage": usage},
@@ -135,7 +149,7 @@ def test_confirmed_balance_refusal_routes_following_steps_of_the_same_generation
             token = _runner_token(overrides={**metadata, "jti": message_id})
             headers["Authorization"] = f"Bearer {token}"
         return client.post(route, headers=headers, json={
-            "model": "claude-sonnet-5.5", "max_tokens": 128, "user": str(user), "stream": stream,
+            "model": model, "max_tokens": 128, "user": str(user), "stream": stream,
             "metadata": metadata,
             "messages": [{"role": "user", "content": content}],
         })
@@ -149,6 +163,14 @@ def test_confirmed_balance_refusal_routes_following_steps_of_the_same_generation
     next_hosts = ["api.aitunnel.ru"] if stays_on_backup else ["api.llmgw.ru", "api.aitunnel.ru"]
     assert hosts == ["api.llmgw.ru", "api.aitunnel.ru", *next_hosts, "api.llmgw.ru"]
     assert billing.charge.await_count == (0 if is_cell else 3)
+    if model == "gpt-6.2-sol":
+        charges = [call.kwargs for call in billing.charge.await_args_list]
+        assert [charge["run_id"] for charge in charges[:2]] == [run, run]
+        assert all(
+            charge["provider_scope"] == "aitunnel"
+            and str(charge["cost_rub"]) == "0.2"
+            for charge in charges[:2]
+        )
 
 
 @pytest.mark.parametrize("status", [500,502,503,504])

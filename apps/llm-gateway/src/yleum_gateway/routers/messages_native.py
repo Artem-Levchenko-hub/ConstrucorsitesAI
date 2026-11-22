@@ -906,7 +906,9 @@ async def _dispatch_native_provider(
                 # These failures occur before the request reaches the provider.
                 # Publish permission only after the failed attempt receipt commits.
                 if provider_scope == "aitunnel" and backup_enabled and not kimi_failover:
-                    delay = await text_failover.retry_after_backup_preconnect(identity, provider_call_id, primary_retry_at)
+                    delay = await text_failover.retry_after_backup_preconnect(
+                        identity, provider_call_id, primary_retry_at, model=model,
+                    )
                     if delay is not None:
                         confirm_response_accounting()
                         refusal = text_failover.primary_rate_limit_error(delay)

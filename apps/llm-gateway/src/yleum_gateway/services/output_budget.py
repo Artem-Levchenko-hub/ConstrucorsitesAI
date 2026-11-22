@@ -1,8 +1,10 @@
 """Omission delegates output policy; it does not claim an unlimited response."""
 
+SOL_MODEL = "gpt-6.2-sol"
+
 
 def is_sol_model(model: str) -> bool:
-    return model.removeprefix("openai/") == "gpt-6.2-sol"
+    return model.removeprefix("openai/") == SOL_MODEL
 
 
 def uses_provider_output_default(model: str, max_tokens: int | None) -> bool:

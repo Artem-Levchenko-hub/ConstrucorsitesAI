@@ -18,6 +18,7 @@ import httpx
 
 from yleum_gateway.core.errors import ModelNotFoundError
 from yleum_gateway.services.kimi_native import KIMI_MODEL
+from yleum_gateway.services.output_budget import SOL_MODEL
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +73,10 @@ def _finite_cost(value: Any) -> Decimal | None:
 _RUB_SOURCES = ("header:x-llmgw-cost-rub", "header:x-cost-rub", "usage:cost_rub", "metadata:cost_rub")
 _USD_SOURCES = ("usage:cost_usd", "usage:cost", "metadata:cost_usd", "header:x-cost-usd")
 _AITUNNEL_TARIFF_SOURCE = "aitunnel-public-catalog-2026-10-23"
-_AITUNNEL_KIMI_RECEIPT_SOURCE = "aitunnel-kimi-k3.1-pro-usage-cost-rub"
+_AITUNNEL_RECEIPT_SOURCES = {
+    KIMI_MODEL: "aitunnel-kimi-k3.1-pro-usage-cost-rub",
+    SOL_MODEL: "aitunnel-gpt-6.2-sol-usage-cost-rub",
+}
 _AITUNNEL_PRICE = ModelPrice(Decimal("0.4"), Decimal("2.0"), Decimal("0.1"))
 
 # Frozen model-specific estimate. Reported RUB still takes precedence.
@@ -89,7 +93,7 @@ def _validate_provider_scope(provider_scope: str) -> None:
         raise ValueError("Unknown provider scope")
 
 
-def _aitunnel_kimi_rub(value: Any) -> Decimal | None:
+def _aitunnel_receipt_rub(value: Any) -> Decimal | None:
     amount = _finite_cost(value)
     # Keep the exact receipt in provenance. Its NUMERIC(12,4) usage projection
     # must also remain positive and must fit the column after rounding.
@@ -204,15 +208,17 @@ def validate_cost_provenance(
         keys |= {"provider_scope", "tariff_source"}
     if set(evidence) != keys or type(version) is not int or version not in {1, 2}:
         raise ValueError("Invalid cost provenance shape")
-    aitunnel_kimi = False
+    aitunnel_receipt_only = False
     if version == 2:
         identity = (evidence["provider_scope"], evidence["tariff_source"])
-        aitunnel_kimi = identity == ("aitunnel", _AITUNNEL_KIMI_RECEIPT_SOURCE)
-        kimi_receipt = (
-            aitunnel_kimi and evidence["basis"] == "provider_reported_rub"
+        aitunnel_receipt_only = (
+            identity[0] == "aitunnel" and identity[1] in _AITUNNEL_RECEIPT_SOURCES.values()
+        )
+        aitunnel_receipt = (
+            aitunnel_receipt_only and evidence["basis"] == "provider_reported_rub"
             and evidence["rub_source"] == "usage:cost_rub"
             and evidence["usd_source"] in (None, "usage:cost_usd")
-            and _aitunnel_kimi_rub(evidence["reported_cost_rub"]) is not None
+            and _aitunnel_receipt_rub(evidence["reported_cost_rub"]) is not None
             and all(evidence[key] is None for key in (
                 "calculated_cost_rub", "tariff", "tariff_revision",
             ))
@@ -225,7 +231,7 @@ def validate_cost_provenance(
                 and evidence["calculated_cost_rub"] is None
                 and type(evidence["cache_write_tokens"]) is int and evidence["cache_write_tokens"] > 0
                 and (_finite_cost(evidence["reported_cost_rub"]) or Decimal(0)) > 0)
-        if not (aitunnel or kimi or kimi_receipt):
+        if not (aitunnel or kimi or aitunnel_receipt):
             raise ValueError("Invalid provider cost provenance")
     if evidence["basis"] not in {"provider_reported_rub", "token_tariff", "local_token_estimate", "provider_catalog_estimate"}:
         raise ValueError("Invalid cost provenance basis")
@@ -251,7 +257,7 @@ def validate_cost_provenance(
     for key in ("tokens_in", "tokens_out", "cache_read_tokens", "cache_write_tokens"):
         if type(evidence[key]) is not int or evidence[key] < 0:
             raise ValueError("Invalid cost provenance tokens")
-    if not aitunnel_kimi:
+    if not aitunnel_receipt_only:
         tariff = evidence["tariff"]
         if not isinstance(tariff, dict) or set(tariff) != tariff_keys or any(
             (not isinstance(v, str) or len(v) > 80 or _finite_cost(v) is None)
@@ -442,8 +448,9 @@ def _aitunnel_request_cost(
     model_id: str, *, tokens_in: int, tokens_out: int, cache_read_tokens: int,
     cache_write_tokens: int, reported: ReportedCost | None, estimated_tokens: bool,
 ) -> tuple[Decimal, dict[str, Any]]:
-    """Use Kimi's reported charge and Sonnet's established tariff fallback."""
-    if model_id not in {"claude-sonnet-5.5", KIMI_MODEL}:
+    """Use the provider receipt and keep Sonnet's established tariff fallback."""
+    tariff_source = _AITUNNEL_RECEIPT_SOURCES.get(model_id)
+    if tariff_source is None and model_id != "claude-sonnet-5.5":
         raise ModelNotFoundError("Unsupported AI Tunnel text model")
     if any(type(v) is not int or v < 0 for v in
            (tokens_in, tokens_out, cache_read_tokens, cache_write_tokens)):
@@ -453,11 +460,10 @@ def _aitunnel_request_cost(
     local = None
     tariff: dict[str, str | None] | None = None
     tariff_revision = None
-    if model_id == KIMI_MODEL:
-        provider_rub = _aitunnel_kimi_rub(provider_rub)
+    if tariff_source is not None:
+        provider_rub = _aitunnel_receipt_rub(provider_rub)
         if provider_rub is None or reported.rub_source != "usage:cost_rub":
-            raise ValueError("AI Tunnel Kimi requires a positive usage.cost_rub receipt")
-        tariff_source = _AITUNNEL_KIMI_RECEIPT_SOURCE
+            raise ValueError(f"AI Tunnel {model_id} requires a positive usage.cost_rub receipt")
     else:
         if cache_write_tokens:
             if provider_rub is None:

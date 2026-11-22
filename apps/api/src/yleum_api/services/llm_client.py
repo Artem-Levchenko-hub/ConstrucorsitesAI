@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 
 from yleum_api.core.config import get_settings
-from yleum_api.services.agent_output_budget import is_sol_model, is_sonnet55_model
+from yleum_api.services.agent_output_budget import SOL_MODEL, is_sol_model, is_sonnet55_model
 from yleum_api.services.generation.provider_identity import GenerationProviderIdentity
 from yleum_api.services.generation.recovery_diagnostic import (
     diagnostic_output_budget as diagnostic_output_budget,
@@ -1022,9 +1022,10 @@ def _chat_dispatch_allowance(payload: dict[str, Any]) -> int:
         provider_dispatch_wire_allowance,
     )
     allowance = _chat_attempt_allowance(payload)
-    if payload.get("model") == "claude-sonnet-5.5":
+    model = payload.get("model")
+    if model in {"claude-sonnet-5.5", SOL_MODEL}:
         allowance += 1
-    if payload.get("model") in _GENERATION_MODELS:
+    if model in _GENERATION_MODELS or model == SOL_MODEL:
         allowance += 2
     saved = provider_dispatch_wire_allowance()
     return min(allowance, saved) if saved is not None else allowance

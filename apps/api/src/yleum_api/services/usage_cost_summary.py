@@ -12,12 +12,15 @@ from yleum_api.schemas.billing import UsageCostBreakdownPublic
 
 CostKind = Literal["confirmed", "estimated", "unknown"]
 ESTIMATE_BASES = ("token_tariff", "local_token_estimate", "provider_catalog_estimate")
-_AITUNNEL_KIMI_RECEIPT = ("aitunnel", "aitunnel-kimi-k3.1-pro-usage-cost-rub")
-_KIMI_NO_TARIFF_FIELDS = ("calculated_cost_rub", "tariff", "tariff_revision")
+_AITUNNEL_RECEIPT_ONLY = (
+    ("aitunnel", "aitunnel-kimi-k3.1-pro-usage-cost-rub"),
+    ("aitunnel", "aitunnel-gpt-6.2-sol-usage-cost-rub"),
+)
+_NO_TARIFF_FIELDS = ("calculated_cost_rub", "tariff", "tariff_revision")
 _RECEIPT_SCOPES = (
     ("aitunnel", "aitunnel-public-catalog-2026-10-23"),
     ("llmgw", "llmgw-public-kimi-k3.1-pro-2026-11-14"),
-    _AITUNNEL_KIMI_RECEIPT,
+    *_AITUNNEL_RECEIPT_ONLY,
 )
 # At most 80 characters and a two-digit exponent keep every accepted value far
 # within PostgreSQL's unconstrained NUMERIC range, including negative zero.
@@ -34,11 +37,11 @@ def classify_cost(provenance: object, stored_cost: Decimal) -> CostKind:
     if version == 2 and identity not in _RECEIPT_SCOPES:
         return "unknown"
     basis = provenance.get("basis")
-    if identity == _AITUNNEL_KIMI_RECEIPT and (
+    if identity in _AITUNNEL_RECEIPT_ONLY and (
         version != 2 or stored_cost <= 0 or basis != "provider_reported_rub"
         or provenance.get("rub_source") != "usage:cost_rub"
         or any(key not in provenance or provenance[key] is not None
-               for key in _KIMI_NO_TARIFF_FIELDS)
+               for key in _NO_TARIFF_FIELDS)
     ):
         return "unknown"
 
@@ -99,17 +102,17 @@ def cost_classification() -> ColumnElement[str]:
     provider_v2 = and_(version == "2", or_(*(
         source_identity(scope, tariff) for scope, tariff in _RECEIPT_SCOPES
     )))
-    kimi_receipt = source_identity(*_AITUNNEL_KIMI_RECEIPT)
+    receipt_only = or_(*(source_identity(*identity) for identity in _AITUNNEL_RECEIPT_ONLY))
     supported = and_(
         func.jsonb_typeof(provenance) == "object",
         func.jsonb_typeof(provenance["schema_version"]) == "number",
         or_(version == "1", provider_v2),
         or_(calculated.is_not(None), and_(provider_v2,
             func.jsonb_typeof(provenance["calculated_cost_rub"]) == "null")),
-        or_(kimi_receipt.is_not(True), and_(
+        or_(receipt_only.is_not(True), and_(
             version == "2", Usage.cost_rub > 0, basis == "provider_reported_rub",
             provenance["rub_source"].astext == "usage:cost_rub",
-            *(func.jsonb_typeof(provenance[key]) == "null" for key in _KIMI_NO_TARIFF_FIELDS),
+            *(func.jsonb_typeof(provenance[key]) == "null" for key in _NO_TARIFF_FIELDS),
         )),
         func.round(effective, 4) == Usage.cost_rub,
     )

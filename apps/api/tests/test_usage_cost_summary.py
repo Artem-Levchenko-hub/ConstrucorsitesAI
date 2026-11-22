@@ -31,11 +31,12 @@ def test_scope_v2_classifies_rub_with_or_without_a_cache_tariff(
     assert classify_cost({**proof, "provider_scope": "unknown"}, Decimal("0.3")) == "unknown"
 
 
-def test_aitunnel_kimi_receipt_is_confirmed_and_forged_shapes_are_unknown():
+@pytest.mark.parametrize("model", ["kimi-k3.1-pro", "gpt-6.2-sol"])
+def test_aitunnel_receipt_without_tariff_is_confirmed_and_forged_shapes_are_unknown(model):
     proof = receipt({
         "schema_version": 2,
         "provider_scope": "aitunnel",
-        "tariff_source": "aitunnel-kimi-k3.1-pro-usage-cost-rub",
+        "tariff_source": f"aitunnel-{model}-usage-cost-rub",
         "basis": "provider_reported_rub",
         "rub_source": "usage:cost_rub",
         "reported_cost_rub": "2.7912345",

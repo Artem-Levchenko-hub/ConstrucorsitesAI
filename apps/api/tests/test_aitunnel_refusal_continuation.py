@@ -138,7 +138,11 @@ async def test_sql_parent_accepts_only_first_primary_refusal():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("repeat", [False, True])
-async def test_chat_overload_http_uses_one_child(monkeypatch, stream, repeat):
+@pytest.mark.parametrize(("model", "changes"), [
+    ("claude-sonnet-5.5", None),
+    ("gpt-6.2-sol", {"retry_policy": "llmgw_http_refused_v1", "upstream_http_status": 422}),
+])
+async def test_chat_http_refusal_uses_one_child(monkeypatch, stream, repeat, model, changes):
     from types import SimpleNamespace
 
     root = GenerationProviderIdentity(*(UUID(int=i) for i in range(1, 5)), "a" * 64, "b" * 64)
@@ -151,7 +155,7 @@ async def test_chat_overload_http_uses_one_child(monkeypatch, stream, repeat):
     def reply(request):
         sent.append(json.loads(request.content))
         if len(sent) == 1 or repeat:
-            return refusal(native=False)
+            return refusal(native=False, changes=changes)
         if stream:
             return httpx.Response(
                 200, text='data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n'
@@ -175,17 +179,19 @@ async def test_chat_overload_http_uses_one_child(monkeypatch, stream, repeat):
         result = [
             event
             async for event in llm_client.stream_chat_completion(
-                [], "claude-sonnet-5.5", "u", "p", "m"
+                [], model, "u", "p", "m"
             )
         ]
         assert bool(result[-1].get("error")) is repeat
     elif repeat:
         with pytest.raises(llm_client.LLMError):
-            await llm_client.complete_chat([], "claude-sonnet-5.5", max_tokens=None)
+            await llm_client.complete_chat([], model, max_tokens=None)
     else:
-        assert await llm_client.complete_chat([], "claude-sonnet-5.5", max_tokens=None) == "ok"
+        assert await llm_client.complete_chat([], model, max_tokens=None) == "ok"
     assert len(sent) == 2
+    assert sent[0]["metadata"]["generation_provider_identity"] == root.to_wire()
     assert sent[1]["metadata"]["generation_provider_identity"] == child.to_wire()
+    assert sent[0]["model"] == sent[1]["model"] == model
 
 
 @pytest.mark.parametrize("native", [False, True])

@@ -277,7 +277,9 @@ async def _dispatch_chat_provider(
                 **({"retry_after_seconds": retry_after} if retry_after is not None else {}),
             ))
             if provider_scope == "aitunnel" and reason == "preconnect" and backup_enabled:
-                delay = await text_failover.retry_after_backup_preconnect(identity, call_id, primary_retry_at)
+                delay = await text_failover.retry_after_backup_preconnect(
+                    identity, call_id, primary_retry_at, model=req.model,
+                )
                 if delay is not None:
                     confirm_response_accounting()
                     raise _gateway_error_to_http(text_failover.primary_rate_limit_error(delay)) from exc

@@ -91,29 +91,31 @@ async def test_ai_only_exact_verified_sonnet_55(model):
     {"cost_rub": "NaN"},
     {"cost_rub": "1e99"},
 ])
-async def test_ai_kimi_unusable_rub_receipt_cannot_fall_back_to_a_tariff(usage):
+@pytest.mark.parametrize("model", ["kimi-k3.1-pro", "gpt-6.2-sol"])
+async def test_ai_unusable_rub_receipt_cannot_fall_back_to_a_tariff(usage, model):
     reported = pricing.read_reported_cost(
         {"usage": usage, "metadata": {"cost_rub": "2.79"}},
         {"x-cost-rub": "2.79", "x-llmgw-cost-rub": "2.79"}, provider_scope="aitunnel",
     )
     with pytest.raises(ValueError, match="receipt"):
         await pricing.resolve_request_cost(
-            "kimi-k3.1-pro", tokens_in=1000, tokens_out=1, reported=reported,
+            model, tokens_in=1000, tokens_out=1, reported=reported,
             provider_scope="aitunnel",
         )
 
 
-async def test_ai_kimi_exact_receipt_has_no_invented_tariff_and_rejects_forged_proof():
+@pytest.mark.parametrize("model", ["kimi-k3.1-pro", "gpt-6.2-sol"])
+async def test_ai_exact_receipt_has_no_invented_tariff_and_rejects_forged_proof(model):
     reported = pricing.read_reported_cost(
         {"usage": {"cost_rub": "2.7912345"}}, {}, provider_scope="aitunnel",
     )
     cost, proof = await pricing.resolve_request_cost(
-        "kimi-k3.1-pro", tokens_in=1000, tokens_out=1, cache_write_tokens=100,
+        model, tokens_in=1000, tokens_out=1, cache_write_tokens=100,
         reported=reported, provider_scope="aitunnel",
     )
     assert cost == Decimal("2.7912345")
     assert proof["schema_version"] == 2 and proof["provider_scope"] == "aitunnel"
-    assert proof["tariff_source"] == "aitunnel-kimi-k3.1-pro-usage-cost-rub"
+    assert proof["tariff_source"] == f"aitunnel-{model}-usage-cost-rub"
     assert proof["tariff"] is proof["tariff_revision"] is proof["calculated_cost_rub"] is None
     assert pricing.validate_cost_provenance(proof, cost_rub=cost) == proof
     for overrides in (

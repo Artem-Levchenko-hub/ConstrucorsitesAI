@@ -23,10 +23,12 @@ from yleum_gateway.core.errors import (
 from yleum_gateway.providers.rate_limit import POLICY as KEY_RATE_LIMIT_POLICY
 from yleum_gateway.services.generation_identity import GenerationProviderIdentity
 from yleum_gateway.services.kimi_native import KIMI_MODEL
+from yleum_gateway.services.output_budget import SOL_MODEL
 from yleum_gateway.services.provider_calls import LLMGW_BALANCE_REFUSED
 
 PRIMARY_URL = "https://api.llmgw.ru/v1/chat/completions"
 MODEL = "claude-sonnet-5.5"
+CHAT_MODELS = frozenset({MODEL, SOL_MODEL})
 POLICY = "llmgw_unavailable_v1"
 HTTP_REFUSAL_POLICY = "llmgw_http_refused_v1"
 _GENERATION_ATTEMPT_LIMITS = {"llmgw": 2, "aitunnel": 3}
@@ -53,7 +55,7 @@ class ProviderRefusedError(GatewayError):
 
 def enabled(model: str) -> bool:
     settings = get_settings()
-    return bool(model == MODEL and settings.aitunnel_text_fallback_enabled
+    return bool(model in CHAT_MODELS and settings.aitunnel_text_fallback_enabled
                 and settings.aitunnel_text_api_key)
 
 
@@ -126,7 +128,9 @@ def primary_rate_limit_error(delay: int) -> UpstreamProviderError:
     })
 
 
-async def primary_retry_after_backup(identity: GenerationProviderIdentity, call_id: UUID) -> int | None:
+async def primary_retry_after_backup(
+    identity: GenerationProviderIdentity, call_id: UUID, model: str,
+) -> int | None:
     """Read the previous primary cooldown only behind an exact uncharged backup failure."""
     async with get_pool().acquire() as conn:
         delay = await conn.fetchval(
@@ -153,16 +157,17 @@ async def primary_retry_after_backup(identity: GenerationProviderIdentity, call_
             AND c.requested_model=$7 AND pc.requested_model=$7
             """,
             call_id, identity.run_id, identity.project_id, identity.user_id,
-            identity.prompt_hash, identity.request_sha256, MODEL,
+            identity.prompt_hash, identity.request_sha256, model,
         )
     return delay if type(delay) is int and 0 <= delay <= 86_400 else None
 
 
 async def retry_after_backup_preconnect(
     identity: GenerationProviderIdentity | None, call_id: UUID, primary_retry_at: float | None,
+    *, model: str,
 ) -> int | None:
     if identity is not None:
-        return await primary_retry_after_backup(identity, call_id)
+        return await primary_retry_after_backup(identity, call_id, model)
     if primary_retry_at is not None:
         return max(0, math.ceil(primary_retry_at - asyncio.get_running_loop().time()))
     return None
@@ -450,7 +455,7 @@ async def select_scope(
     cell_route: str | None = None, deadline: float | None = None,
 ) -> str:
     """Route new steps using a committed balance refusal, and retries using their parent."""
-    if model != MODEL:
+    if model not in CHAT_MODELS:
         return "llmgw"
     backup_enabled = enabled(model)
     if identity is not None and cell_route is None:
@@ -549,7 +554,7 @@ async def select_scope(
             return alternate
         if (identity is not None and backup_parent and reason == "preconnect"
                 and isinstance(call_id := parent.get("provider_call_id"), UUID)):
-            delay = await primary_retry_after_backup(identity, call_id)
+            delay = await primary_retry_after_backup(identity, call_id, model)
             if delay is not None:
                 await _wait_for_primary_cooldown(delay, deadline)
                 return "llmgw"
