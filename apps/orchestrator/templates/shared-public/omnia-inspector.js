@@ -15,15 +15,15 @@
  *   - fullstack template <script src> copies remain as an offline/local fallback
  * A drift test keeps the fallback copies identical (DRY of knowledge).
  *
- * Dormant until the parent sends `omnia:inspect:enable`, so shipping it in every
- * preview costs nothing until select-mode is turned on.
+ * The parent explicitly enables element inspection and mobile navigation.
  *
  * Protocol:
  *   parent → iframe: omnia:inspect:enable | :disable | :clear | :remove {id}
  *   parent → iframe (style 1.5): omnia:style:enable | :disable |
  *       omnia:style:set {target:'element'|'token', selector, prop, value} |
  *       omnia:font:link {family, href} | omnia:style:reset {selector?}
- *   iframe → parent: omnia:inspect:ready |
+ *   parent → iframe: omnia:preview:chrome {hideScrollbar, mobileNavigation}
+ *   iframe → parent: omnia:preview:swipe {dx,dy} | omnia:inspect:ready |
  *       omnia:pick {el:{id,selector,label,text,html,rect,tag,color,backgroundColor,borderColor,fontFamily}}
  */
 (function () {
@@ -69,11 +69,78 @@
   var overrideModel = { tokens: {}, elements: {}, fonts: {} };
   var overrideStyleEl = null;
   var previewChromeStyleEl = null;
+  var mobileSwipeListeners = null;
+
+  // Input inside a cross-origin app never bubbles to the builder. Only report
+  // a finished horizontal gesture when the mobile preview explicitly opts in.
+  function setMobileSwipeRelay(allow) {
+    if (!allow || window.parent === window) {
+      if (mobileSwipeListeners) mobileSwipeListeners.abort();
+      mobileSwipeListeners = null;
+      return;
+    }
+    if (mobileSwipeListeners) return;
+    mobileSwipeListeners = new AbortController();
+    var options = { signal: mobileSwipeListeners.signal };
+    var passive = { signal: mobileSwipeListeners.signal, passive: true };
+    var start = null;
+    function reset() { start = null; }
+    function begin(event, point, id) {
+      reset();
+      var el = event.target;
+      if (enabled || styleMode || event.defaultPrevented || !el || !el.closest ||
+        el.closest('a,button,input,textarea,select,label,[contenteditable]:not([contenteditable=false]),[role=slider],[role=tablist],[role=dialog],[aria-roledescription=carousel],canvas,video')) return;
+      for (var node = el; node && node !== document.documentElement; node = node.parentElement) {
+        if (node.scrollWidth > node.clientWidth + 2 && /auto|scroll/.test(getComputedStyle(node).overflowX)) return;
+      }
+      start = { id: id, x: point.clientX, y: point.clientY };
+    }
+    function move(point, id) {
+      if (!start || start.id !== id) return;
+      var dy = Math.abs(point.clientY - start.y);
+      if (dy > 12 && dy >= Math.abs(point.clientX - start.x)) reset();
+    }
+    function finish(event, point, id) {
+      var first = start;
+      reset();
+      if (!first || first.id !== id || enabled || styleMode || event.defaultPrevented) return;
+      var dx = point.clientX - first.x, dy = point.clientY - first.y;
+      if (Math.abs(dx) < 56 || Math.abs(dx) < 1.5 * Math.abs(dy)) return;
+      var selection = window.getSelection();
+      if (selection && selection.rangeCount && !selection.isCollapsed) {
+        if (event.type === "touchend" || Array.from(selection.getRangeAt(0).getClientRects()).some(function (r) {
+          return first.x >= r.left - 2 && first.x <= r.right + 2 && first.y >= r.top - 2 && first.y <= r.bottom + 2;
+        })) return;
+        selection.removeAllRanges();
+      }
+      if (event.cancelable) event.preventDefault();
+      post({ type: "omnia:preview:swipe", dx: dx, dy: dy });
+    }
+    document.addEventListener("touchstart", function (e) {
+      if (e.touches.length === 1) begin(e, e.touches[0], e.touches[0].identifier); else reset();
+    }, passive);
+    document.addEventListener("touchmove", function (e) {
+      if (e.touches.length === 1) move(e.touches[0], e.touches[0].identifier); else reset();
+    }, passive);
+    document.addEventListener("touchend", function (e) {
+      if (!e.touches.length && e.changedTouches.length) finish(e, e.changedTouches[0], e.changedTouches[0].identifier); else reset();
+    }, { signal: mobileSwipeListeners.signal, passive: false });
+    document.addEventListener("touchcancel", reset, options);
+    document.addEventListener("pointerdown", function (e) {
+      if (e.pointerType === "touch") return;
+      if (e.isPrimary && e.button === 0) begin(e, e, e.pointerId); else reset();
+    }, options);
+    document.addEventListener("pointermove", function (e) { if (e.pointerType !== "touch") move(e, e.pointerId); }, options);
+    document.addEventListener("pointerup", function (e) { if (e.pointerType !== "touch") finish(e, e, e.pointerId); }, options);
+    document.addEventListener("pointercancel", function (e) { if (e.pointerType !== "touch") reset(); }, options);
+    window.addEventListener("blur", reset, options);
+  }
 
   // The device mock keeps scrolling available while hiding the desktop browser
   // scrollbar that would otherwise appear inside the phone bezel. This is
   // opt-in from the embedding shell, so standalone/public apps are untouched.
   function setPreviewChrome(options) {
+    setMobileSwipeRelay(options && options.mobileNavigation === true);
     var hideScrollbar = options && options.hideScrollbar === true;
     if (!hideScrollbar) {
       if (previewChromeStyleEl) previewChromeStyleEl.remove();

@@ -1,4 +1,5 @@
 .max-mobile-nav { display: none; }
+.prompt-input-ios-frame { display: block; width: 100%; min-width: 0; border: 0; background: transparent; }
 .max-shared-project-trigger > span > .max-project-menu-caption { display: none; }
 @media (max-width: 600px) {
   .max-mobile-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); flex: none; gap: 4px; padding: 6px max(12px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); border-top: 1px solid #e7eaf1; background: #fff; }
@@ -36,10 +37,46 @@
   .max-editor[data-max-editor] .max-editor-workspace { margin: 0 8px; border-radius: 24px 24px 0 0; background: #fff; }
   .max-editor[data-max-editor] .max-editor-chat { background: #fff; }
   .max-editor[data-max-editor] .max-chat-footer { background: #fff; padding-bottom: 0; border-top: 0; }
-  .max-editor[data-max-editor] .max-chat-composer { padding: 8px 12px 12px; }
-  .max-editor[data-max-editor] .max-chat-composer > .prompt-input-surface { border-radius: 24px; border-color: #e4e8f0; background: #f7f8fb; box-shadow: none; }
-  .max-editor[data-max-editor] .max-chat-composer > .prompt-input-surface > textarea { min-height: 52px; font-size: 16px; padding: 14px 16px 10px; }
-  .max-editor[data-max-editor] .max-chat-advice-trigger { min-height: 48px; border: 0; background: transparent; font-size: 14px; padding-inline: 12px; }
+  .max-editor[data-max-editor] .max-editor-chat .max-chat-composer {
+    padding: 6px max(4px, env(safe-area-inset-right)) 0 max(4px, env(safe-area-inset-left));
+  }
+  .max-editor[data-max-editor] .max-studio-prompt.max-chat-composer > .prompt-input-surface {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr) 48px auto;
+    grid-template-areas: "status status status status" "add field advice actions";
+    gap: 0 2px;
+    align-items: end;
+    position: relative;
+    isolation: isolate;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+  }
+  .max-editor .max-chat-composer > .prompt-input-surface::before {
+    content: ""; grid-area: 2 / 2 / 3 / 4; align-self: stretch; z-index: -1;
+    border: 1px solid #dce2eb; border-radius: 24px; background: #f6f8fb;
+  }
+  .max-editor .max-chat-composer[data-composer-focused] > .prompt-input-surface::before { border-color: #89b5fa; }
+  .max-editor[data-max-editor] .max-studio-prompt.max-chat-composer > .prompt-input-surface > :is(textarea, iframe) {
+    grid-area: field; width: 100%; min-width: 0; min-height: 48px; margin: 0; border: 0; background: transparent;
+  }
+  .max-editor[data-max-editor] .max-studio-prompt.max-chat-composer > .prompt-input-surface > textarea {
+    padding: 13px 0 13px 14px; font: inherit; font-size: 16px; line-height: 22px;
+  }
+  .max-editor .max-chat-composer .prompt-input-toolbar, .max-editor .max-chat-composer .prompt-input-tools { display: contents; }
+  .max-editor .max-chat-composer .prompt-input-add { grid-area: add; }
+  .max-editor .max-chat-composer .max-chat-advice-anchor { grid-area: advice; }
+  .max-editor .max-chat-composer .prompt-input-actions { grid-area: actions; }
+  .max-editor .max-chat-composer .prompt-input-voice-status { grid-area: status; padding: 3px 8px; }
+  .max-editor[data-max-editor] .max-chat-composer :is(.prompt-input-add, .prompt-input-voice, .max-chat-advice-trigger) {
+    display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; min-height: 48px;
+    border: 0; border-radius: 50%; padding: 0; background: transparent; box-shadow: none;
+  }
+  .max-editor[data-max-editor] .max-chat-advice-trigger > span { display: none; }
+  .max-editor[data-max-editor] .max-chat-composer :is(.prompt-input-voice,.prompt-input-send,.max-chat-advice-trigger) svg { width: 20px; height: 20px; }
+  .max-editor[data-max-editor] .max-chat-composer .prompt-input-add svg { width: 22px; height: 22px; }
+  .max-editor .max-chat-composer .prompt-input-surface[data-has-draft=false]:has(.prompt-input-voice) .prompt-input-send,
+  .max-editor[data-max-editor] .max-chat-composer .prompt-input-surface[data-has-draft=true][data-voice-active=false] .prompt-input-voice { display: none; }
   .max-editor[data-max-editor] .max-chat-advice-heading button { width: 48px; height: 48px; min-height: 48px; border-radius: 16px; }
   .max-editor[data-max-editor] .max-chat-composer .prompt-input-send { background: #0665ed; box-shadow: 0 4px 12px #0665ed26; }
   .max-project-workspace[data-max-studio] { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; height: 100%; }
@@ -64,6 +101,11 @@
   .max-project-menu-account > .max-install-button { width: 100%; margin-bottom: 16px; justify-content: flex-start; border: 0; background: #e8f0ff; }
   .max-project-menu-account > div, .max-project-menu-account > form { border-radius: 18px; background: #fff; padding: 4px; }
   .max-editor-modal-preview[data-max-editor] .max-editor-modal-heading { min-height: 64px; border-bottom: 1px solid #edf0f5; background: #fff; }
+  .max-editor-modal-preview { translate: 0 var(--max-preview-pull, 0px); }
+  .max-editor-modal-preview .max-editor-modal-heading { position: relative; touch-action: pinch-zoom; user-select: none; }
+  .max-editor-modal-preview .max-editor-modal-heading::before { content: ""; position: absolute; top: 5px; left: 50%; translate: -50% 0; width: 34px; height: 4px; border-radius: 4px; background: #c3cbd7; }
+  .max-mobile-nav { touch-action: pan-y pinch-zoom; user-select: none; }
+  @media (prefers-reduced-motion: reduce) { .max-editor-modal-preview { translate: none; } }
   .max-editor-modal-preview[data-max-editor] .max-editor-modal-heading h2 { font-size: 17px; }
   .max-editor-modal-preview [data-testid=max-preview-header] { display: none; }
   .max-editor-modal-preview [data-testid=max-accepted-preview-status] { padding-block: 6px; }
@@ -89,7 +131,8 @@
   .max-owner-section-heading > p { display: none; }
   .max-owner-record-item, .max-owner-record-card { border-radius: 20px; }
   .max-owner-period-toggle:focus-visible { outline: 2px solid #0665ed; outline-offset: 2px; }
-  .max-editor:has(.max-chat-composer textarea:focus) > .max-mobile-nav { display: none; }
+  .max-editor:has(.max-chat-composer[data-composer-focused]) > .max-mobile-nav,
+  .max-editor[data-keyboard-open] > .max-mobile-nav { display: none; }
   .max-install-dialog { max-height: calc(100dvh - 24px); overflow-y: auto; overscroll-behavior: contain; }
 }
 @media (max-width: 360px) {

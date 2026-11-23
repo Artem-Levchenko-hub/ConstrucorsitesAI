@@ -146,6 +146,35 @@ describe("MAX chat suggestions and draft", () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 
+  it("keeps an iPhone draft in one isolated text field with multiline editing and the usual submit path", async () => {
+    const ua = vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15");
+    vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    try {
+      render();
+      const frame = container.querySelector<HTMLIFrameElement>("iframe[title='Поле ввода сообщения']");
+      expect(frame).not.toBeNull();
+      await act(async () => frame!.dispatchEvent(new Event("load")));
+      expect(container.querySelector("textarea")).toBeNull();
+      const input = frame!.contentDocument!.querySelector("textarea")!;
+      expect(input.getAttribute("aria-label")).toBe("Опишите изменение проекта");
+      await act(async () => draftRef.current!.insertDraft("Собери меню\nна неделю"));
+      expect(input.value).toBe("Собери меню\nна неделю");
+      expect(frame!.contentDocument!.activeElement).toBe(input);
+      expect(container.querySelector("[data-composer-focused]")).not.toBeNull();
+      const keyboard = frame!.contentWindow as Window & typeof globalThis;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(keyboard.HTMLTextAreaElement.prototype, "value")!.set!.call(input, "Меню\nна два дня");
+        input.dispatchEvent(new keyboard.Event("input", { bubbles: true }));
+      });
+      const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      await act(async () => input.dispatchEvent(enter));
+      expect(enter.defaultPrevented).toBe(false);
+      await click(container.querySelector<HTMLButtonElement>(".prompt-input-send")!);
+      expect(sent).toEqual(["Меню\nна два дня"]);
+      expect(input.value).toBe("");
+    } finally { ua.mockRestore(); }
+  });
+
   it("leaves ordinary PromptInput route behavior unchanged", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     act(() => root.render(createElement(PromptInput, {

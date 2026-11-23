@@ -133,6 +133,32 @@ describe("shared MAX project identity and navigation", () => {
     if (surface === "editor") expect(host.querySelector<HTMLInputElement>('[aria-label="Черновик"]')?.value).toBe("Не потерять");
   });
 
+  it("tracks a panned iPhone keyboard and a resized Android viewport without applying the keyboard height twice", async () => {
+    const viewport = Object.assign(new EventTarget(), { height: 844, offsetTop: 0, scale: 1 });
+    vi.stubGlobal("visualViewport", viewport);
+    vi.stubGlobal("innerHeight", 844);
+    vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+    try {
+      await render("editor");
+      const editor = host.querySelector<HTMLElement>(".max-editor")!;
+      Object.assign(viewport, { height: 396.5, offsetTop: 31.5 });
+      viewport.dispatchEvent(new Event("resize"));
+      await vi.waitFor(() => expect(editor.style.getPropertyValue("--max-editor-visual-height")).toBe("396.5px"));
+      expect(editor.style.getPropertyValue("--max-editor-visual-top")).toBe("31.5px");
+      expect(editor.hasAttribute("data-keyboard-open")).toBe(true);
+      vi.stubGlobal("innerHeight", 420);
+      Object.assign(viewport, { height: 420, offsetTop: 0 });
+      window.dispatchEvent(new Event("resize"));
+      await vi.waitFor(() => expect(editor.style.getPropertyValue("--max-editor-visual-height")).toBe("420px"));
+      expect(editor.hasAttribute("data-keyboard-open")).toBe(false);
+      Object.assign(viewport, { height: 840, scale: 2 });
+      viewport.dispatchEvent(new Event("scroll"));
+      await vi.waitFor(() => expect(editor.style.getPropertyValue("--max-editor-visual-height")).toBe(""));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("guards a mobile bottom-tab departure when the chat has an unsent draft", async () => {
     window.history.replaceState(null, "", "/max/qa");
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);

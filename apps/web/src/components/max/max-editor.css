@@ -135,10 +135,18 @@
 @keyframes max-editor-enter { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: translateX(0); } }
 @media (max-width: 1023px) {
   .max-editor {
-    position: relative;
+    position: fixed;
+    inset-inline: 0;
     top: var(--max-editor-visual-top, 0px);
-    height: min(100%, var(--max-editor-visual-height, 100dvh));
+    height: var(--max-editor-visual-height, 100dvh);
+    max-height: none;
   }
+  html:has(.max-editor), body:has(.max-editor) { overflow: hidden; overscroll-behavior: none; }
+  .max-editor-conversation > .overflow-hidden { overflow: clip; }
+  .max-editor[data-keyboard-open] .max-chat-footer,
+  .max-editor:has(.max-chat-composer[data-composer-focused]) .max-chat-footer,
+  .max-editor[data-keyboard-open] .max-editor-chat .max-chat-composer,
+  .max-editor:has(.max-chat-composer[data-composer-focused]) .max-editor-chat .max-chat-composer { padding-bottom: 0; }
   main[data-product-shell][data-max-editor] {
     box-sizing: border-box;
     padding-bottom: calc(80px + env(safe-area-inset-bottom));

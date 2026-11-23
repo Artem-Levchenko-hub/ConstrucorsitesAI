@@ -17,6 +17,7 @@ import { REFERENCE_IMAGE_ACCEPT, REFERENCE_IMAGE_LIMITS } from "@/lib/api/refere
 import { useInspectorStore, type PickedElement } from "@/store/inspector";
 import type { QueuedPromptDraft, QueuedPromptPhase } from "@/lib/studio-prompt-queue";
 import { SelectedChips } from "./SelectedChips";
+import { PromptTextField } from "./PromptTextField";
 import { FontAttachmentChips, FontAttachmentPanel } from "./FontAttachments";
 import { DEFAULT_GENERATION_ENGINE, type GenerationEngine } from "@/lib/generation-engine";
 
@@ -82,6 +83,7 @@ function ProjectPromptInput({
 }) {
   const [value, setValue] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [fieldFocused, setFieldFocused] = useState(false);
   const internalRef = useRef<HTMLTextAreaElement>(null);
   const ref = textareaRef ?? internalRef;
   // Synchronous per-gesture latch. React state updates after the event, so
@@ -135,14 +137,6 @@ function ProjectPromptInput({
     guardMaxDraft && (isSubmitting || pendingPrompt !== null),
     "chat",
   );
-
-  // Auto-resize textarea up to a sensible max.
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = "0px";
-    el.style.height = `${Math.min(el.scrollHeight, compact ? 144 : 200)}px`;
-  }, [value, ref, compact]);
 
   const prepareDraft = useCallback((picks: PickedElement[]) => {
     const text = value.trim();
@@ -267,6 +261,7 @@ function ProjectPromptInput({
   return (
     <div
       aria-busy={isSubmitting}
+      data-composer-focused={guardMaxDraft && fieldFocused || undefined}
       onDragOver={(event) => { if (projectId && event.dataTransfer.types.includes("Files")) event.preventDefault(); }}
       onDrop={(event) => {
         if (!projectId || !event.dataTransfer.files.length) return;
@@ -334,12 +329,18 @@ function ProjectPromptInput({
         onRemove={removeSelection}
       />
 
-      <div className="prompt-input-surface rounded-lg border border-border-default bg-surface-input transition-all focus-within:border-accent focus-within:shadow-[0_0_0_3px_rgba(79,129,247,0.13)]">
-        <textarea
-          ref={ref}
+      <div className="prompt-input-surface rounded-lg border border-border-default bg-surface-input transition-all focus-within:border-accent focus-within:shadow-[0_0_0_3px_rgba(79,129,247,0.13)]"
+        data-has-draft={!!currentDraft.text} data-voice-active={voice.state === "recording" || voice.state === "transcribing"}>
+        <PromptTextField
+          inputRef={ref} compact={compact} maxComposer={guardMaxDraft}
+          mobilePlaceholder={guardMaxDraft && !isStreaming && !selections.length ? "Сообщение…" : undefined}
           aria-label={ariaLabel}
           value={value}
-          disabled={isSubmitting}
+          disabled={isSubmitting && !guardMaxDraft}
+          readOnly={isSubmitting && guardMaxDraft}
+          onFocus={guardMaxDraft ? () => setFieldFocused(true) : undefined}
+          onBlur={guardMaxDraft ? () => setFieldFocused(false) : undefined}
+          enterKeyHint={guardMaxDraft ? "enter" : undefined}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
           onPaste={(event) => {
@@ -388,6 +389,11 @@ function ProjectPromptInput({
                 <DropdownMenuItem disabled={fontsDisabled} onSelect={toggleFonts}>
                   <Type aria-hidden="true" className="size-4" />Шрифт
                 </DropdownMenuItem>
+                {guardMaxDraft && currentDraft.text && voice.supported && voice.state !== "recording" && (
+                  <DropdownMenuItem disabled={isSubmitting || voice.state === "transcribing"} onSelect={voice.toggle}>
+                    <Mic aria-hidden="true" className="size-4" />Надиктовать
+                  </DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           )}
@@ -430,7 +436,7 @@ function ProjectPromptInput({
                 size="sm"
                 onClick={voice.toggle}
                 disabled={isSubmitting || voice.state === "transcribing"}
-                className={cn("h-11 px-2.5 sm:h-8", voice.state === "recording" && "text-danger")}
+                className={cn("prompt-input-voice h-11 px-2.5 sm:h-8", voice.state === "recording" && "text-danger")}
                 title={
                   voice.state === "recording"
                     ? "Остановить запись"
@@ -465,6 +471,10 @@ function ProjectPromptInput({
             <Button
               type="button"
               size="sm"
+              onPointerDown={event => {
+                const field = ref.current;
+                if (guardMaxDraft && field && field.ownerDocument.activeElement === field) event.preventDefault();
+              }}
               onClick={() => {
                 void send();
               }}

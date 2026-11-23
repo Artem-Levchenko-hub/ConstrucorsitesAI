@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BatteryFull,
@@ -496,6 +496,13 @@ export function MaxLivePreview({
     return () => observer.disconnect();
   }, []);
 
+  const updatePreviewChrome = useCallback(() => {
+    previewFrame.current?.contentWindow?.postMessage({
+      type: "omnia:preview:chrome", hideScrollbar: true,
+      mobileNavigation: !!onClose && window.matchMedia?.("(max-width: 600px)").matches === true,
+    }, "*");
+  }, [onClose]);
+
   useEffect(() => {
     const syncPreviewChrome = (event: MessageEvent) => {
       if (
@@ -504,15 +511,17 @@ export function MaxLivePreview({
       ) {
         return;
       }
-      previewFrame.current?.contentWindow?.postMessage(
-        { type: "omnia:preview:chrome", hideScrollbar: true },
-        "*",
-      );
+      updatePreviewChrome();
     };
 
     window.addEventListener("message", syncPreviewChrome);
-    return () => window.removeEventListener("message", syncPreviewChrome);
-  }, []);
+    const viewport = window.matchMedia?.("(max-width: 600px)");
+    viewport?.addEventListener?.("change", updatePreviewChrome);
+    return () => {
+      window.removeEventListener("message", syncPreviewChrome);
+      viewport?.removeEventListener?.("change", updatePreviewChrome);
+    };
+  }, [updatePreviewChrome]);
 
   const firstBuildHidden = Boolean(workingRun || firstBuildTerminal) || firstBuildWaiting;
   const previewUrl = firstBuildHidden ? null : previewSession.data?.url ?? null;
@@ -775,14 +784,11 @@ export function MaxLivePreview({
                       allow="clipboard-read; clipboard-write"
                       referrerPolicy="no-referrer"
                       data-testid="max-live-iframe"
-                      onLoad={(event) => {
+                      onLoad={() => {
                         if (previewUrl) setLastWorkingPreview({
                           projectId: project.id, url: previewUrl, documentKey: previewDocumentKey,
                         });
-                        event.currentTarget.contentWindow?.postMessage(
-                          { type: "omnia:preview:chrome", hideScrollbar: true },
-                          "*",
-                        );
+                        updatePreviewChrome();
                       }}
                       />
                       {!workingRun && !previewUrl && preparing && (

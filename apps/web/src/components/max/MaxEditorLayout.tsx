@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { ArrowUpRight, PanelRightOpen, Plug, SlidersHorizontal, X } from "lucide-react";
@@ -35,36 +35,69 @@ export function MaxEditorLayout({ project, email, children, navigation, preview,
   const [entry, setEntry] = useState<keyof typeof titles | null>(initialPreview ? "preview" : null);
   const desktop = useSyncExternalStore(subscribeViewport, isDesktop, serverViewport);
   const editor = useRef<HTMLDivElement>(null);
+  const previewDialog = useRef<HTMLDivElement>(null);
+  const closePreview = useCallback(() => {
+    setEntry(null);
+    const location = new URL(window.location.href);
+    if (location.searchParams.get("preview") === "1") {
+      location.searchParams.delete("preview");
+      window.history.replaceState(window.history.state, "", location);
+    }
+  }, []);
   const trigger = useRef<HTMLElement | null>(null);
   const projectHref = `/max/${project.id}`;
   const modal = entry === "preview" && desktop ? null : entry;
   const previewContent = typeof preview === "function"
-    ? preview(modal === "preview" ? () => setEntry(null) : undefined)
+    ? preview(modal === "preview" ? closePreview : undefined)
     : preview;
   useEffect(() => {
     const viewport = window.visualViewport;
     const element = editor.current;
-    if (!viewport || !element || desktop) return;
+    if (!element || desktop) return;
+    let frame = 0;
+    let settled = 0;
 
     const resetViewport = () => {
       element.style.removeProperty("--max-editor-visual-height");
       element.style.removeProperty("--max-editor-visual-top");
+      delete element.dataset.keyboardOpen;
     };
     const updateViewport = () => {
-      if (viewport.scale !== 1) {
+      frame = 0;
+      if (viewport && viewport.scale !== 1) {
         resetViewport();
         return;
       }
-      element.style.setProperty("--max-editor-visual-height", `${Math.floor(viewport.height)}px`);
-      element.style.setProperty("--max-editor-visual-top", `${Math.round(viewport.offsetTop)}px`);
+      const height = viewport?.height ?? window.innerHeight;
+      const top = viewport?.offsetTop ?? 0;
+      element.style.setProperty("--max-editor-visual-height", height + "px");
+      element.style.setProperty("--max-editor-visual-top", top + "px");
+      element.toggleAttribute("data-keyboard-open", window.innerHeight - height - top > 96);
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(updateViewport);
+    };
+    const onResize = () => {
+      schedule();
+      // Safari can publish its final keyboard geometry after the last resize.
+      window.clearTimeout(settled);
+      settled = window.setTimeout(schedule, 320);
     };
 
     updateViewport();
-    viewport.addEventListener("resize", updateViewport);
-    viewport.addEventListener("scroll", updateViewport);
+    viewport?.addEventListener("resize", onResize);
+    viewport?.addEventListener("scroll", schedule);
+    window.addEventListener("resize", onResize);
+    element.addEventListener("focusin", onResize);
+    element.addEventListener("focusout", onResize);
     return () => {
-      viewport.removeEventListener("resize", updateViewport);
-      viewport.removeEventListener("scroll", updateViewport);
+      viewport?.removeEventListener("resize", onResize);
+      viewport?.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", onResize);
+      element.removeEventListener("focusin", onResize);
+      element.removeEventListener("focusout", onResize);
+      cancelAnimationFrame(frame);
+      window.clearTimeout(settled);
       resetViewport();
     };
   }, [desktop]);
@@ -102,11 +135,11 @@ export function MaxEditorLayout({ project, email, children, navigation, preview,
         </section>
         {desktop && <div data-learning="editor-preview" className="max-editor-desktop-preview">{previewContent}</div>}
       </div>
-      <MaxMobileNav projectId={project.id} active="chat" onPreview={openPreview} />
-      <Dialog.Root open={!!modal} onOpenChange={value => { if (!value) setEntry(null); }}>
+      <MaxMobileNav projectId={project.id} active="chat" onPreview={openPreview} previewDialog={previewDialog} onClosePreview={closePreview} />
+      <Dialog.Root open={!!modal} onOpenChange={value => { if (!value) closePreview(); }}>
         <Dialog.Portal>
           <Dialog.Overlay className="max-editor-overlay" />
-          <Dialog.Content data-product-shell data-max-editor data-max-studio data-learning-context={modal ?? undefined} className={`max-editor-modal max-editor-modal-${modal}`}
+          <Dialog.Content ref={previewDialog} data-product-shell data-max-editor data-max-studio data-learning-context={modal ?? undefined} className={`max-editor-modal max-editor-modal-${modal}`}
             data-testid={modal === "preview" ? "max-mobile-preview" : "max-editor-modal"} aria-describedby={undefined}
             onCloseAutoFocus={event => {
               event.preventDefault();
