@@ -42,7 +42,7 @@ async function mount(allowed: boolean) {
   await act(async () => root.render(<QueryClientProvider client={client}>
     <ChatPanel projectId="p" projectSlug="p" initialCanChooseGenerationEngine={allowed} />
   </QueryClientProvider>));
-  await act(async () => vi.waitFor(() => expect(client.getQueryState(["owner-profile"])?.status).toBe("success")));
+  await act(async () => vi.waitFor(() => expect(client.getQueryState(["messages", "p"])?.status).toBe("success")));
 }
 
 async function typePrompt(text: string) {
@@ -57,16 +57,17 @@ async function clickSend() {
   await act(async () => [...host.querySelectorAll("button")].find(b => b.textContent?.trim() === "Отправить")!.click());
 }
 
-it("QA defaults to Sol; selecting Claude sends nothing and only explicit submit freezes Claude", async () => {
+it("QA submits with Sol without exposing model controls", async () => {
   await mount(true);
-  const select = host.querySelector("select")!;
-  expect(select.value).toBe("sol");
-  await act(async () => { select.value = "claude"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(host.querySelector("select")).toBeNull();
+  expect(host.textContent).not.toContain("Следующий запрос");
+  expect(host.textContent).not.toContain("GPT-6.2 Sol");
+  expect(host.textContent).not.toContain("Claude Sonnet");
   expect(mocks.submit).not.toHaveBeenCalled();
   await typePrompt("Создай дневник растений");
   await clickSend();
   expect(mocks.submit).toHaveBeenCalledTimes(1);
-  expect(mocks.submit.mock.calls[0][3]).toMatchObject({ generationEngine: "claude", idempotencyKey: expect.any(String) });
+  expect(mocks.submit.mock.calls[0][3]).toMatchObject({ generationEngine: "sol", idempotencyKey: expect.any(String) });
 });
 
 it("ordinary users send the captured Sol default without a QA selector", async () => {
@@ -81,8 +82,7 @@ it("ordinary users send the captured Sol default without a QA selector", async (
 
 it("explicit client capability revocation hides the selector and restores the normal next-request default", async () => {
   await mount(true);
-  const select = host.querySelector("select")!;
-  await act(async () => { select.value = "claude"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(host.querySelector("select")).toBeNull();
   await act(async () => {
     client.setQueryData(["owner-profile"], { id: "owner", can_choose_generation_engine: false });
     await vi.waitFor(() => expect(host.querySelector("select")).toBeNull());
@@ -103,7 +103,7 @@ it("a previous QA login's cached profile cannot expose the selector in an ordina
   expect(mocks.submit).not.toHaveBeenCalled();
 });
 
-it("server-authorized QA can choose Sol before the first wizard brief is sent, retaining the handoff on unknown acceptance", async () => {
+it("server-authorized QA can review the first Sol wizard brief before it is sent, retaining the handoff on unknown acceptance", async () => {
   const brief = "Хочу дневник растений с красивым оформлением";
   window.history.replaceState(null, "", "/max/p?starter=1");
   sessionStorage.setItem("omnia:max:starter:p", brief);
@@ -120,8 +120,7 @@ it("server-authorized QA can choose Sol before the first wizard brief is sent, r
   });
   expect(host.querySelector("textarea")?.value).toBe(brief);
   expect(mocks.submit).not.toHaveBeenCalled();
-  const select = host.querySelector("select")!;
-  expect(select.value).toBe("sol");
+  expect(host.querySelector("select")).toBeNull();
   expect(mocks.submit).not.toHaveBeenCalled();
   const send = [...host.querySelectorAll("button")].find(b => b.textContent?.trim() === "Отправить")!;
   await act(async () => send.click());

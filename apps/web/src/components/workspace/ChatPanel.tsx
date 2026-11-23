@@ -50,10 +50,7 @@ import { isChatMessageStreaming } from "@/lib/chat-message-status";
 import { readMaxLaunch } from "@/lib/max-launch-runner";
 import type { MaxAdaptationAttachment } from "@/lib/use-max-adaptation";
 import type { Message, Snapshot } from "@/lib/api/types";
-import { getOwnerProfile } from "@/lib/api/owner-profile";
-import { OWNER_PROFILE_QUERY_KEY } from "@/lib/owner-chat-quota";
-import { DEFAULT_GENERATION_ENGINE, type GenerationEngine } from "@/lib/generation-engine";
-import { GenerationEngineSelect } from "./GenerationEngineSelect";
+import { DEFAULT_GENERATION_ENGINE } from "@/lib/generation-engine";
 
 export type ChatPanelAdaptationHandle = {
   submitAdaptation: (attachment: MaxAdaptationAttachment) => Promise<boolean>;
@@ -97,14 +94,7 @@ export function ChatPanel({
   // This historical optimistic label is separate from the captured coding engine.
   const modelId = "topmix-v1";
   const quota = useOwnerChatQuota();
-  const profile = useQuery({ queryKey: OWNER_PROFILE_QUERY_KEY, queryFn: getOwnerProfile,
-    staleTime: 0, retry: false });
-  // A cached profile from a previous login cannot expose the QA control.
-  const canChooseEngine = initialCanChooseGenerationEngine
-    && profile.data?.can_choose_generation_engine !== false;
-  const [engineChoice, setEngineChoice] = useState<{ projectId: string; engine: GenerationEngine } | null>(null);
-  const engine = canChooseEngine && engineChoice?.projectId === projectId
-    ? engineChoice.engine : DEFAULT_GENERATION_ENGINE;
+  const engine = DEFAULT_GENERATION_ENGINE;
   const authoredPending = useRef(false);
   const { submit, cancel, cancelPending, retryPending, restoreExpiredPending, pendingPrompt, pendingPhase } = usePromptStream(
     projectId,
@@ -464,8 +454,7 @@ export function ChatPanel({
     if (p && p.trim() && messages.length === 0) {
       if (initialCanChooseGenerationEngine) {
         if (pendingPrompt) return;
-        // Server session already supplied QA authority before hydration. Keep
-        // this first brief reviewable so choosing an alternative precedes the paid call.
+        // Keep the first QA brief reviewable before submitting a paid request.
         // Retain the handoff/key through F5 or unknown acceptance until success.
         if (composerDraftRef.current?.insertDraft(p.trim())) {
           autoFiredRef.current = true;
@@ -488,7 +477,7 @@ export function ChatPanel({
         }
       });
     }
-  }, [messages, submitWithCredentialIntake, basePath, projectId, canChooseEngine, initialCanChooseGenerationEngine, pendingPrompt, clearStarterHandoff]);
+  }, [messages, submitWithCredentialIntake, basePath, projectId, initialCanChooseGenerationEngine, pendingPrompt, clearStarterHandoff]);
 
   return (
     // h-full + min-h-0 нужны чтобы в grid-cell flex-колонка получила фиксированную
@@ -559,9 +548,6 @@ export function ChatPanel({
       </div>
 
       <div className="max-chat-footer relative shrink-0">
-        {canChooseEngine && <GenerationEngineSelect value={engine}
-          disabled={isStreaming || !!pendingPrompt}
-          onChange={value => setEngineChoice({ projectId, engine: value })} />}
         {!chatScroll.following && <div className="max-chat-latest">
           <Button type="button" variant="secondary" size="sm" onClick={chatScroll.scrollToLatest}>
             <ArrowDown aria-hidden="true" /> К последнему сообщению

@@ -173,20 +173,18 @@ it("also verifies and redacts a credential from the saved starter before replay"
   expect(sessionStorage.getItem(starterKey)).toBeNull();
 });
 
-it("captures the coding engine before credential verification even if the next-request selector changes", async () => {
+it("keeps Sol captured through credential verification without model controls", async () => {
   let finish!: () => void;
   mocks.connect.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
   await render(true);
   await sendFromComposer();
   expect(mocks.connect).toHaveBeenCalledOnce();
   expect(mocks.submit).not.toHaveBeenCalled();
-  const select = host.querySelector("select")!;
-  expect(select.value).toBe("sol");
-  await act(async () => { select.value = "claude"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(host.querySelector("select")).toBeNull();
   expect(mocks.submit).not.toHaveBeenCalled();
   await act(async () => finish());
   expectRedactedSubmission();
-  expect(select.value).toBe("claude");
+  expect(host.querySelector("select")).toBeNull();
 });
 
 it("verifies and redacts a credential typed into an inline discovery answer", async () => {
