@@ -30,7 +30,7 @@ describe("MAX live preview surface", () => {
 
   it("preserves white generated-app canvases inside the dark product chrome", () => {
     expect(livePreview).toContain(
-      'className="relative bg-white" style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT }}',
+      'className="max-preview-app-screen relative bg-white" style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT }}',
     );
     expect(livePreview).toContain(
       'className="absolute inset-0 size-full border-0 bg-white"',

@@ -37,6 +37,20 @@
   .max-shared-project-brand a > span:last-child { display: none; }
   .max-shared-project-trigger { gap: 8px; padding-inline: 4px; }
   .max-shared-project-trigger strong { font-size: 13px; }
-  .max-project-menu { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
-  .max-project-menu-heading { gap: 12px; padding: 16px; }
+  .max-project-menu { inset: 0; width: 100%; height: 100dvh; max-height: 100dvh; transform: none; border-radius: 0; }
+  .max-project-menu-heading { gap: 12px; padding: max(12px, env(safe-area-inset-top)) 16px 12px; }
+  .max-project-menu-heading h2 { font-size: 22px; line-height: 28px; }
+  .max-project-menu-heading button { min-width: 48px; min-height: 48px; border-radius: 14px; }
+  .max-project-menu-heading .learning-launch { width: 48px; padding: 0; }
+  .max-project-menu-heading .learning-launch > span { display: none; }
+  .max-project-menu-scroll { flex: 1; padding: 12px max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+  .max-project-menu-navigation h3 { margin: 24px 12px 8px; font-size: 13px; }
+  .max-project-menu-navigation :is(.max-project-menu-link, nav > a) { min-height: 56px; height: auto; padding: 14px 16px; gap: 14px; border-radius: 14px; font-size: 16px; line-height: 24px; }
+  .max-project-menu-navigation :is(.max-project-menu-link, nav > a) > svg { width: 22px; height: 22px; }
+  .max-project-menu-projects { max-height: 224px; }
+  .max-project-menu-account :is(button, a) { min-height: 52px; height: auto; font-size: 16px; border-radius: 14px; }
+  .max-project-menu-account button > span:nth-child(2) > span:first-child { font-size: 16px; }
+  .max-project-menu-account button > span:nth-child(2) > span:last-child { font-size: 13px; }
+  .max-project-menu-account nav { max-height: min(380px, calc(100dvh - 180px)); }
+  .max-project-menu-account :is(button, a) > svg { width: 22px; height: 22px; }
 }

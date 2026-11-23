@@ -47,6 +47,8 @@ import { MaxVersionRail } from "./MaxVersionRail";
 import { draftPreviewLabel, MaxPreviewDraft, useMaxPreviewDraft } from "./MaxPreviewDraft";
 import { MAX_CUSTOMER_VERSIONING } from "@/lib/max-product-policy";
 
+import "./max-live-preview.css";
+
 const SCREEN_WIDTH = 390;
 const SCREEN_HEIGHT = 844;
 const STATUS_BAR_HEIGHT = 38;
@@ -713,14 +715,14 @@ export function MaxLivePreview({
             <p>{unavailableState.hint}</p>
             {(!selectedSnapshot || ["ready", "unchanged"].includes(selectedSnapshot.status)) && <Button variant="outline" size="sm" onClick={retryImages} data-testid="max-history-retry-image">{imageFailed ? "Повторить загрузку" : "Обновить историю"}</Button>}
           </section> : <div
-            className="relative shrink-0"
+            className="max-preview-device-slot relative shrink-0"
             style={{
               width: DEVICE_WIDTH * deviceScale,
               height: DEVICE_HEIGHT * deviceScale,
             }}
           >
             <div
-              className="absolute left-0 top-0 rounded-[58px] bg-[#0b0b0b] p-[10px] shadow-[0_12px_28px_rgba(23,23,22,.14),0_2px_7px_rgba(23,23,22,.12),inset_0_0_0_1px_rgba(255,255,255,.16)]"
+              className="max-preview-device-frame absolute left-0 top-0 rounded-[58px] bg-[#0b0b0b] p-[10px] shadow-[0_12px_28px_rgba(23,23,22,.14),0_2px_7px_rgba(23,23,22,.12),inset_0_0_0_1px_rgba(255,255,255,.16)]"
               data-testid="max-live-device"
               style={{
                 width: DEVICE_WIDTH,
@@ -733,8 +735,8 @@ export function MaxLivePreview({
               <span className="absolute -left-[3px] top-[242px] h-[46px] w-[4px] rounded-l-full bg-[#30302f] shadow-[inset_1px_0_rgba(255,255,255,.16)]" aria-hidden="true" />
               <span className="absolute -right-[3px] top-[196px] h-[104px] w-[4px] rounded-r-full bg-[#30302f] shadow-[inset_-1px_0_rgba(255,255,255,.16)]" aria-hidden="true" />
 
-              <div className="relative h-full overflow-hidden rounded-[48px] bg-[#111] shadow-[inset_0_0_0_1px_rgba(255,255,255,.08)]">
-                <div className="relative z-10 flex items-center justify-between bg-[#111] px-[19px] text-[11px] font-semibold text-white" style={{ height: STATUS_BAR_HEIGHT }}>
+              <div className="max-preview-device-body relative h-full overflow-hidden rounded-[48px] bg-[#111] shadow-[inset_0_0_0_1px_rgba(255,255,255,.08)]">
+                <div className="max-preview-device-status relative z-10 flex items-center justify-between bg-[#111] px-[19px] text-[11px] font-semibold text-white" style={{ height: STATUS_BAR_HEIGHT }}>
                   <span className="min-w-[58px] tracking-[-0.02em]">09:41</span>
                   <span className="absolute left-1/2 top-[8px] h-[22px] w-[82px] -translate-x-1/2 rounded-full bg-black shadow-[inset_0_0_0_1px_rgba(255,255,255,.03)]" aria-hidden="true" />
                   <span className="flex min-w-[58px] items-center justify-end gap-1.5" aria-hidden="true">
@@ -743,7 +745,7 @@ export function MaxLivePreview({
                     <BatteryFull className="h-3 w-4" strokeWidth={2.25} />
                   </span>
                 </div>
-                <div className="relative bg-white" style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT }}>
+                <div className="max-preview-app-screen relative bg-white" style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT }}>
                   {viewingHistorical ? (
                     <div className="absolute inset-0" data-testid="max-historical-snapshot">
                       <VersionImagePreview

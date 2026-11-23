@@ -24,7 +24,7 @@ export function MaxSectionShell({ projectId, projectName, active, title, lead, c
       <header className="max-project-header max-shared-project-header">
         <MaxProjectHeader projectId={projectId} projectName={projectName} active={active} />
         <div className="max-project-header-actions" data-learning-context={learningContext}>
-          {active !== "editor" && <Link href={projectHref} className="max-project-chat"><MessageCircle aria-hidden="true" className="size-4" />К чату</Link>}
+          {active !== "editor" && <Link href={projectHref} className="max-project-chat"><MessageCircle aria-hidden="true" className="size-4" />Чат</Link>}
           <LearningButton />
           <Link href="/account" aria-label="Аккаунт" className="max-project-back"><UserRound aria-hidden="true" className="size-4" /></Link>
         </div>

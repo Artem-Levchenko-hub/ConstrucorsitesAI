@@ -1,0 +1,16 @@
+/* Desktop keeps the device frame; mobile renders the actual mini app at viewport size. */
+@media (max-width: 600px) {
+  [data-testid="max-live-preview"] { padding-block: 0; }
+  [data-testid="max-live-preview"] > .mt-1 { margin-top: 0; }
+  [data-testid="max-live-device-stage"] { padding: 0; align-items: stretch; }
+  .max-preview-device-slot, .max-preview-device-frame, .max-preview-app-screen { width: 100% !important; height: 100% !important; }
+  .max-preview-device-slot { flex: 1; min-height: 0; }
+  .max-preview-device-frame { position: relative; padding: 0; transform: none !important; border-radius: 0; box-shadow: none; background: #fff; }
+  .max-preview-device-body { border-radius: 0; box-shadow: none; background: #fff; }
+  .max-preview-device-frame > span, .max-preview-device-status, .max-preview-device-body > [aria-hidden="true"] { display: none; }
+  [data-testid="max-preview-header"] .omnia-kicker { display: none; }
+  [data-testid="max-preview-header"] button { min-width: 48px; min-height: 48px; border-radius: 14px; }
+  [data-testid="max-accepted-preview-status"] { margin: 0; padding: 4px 16px 8px; font-size: 12px; }
+  [data-testid="max-preview-actions"] { margin: 0; }
+  [data-testid="max-preview-actions"] :is(button, a) { min-height: 48px; font-size: 14px; }
+}

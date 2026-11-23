@@ -46,7 +46,7 @@ it("даёт статистике постоянное место рядом с 
   // понимал, где искать адрес приложения и куда вставлять токен бота.
   const links = await render("p2", "editor", ["build", "legal"]);
   expect(links.map(link => link.textContent?.trim())).toEqual([
-    "Управление", "Данные приложения", "Каталог", "Бот и подключения", "Публикация", "Статистика",
+    "Управление", "Данные", "Каталог", "Подключения", "Публикация", "Статистика",
   ]);
   expect(links.map(link => link.getAttribute("href"))).toEqual([
     "/max/p2/manage", "/max/p2/settings?tab=app", "/max/p2/catalog", "/max/p2/integrations", "/max/p2/publish", "/max/p2/dashboard",

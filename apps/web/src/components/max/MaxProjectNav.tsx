@@ -42,7 +42,7 @@ const navigation: Array<{
   {
     key: "app",
     keys: ["app"],
-    label: "Данные приложения",
+    label: "Данные",
     suffix: "/settings?tab=app",
     icon: FileCheck2,
   },
@@ -52,7 +52,7 @@ const navigation: Array<{
   {
     key: "bot",
     keys: ["bot", "integrations"],
-    label: "Бот и подключения",
+    label: "Подключения",
     suffix: "/integrations",
     icon: Bot,
     stageId: "bot",

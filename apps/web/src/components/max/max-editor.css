@@ -202,3 +202,17 @@
   [data-max-editor] .max-editor-advice { margin-inline: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { .max-editor-drawer, .max-editor-launch-drawer { animation: none; } }
+
+@media (max-width: 600px) {
+  [data-max-editor] button { min-height: 48px; touch-action: manipulation; }
+  [data-max-editor] .max-studio-prompt { padding: 8px 12px max(12px, env(safe-area-inset-bottom)); }
+  [data-max-editor] .max-studio-prompt > .prompt-input-surface { border-radius: 20px; }
+  [data-max-editor] .max-studio-prompt textarea { font-size: 16px; min-height: 72px; padding: 14px; }
+  [data-max-editor] .max-studio-prompt button { min-width: 48px; min-height: 48px; border-radius: 14px; }
+  [data-max-editor] :is(summary, .max-history-activity button) { min-height: 48px; }
+  .max-editor-header-actions > button { min-height: 48px; border-radius: 14px; }
+  .max-editor-header-actions .learning-launch { display: none; }
+  .max-editor-header .max-shared-project-trigger { min-height: 48px; }
+  .max-editor-modal-heading button { min-width: 48px; min-height: 48px; border-radius: 14px; }
+  .max-editor-modal-preview .max-editor-modal-actions .learning-launch { display: none; }
+}

@@ -20,7 +20,7 @@ function subscribeViewport(onChange: () => void) {
 const isDesktop = () => window.matchMedia?.(desktopQuery).matches ?? true;
 const serverViewport = () => false;
 const titles = {
-  preview: "Предпросмотр приложения",
+  preview: "Превью",
 };
 
 export function MaxEditorLayout({ project, email, children, navigation, preview }: {

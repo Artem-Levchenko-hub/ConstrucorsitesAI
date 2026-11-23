@@ -83,7 +83,7 @@ export function MaxProjectHeader({ projectId, projectName, active, email, naviga
           <Dialog.Content data-product-shell data-max-studio data-max-editor data-learning-context="navigation"
             className="max-project-menu" data-testid="max-editor-modal" aria-describedby={undefined}>
             <div className="max-project-menu-heading">
-              <div><p title={projectName}>{projectName}</p><Dialog.Title>Проекты и аккаунт</Dialog.Title></div>
+              <div><p title={projectName}>{projectName}</p><Dialog.Title>Меню</Dialog.Title></div>
               <div className="flex shrink-0 items-center gap-2"><LearningButton /><Dialog.Close asChild>
                 <Button variant="outline" size="icon" aria-label="Закрыть окно"><X aria-hidden="true" className="size-5" /></Button>
               </Dialog.Close></div>

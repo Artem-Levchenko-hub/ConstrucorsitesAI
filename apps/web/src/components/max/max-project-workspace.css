@@ -145,3 +145,19 @@
 .max-launch-publication-progress strong { color: var(--color-fg-primary); font-weight: 500; }
 .max-launch-publication-progress .max-launch-notice { flex-basis: 100%; margin-top: 4px; }
 .max-launch-failure-detail { margin-top: 4px; font-size: 12px; color: var(--color-fg-secondary); }
+
+/* Comfortable, consistent controls throughout the mobile owner workspace. */
+@media (max-width: 600px) {
+  .max-project-workspace :is(button, a[class], summary) { touch-action: manipulation; }
+  .max-project-workspace :is(button, .max-project-chat, .max-project-back, .max-project-help, .max-requirement-action, .max-launch-option a, .max-launch-primary-action a) { min-height: 48px; min-width: 48px; border-radius: 14px; font-size: 15px; }
+  .max-project-workspace :is(input:not([type=checkbox]):not([type=radio]), select, textarea) { min-height: 48px; font-size: 16px; border-radius: 12px; }
+  .max-project-header-actions { gap: 8px; }
+  .max-project-header-actions .max-project-chat { flex: 1; justify-content: center; }
+  .max-project-header-actions .learning-launch { width: 48px; padding: 0; }
+  .max-project-header-actions .learning-launch > span { display: none; }
+  .max-project-nav { gap: 8px; padding-block: 10px; }
+  .max-project-nav-link { min-height: 48px; padding: 12px 16px; border-radius: 14px; font-size: 14px; }
+  .max-project-lead { font-size: 14px; line-height: 1.5; }
+  .max-launch-checks summary { min-height: 48px; }
+  .max-project-workspace :is(button, a):active { opacity: .75; }
+}
