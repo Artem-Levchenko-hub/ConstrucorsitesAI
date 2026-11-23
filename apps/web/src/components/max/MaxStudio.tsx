@@ -14,7 +14,7 @@ import { describeApiError } from "@/lib/api/errors";
 import { peekLandingPrompt, takeLandingPrompt } from "@/lib/landing-prompt";
 import { createProject, listProjects } from "@/lib/api/projects";
 import { MAX_DEFAULT_SUMMARY, availableManagementModules, briefManagementModuleOptOuts, buildMaxProjectPrompt, newProjectManagementModules, selectedMaxAppTypes, serializeMaxProjectFeatures, type MaxProjectBrief } from "@/lib/max-brief";
-import { completeMaxProjectDraft, emptyMaxProjectDraft, readMaxProjectDraft, replaceMaxProjectDraft, saveMaxProjectDraft, startMaxProjectDraft, type MaxProjectDraft } from "@/lib/max-project-draft";
+import { completeMaxProjectDraft, dismissEmptyMaxProjectDraft, emptyMaxProjectDraft, hasMaxProjectDraftAnswers, readMaxProjectDraft, replaceMaxProjectDraft, saveMaxProjectDraft, startMaxProjectDraft, type MaxProjectDraft } from "@/lib/max-project-draft";
 import { containsChatSecret, resolveChatCredential } from "@/lib/max-chat-credentials";
 import { extractInitialCatalog } from "@/lib/max-catalog-brief";
 import { newMaxContentItem } from "@/lib/max-catalog";
@@ -237,12 +237,16 @@ function OwnedMaxStudio({ email }: { email: string }) {
     setDialogOpen(true);
   }
 
+  function changeWizardOpen(open: boolean) {
+    if (!open) dismissEmptyMaxProjectDraft(email, draftRef.current);
+    setDialogOpen(open);
+  }
+
   /** Готовая идея заполняет мастер, а не создаёт проект молча. */
   function applyIdea(idea: MaxStudioIdea) {
     if (!draftReady || completedDraft.current) return;
     const current = draftRef.current;
-    const dirty = current.name || current.idea || current.audience || current.primaryAction || current.brandColors
-      || current.features.length || current.managementModules.length || current.appTypes.some(type => type !== "custom");
+    const dirty = hasMaxProjectDraftAnswers(current);
     if (dirty && !window.confirm("Заменить текущий черновик выбранной идеей?")) return;
     const replacement = { ...emptyMaxProjectDraft(), name: idea.title, idea: idea.idea,
       appType: idea.appType, appTypes: [idea.appType], audience: idea.audience, primaryAction: idea.primaryAction };
@@ -279,10 +283,10 @@ function OwnedMaxStudio({ email }: { email: string }) {
           <div className="max-projects-heading">
             <div>
               <p className="omnia-kicker text-accent">Ваша студия</p>
-              <h1>Мои приложения</h1>
+              <h1><span className="max-projects-title-prefix">Мои </span>приложения</h1>
             </div>
-            <Button data-learning="create-project" size="lg" disabled={!draftReady || quota.initialExhausted} onClick={openWizard}>
-              <Plus className="size-4" /> Создать приложение
+            <Button data-learning="create-project" aria-label="Создать приложение" size="lg" disabled={!draftReady || quota.initialExhausted} onClick={openWizard}>
+              <Plus aria-hidden="true" className="size-4" /><span>Создать<span className="max-projects-action-suffix"> приложение</span></span>
             </Button>
           </div>
 
@@ -292,7 +296,7 @@ function OwnedMaxStudio({ email }: { email: string }) {
               <Search className="size-4 shrink-0" aria-hidden="true" />
               <Input ref={searchField} type="search" aria-label="Найти проект" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти проект" />
             </label>
-            {projects.isSuccess && <span className="text-sm text-fg-secondary" aria-live="polite">
+            {projects.isSuccess && <span className="max-projects-count text-sm text-fg-secondary" data-filtering={Boolean(search.trim())} aria-live="polite">
               {search.trim() ? `Найдено: ${maxProjects.length} из ${allMaxProjects.length}` : `Всего: ${allMaxProjects.length}`}
             </span>}
           </div>
@@ -340,7 +344,7 @@ function OwnedMaxStudio({ email }: { email: string }) {
       </main>
       <MaxProjectWizard
         open={dialogOpen}
-        onOpenChange={setDialogOpen}
+        onOpenChange={changeWizardOpen}
         pending={create.isPending}
         submitDisabled={quota.initialExhausted || Boolean(catalogError)}
         quotaNotice={<><OwnerChatQuotaNotice {...quota} initialOnly />{draftStorageFailed && <p role="status" className="text-sm text-fg-secondary">Не удалось сохранить черновик в этом браузере. Не закрывайте страницу до создания проекта.</p>}</>}

@@ -571,7 +571,7 @@ export function ChatPanel({
           pendingPrompt={pendingPrompt}
           pendingPhase={pendingPhase}
           textareaRef={inputRef}
-          placeholder="Опишите приложение или изменения…"
+          placeholder="Что создадим или изменим?"
           ariaLabel="Опишите изменение MAX Mini App"
           className="max-studio-prompt"
         />

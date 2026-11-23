@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } fro
 import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { ArrowUpRight, PanelRightOpen, Plug, SlidersHorizontal, X } from "lucide-react";
+import { MaxMobileNav } from "./MaxMobileNav";
 import { MaxProjectHeader } from "./MaxProjectHeader";
 import { Button } from "@/components/ui/button";
 import { LearningButton } from "@/components/learning/ProductLearning";
@@ -23,14 +24,15 @@ const titles = {
   preview: "Превью",
 };
 
-export function MaxEditorLayout({ project, email, children, navigation, preview }: {
+export function MaxEditorLayout({ project, email, children, navigation, preview, initialPreview = false }: {
   project: Project;
+  initialPreview?: boolean;
   email?: string;
   children: ReactNode;
   navigation?: ReactNode;
   preview: ReactNode | ((onClose?: () => void) => ReactNode);
 }) {
-  const [entry, setEntry] = useState<keyof typeof titles | null>(null);
+  const [entry, setEntry] = useState<keyof typeof titles | null>(initialPreview ? "preview" : null);
   const desktop = useSyncExternalStore(subscribeViewport, isDesktop, serverViewport);
   const editor = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLElement | null>(null);
@@ -100,6 +102,7 @@ export function MaxEditorLayout({ project, email, children, navigation, preview 
         </section>
         {desktop && <div data-learning="editor-preview" className="max-editor-desktop-preview">{previewContent}</div>}
       </div>
+      <MaxMobileNav projectId={project.id} active="chat" onPreview={openPreview} />
       <Dialog.Root open={!!modal} onOpenChange={value => { if (!value) setEntry(null); }}>
         <Dialog.Portal>
           <Dialog.Overlay className="max-editor-overlay" />
@@ -108,9 +111,9 @@ export function MaxEditorLayout({ project, email, children, navigation, preview 
             onCloseAutoFocus={event => {
               event.preventDefault();
               const opener = trigger.current;
-              const hiddenPreview = desktop && opener?.matches(".max-editor-mobile-preview-trigger");
+              const hiddenPreview = desktop && (opener?.matches(".max-editor-mobile-preview-trigger") || !!opener?.closest(".max-mobile-nav"));
               if (opener?.isConnected && !hiddenPreview) opener.focus();
-              else document.querySelector<HTMLElement>('[data-testid="max-launch-open"]')?.focus();
+              else editor.current?.querySelector<HTMLElement>(desktop ? '[data-testid="max-launch-open"]' : ".max-mobile-nav button")?.focus();
             }}>
             <div className="max-editor-modal-heading">
               <div><span className="max-editor-modal-project">{project.name}</span><Dialog.Title>{modal ? titles[modal] : undefined}</Dialog.Title></div>

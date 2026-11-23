@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { ArrowUpRight, Copy, Inbox, Link2, ShoppingBag, UsersRound } from "lucide-react";
@@ -47,6 +47,8 @@ export function MaxStaffTeam({ projectId, team, onDirtyChange }: {
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState<{ member: TeamMember; permissions: StaffPermission[] } | null>(null);
   const linkField = useRef<HTMLInputElement>(null);
+  const leadHintId = useId();
+  const paymentHintId = useId();
   const key = ["max-team", projectId];
   const refreshStaff = () => cache.invalidateQueries({ queryKey: ["max-staff-access", projectId] });
 
@@ -94,23 +96,22 @@ export function MaxStaffTeam({ projectId, team, onDirtyChange }: {
       <Button variant="outline" onClick={() => void team.refetch()}>Повторить загрузку</Button>
     </div>}
     {team.isSuccess && current && <>
-      <form className="max-staff-panel" onSubmit={event => { event.preventDefault(); if (settingsDraft && !pending) settings.mutate(settingsDraft); }}>
-        <header><h3>Настройки очередей</h3><p>Включайте очереди после публикации версии приложения, которая их поддерживает.</p></header>
+      <form className="max-staff-panel max-queue-settings" data-edited={Boolean(settingsDraft)} onSubmit={event => { event.preventDefault(); if (settingsDraft && !pending) settings.mutate(settingsDraft); }}>
+        <header><h3>Настройки очередей</h3><p>Для приёма обращений опубликуйте версию с нужной очередью.</p></header>
         <fieldset disabled={pending} className="max-staff-settings-fields">
           <div className="max-staff-queue-setting">
-            <p className="max-staff-field-label">Заявки</p>
-            <label className="max-staff-checkbox"><input type="checkbox" checked={current.leads_enabled}
+            <label className="max-staff-checkbox"><input type="checkbox" checked={current.leads_enabled} aria-describedby={leadHintId}
               disabled={team.data.settings.leads_enabled} onChange={event => { setSettingsDraft({ ...current, leads_enabled: event.target.checked }); settings.reset(); }} />
               <span>Принимать заявки</span>
             </label>
-            <p className="max-staff-field-help">{team.data.settings.leads_enabled ? "Рабочая очередь включена." : "Вы сможете брать заявки в работу и отмечать итог."}</p>
+            <p className="max-staff-field-help" id={leadHintId}>{team.data.settings.leads_enabled ? "Очередь включена." : "Новые заявки появятся в управлении."}</p>
           </div>
           <div className="max-staff-queue-setting">
-            <label className="max-staff-field">Оплата заказов<select value={current.orders_mode ?? ""} disabled={team.data.settings.orders_mode !== null}
+            <label className="max-staff-field">Оплата заказов<select value={current.orders_mode ?? ""} disabled={team.data.settings.orders_mode !== null} aria-describedby={paymentHintId}
               onChange={event => { setSettingsDraft({ ...current, orders_mode: (event.target.value || null) as TeamSettings["orders_mode"] }); settings.reset(); }}>
               <option value="">Заказы выключены</option><option value="pickup">При получении</option><option value="yookassa">Онлайн через ЮKassa</option>
             </select></label>
-            <p className="max-staff-field-help">{team.data.settings.orders_mode ? "Способ оплаты уже выбран для этой очереди." : "Способ оплаты фиксируется при включении очереди заказов."}</p>
+            <p className="max-staff-field-help" id={paymentHintId}>{team.data.settings.orders_mode ? "Способ оплаты закреплён за очередью." : "После включения очереди изменить способ оплаты нельзя."}</p>
             {current.orders_mode && <label className="max-staff-field">Время приготовления, мин
               <Input type="number" min={1} max={120} required value={Number.isNaN(current.prep_minutes) ? "" : current.prep_minutes}
                 onChange={event => { setSettingsDraft({ ...current, prep_minutes: event.target.valueAsNumber }); settings.reset(); }} />
@@ -131,7 +132,9 @@ export function MaxStaffTeam({ projectId, team, onDirtyChange }: {
         </div> : <p role="alert">{staffRequestError(settings.error)}</p>)}
         {settings.isSuccess && <p role="status">Настройки очередей сохранены.</p>}
         <div className="max-staff-actions">
-          <Button type="submit" disabled={!settingsDraft || pending}>{settings.isPending ? "Сохраняем…" : "Сохранить настройки"}</Button>
+          <Button type="submit" aria-label={settings.isPending ? "Сохраняем…" : "Сохранить настройки"} disabled={!settingsDraft || pending}>
+            {settings.isPending ? "Сохраняем…" : <span>Сохранить<span className="max-queue-save-qualifier"> настройки</span></span>}
+          </Button>
           {settingsDraft && <Button type="button" variant="ghost" disabled={pending} onClick={() => { setSettingsDraft(null); settings.reset(); }}>Отменить</Button>}
         </div>
       </form>

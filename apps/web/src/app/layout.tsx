@@ -26,6 +26,7 @@ export async function generateMetadata(): Promise<Metadata> {
     },
     description,
     applicationName: SITE_NAME,
+    appleWebApp: { capable: true, title: SITE_NAME, statusBarStyle: "default" },
     authors: [{ name: "Yleum" }],
     generator: "Yleum",
     keywords: [
@@ -91,7 +92,8 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export const viewport: Viewport = {
-  themeColor: "#121519",
+  themeColor: "#f5f6fa",
+  viewportFit: "cover",
   width: "device-width",
   initialScale: 1,
 };

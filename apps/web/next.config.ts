@@ -5,6 +5,7 @@ const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  devIndicators: false,
   eslint: {
     // Lint is run separately via `pnpm lint`. The build only enforces
     // typecheck (which is the source of truth for type safety anyway).

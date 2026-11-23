@@ -95,6 +95,14 @@ async function input(label: string, value: string) {
 }
 function patches() { return requests.filter(request => request.init.method === "PATCH"); }
 
+it("allows the owner to retry when a successful response omits the catalog", async () => {
+  vi.mocked(fetch).mockResolvedValueOnce(Response.json({}));
+  await mount();
+  expect(node.querySelector('[role="alert"]')?.textContent).toContain("Не удалось загрузить каталог");
+  await click("Повторить");
+  expect(node.querySelector("article h2")?.textContent).toBe(item.title);
+});
+
 const sourceDependentQueries = [
   ["snapshots", "owned"], ["max-preview-session", "owned"], ["max-readiness", "owned"],
   ["project-versions", "owned", "current-build"],

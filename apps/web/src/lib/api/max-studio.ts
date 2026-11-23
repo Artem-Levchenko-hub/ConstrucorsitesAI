@@ -30,14 +30,23 @@ export function saveMaxProjectConfig(
   });
 }
 
+function requireCatalogResponse(data: MaxProjectContent | null): MaxProjectContent {
+  if (!data || !Array.isArray(data.content) || !Number.isInteger(data.config_version)
+    || data.saved?.state !== "saved" || typeof data.public?.state !== "string"
+    || typeof data.preview?.state !== "string") {
+    throw new Error("Сервер вернул неполные данные каталога.");
+  }
+  return data;
+}
+
 export function getMaxProjectContent(projectId: Uuid): Promise<MaxProjectContent> {
-  return apiFetch(`${path(projectId)}/content`, { timeoutMs: 15_000 });
+  return apiFetch<MaxProjectContent>(`${path(projectId)}/content`, { timeoutMs: 15_000 }).then(requireCatalogResponse);
 }
 
 export function saveMaxProjectContent(projectId: Uuid, expectedConfigVersion: number, content: MaxContentItem[]): Promise<MaxProjectContent> {
-  return apiFetch(`${path(projectId)}/content`, {
+  return apiFetch<MaxProjectContent>(`${path(projectId)}/content`, {
     method: "PATCH", json: { expected_config_version: expectedConfigVersion, content }, timeoutMs: 180_000,
-  });
+  }).then(requireCatalogResponse);
 }
 
 /** Загрузить фото позиции каталога и получить его публичный адрес. */

@@ -62,13 +62,14 @@ export function MaxStudioIdeas({ onPick }: { onPick: (idea: MaxStudioIdea) => vo
         {MAX_STUDIO_IDEAS.map(idea => {
           const Icon = idea.icon;
           return (
-            <button key={idea.key} type="button" className="max-studio-idea" onClick={() => onPick(idea)}>
+            <button key={idea.key} type="button" data-idea={idea.key} className="max-studio-idea" onClick={() => onPick(idea)}>
               <span className="max-studio-idea-icon" aria-hidden="true"><Icon className="size-4" /></span>
               <span className="max-studio-idea-copy">
                 <span className="max-studio-idea-title">{idea.title}</span>
                 <span className="max-studio-idea-text">{idea.idea}</span>
+                <span className="max-studio-idea-action">{idea.primaryAction}</span>
               </span>
-              <span className="max-studio-idea-go" aria-hidden="true">Использовать описание<ArrowRight className="size-3.5" /></span>
+              <span className="max-studio-idea-go" aria-hidden="true"><span>Использовать описание</span><ArrowRight className="size-3.5" /></span>
             </button>
           );
         })}

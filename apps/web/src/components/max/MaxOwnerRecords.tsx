@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, Inbox, Loader2, Search } from "lucide-react";
+import { ArrowLeft, ArrowRight, CalendarDays, ChevronRight, Inbox, Loader2, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ApiError } from "@/lib/api/client";
@@ -11,7 +11,9 @@ import { getMaxOwnerRecords, ownerMoney, ownerRequestError, updateMaxOwnerRecord
 type Filters = { query: string; status: string; from: string; to: string };
 type Draft = { record: OwnerRecord; status: OwnerStatus; note: string; operation?: OwnerRecordUpdate; error?: unknown; latest?: OwnerRecord; reloadMessage?: string };
 const initialFilters: Filters = { query: "", status: "", from: "", to: "" };
-const dateLabel = (value: string) => new Date(value).toLocaleString("ru-RU");
+const dateLabel = (value: string, compact = false) => new Date(value).toLocaleString(
+  "ru-RU", compact ? { dateStyle: "short", timeStyle: "short" } : undefined,
+);
 function dirty(draft: Draft | null): boolean { return Boolean(draft && (draft.status !== draft.record.status || draft.note !== (draft.record.note ?? ""))); }
 function ambiguous(error: unknown): boolean {
   // A response body can fail after the server committed, outside fetch's ApiError normalization.
@@ -36,6 +38,8 @@ export function MaxOwnerRecords(props: RecordsProps) {
 }
 
 function Records({ projectId, resource, onDirtyChange, readOnly = false }: RecordsProps) {
+  const [periodOpen, setPeriodOpen] = useState(false);
+  const periodId = useId();
   const [filters, setFilters] = useState<Filters>(initialFilters);
   const [cursors, setCursors] = useState<Array<string | undefined>>([undefined]);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -44,6 +48,8 @@ function Records({ projectId, resource, onDirtyChange, readOnly = false }: Recor
   const saving = useRef(false);
   const mounted = useRef(true);
   const detailsHeading = useRef<HTMLHeadingElement>(null);
+  const openedFrom = useRef<HTMLButtonElement>(null);
+  const searchInput = useRef<HTMLInputElement>(null);
   const selectedId = draft?.record.id;
   const unsaved = dirty(draft);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -61,9 +67,19 @@ function Records({ projectId, resource, onDirtyChange, readOnly = false }: Recor
   });
 
   function mayLeave() { return !saving.current && (!unsaved || window.confirm("Есть несохранённые правки. Отменить их и перейти дальше?")); }
-  function select(record: OwnerRecord) {
+  function select(record: OwnerRecord, trigger: HTMLButtonElement) {
     if (record.id === draft?.record.id || !mayLeave()) return;
+    openedFrom.current = trigger;
     setDraft({ record, status: record.status, note: record.note ?? "" }); setSaved(false);
+  }
+  function returnToList() {
+    if (!mayLeave()) return;
+    setDraft(null);
+    setSaved(false);
+    requestAnimationFrame(() => {
+      const trigger = openedFrom.current;
+      (trigger?.isConnected ? trigger : searchInput.current)?.focus();
+    });
   }
   function changeFilter(patch: Partial<Filters>) {
     if (!mayLeave()) return;
@@ -109,13 +125,13 @@ function Records({ projectId, resource, onDirtyChange, readOnly = false }: Recor
   const booking = resource.id === "bookings";
   const filtered = Boolean(filters.query || filters.status || filters.from || filters.to);
   const rows = records.data?.records ?? [];
-  return <section className="max-owner-records" aria-label={resource.label}>
+  return <section className="max-owner-records" aria-label={resource.label} data-detail-open={Boolean(draft)} data-read-only={readOnly}>
     <header className="max-owner-section-heading"><h2>{resource.label}</h2><p>{readOnly ? "Обращения, полученные до подключения команды." : "Обращения клиентов из опубликованного приложения."}</p></header>
     <fieldset className="max-owner-filters" aria-label="Фильтры обращений" disabled={pending}>
-      <label>Поиск
+      <label><span className="max-owner-search-label">Поиск</span>
         <span className="max-owner-search-field">
           <Search aria-hidden="true" className="size-4" />
-          <Input aria-label="Поиск обращений" maxLength={120} value={filters.query} placeholder="Имя или контакт клиента" onChange={event => changeFilter({ query: event.target.value })} />
+          <Input ref={searchInput} aria-label="Поиск обращений" maxLength={120} value={filters.query} placeholder="Имя или контакт клиента" onChange={event => changeFilter({ query: event.target.value })} />
         </span>
       </label>
       <label>Статус
@@ -124,12 +140,15 @@ function Records({ projectId, resource, onDirtyChange, readOnly = false }: Recor
           {Object.entries(resource.status_labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
       </label>
-      <label>{booking ? "Дата записи с" : "Дата создания с"}
-        <Input aria-label={booking ? "Дата записи с" : "С даты"} type="date" value={filters.from} onChange={event => changeFilter({ from: event.target.value })} />
-      </label>
-      <label>{booking ? "Дата записи по" : "Дата создания по"}
-        <Input aria-label={booking ? "Дата записи по" : "По дату"} type="date" value={filters.to} onChange={event => changeFilter({ to: event.target.value })} />
-      </label>
+      <Button type="button" variant="outline" className="max-owner-period-toggle" aria-expanded={periodOpen} aria-controls={periodId} data-active={Boolean(filters.from || filters.to)} onClick={() => setPeriodOpen(value => !value)}><CalendarDays aria-hidden="true" />Период</Button>
+      <div id={periodId} className="max-owner-date-fields" data-open={periodOpen}>
+        <label>{booking ? "Дата записи с" : "Дата создания с"}
+          <Input aria-label={booking ? "Дата записи с" : "С даты"} type="date" value={filters.from} onChange={event => changeFilter({ from: event.target.value })} />
+        </label>
+        <label>{booking ? "Дата записи по" : "Дата создания по"}
+          <Input aria-label={booking ? "Дата записи по" : "По дату"} type="date" value={filters.to} onChange={event => changeFilter({ to: event.target.value })} />
+        </label>
+      </div>
     </fieldset>
     {dateError && <p role="alert" className="max-owner-error">{dateError}</p>}
     {!dateError && <div className="max-owner-record-layout" data-has-records={Boolean(rows.length || draft)}>
@@ -153,10 +172,12 @@ function Records({ projectId, resource, onDirtyChange, readOnly = false }: Recor
             const when = booking ? record.requested_for ?? record.created_at : record.created_at;
             const selected = selectedId === record.id;
             return <li key={record.id} className="max-owner-record-row" data-selected={selected}>
-              <Button variant="ghost" disabled={pending} aria-pressed={selected} onClick={() => select(record)}>{record.customer_name}</Button>
+              <Button variant="ghost" disabled={pending} aria-pressed={selected} onClick={event => select(record, event.currentTarget)}>
+                {record.customer_name}<ChevronRight className="max-owner-row-chevron" aria-hidden="true" />
+              </Button>
               <div className="max-owner-record-meta">
                 <span className="max-owner-record-status" data-status={record.status}>{resource.status_labels[record.status]}</span>
-                <time dateTime={when}>{dateLabel(when)}</time>
+                <time dateTime={when} title={dateLabel(when)}>{dateLabel(when, true)}</time>
               </div>
               {(booking || record.total_kopecks != null) && <div className="max-owner-record-meta">
                 {booking && <span>{record.service_title}</span>}
@@ -165,10 +186,10 @@ function Records({ projectId, resource, onDirtyChange, readOnly = false }: Recor
             </li>;
           })}
         </ul>}
-        {(rows.length > 0 || cursors.length > 1) && <div className="max-owner-pagination">
-          <Button variant="outline" disabled={cursors.length === 1 || pending || records.isFetching} onClick={() => page(false)}><ArrowLeft aria-hidden="true" className="size-4" />Предыдущая страница</Button>
+        {(records.data?.next_cursor || cursors.length > 1) && <div className="max-owner-pagination">
+          <Button variant="outline" aria-label="Предыдущая страница" disabled={cursors.length === 1 || pending || records.isFetching} onClick={() => page(false)}><ArrowLeft aria-hidden="true" className="size-4" /><span>Предыдущая страница</span></Button>
           <span>Страница {cursors.length}</span>
-          <Button variant="outline" disabled={!records.data?.next_cursor || pending || records.isFetching} onClick={() => page(true)}>Следующая страница<ArrowRight aria-hidden="true" className="size-4" /></Button>
+          <Button variant="outline" aria-label="Следующая страница" disabled={!records.data?.next_cursor || pending || records.isFetching} onClick={() => page(true)}><span>Следующая страница</span><ArrowRight aria-hidden="true" className="size-4" /></Button>
         </div>}
       </div>
       {!draft && rows.length > 0 && <div className="max-owner-empty max-owner-record-placeholder">
@@ -176,15 +197,18 @@ function Records({ projectId, resource, onDirtyChange, readOnly = false }: Recor
         <p>Здесь откроются детали, статус и заметка владельца.</p>
       </div>}
       {draft && <article className="max-owner-record-card" aria-label={`${resource.singular_label}: ${draft.record.customer_name}`}>
+        <Button type="button" className="max-owner-record-back" variant="ghost" onClick={returnToList} disabled={pending}>
+          <ArrowLeft aria-hidden="true" />К списку
+        </Button>
         <header className="max-owner-record-card-header">
-          <h3 ref={detailsHeading} tabIndex={-1}>{resource.singular_label}</h3>
+          <h3 ref={detailsHeading} tabIndex={-1}>{resource.singular_label}{draft.record.customer_name && <span className="max-owner-detail-name"> · {draft.record.customer_name}</span>}</h3>
           <span className="max-owner-record-status" data-status={draft.record.status}>{resource.status_labels[draft.record.status]}</span>
           <p className="max-owner-hint">Сведения клиента и состав сохранены на момент обращения.</p>
         </header>
         <dl>{resource.fields.filter(field => field.readonly && field.key !== "items").map(field => {
           const value = draft.record[field.key];
           if (value == null || value === "") return null;
-          return <div key={field.key}><dt>{field.label}</dt><dd>{field.kind === "date" ? dateLabel(String(value)) : field.kind === "money" ? ownerMoney(Number(value)) : String(value)}</dd></div>;
+          return <div key={field.key} data-field={field.key}><dt>{field.label}</dt><dd>{field.kind === "date" ? dateLabel(String(value)) : field.kind === "money" ? ownerMoney(Number(value)) : String(value)}</dd></div>;
         })}</dl>
         {resource.id === "orders" && draft.record.fulfillment && <p className="max-owner-hint">
           {draft.record.fulfillment.delay_minutes === 0 ? "Самовывоз: как можно скорее" : <>

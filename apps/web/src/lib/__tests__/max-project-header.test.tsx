@@ -133,6 +133,15 @@ describe("shared MAX project identity and navigation", () => {
     if (surface === "editor") expect(host.querySelector<HTMLInputElement>('[aria-label="Черновик"]')?.value).toBe("Не потерять");
   });
 
+  it("guards a mobile bottom-tab departure when the chat has an unsent draft", async () => {
+    window.history.replaceState(null, "", "/max/qa");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await render("editor", project.name, true);
+    await act(async () => host.querySelector<HTMLAnchorElement>('.max-mobile-nav a[href="/max/qa/manage"]')!.click());
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Черновик"]')?.value).toBe("Не потерять");
+  });
+
   it("follows a real project link and closes navigation", async () => {
     await render("section");
     await open();

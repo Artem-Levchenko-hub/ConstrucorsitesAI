@@ -24,10 +24,12 @@ export function MaxWorkspaceShell({
   project,
   email,
   canChooseGenerationEngine = false,
+  initialPreview = false,
 }: {
   project: Project;
   email: string;
   canChooseGenerationEngine?: boolean;
+  initialPreview?: boolean;
 }) {
   const adaptationRef = useRef<ChatPanelAdaptationHandle>(null);
   const adaptationPending = useRef(false);
@@ -202,7 +204,7 @@ export function MaxWorkspaceShell({
   );
 
   return (
-    <MaxEditorLayout
+    <MaxEditorLayout initialPreview={initialPreview}
       project={project}
       preview={preview}
       email={email}

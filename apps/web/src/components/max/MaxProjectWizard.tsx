@@ -127,10 +127,10 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
               <fieldset>
                 <legend className="text-sm font-medium">Что пользователь сможет делать?</legend>
                 {multipleTypes && <p className="max-wizard-note">Выберите хотя бы один</p>}
-                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <div className="max-wizard-type-options mt-3 grid gap-2 sm:grid-cols-2">
                   {MAX_APP_TYPES.map(item => <button key={item.id} type="button" disabled={busy} aria-pressed={appTypes.includes(item.id)} onClick={() => selectAppType(item.id)} className="max-wizard-option">
                     <span className="flex items-center justify-between gap-2 text-sm font-medium">{item.label}{appTypes.includes(item.id) && <Check className="size-4 text-accent" />}</span>
-                    <span className="mt-1 block text-xs leading-5 text-fg-secondary">{item.description}</span>
+                    <span className="max-wizard-type-hint mt-1 block text-xs leading-5 text-fg-secondary">{item.description}</span>
                   </button>)}
                 </div>
                 <div id="max-project-details" className="mt-3 space-y-2">

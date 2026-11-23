@@ -5,6 +5,7 @@ import { isMaxOwnerPreviewPath } from "@/lib/max-owner-preview-path";
 import { maxStaffEnabled, maxStaffReturnPath } from "@/lib/max-staff-path";
 import { Suspense } from "react";
 import { ProductLearning } from "@/components/learning/ProductLearning";
+import { PwaInstallProvider } from "@/components/max/MaxInstallApp";
 import { LearningProvider } from "@/components/learning/LearningProvider";
 
 export default async function AppLayout({
@@ -32,11 +33,13 @@ export default async function AppLayout({
   // дополнительно гарантирует что страничный скролл не появится — скроллятся
   // только внутренние блоки (chat history, code view, preview iframe).
   return (
+    <PwaInstallProvider>
     <LearningProvider key={session.id} userKey={session.id}>
       <div className="flex h-dvh max-h-dvh min-h-0 flex-col overflow-hidden">
         {children}
         {!session.registrationVerificationReason && <Suspense fallback={null}><ProductLearning userKey={session.id} /></Suspense>}
       </div>
     </LearningProvider>
+    </PwaInstallProvider>
   );
 }

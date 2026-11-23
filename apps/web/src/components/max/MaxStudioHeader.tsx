@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { ChevronDown, CircleHelp, CreditCard, LogOut, Receipt, Shield, User, UsersRound, WalletCards } from "lucide-react";
 
+import { MaxInstallButton } from "./MaxInstallApp";
 import { logoutAction } from "@/app/(auth)/actions";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -53,6 +54,7 @@ export function MaxStudioHeader({
       </div>
 
       <div className="max-topbar-actions">
+        <MaxInstallButton />
         {showLearning && <LearningButton className="max-[360px]:w-11 max-[360px]:px-0 max-[360px]:[&>span]:sr-only" />}
         <Button asChild variant="secondary" size="nav" className="max-sm:w-11 max-sm:px-0">
           <Link href="/max/start" aria-label="Помощь и быстрый старт" data-learning="projects-help">

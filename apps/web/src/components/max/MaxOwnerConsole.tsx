@@ -115,9 +115,12 @@ function OwnerConsole({ projectId, projectName, initialTeam }: OwnerConsoleProps
           <nav className="max-owner-tabs" aria-label="Разделы управления">
             {sections.map(section => {
               const Icon = sectionIcon[section.id];
-              return <Button key={section.id} variant="ghost"
+              return <Button key={section.id} variant="ghost" aria-label={section.label}
                 aria-current={active === section.id ? "page" : undefined} onClick={() => select(section.id)}>
-                <Icon aria-hidden="true" className="size-4" />{section.label}
+                <Icon aria-hidden="true" className="size-4" />
+                {section.id === "team" && !maxStaffEnabled
+                  ? <span>Настройки<span className="max-owner-tab-qualifier"> очередей</span></span>
+                  : <span>{section.label}</span>}
               </Button>;
             })}
           </nav>

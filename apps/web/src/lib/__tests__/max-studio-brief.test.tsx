@@ -47,6 +47,24 @@ async function initial(idea = "Помощник для чтения с личн�
 }
 async function create() { await click("Создать проект"); await act(async () => { await vi.waitFor(() => expect(mocks.push).toHaveBeenCalled()); }); }
 
+it("keeps the home screen open after dismissing an empty wizard and preserves another tab's answers", async () => {
+  const owner = "qa@example.test";
+  const page = await renderStudio(owner);
+  try {
+    await click("Создать приложение");
+    await click("Отмена");
+    expect(readMaxProjectDraft(owner)).toBeNull();
+    await page.hide();
+    await page.render(owner);
+    expect(input("#max-project-name")).toBeNull();
+    await click("Создать приложение");
+    const draft = readMaxProjectDraft(owner)!;
+    expect(saveMaxProjectDraft(owner, { ...draft, name: "В другой вкладке" })).toBe(true);
+    await click("Отмена");
+    expect(readMaxProjectDraft(owner)?.name).toBe("В другой вкладке");
+  } finally { await page.dispose(); }
+});
+
 it("starts neutral, keeps free design and leaves unchosen capabilities available as needed", async () => {
   mocks.create.mockResolvedValue({ id: "neutral" }); const page = await renderStudio();
   try {

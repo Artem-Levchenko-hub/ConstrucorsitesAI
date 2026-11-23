@@ -1,5 +1,6 @@
-import { CircleHelp, MessageCircle, UserRound } from "lucide-react";
+import { BookOpen, MessageCircle, UserRound } from "lucide-react";
 import Link from "next/link";
+import { MaxMobileNav } from "./MaxMobileNav";
 import { MaxProjectHeader } from "./MaxProjectHeader";
 import { MaxProjectNav, type MaxProjectNavKey } from "@/components/max/MaxProjectNav";
 import { LearningButton } from "@/components/learning/ProductLearning";
@@ -34,11 +35,12 @@ export function MaxSectionShell({ projectId, projectName, active, title, lead, c
         <div className="max-project-content">
           <header className="max-project-page-heading">
             <div><h1>{title}</h1><p className="max-project-lead">{lead}</p></div>
-            <Link data-learning="project-help" href={helpHref[active]} aria-label="Помощь" className="max-project-help"><CircleHelp aria-hidden="true" className="size-4" /><span>Помощь</span></Link>
+            <Link data-learning="project-help" href={helpHref[active]} aria-label="Помощь" title="Справка по разделу" className="max-project-help"><BookOpen aria-hidden="true" className="size-4" /><span>Помощь</span></Link>
           </header>
           {children}
         </div>
       </main>
+      <MaxMobileNav projectId={projectId} active="manage" />
     </div>
   );
 }

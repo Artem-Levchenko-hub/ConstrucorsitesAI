@@ -44,9 +44,10 @@ export default async function MaxWorkspacePage({
   const project = result.data;
   // Only MAX Mini Apps have an editor here; anything else goes back to the cabinet.
   if (project.template !== "max_miniapp") redirect("/max");
-  const destination = legacyMaxEditorDestination(project.id, (await searchParams) ?? {});
+  const query = (await searchParams) ?? {};
+  const destination = legacyMaxEditorDestination(project.id, query);
   if (destination) redirect(destination);
 
-  return <MaxWorkspaceShell project={project} email={session.email}
+  return <MaxWorkspaceShell initialPreview={query.preview === "1"} project={project} email={session.email}
     canChooseGenerationEngine={session.canChooseGenerationEngine === true} />;
 }

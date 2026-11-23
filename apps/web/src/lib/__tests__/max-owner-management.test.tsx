@@ -112,6 +112,21 @@ it("links to management from project navigation", async () => {
   await render(<MaxProjectNav projectId="owned" active="manage" showProgress={false} />);
   expect(node.querySelector('a[href="/max/owned/manage"]')?.textContent).toContain("Управление");
 });
+it("returns from a record to the same filtered list and guards an unsaved note", async () => {
+  await mountRecords();
+  await change("Поиск обращений", "Клиент");
+  await click(first.customer_name);
+  await change("Заметка владельца", "Перезвонить");
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  await click("К списку");
+  expect(node.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Перезвонить");
+  confirm.mockReturnValue(true);
+  await click("К списку");
+  expect(node.querySelector(".max-owner-record-card")).toBeNull();
+  expect(node.querySelector<HTMLInputElement>('[aria-label="Поиск обращений"]')?.value).toBe("Клиент");
+  await vi.waitFor(() => expect(document.activeElement).toBe(button(first.customer_name)));
+  expect(patches()).toHaveLength(0);
+});
 it("keeps owner queues and settings usable while staff access is paused", async () => {
   flags.staffEnabled = false;
   overview = { ...overview, active_modules: ["orders", "leads"], resources: resources.filter(item => item.id !== "bookings") };
@@ -485,4 +500,13 @@ it("booking dates target appointments and display service and requested time", a
   expect(query.has("created_from")).toBe(false);
   expect(node.textContent).toContain("Маникюр");
   expect(node.querySelector('time')?.dateTime).toBe(booking.requested_for);
+});
+it("preserves a chosen date when the compact mobile period filter is collapsed", async () => {
+  await render(<MaxOwnerRecords projectId="owned" resource={resources[0]} />);
+  expect(button("Период")?.getAttribute("aria-expanded")).toBe("false");
+  await click("Период");
+  await change("С даты", "2026-11-01");
+  await click("Период");
+  expect(button("Период")?.getAttribute("aria-expanded")).toBe("false");
+  expect(node.querySelector<HTMLInputElement>('[aria-label="С даты"]')?.value).toBe("2026-11-01");
 });

@@ -109,8 +109,10 @@
   .max-editor .max-chat-composer .prompt-input-add,
   .max-editor .max-chat-composer .prompt-input-actions > button {
     display: inline-flex;
-    width: 44px;
-    min-width: 44px;
+    width: 48px;
+    min-width: 48px;
+    height: 48px;
+    min-height: 48px;
     padding: 0;
     border-radius: 12px;
   }
@@ -126,7 +128,7 @@
     white-space: nowrap;
   }
   .max-chat-attachment-menu { background: var(--color-surface-raised); }
-  .max-chat-attachment-menu [role=menuitem] { min-height: 44px; }
+  .max-chat-attachment-menu [role=menuitem] { min-height: 48px; font-size: 15px; }
   .max-chat-attachment-menu [role=menuitem][data-highlighted] {
     background: var(--color-accent-subtle);
     color: var(--color-accent-secondary);

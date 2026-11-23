@@ -11,6 +11,7 @@ import { LearningButton } from "@/components/learning/ProductLearning";
 import { Button } from "@/components/ui/button";
 import { listProjects } from "@/lib/api/projects";
 import { getOwnerProfile } from "@/lib/api/owner-profile";
+import { MaxInstallButton } from "./MaxInstallApp";
 import { MaxAccountMenu } from "./MaxAccountMenu";
 import { MaxProjectNav, type MaxProjectNavKey } from "./MaxProjectNav";
 import "./max-project-header.css";
@@ -55,6 +56,7 @@ function ProjectNavigation({ projectId, active, email, onNavigate }: {
         <MaxProjectNav projectId={projectId} active={active} showProgress={false} />
       </div>
       <div className="max-project-menu-account">
+        <MaxInstallButton />
         <MaxAccountMenu email={confirmedEmail} onNavigate={onNavigate} />
       </div>
     </>
@@ -74,7 +76,11 @@ export function MaxProjectHeader({ projectId, projectName, active, email, naviga
         <Dialog.Trigger asChild>
           <button type="button" className="max-shared-project-trigger" data-learning="editor-projects"
             data-testid="max-navigation-open" aria-label="Проекты и аккаунт" title={projectName}>
-            <span><strong>{projectName}</strong><small>Yleum</small></span>
+            <span>
+              <strong>{projectName}</strong>
+              <small>Yleum</small>
+              <small className="max-project-menu-caption" data-learning="project-navigation">Меню проекта</small>
+            </span>
             <ChevronDown aria-hidden="true" className="size-4 shrink-0" />
           </button>
         </Dialog.Trigger>

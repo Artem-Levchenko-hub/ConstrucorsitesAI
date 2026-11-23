@@ -19,6 +19,13 @@ export function emptyMaxProjectDraft(): MaxProjectDraft {
     managementModuleOptOuts: [], catalogDraft: null };
 }
 
+export function hasMaxProjectDraftAnswers(draft: MaxProjectDraft): boolean {
+  return texts.some(key => draft[key].length > 0)
+    || draft.appTypes.some(type => type !== "custom")
+    || draft.features.length > 0 || draft.managementModules.length > 0
+    || draft.managementModuleOptOuts.length > 0 || draft.catalogDraft !== null;
+}
+
 function validDraft(value: unknown): value is MaxProjectDraft {
   if (!value || typeof value !== "object") return false;
   const v = value as MaxProjectDraft;
@@ -61,6 +68,13 @@ function envelope(owner: string): Envelope | null {
 export function readMaxProjectDraft(owner: string): MaxProjectDraft | null {
   const saved = envelope(owner);
   return saved && !saved.completed && validDraft(saved.draft) && saved.id === saved.draft.id ? saved.draft : null;
+}
+
+export function dismissEmptyMaxProjectDraft(owner: string, draft: MaxProjectDraft) {
+  if (hasMaxProjectDraftAnswers(draft)) return;
+  const saved = readMaxProjectDraft(owner);
+  if (!saved || saved.id !== draft.id || hasMaxProjectDraftAnswers(saved)) return;
+  try { localStorage.removeItem(ownerKey(owner)); } catch { /* Storage may have become unavailable. */ }
 }
 
 function persist(owner: string, draft: MaxProjectDraft, now: number, start: boolean, expectedOldId?: string): boolean {
