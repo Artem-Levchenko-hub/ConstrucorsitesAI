@@ -141,7 +141,13 @@
     height: var(--max-editor-visual-height, 100dvh);
     max-height: none;
   }
-  html:has(.max-editor), body:has(.max-editor) { overflow: hidden; overscroll-behavior: none; }
+  html:has(.max-editor), body:has(.max-editor) {
+    color-scheme: light;
+    background-color: #f5f6fa;
+    overflow: hidden;
+    overscroll-behavior: none;
+    scroll-behavior: auto;
+  }
   .max-editor-conversation > .overflow-hidden { overflow: clip; }
   .max-editor[data-keyboard-open] .max-chat-footer,
   .max-editor:has(.max-chat-composer[data-composer-focused]) .max-chat-footer,

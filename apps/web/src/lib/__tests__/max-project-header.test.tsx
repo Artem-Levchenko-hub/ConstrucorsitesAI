@@ -1,9 +1,10 @@
-import { act } from "react";
+import { act, createRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MaxEditorLayout } from "@/components/max/MaxEditorLayout";
+import { PromptTextField } from "@/components/workspace/PromptTextField";
 import { MaxSectionShell } from "@/components/max/MaxSectionShell";
 import { useMaxWorkspaceDraftGuard } from "@/components/max/use-max-workspace-draft-guard";
 import type { Project } from "@/lib/api/types";
@@ -157,6 +158,39 @@ describe("shared MAX project identity and navigation", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("redocks on focus and blur inside the iOS field even when Safari omits the final resize", async () => {
+    const viewport = Object.assign(new EventTarget(), { height: 844, offsetTop: 0, scale: 1 });
+    vi.stubGlobal("visualViewport", viewport);
+    vi.stubGlobal("innerHeight", 844);
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(max-width: 1023px)", addEventListener() {}, removeEventListener() {},
+    }));
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iPhone");
+    const input = createRef<HTMLTextAreaElement>();
+    try {
+      await act(async () => root.render(<QueryClientProvider client={client}>
+        <MaxEditorLayout project={project} preview={null}>
+          <PromptTextField inputRef={input} compact maxComposer aria-label="Сообщение" />
+        </MaxEditorLayout>
+      </QueryClientProvider>));
+      const editor = host.querySelector<HTMLElement>(".max-editor")!;
+      const frame = host.querySelector<HTMLIFrameElement>("iframe")!;
+      await act(async () => frame.dispatchEvent(new Event("load")));
+      Object.assign(viewport, { height: 400, offsetTop: 24 });
+      await act(async () => input.current!.focus());
+      await vi.waitFor(() => expect(editor.style.getPropertyValue("--max-editor-visual-height")).toBe("400px"));
+      expect(editor.style.getPropertyValue("--max-editor-visual-top")).toBe("24px");
+      const resetScroll = vi.spyOn(window, "scrollTo").mockImplementation(() => { vi.stubGlobal("scrollY", 0); });
+      vi.stubGlobal("scrollY", 37);
+      await act(async () => input.current!.blur());
+      await vi.waitFor(() => expect(resetScroll).toHaveBeenCalledWith(0, 0));
+      // The keyboard finishes sliding away after blur without another DOM event.
+      Object.assign(viewport, { height: 844, offsetTop: 0 });
+      await vi.waitFor(() => expect(editor.style.getPropertyValue("--max-editor-visual-height")).toBe("844px"));
+      expect(editor.hasAttribute("data-keyboard-open")).toBe(false);
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it("guards a mobile bottom-tab departure when the chat has an unsent draft", async () => {

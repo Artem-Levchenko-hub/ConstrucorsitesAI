@@ -35,6 +35,7 @@ export function MaxEditorLayout({ project, email, children, navigation, preview,
   const [entry, setEntry] = useState<keyof typeof titles | null>(initialPreview ? "preview" : null);
   const desktop = useSyncExternalStore(subscribeViewport, isDesktop, serverViewport);
   const editor = useRef<HTMLDivElement>(null);
+  const syncViewportAfterFocus = useRef<(() => void) | null>(null);
   const previewDialog = useRef<HTMLDivElement>(null);
   const closePreview = useCallback(() => {
     setEntry(null);
@@ -68,6 +69,9 @@ export function MaxEditorLayout({ project, email, children, navigation, preview,
         resetViewport();
         return;
       }
+      // Only the chat history scrolls. WebKit can also pan the outer document
+      // to reveal the caret and leave that offset behind when the keyboard closes.
+      if (window.scrollY !== 0) window.scrollTo(0, 0);
       const height = viewport?.height ?? window.innerHeight;
       const top = viewport?.offsetTop ?? 0;
       element.style.setProperty("--max-editor-visual-height", height + "px");
@@ -81,21 +85,24 @@ export function MaxEditorLayout({ project, email, children, navigation, preview,
       schedule();
       // Safari can publish its final keyboard geometry after the last resize.
       window.clearTimeout(settled);
-      settled = window.setTimeout(schedule, 320);
+      settled = window.setTimeout(schedule, 480);
     };
 
     updateViewport();
     viewport?.addEventListener("resize", onResize);
     viewport?.addEventListener("scroll", schedule);
     window.addEventListener("resize", onResize);
-    element.addEventListener("focusin", onResize);
-    element.addEventListener("focusout", onResize);
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("pageshow", onResize);
+    // React focus events reach the editor even from the textarea's iOS iframe portal.
+    syncViewportAfterFocus.current = onResize;
     return () => {
       viewport?.removeEventListener("resize", onResize);
       viewport?.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", onResize);
-      element.removeEventListener("focusin", onResize);
-      element.removeEventListener("focusout", onResize);
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("pageshow", onResize);
+      syncViewportAfterFocus.current = null;
       cancelAnimationFrame(frame);
       window.clearTimeout(settled);
       resetViewport();
@@ -107,7 +114,8 @@ export function MaxEditorLayout({ project, email, children, navigation, preview,
     setEntry("preview");
   }
   return (
-    <div ref={editor} data-product-shell data-max-editor className="max-editor">
+    <div ref={editor} data-product-shell data-max-editor className="max-editor"
+      onFocusCapture={() => syncViewportAfterFocus.current?.()} onBlurCapture={() => syncViewportAfterFocus.current?.()}>
       <header className="max-editor-header max-shared-project-header">
         <MaxProjectHeader projectId={project.id} projectName={project.name} active="editor" email={email} navigation={navigation} />
         <div className="max-editor-header-actions">
