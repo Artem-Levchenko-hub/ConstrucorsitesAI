@@ -15,6 +15,9 @@ import { supportHours, supportPromise, takeSupportRecovery } from "@/lib/api/sup
 import "@/components/max/max-studio.css";
 import "./support.css";
 
+// Support positions its own panel against the viewport on both mobile and desktop.
+const supportDialogClass = "support-dialog translate-x-0 translate-y-0";
+
 function SupportHeader() {
   return <header className="support-header"><span className="support-brand"><YleumMark tone="mono" /></span><div><DialogTitle>Поддержка Yleum</DialogTitle><DialogDescription>Помощник и команда поддержки</DialogDescription></div></header>;
 }
@@ -112,7 +115,7 @@ export function SupportWidget() {
   return <Dialog open={open} onOpenChange={setOpen}>
     <DialogTrigger asChild><button type="button" className="support-launcher" data-max-studio aria-label="Открыть поддержку" title="Поддержка Yleum"><MessageCircleQuestion size={24} aria-hidden="true" />{context.data?.is_admin && !context.isError && !context.isFetching && !!adminCount.data?.new_count && <span className="support-badge" aria-label={`${adminCount.data.new_count} новых обращений`}>{adminCount.data.new_count}</span>}</button></DialogTrigger>
     {context.data && <SupportSession key={`${identity}:${recovery?.id ?? requested ?? ""}`} context={context.data} recovery={recovery} requested={requested} available={!context.isError} open={open} checking={checking} newCount={adminCount.data?.new_count ?? 0} />}
-    {open && (context.isError || !context.data) && <DialogContent data-max-studio className="support-dialog" overlayClassName="support-overlay"><SupportHeader />{context.isError ? <p role="alert">Не удалось подключиться. <button onClick={() => void context.refetch()}>Повторить</button></p> : <p role="status">Подключаем поддержку…</p>}</DialogContent>}
+    {open && (context.isError || !context.data) && <DialogContent data-max-studio className={supportDialogClass} overlayClassName="support-overlay"><SupportHeader />{context.isError ? <p role="alert">Не удалось подключиться. <button onClick={() => void context.refetch()}>Повторить</button></p> : <p role="status">Подключаем поддержку…</p>}</DialogContent>}
   </Dialog>;
 }
 
@@ -173,7 +176,7 @@ function SupportSession({ context, available, open, checking, newCount, recovery
     finally { busy.current = false; setPending(false); }
   }
   if (!open || !available) return null;
-  return <DialogContent data-max-studio className="support-dialog" overlayClassName="support-overlay" style={viewport.style} data-compact={viewport.compact || undefined} onEscapeKeyDown={preserveSuggestionEscape}>
+  return <DialogContent data-max-studio className={supportDialogClass} overlayClassName="support-overlay" style={viewport.style} data-compact={viewport.compact || undefined} onEscapeKeyDown={preserveSuggestionEscape}>
     <SupportHeader />
     {context.is_admin && <a className="support-admin-link" href="/admin/max?tab=support">Обращения пользователей{newCount ? " · " + newCount + " новых" : ""}</a>}
     {checking && <p className="support-checking" role="status">Проверяем доступ…</p>}

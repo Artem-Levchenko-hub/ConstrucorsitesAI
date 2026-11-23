@@ -22,18 +22,36 @@
 .max-install-done { min-height: 52px; border-radius: 16px; background: #0665ed; color: #fff; font-size: 16px; font-weight: 600; }
 @media (max-width: 600px) {
   .max-editor[data-max-editor], .max-project-workspace[data-max-studio] { background: #f5f6fa; --color-border-default: #e4e8f0; --color-border-subtle: #edf0f5; --color-accent-subtle: #edf3ff; }
+  body:has(.max-shared-project-header) {
+    --max-header-control: 48px;
+    --max-header-top: max(10px, env(safe-area-inset-top));
+    --max-header-right: max(16px, env(safe-area-inset-right));
+  }
   .max-editor[data-max-editor] > .max-editor-header.max-shared-project-header,
-  .max-project-workspace[data-max-studio] > .max-project-header.max-shared-project-header { flex-wrap: nowrap; min-height: 68px; gap: 8px; padding: max(10px, env(safe-area-inset-top)) 68px 10px 16px; border-bottom: 0; background: #f5f6fa; }
+  .max-project-workspace[data-max-studio] > .max-project-header.max-shared-project-header {
+    flex-wrap: nowrap; min-height: 68px; gap: 8px;
+    padding: var(--max-header-top) calc(var(--max-header-right) + var(--max-header-control) + 8px) 10px max(16px, env(safe-area-inset-left));
+    border-bottom: 0; background: #f5f6fa;
+  }
   .max-editor[data-max-editor] .max-editor-header-actions { display: none; }
   .max-project-workspace[data-max-studio] .max-project-header-actions { display: none; }
   .max-shared-project-header .max-shared-project-identity { flex: 1; width: auto; max-width: 100%; gap: 8px; }
   .max-shared-project-header .max-shared-project-brand { padding: 0; border: 0; }
-  .max-shared-project-header .max-shared-project-brand > a { min-width: 48px; min-height: 48px; }
-  .max-shared-project-header .max-shared-project-trigger { min-height: 48px; gap: 8px; padding-inline: 4px; }
+  .max-shared-project-header .max-shared-project-brand > a { min-width: var(--max-header-control); min-height: var(--max-header-control); }
+  .max-shared-project-header .max-shared-project-trigger { min-height: var(--max-header-control); gap: 8px; padding-inline: 4px; }
   .max-shared-project-header .max-shared-project-trigger strong { font-size: 15px; line-height: 22px; }
   .max-shared-project-header .max-shared-project-trigger small { display: none; }
   .max-shared-project-header .max-shared-project-trigger .max-project-menu-caption { display: block; color: #59677c; font-size: 12px; line-height: 16px; }
-  body:has(:is(.max-editor, .max-project-workspace)) .support-launcher { inset: max(12px, env(safe-area-inset-top)) 16px auto auto; width: 48px; height: 48px; border-radius: 16px; border: 1px solid #e4e8f0; background: #fff; color: #66748b; box-shadow: none; }
+  body:has(.max-shared-project-header) .support-launcher {
+    inset: calc(var(--max-editor-visual-top, 0px) + var(--max-header-top)) var(--max-header-right) auto auto;
+    width: var(--max-header-control); height: var(--max-header-control); padding: 0;
+    border-radius: 16px; border: 1px solid #e1e6ef; background: #fff; color: #526078; box-shadow: none;
+  }
+  body:has(.max-shared-project-header) .support-launcher > svg { width: 22px; height: 22px; stroke-width: 1.8; }
+  body:has(.max-shared-project-header) .support-badge {
+    top: -2px; right: -2px; display: grid; place-items: center;
+    min-width: 20px; height: 20px; padding: 0 4px; line-height: 1; font-variant-numeric: tabular-nums;
+  }
   .max-editor[data-max-editor] .max-editor-workspace { margin: 0 8px; border-radius: 24px 24px 0 0; background: #fff; }
   .max-editor[data-max-editor] .max-editor-chat { background: #fff; }
   .max-editor[data-max-editor] .max-chat-footer { background: #fff; padding-bottom: 0; border-top: 0; }

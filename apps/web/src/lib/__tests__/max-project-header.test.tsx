@@ -145,7 +145,7 @@ describe("shared MAX project identity and navigation", () => {
       Object.assign(viewport, { height: 396.5, offsetTop: 31.5 });
       viewport.dispatchEvent(new Event("resize"));
       await vi.waitFor(() => expect(editor.style.getPropertyValue("--max-editor-visual-height")).toBe("396.5px"));
-      expect(editor.style.getPropertyValue("--max-editor-visual-top")).toBe("31.5px");
+      expect(document.body.style.getPropertyValue("--max-editor-visual-top")).toBe("31.5px");
       expect(editor.hasAttribute("data-keyboard-open")).toBe(true);
       vi.stubGlobal("innerHeight", 420);
       Object.assign(viewport, { height: 420, offsetTop: 0 });
@@ -155,6 +155,7 @@ describe("shared MAX project identity and navigation", () => {
       Object.assign(viewport, { height: 840, scale: 2 });
       viewport.dispatchEvent(new Event("scroll"));
       await vi.waitFor(() => expect(editor.style.getPropertyValue("--max-editor-visual-height")).toBe(""));
+      expect(document.body.style.getPropertyValue("--max-editor-visual-top")).toBe("");
     } finally {
       vi.unstubAllGlobals();
     }
@@ -181,7 +182,7 @@ describe("shared MAX project identity and navigation", () => {
       Object.assign(viewport, { height: 400, offsetTop: 24 });
       await act(async () => input.current!.focus());
       await vi.waitFor(() => expect(editor.style.getPropertyValue("--max-editor-visual-height")).toBe("400px"));
-      expect(editor.style.getPropertyValue("--max-editor-visual-top")).toBe("24px");
+      expect(document.body.style.getPropertyValue("--max-editor-visual-top")).toBe("24px");
       const resetScroll = vi.spyOn(window, "scrollTo").mockImplementation(() => { vi.stubGlobal("scrollY", 0); });
       vi.stubGlobal("scrollY", 37);
       await act(async () => input.current!.blur());

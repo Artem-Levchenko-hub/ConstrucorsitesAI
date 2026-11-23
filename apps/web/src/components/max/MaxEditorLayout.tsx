@@ -60,7 +60,7 @@ export function MaxEditorLayout({ project, email, children, navigation, preview,
 
     const resetViewport = () => {
       element.style.removeProperty("--max-editor-visual-height");
-      element.style.removeProperty("--max-editor-visual-top");
+      document.body.style.removeProperty("--max-editor-visual-top");
       delete element.dataset.keyboardOpen;
     };
     const updateViewport = () => {
@@ -75,7 +75,8 @@ export function MaxEditorLayout({ project, email, children, navigation, preview,
       const height = viewport?.height ?? window.innerHeight;
       const top = viewport?.offsetTop ?? 0;
       element.style.setProperty("--max-editor-visual-height", height + "px");
-      element.style.setProperty("--max-editor-visual-top", top + "px");
+      // The global support button and the editor header share this viewport origin.
+      document.body.style.setProperty("--max-editor-visual-top", top + "px");
       element.toggleAttribute("data-keyboard-open", window.innerHeight - height - top > 96);
     };
     const schedule = () => {

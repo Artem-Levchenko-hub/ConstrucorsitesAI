@@ -108,6 +108,8 @@ it("tracks a shortened visual viewport and releases its subscription when unmoun
   vi.stubGlobal("visualViewport", viewport);
   await mount(); await click("Открыть поддержку");
   const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+  expect(dialog.classList.contains("-translate-x-1/2")).toBe(false);
+  expect(dialog.classList.contains("-translate-y-1/2")).toBe(false);
   expect(dialog.style.getPropertyValue("--support-vh")).toBe("360px");
   expect(dialog.style.getPropertyValue("--support-top")).toBe("120px");
   expect(dialog.style.getPropertyValue("--support-bottom")).toBe("16px");
