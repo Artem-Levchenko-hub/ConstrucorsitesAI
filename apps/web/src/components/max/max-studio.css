@@ -220,7 +220,6 @@
   .max-studio-idea:active { background: #f5f8fe; }
   .max-studio-idea-icon { width: 44px; height: 44px; border-radius: 14px; }
   .max-studio-idea-icon svg { width: 21px; height: 21px; }
-  .max-studio-idea[data-idea=coffee] .max-studio-idea-icon { color: #87501d; background: #fff0db; }
   .max-studio-idea[data-idea=barber] .max-studio-idea-icon { color: #654aa0; background: #f0eafd; }
   .max-studio-idea[data-idea=shop] .max-studio-idea-icon { color: #216a59; background: #e0f4ee; }
   .max-studio-idea-title { font-size: 16px; }
