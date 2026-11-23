@@ -19,18 +19,18 @@ async function mountChat(initialHeight = 1000) {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const frames = new Map<number, FrameRequestCallback>();
   let frameId = 0;
-  const observers: { target?: Element; notify: () => void }[] = [];
+  const observers: { targets: Set<Element>; notify: () => void }[] = [];
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     frames.set(++frameId, callback); return frameId;
   });
   vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
   vi.stubGlobal("ResizeObserver", class {
     notify: () => void;
-    target?: Element;
+    readonly targets = new Set<Element>();
     constructor(callback: ResizeObserverCallback) {
       this.notify = () => callback([], this as unknown as ResizeObserver); observers.push(this);
     }
-    observe(target: Element) { this.target = target; }
+    observe(target: Element) { this.targets.add(target); }
     disconnect() {}
   });
   const createdAt = new Date().toISOString();
@@ -49,7 +49,8 @@ async function mountChat(initialHeight = 1000) {
   await act(async () => root.render(<QueryClientProvider client={client}><ChatPanel projectId="p" projectSlug="p" /></QueryClientProvider>));
   await act(async () => { await vi.waitFor(() => expect(container.querySelector("summary")).not.toBeNull()); });
   const pane = container.querySelector<HTMLDivElement>(".overflow-y-auto")!;
-  const observer = observers.find(item => item.target === pane.firstElementChild)!;
+  const observer = observers.find(item => item.targets.has(pane.firstElementChild!))!;
+  expect(observer).toBeDefined();
   let height = initialHeight;
   let top = 0;
   Object.defineProperties(pane, {

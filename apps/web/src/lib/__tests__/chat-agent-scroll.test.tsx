@@ -16,19 +16,19 @@ it("follows an AgentTranscript cache-only update while preserving history and th
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const frames = new Map<number, FrameRequestCallback>();
   let frameId = 0;
-  const observers: { target?: Element; notify: () => void; disconnect: ReturnType<typeof vi.fn> }[] = [];
+  const observers: { targets: Set<Element>; notify: () => void; disconnect: ReturnType<typeof vi.fn> }[] = [];
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     frames.set(++frameId, callback); return frameId;
   });
   vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
   vi.stubGlobal("ResizeObserver", class {
     notify: () => void;
-    target?: Element;
+    readonly targets = new Set<Element>();
     disconnect = vi.fn();
     constructor(callback: ResizeObserverCallback) {
       this.notify = () => callback([], this as unknown as ResizeObserver); observers.push(this);
     }
-    observe(target: Element) { this.target = target; }
+    observe(target: Element) { this.targets.add(target); }
   });
   const flushFrame = () => act(() => {
     const pending = [...frames.values()]; frames.clear();
@@ -49,7 +49,7 @@ it("follows an AgentTranscript cache-only update while preserving history and th
     await act(async () => root.render(<QueryClientProvider client={client}><ChatPanel projectId="p" projectSlug="p" /></QueryClientProvider>));
     await act(async () => { await vi.waitFor(() => expect(client.getQueryData(["messages", "p"])).toEqual([message])); });
     const pane = container.querySelector<HTMLDivElement>(".overflow-y-auto")!;
-    const contentObserver = observers.find(observer => observer.target === pane.firstElementChild)!;
+    const contentObserver = observers.find(observer => observer.targets.has(pane.firstElementChild!))!;
     expect(contentObserver).toBeDefined();
     let height = 1000;
     Object.defineProperties(pane, { scrollHeight: { get: () => height }, clientHeight: { value: 400 } });
