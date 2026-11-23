@@ -144,17 +144,17 @@ describe("shared MAX project identity and navigation", () => {
       const editor = host.querySelector<HTMLElement>(".max-editor")!;
       Object.assign(viewport, { height: 396.5, offsetTop: 31.5 });
       viewport.dispatchEvent(new Event("resize"));
-      await vi.waitFor(() => expect(editor.style.getPropertyValue("--max-editor-visual-height")).toBe("396.5px"));
+      await vi.waitFor(() => expect(document.body.style.getPropertyValue("--max-editor-visual-height")).toBe("396.5px"));
       expect(document.body.style.getPropertyValue("--max-editor-visual-top")).toBe("31.5px");
       expect(editor.hasAttribute("data-keyboard-open")).toBe(true);
       vi.stubGlobal("innerHeight", 420);
       Object.assign(viewport, { height: 420, offsetTop: 0 });
       window.dispatchEvent(new Event("resize"));
-      await vi.waitFor(() => expect(editor.style.getPropertyValue("--max-editor-visual-height")).toBe("420px"));
+      await vi.waitFor(() => expect(document.body.style.getPropertyValue("--max-editor-visual-height")).toBe("420px"));
       expect(editor.hasAttribute("data-keyboard-open")).toBe(false);
       Object.assign(viewport, { height: 840, scale: 2 });
       viewport.dispatchEvent(new Event("scroll"));
-      await vi.waitFor(() => expect(editor.style.getPropertyValue("--max-editor-visual-height")).toBe(""));
+      await vi.waitFor(() => expect(document.body.style.getPropertyValue("--max-editor-visual-height")).toBe(""));
       expect(document.body.style.getPropertyValue("--max-editor-visual-top")).toBe("");
     } finally {
       vi.unstubAllGlobals();
@@ -181,7 +181,7 @@ describe("shared MAX project identity and navigation", () => {
       await act(async () => frame.dispatchEvent(new Event("load")));
       Object.assign(viewport, { height: 400, offsetTop: 24 });
       await act(async () => input.current!.focus());
-      await vi.waitFor(() => expect(editor.style.getPropertyValue("--max-editor-visual-height")).toBe("400px"));
+      await vi.waitFor(() => expect(document.body.style.getPropertyValue("--max-editor-visual-height")).toBe("400px"));
       expect(document.body.style.getPropertyValue("--max-editor-visual-top")).toBe("24px");
       const resetScroll = vi.spyOn(window, "scrollTo").mockImplementation(() => { vi.stubGlobal("scrollY", 0); });
       vi.stubGlobal("scrollY", 37);
@@ -189,8 +189,31 @@ describe("shared MAX project identity and navigation", () => {
       await vi.waitFor(() => expect(resetScroll).toHaveBeenCalledWith(0, 0));
       // The keyboard finishes sliding away after blur without another DOM event.
       Object.assign(viewport, { height: 844, offsetTop: 0 });
-      await vi.waitFor(() => expect(editor.style.getPropertyValue("--max-editor-visual-height")).toBe("844px"));
+      await vi.waitFor(() => expect(document.body.style.getPropertyValue("--max-editor-visual-height")).toBe("844px"));
       expect(editor.hasAttribute("data-keyboard-open")).toBe(false);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("keeps the three mobile tabs inside preview and returns to the same chat draft", async () => {
+    window.history.replaceState(null, "", "/max/qa");
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(max-width: 600px)", addEventListener() {}, removeEventListener() {},
+    }));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      await render("editor", project.name, true);
+      const draft = host.querySelector<HTMLInputElement>('[aria-label="Черновик"]')!;
+      await act(async () => host.querySelector<HTMLButtonElement>('.max-mobile-nav [data-max-tab="preview"]')!.click());
+      const tabs = document.querySelector('[role="dialog"] nav[aria-label="Основные разделы"]');
+      expect(tabs).not.toBeNull();
+      expect([...tabs!.children].map(control => control.textContent)).toEqual(["Чат", "Превью", "Управление"]);
+      expect(tabs!.querySelector('[aria-current="page"]')?.textContent).toBe("Превью");
+      await act(async () => tabs!.querySelector<HTMLAnchorElement>('a[href="/max/qa/manage"]')!.click());
+      expect(confirm).toHaveBeenCalledOnce();
+      expect(tabs!.isConnected).toBe(true);
+      await act(async () => tabs!.querySelector<HTMLButtonElement>('[data-max-tab="chat"]')!.click());
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      expect(draft.isConnected && draft.value === "Не потерять").toBe(true);
     } finally { vi.unstubAllGlobals(); }
   });
 

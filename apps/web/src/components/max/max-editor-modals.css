@@ -17,8 +17,10 @@
   .max-editor-modal-scroll { padding: 20px 18px; }
   .max-editor-modal.max-editor-modal-preview {
     inset: 0;
+    top: var(--max-editor-visual-top, 0px);
+    bottom: auto;
     width: 100%;
-    height: 100dvh;
+    height: var(--max-editor-visual-height, 100dvh);
     max-height: none;
     transform: none;
     border: 0;
@@ -36,6 +38,5 @@
   .max-editor-modal-preview .max-editor-modal-actions { flex-shrink: 0; }
   .max-editor-modal-preview .max-editor-modal-actions .learning-launch { width: 44px; padding: 0; }
   .max-editor-modal-preview .max-editor-modal-actions .learning-launch > span { display: none; }
-  .max-editor-modal-preview .max-editor-modal-scroll { padding-bottom: env(safe-area-inset-bottom); }
   .max-editor-modal-preview [aria-label="Скрыть панель превью"] { display: none; }
 }

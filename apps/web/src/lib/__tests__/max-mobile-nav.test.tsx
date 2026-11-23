@@ -46,7 +46,7 @@ it("moves between adjacent mobile tabs and keeps vertical drags and form edits i
   const manage = vi.fn();
   const dialog = document.createElement("div");
   dialog.setAttribute("role", "dialog");
-  dialog.innerHTML = '<div class="max-editor-modal-heading">Превью</div><iframe data-testid="max-live-iframe" src="https://preview.example/app"></iframe>';
+  dialog.innerHTML = '<div class="max-editor-modal-heading">Превью</div><iframe data-testid="max-live-iframe" src="https://preview.example/app"></iframe><nav class="max-mobile-nav"><button>Чат</button><a data-max-tab="manage" href="/max/owned/manage">Управление</a></nav>';
   const preview = { current: null as HTMLDivElement | null };
   function drag(target: Element, dx: number, dy: number, end = "pointerup") {
     function fire(type: string, x: number, y: number) {
@@ -61,7 +61,7 @@ it("moves between adjacent mobile tabs and keeps vertical drags and form edits i
   try {
     await act(async () => root.render(<><main><p>Чат</p><input /></main><MaxMobileNav projectId="owned" active="chat" onPreview={open} previewDialog={preview} onClosePreview={close} /></>));
     const panel = shell.querySelector("p")!;
-    shell.querySelector('a[href="/max/owned/manage"]')!.addEventListener("click", event => { event.preventDefault(); manage(); });
+    dialog.querySelector('a[href="/max/owned/manage"]')!.addEventListener("click", event => { event.preventDefault(); manage(); });
     drag(panel, -12, 120);
     drag(panel, -8, 0);
     drag(shell.querySelector("input")!, -120, 2);
@@ -80,6 +80,8 @@ it("moves between adjacent mobile tabs and keeps vertical drags and form edits i
     expect(close).toHaveBeenCalledTimes(2);
     drag(header, -110, 2);
     expect(manage).toHaveBeenCalledOnce();
+    drag(dialog.querySelector("nav button")!, -110, 2);
+    expect(manage).toHaveBeenCalledTimes(2);
 
     const frame = dialog.querySelector("iframe")!;
     const data = { type: "omnia:preview:swipe", dx: 108, dy: 4 };

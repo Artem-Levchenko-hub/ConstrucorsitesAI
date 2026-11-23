@@ -59,7 +59,7 @@ export function MaxEditorLayout({ project, email, children, navigation, preview,
     let settled = 0;
 
     const resetViewport = () => {
-      element.style.removeProperty("--max-editor-visual-height");
+      document.body.style.removeProperty("--max-editor-visual-height");
       document.body.style.removeProperty("--max-editor-visual-top");
       delete element.dataset.keyboardOpen;
     };
@@ -74,8 +74,8 @@ export function MaxEditorLayout({ project, email, children, navigation, preview,
       if (window.scrollY !== 0) window.scrollTo(0, 0);
       const height = viewport?.height ?? window.innerHeight;
       const top = viewport?.offsetTop ?? 0;
-      element.style.setProperty("--max-editor-visual-height", height + "px");
-      // The global support button and the editor header share this viewport origin.
+      // Preview is portaled to the body. Its tab bar and the chat use the same visible area.
+      document.body.style.setProperty("--max-editor-visual-height", height + "px");
       document.body.style.setProperty("--max-editor-visual-top", top + "px");
       element.toggleAttribute("data-keyboard-open", window.innerHeight - height - top > 96);
     };
@@ -164,6 +164,7 @@ export function MaxEditorLayout({ project, email, children, navigation, preview,
             <div data-learning="editor-panel" className="max-editor-modal-scroll" key={modal}>
               {modal === "preview" && <div className="max-editor-modal-preview-content">{previewContent}</div>}
             </div>
+            {modal === "preview" && <MaxMobileNav projectId={project.id} active="preview" onClosePreview={closePreview} />}
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

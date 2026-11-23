@@ -30,7 +30,7 @@ export function bindMaxMobileSwipes(nav: HTMLElement, page: Page, dialogRef?: Re
     if (dialog && dx > 0) { close?.(); return true; }
     if (!dialog && ((page === "chat" && dx > 0) || (page === "manage" && dx < 0))) return false;
     // Follow the same Link/button as a tap, including the unsaved-draft guard.
-    const tab = nav.querySelector<HTMLElement>(dialog ? '[data-max-tab="manage"]' : '[data-max-tab="preview"]');
+    const tab = (dialog ?? nav).querySelector<HTMLElement>(dialog ? '.max-mobile-nav [data-max-tab="manage"]' : '[data-max-tab="preview"]');
     tab?.click();
     return !!tab;
   }
@@ -42,7 +42,7 @@ export function bindMaxMobileSwipes(nav: HTMLElement, page: Page, dialogRef?: Re
     const dialog = dialogRef?.current ?? null;
     const surface = dialog ?? shell;
     if (!surface?.contains(target) || target.closest('[role="dialog"]') !== dialog) return;
-    if (!nav.contains(target) && hasOwnGesture(target, surface)) return;
+    if (!target.closest(".max-mobile-nav") && hasOwnGesture(target, surface)) return;
     start = { id, x: point.clientX, y: point.clientY, dialog, header: !!target.closest(".max-editor-modal-heading") };
   }
   function move(id: number, point: Point) {
