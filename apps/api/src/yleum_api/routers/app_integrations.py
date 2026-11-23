@@ -47,9 +47,14 @@ router = APIRouter(tags=["app-integrations"])
 
 
 async def _owned_max_project(
-    session: SessionDep, project_id: UUID, owner_id: UUID
+    session: SessionDep, project_id: UUID, owner_id: UUID, *, for_update: bool = False,
 ) -> Project:
-    project = await session.get(Project, project_id)
+    if for_update:
+        project = await session.get(
+            Project, project_id, with_for_update=True, populate_existing=True,
+        )
+    else:
+        project = await session.get(Project, project_id)
     if project is None or project.owner_id != owner_id:
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
     if project.template != "max_miniapp":
@@ -394,6 +399,9 @@ async def get_integration_catalog(
             session, project, connections, bindings
         ),
         nutrition_ai_enabled=bool(project.runtime_nutrition_ai_key_enc),
+        aitunnel_ai_enabled=bool(
+            project.runtime_aitunnel_ai_enabled and project.runtime_nutrition_ai_key_enc
+        ),
     )
 
 
@@ -414,20 +422,42 @@ async def set_nutrition_ai(
     project_id: UUID, payload: NutritionAIKeyUpdate,
     session: SessionDep, current_user: CurrentUserDep,
 ) -> PlatformAIState:
-    project = await _owned_max_project(session, project_id, current_user.id)
+    owner_id = current_user.id
+    project = await _owned_max_project(
+        session, project_id, owner_id, for_update=payload.api_key is None,
+    )
     require_existing_max_account_access(current_user)
-    if payload.api_key is None:
-        project.runtime_nutrition_ai_key_enc = None
-    else:
-        owner_id = current_user.id
+    encrypted_key = None
+    if payload.api_key is not None:
         await assert_integrations_allowed(session, owner_id)
         key = payload.api_key.get_secret_value().strip()
         await session.rollback()
         await verify_nutrition_key(key)
-        project = await _owned_max_project(session, project_id, owner_id)
-        project.runtime_nutrition_ai_key_enc = encrypt_strong(key)
+        project = await _owned_max_project(session, project_id, owner_id, for_update=True)
+        encrypted_key = encrypt_strong(key)
+    project.runtime_nutrition_ai_key_enc = encrypted_key
+    project.runtime_aitunnel_ai_enabled = encrypted_key is not None and payload.allow_app_ai
     await session.commit()
-    return PlatformAIState(enabled=bool(project.runtime_nutrition_ai_key_enc))
+    return PlatformAIState(enabled=encrypted_key is not None)
+
+
+@router.put("/api/projects/{project_id}/aitunnel-ai", response_model=PlatformAIState)
+async def set_aitunnel_ai(
+    project_id: UUID, payload: PlatformAIState,
+    session: SessionDep, current_user: CurrentUserDep,
+) -> PlatformAIState:
+    project = await _owned_max_project(session, project_id, current_user.id, for_update=True)
+    require_existing_max_account_access(current_user)
+    if payload.enabled:
+        if not project.runtime_nutrition_ai_key_enc:
+            raise ApiError(
+                "ai_integration_required", "Сначала сохраните ключ AITunnel этого проекта.",
+                status.HTTP_409_CONFLICT,
+            )
+        await assert_integrations_allowed(session, current_user.id)
+    project.runtime_aitunnel_ai_enabled = payload.enabled
+    await session.commit()
+    return PlatformAIState(enabled=project.runtime_aitunnel_ai_enabled)
 
 
 @router.put(

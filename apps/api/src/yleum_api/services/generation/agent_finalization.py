@@ -891,9 +891,9 @@ async def finalize_max_candidate(
             _max_finalization_proof = _finalization.proof
             files = await runtime.handle.snapshot_files()
             accumulated = (
-                "Готово — правка применена и проверена."
+                "Готово — правка применена. Сборка и запуск превью проверены."
                 if _is_edit
-                else "Готово — приложение собрано и проверено."
+                else "Готово — приложение собрано. Запуск превью проверен."
             )
 
     return FinalizedAgentSource(_max_finalization_proof, files, accumulated)

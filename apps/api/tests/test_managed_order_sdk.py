@@ -1,5 +1,6 @@
 """Actual managed proxy signatures reach actor-scoped API, with no provider calls."""
 
+import base64
 import json
 import subprocess
 from pathlib import Path
@@ -119,6 +120,37 @@ def test_checkout_proxy_signs_only_the_managed_order_path_and_payload(operation,
     assert "X-Omnia-Integration-Assertion" in sent["headers"]
 
 
+@pytest.mark.parametrize(("origin", "content_type", "fetch_site", "status"), [
+    ("https://public.app.test", "application/json; charset=UTF-8", "same-origin", 200),
+    ("https://public.app.test", "application/json", None, 200),
+    ("https://neighbor.app.test", "application/json", "same-site", 403),
+    ("https://app.test", "application/json", "same-origin", 403),
+    ("https://public.app.test", "text/plain", "same-origin", 403),
+    ("https://public.app.test", "application/json", "cross-site", 403),
+    ("null", "application/json", None, 403),
+    (None, "application/json", None, 403),
+])
+def test_ai_proxy_only_attests_same_origin_json(origin, content_type, fetch_site, status):
+    headers = {"Content-Type": content_type}
+    if origin is not None:
+        headers["Origin"] = origin
+    if fetch_site is not None:
+        headers["Sec-Fetch-Site"] = fetch_site
+    response = run(
+        "proxy", operation="ai", payload={"message": "Sample"}, project=ORDER_ID, actor="42",
+        headers=headers, publicOrigin="https://public.app.test/",
+    )
+    assert response["status"] == status
+    if status == 403:
+        assert response["sent"] == []
+        return
+    sent, = response["sent"]
+    encoded = sent["headers"]["X-Omnia-Integration-Assertion"].split(".")[1]
+    claims = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+    assert claims["same_origin"] is True
+    assert sent["url"] == f"https://yleum.ru/api/runtime/projects/{ORDER_ID}/ai"
+
+
 @pytest.mark.parametrize("operation,tail,payload", [
     ("payments", "payments", {"amount": 12, "description": "Generic payment"}),
     ("payment-status", "payments/status", {"payment_id": "generic-payment-1"}),
@@ -161,7 +193,8 @@ async def test_generation_preserves_configured_order_modes_and_omits_disabled_st
     )
     session = SimpleNamespace(
         scalars=AsyncMock(return_value=SimpleNamespace(all=lambda: ["yookassa"])),
-        scalar=AsyncMock(side_effect=[False, mode]),
+        execute=AsyncMock(return_value=SimpleNamespace(one_or_none=lambda: (False, False, False))),
+        scalar=AsyncMock(return_value=mode),
     )
     context = await integration_generation.generation_context(session, UUID(ORDER_ID))
     assert ("staff queue" in context) is (staff_enabled and mode is None)

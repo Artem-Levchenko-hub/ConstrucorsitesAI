@@ -1,0 +1,14 @@
+{
+  "src/app/api/omnia/integrations/[...path]/route.ts": {
+    "sha256": "4a37903fcb8b061082e4dd97d55dfbaa2669f2b21cecf6aee2d5d75b532e6b76",
+    "mode": "100644"
+  },
+  "src/lib/omnia/integration-client.ts": {
+    "sha256": "062cdc040db3360aa4bd7d2c193c34fa16b7a0773e49ed0029dc2f9491a41e6f",
+    "mode": "100644"
+  },
+  "tests/starter.test.mjs": {
+    "sha256": "a890c61dd5894e3c517a15d159f555d403dc096868be82ea4c4eedf993811cdf",
+    "mode": "100644"
+  }
+}

@@ -211,7 +211,7 @@ async def test_nutrition_key_setup_is_owner_only_and_stores_ciphertext(
     response = httpx.Response(200, json={"name": "test", "allowed_models": None})
 
     class Session:
-        async def get(self, _model: object, requested_id: UUID) -> object:
+        async def get(self, _model: object, requested_id: UUID, **_options: Any) -> object:
             assert requested_id == project_id
             return project
 

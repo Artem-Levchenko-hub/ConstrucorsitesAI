@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import {
   connectAppIntegration,
   getIntegrationCatalog,
+  setAitunnelAi,
   setNutritionAiKey,
 } from "@/lib/api/app-integrations";
 import { getLatestGeneration, listMessages } from "@/lib/api/messages";
@@ -35,8 +36,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useWorkspaceStore } from "@/store/workspace";
 import { restorePersistedAgentSteps } from "@/lib/agent-steps";
 import {
+  buildAitunnelChatPrompt,
   containsChatSecret,
+  getAitunnelSettingsCommand,
   redactChatSecrets,
+  requestsAitunnelAppAi,
   resolveChatCredential,
 } from "@/lib/max-chat-credentials";
 import { MaxChatComposer } from "@/components/max/MaxChatComposer";
@@ -157,8 +161,12 @@ export function ChatPanel({
       text: string,
       selections: SelectedElement[],
       opts?: PromptSubmitOptions,
-      replay = Boolean(opts?.idempotencyKey),
+      composer?: { replay: boolean },
     ): Promise<boolean> => {
+      const replay = composer?.replay ?? Boolean(opts?.idempotencyKey);
+      const command = composer && !selections.length && !opts?.referenceImages?.length && !opts?.fontSelections?.length
+        ? getAitunnelSettingsCommand(text)
+        : null;
       // Capture fresh choices before async work. A legacy stable-key replay with
       // no choice must let the server recover its original accepted engine.
       if (opts?.generationEngine === undefined && !opts?.continuation && !replay) {
@@ -167,7 +175,7 @@ export function ChatPanel({
       // An explicit stable key may be an already accepted request whose response
       // was lost; only the server can adjudicate that replay. Fresh manual sends
       // must not become a second queued message on Free.
-      if (!replay && (quota.exhausted || (quota.limited && authoredPending.current))) {
+      if (command === null && !replay && (quota.exhausted || (quota.limited && authoredPending.current))) {
         toast.info(FREE_CHAT_UPGRADE_MESSAGE);
         return false;
       }
@@ -177,79 +185,84 @@ export function ChatPanel({
         .join("\n");
       const credentialSource = [text, selectionText].filter(Boolean).join("\n");
       let resolution = resolveChatCredential(credentialSource, [], text);
-      if (resolution.kind === "none") {
-        if (quota.limited) authoredPending.current = true;
-        try { return await submit(text, modelId, selections, opts); }
-        finally { authoredPending.current = false; }
-      }
-      if (credentialSubmitPending.current) {
-        toast.info("Ключ уже подключается");
-        return false;
-      }
+      // A new grant may come from the sent composer text. URL starters and
+      // inspector metadata can carry task data without authorizing that grant.
+      const allowAppAi = Boolean(composer)
+        && (resolution.kind === "none" || resolution.kind === "aitunnel_key")
+        && requestsAitunnelAppAi(text, resolution.kind === "aitunnel_key" ? resolution.value.secret : undefined);
+      const updateSavedKey = command !== null || (resolution.kind === "none" && allowAppAi);
+      let safePrompt = text;
+      let safeSelections = selections;
 
-      credentialSubmitPending.current = true;
-      try {
-        if (resolution.kind === "needs_provider") {
-          const catalog = await qc.fetchQuery({
-            queryKey: ["app-integrations", projectId],
-            queryFn: () => getIntegrationCatalog(projectId),
-            staleTime: 60_000,
-          });
-          resolution = resolveChatCredential(credentialSource, catalog.providers, text);
-        }
-        if (resolution.kind === "needs_provider") {
-          toast.error("Не понял, к какому провайдеру относится ключ", {
-            description:
-              "Напишите рядом точное название сервиса, например: ЮKassa — ключ …",
-          });
+      if (updateSavedKey || resolution.kind !== "none") {
+        if (credentialSubmitPending.current) {
+          toast.info("Дождитесь завершения настройки ключа");
           return false;
         }
-        if (resolution.kind === "needs_fields") {
-          const fields = resolution.labels.length
-            ? ` Нужны также: ${resolution.labels.join(", ")}.`
-            : " Для этого сервиса нужно дополнительное подключение.";
-          toast.error(`Не хватает данных для ${resolution.provider.name}`, {
-            description: `${fields} Откройте «Интеграции» для завершения.`,
+        credentialSubmitPending.current = true;
+        const queryKey = ["app-integrations", projectId];
+        let secret: string | undefined;
+        try {
+          if (updateSavedKey) {
+            const requested = command ?? true;
+            const { enabled } = await setAitunnelAi(projectId, requested);
+            if (enabled !== requested) throw new Error("Сервер не подтвердил изменение доступа");
+            toast.success(enabled ? "AITunnel включён для ИИ приложения" : "AITunnel выключен для ИИ приложения");
+            if (command === null) safePrompt = buildAitunnelChatPrompt(text, true);
+          } else {
+            if (resolution.kind === "needs_provider") {
+              const catalog = await qc.fetchQuery({ queryKey, queryFn: () => getIntegrationCatalog(projectId), staleTime: 60_000 });
+              resolution = resolveChatCredential(credentialSource, catalog.providers, text);
+            }
+            if (resolution.kind === "needs_provider") {
+              toast.error("Не понял, к какому провайдеру относится ключ", {
+                description: "Напишите рядом точное название сервиса, например: ЮKassa — ключ …",
+              });
+              return false;
+            }
+            if (resolution.kind === "needs_fields") {
+              const fields = resolution.labels.length
+                ? ` Нужны также: ${resolution.labels.join(", ")}.`
+                : " Для этого сервиса нужно дополнительное подключение.";
+              toast.error(`Не хватает данных для ${resolution.provider.name}`, {
+                description: `${fields} Откройте «Интеграции» для завершения.`,
+              });
+              return false;
+            }
+            if (resolution.kind === "none") return false;
+            ({ secret, safePrompt } = resolution.value);
+            if (resolution.kind === "aitunnel_key") {
+              const { enabled } = await setNutritionAiKey(projectId, secret, allowAppAi);
+              if (enabled !== true) throw new Error("Не удалось сохранить ключ AITunnel");
+              if (allowAppAi) safePrompt = buildAitunnelChatPrompt(text, true, secret);
+              toast.success(allowAppAi ? "Ключ AITunnel сохранён для ИИ приложения" : "Ключ AITunnel сохранён для оценки КБЖУ");
+            } else {
+              const { provider, secretField } = resolution.value;
+              await connectAppIntegration(projectId, provider.key, { [secretField.key]: secret });
+              toast.success(`${provider.name} подключён`, {
+                description: "Ключ проверен и зашифрован. Агент получил безопасную ссылку на интеграцию.",
+              });
+            }
+            safeSelections = selections.map((selection) =>
+              Object.fromEntries(Object.entries(selection).map(([key, value]) => [
+                key, typeof value === "string" ? redactChatSecrets(value, secret) : value,
+              ])) as SelectedElement,
+            );
+          }
+          void qc.invalidateQueries({ queryKey });
+        } catch (error) {
+          toast.error(updateSavedKey ? "Не удалось изменить доступ AITunnel к ИИ приложения" : "Ключ не подключён", {
+            description: error instanceof Error ? redactChatSecrets(error.message, secret) : "Проверьте данные и повторите отправку.",
           });
           return false;
+        } finally {
+          credentialSubmitPending.current = false;
         }
-        if (resolution.kind === "none") return false;
-        const { secret, safePrompt } = resolution.value;
-        if (resolution.kind === "aitunnel_key") {
-          const { enabled } = await setNutritionAiKey(projectId, secret);
-          if (!enabled) throw new Error("Не удалось сохранить ключ AITunnel");
-          toast.success("Ключ AITunnel сохранён");
-        } else {
-          const { provider, secretField } = resolution.value;
-          await connectAppIntegration(projectId, provider.key, {
-            [secretField.key]: secret,
-          });
-          toast.success(`${provider.name} подключён`, {
-            description:
-              "Ключ проверен и зашифрован. Агент получил только безопасную ссылку на интеграцию.",
-          });
-        }
-        void qc.invalidateQueries({ queryKey: ["app-integrations", projectId] });
-        const safeSelections = selections.map((selection) =>
-          Object.fromEntries(
-            Object.entries(selection).map(([key, value]) => [
-              key,
-              typeof value === "string" ? redactChatSecrets(value, secret) : value,
-            ]),
-          ) as SelectedElement,
-        );
-        return await submit(safePrompt, modelId, safeSelections, opts);
-      } catch (error) {
-        toast.error("Ключ не подключён", {
-          description:
-            error instanceof Error
-              ? redactChatSecrets(error.message)
-              : "Проверьте данные и повторите отправку.",
-        });
-        return false;
-      } finally {
-        credentialSubmitPending.current = false;
       }
+      if (command !== null) return true;
+      if (quota.limited) authoredPending.current = true;
+      try { return await submit(safePrompt, modelId, safeSelections, opts); }
+      finally { authoredPending.current = false; }
     },
     [modelId, projectId, qc, submit, quota.exhausted, quota.limited, engine],
   );
@@ -262,7 +275,7 @@ export function ChatPanel({
       ...(generationEngine ? { generationEngine } : {}),
       ...(referenceImages.length ? { referenceImages, onReferenceImagesExpired: () => { referencesExpired = true; } } : {}),
       ...(fontSelections?.length ? { fontSelections } : {}),
-    }, replay);
+    }, { replay });
     if (accepted === true && stagedStarterRef.current) clearStarterHandoff();
     return referencesExpired ? { accepted: false, reason: "reference_images_expired" } : accepted;
   };
@@ -562,6 +575,7 @@ export function ChatPanel({
           contextVersion={currentConfig?.config_version}
           onSubmit={handleSubmit}
           sendDisabled={quota.exhausted || (quota.limited && isStreaming)}
+          canSendWithoutQuota={(text) => getAitunnelSettingsCommand(text) !== null}
           quotaNotice={<OwnerChatQuotaNotice {...quota} />}
           onCancel={cancel}
           onCancelPending={cancelPending}

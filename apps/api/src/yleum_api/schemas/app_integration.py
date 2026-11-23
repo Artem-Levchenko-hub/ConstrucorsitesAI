@@ -66,6 +66,7 @@ class IntegrationCatalogPublic(BaseModel):
     connections: list[AppIntegrationPublic]
     recommended_pack: IntegrationPackPublic
     nutrition_ai_enabled: bool = False
+    aitunnel_ai_enabled: bool = False
 
 
 class IntegrationPackApplyPublic(BaseModel):
@@ -105,3 +106,4 @@ class PlatformAIState(BaseModel):
 class NutritionAIKeyUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     api_key: SecretStr | None = Field(max_length=220)
+    allow_app_ai: StrictBool = False

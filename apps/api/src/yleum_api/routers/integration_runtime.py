@@ -8,10 +8,11 @@ import json
 import logging
 import re
 import time
+from asyncio import timeout
 from contextlib import nullcontext
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 from urllib.parse import parse_qsl
 from uuid import UUID
 
@@ -50,7 +51,7 @@ from yleum_api.schemas.integration_runtime import (
 from yleum_api.services import integration_providers
 from yleum_api.services.integration_auth import (
     verify_business_analytics_assertion,
-    verify_integration_assertion,
+    verify_integration_assertion_claims,
 )
 from yleum_api.services.integration_consent import (
     actor_dispatch_guard,
@@ -65,9 +66,13 @@ from yleum_api.services.integration_responses import (
     payment_response,
     response_object,
 )
+from yleum_api.services.runtime_ai_idempotency import has_aitunnel_request, reserve_runtime_ai
 from yleum_api.services.runtime_nutrition_ai import (
+    LEGACY_MEAL_PLAN_DAYS,
+    MEAL_PLAN_TASK,
     NUTRITION_TASK,
     estimate_nutrition,
+    request_aitunnel_text,
     validate_nutrition_request,
 )
 from yleum_api.services.secret_safety import redact_provider_secrets
@@ -93,6 +98,7 @@ return 0
 class RuntimeContext:
     project_id: UUID
     max_user_id: int
+    same_origin: bool = False
 
 
 class RuntimeConsentRequest(BaseModel):
@@ -201,6 +207,7 @@ async def _runtime_context(
             "MAX-бот проекта не подключён",
             status.HTTP_409_CONFLICT,
         )
+    same_origin = False
     try:
         token = decrypt_strong(max_integration.bot_token_enc)
         assertion = request.headers.get(
@@ -211,9 +218,9 @@ async def _runtime_context(
                 raise ValueError("unsigned integration query")
             verify = (
                 verify_business_analytics_assertion if business_analytics
-                else verify_integration_assertion
+                else verify_integration_assertion_claims
             )
-            max_user_id = verify(
+            verified = verify(
                 assertion,
                 token,
                 project_id=project_id,
@@ -221,6 +228,11 @@ async def _runtime_context(
                 path=request.url.path,
                 body=await request.body(),
             )
+            if isinstance(verified, int):
+                max_user_id = verified
+            else:
+                max_user_id = verified.max_user_id
+                same_origin = verified.same_origin
         else:
             max_user_id = _validate_init_data(init_data, token)
     except (InvalidToken, ValueError, TypeError, json.JSONDecodeError) as exc:
@@ -229,7 +241,7 @@ async def _runtime_context(
             "Не удалось подтвердить запуск приложения из MAX",
             status.HTTP_401_UNAUTHORIZED,
         ) from exc
-    return RuntimeContext(project_id=project_id, max_user_id=max_user_id)
+    return RuntimeContext(project_id=project_id, max_user_id=max_user_id, same_origin=same_origin)
 
 
 async def _connections(session: SessionDep, project_id: UUID) -> dict[str, AccountIntegration]:
@@ -331,15 +343,21 @@ async def runtime_integration_status(
         for connection in connections.values()
         for capability in integration_providers.get_provider(connection.provider).capabilities
     }
+    ai_provider: Literal["aitunnel", "llmgw"] | None = None
     if project.runtime_ai_enabled:
         providers.add("llmgw")
         capabilities.update(integration_providers.get_provider("llmgw").capabilities)
+        ai_provider = "llmgw"
     if project.runtime_nutrition_ai_key_enc:
         providers.add("aitunnel")
         capabilities.add("Оценка КБЖУ")
+        if project.runtime_aitunnel_ai_enabled:
+            capabilities.update(integration_providers.get_provider("aitunnel").capabilities)
+            ai_provider = "aitunnel"
     return RuntimeIntegrationStatus(
         providers=sorted(providers),
         capabilities=sorted(capabilities),
+        ai_provider=ai_provider,
         analytics_counter_id=(
             str(metrica.public_config.get("counter_id"))
             if metrica and metrica.public_config.get("counter_id")
@@ -364,7 +382,10 @@ async def _enforce_runtime_ai_limits(
         keys = [key for key, _limit, _ttl in buckets]
         args = [str(value) for _key, limit, ttl in buckets for value in (limit, ttl)]
         eval_command = cast(Any, redis.eval)
-        exceeded_bucket = int(await eval_command(_RUNTIME_AI_LIMIT_SCRIPT, len(keys), *keys, *args))
+        async with timeout(2):
+            exceeded_bucket = int(await eval_command(
+                _RUNTIME_AI_LIMIT_SCRIPT, len(keys), *keys, *args,
+            ))
         if exceeded_bucket:
             raise ApiError(
                 "rate_limited",
@@ -469,6 +490,92 @@ async def _request_gateway_ai(
     )
 
 
+def _runtime_ai_messages(payload: RuntimeAIRequest) -> tuple[str, str]:
+    system_prompt = (
+        "Ты — ИИ-функция внутри MAX Mini App. Отвечай на русском языке, кратко и "
+        "по существу. Используй только переданный контекст, не выдумывай измерения "
+        "или действия, которых не было. Для медицинских, юридических и финансовых "
+        "тем явно обозначай ограничения и не выдавай ответ за профессиональный диагноз."
+    )
+    if payload.instructions:
+        system_prompt += "\n\nЗадача продукта:\n" + payload.instructions
+    user_message = payload.message
+    if payload.context:
+        user_message += "\n\nКонтекст продукта (JSON):\n" + json.dumps(
+            payload.context, ensure_ascii=False, default=str,
+        )
+    return system_prompt, user_message
+
+
+def _require_aitunnel_key(project: Project, request: Request, *, general: bool) -> str:
+    # _runtime_context has already verified the assertion's signature and scope.
+    if not request.headers.get("X-Omnia-Integration-Assertion"):
+        raise ApiError(
+            "max_init_data_invalid", "Откройте приложение из чата MAX.",
+            status.HTTP_401_UNAUTHORIZED,
+        )
+    encrypted_key = project.runtime_nutrition_ai_key_enc
+    if not encrypted_key or (general and not project.runtime_aitunnel_ai_enabled):
+        raise ApiError(
+            "ai_integration_required", "AITunnel не подключён к этому приложению.",
+            status.HTTP_409_CONFLICT,
+        )
+    return encrypted_key
+
+
+def _decrypt_aitunnel_key(encrypted_key: str) -> str:
+    try:
+        return decrypt_strong(encrypted_key)
+    except (InvalidToken, ValueError):
+        raise ApiError(
+            "integration_credentials_corrupted", "Переподключите AITunnel в настройках.",
+            status.HTTP_409_CONFLICT,
+        ) from None
+
+
+async def _request_project_aitunnel_ai(
+    context: RuntimeContext,
+    payload: RuntimeAIRequest,
+    encrypted_key: str,
+    session: SessionDep,
+    *,
+    legacy_meal_plan: bool,
+) -> RuntimeAIPublic:
+    if not context.same_origin:
+        raise ApiError(
+            "max_deploy_required",
+            "Обновите опубликованную версию приложения, затем снова откройте его в MAX.",
+            status.HTTP_409_CONFLICT,
+        )
+    key = _decrypt_aitunnel_key(encrypted_key)
+    system_prompt, user_message = _runtime_ai_messages(payload)
+    # Return the read transaction's connection before Redis and paid inference.
+    await session.rollback()
+    reservation = await reserve_runtime_ai(
+        get_redis,
+        project_id=context.project_id,
+        max_user_id=context.max_user_id,
+        payload=payload,
+    )
+    if isinstance(reservation, RuntimeAIPublic):
+        return reservation
+    try:
+        await _enforce_runtime_ai_limits(context.project_id, context.max_user_id)
+    except ApiError:
+        await reservation.cancel_before_dispatch()
+        raise
+    try:
+        result = await request_aitunnel_text(
+            key, system_prompt=system_prompt, user_message=user_message,
+            json_mode=payload.json_mode, legacy_meal_plan=legacy_meal_plan,
+        )
+    except ApiError as exc:
+        await reservation.record_outcome(exc)
+        raise
+    await reservation.record_outcome(result)
+    return result
+
+
 @router.post("/{project_id}/ai", response_model=RuntimeAIPublic)
 async def request_runtime_ai(
     project_id: UUID,
@@ -484,51 +591,49 @@ async def request_runtime_ai(
     if project is None:
         raise ApiError("not_found", "Проект не найден", status.HTTP_404_NOT_FOUND)
     if payload.context.get("task") == NUTRITION_TASK:
-        if not request.headers.get("X-Omnia-Integration-Assertion"):
-            raise ApiError(
-                "max_init_data_invalid", "Откройте приложение из чата MAX.",
-                status.HTTP_401_UNAUTHORIZED,
-            )
-        encrypted_key = project.runtime_nutrition_ai_key_enc
-        if not encrypted_key:
-            raise ApiError(
-                "ai_integration_required", "AITunnel не подключён к этому приложению.",
-                status.HTTP_409_CONFLICT,
-            )
+        encrypted_key = _require_aitunnel_key(
+            project, request, general=payload.provider is not None,
+        )
         dish, portion_g = validate_nutrition_request(payload)
-        try:
-            key = decrypt_strong(encrypted_key)
-        except (InvalidToken, ValueError):
-            raise ApiError(
-                "integration_credentials_corrupted", "Переподключите AITunnel в настройках.",
-                status.HTTP_409_CONFLICT,
-            ) from None
+        key = _decrypt_aitunnel_key(encrypted_key)
         # Do not tie up the shared database pool while a provider call is pending.
         await session.rollback()
         await _enforce_runtime_ai_limits(project_id, context.max_user_id, nutrition=True)
         return await estimate_nutrition(key, dish, portion_g)
+    days = payload.context.get("days")
+    legacy_meal_plan = (
+        payload.model_fields_set.isdisjoint({"provider", "json_mode"})
+        and payload.context.get("task") == MEAL_PLAN_TASK
+        and type(days) is int
+        and days == LEGACY_MEAL_PLAN_DAYS
+    )
+    if payload.provider == "aitunnel" or (
+        project.runtime_aitunnel_ai_enabled and (legacy_meal_plan or not project.runtime_ai_enabled)
+    ):
+        encrypted_key = _require_aitunnel_key(project, request, general=True)
+        return await _request_project_aitunnel_ai(
+            context, payload, encrypted_key, session, legacy_meal_plan=legacy_meal_plan,
+        )
     if not project.runtime_ai_enabled:
         raise ApiError(
             "ai_integration_required",
             "Включите ИИ в настройках приложения",
             status.HTTP_409_CONFLICT,
         )
-    await _enforce_runtime_ai_limits(project_id, context.max_user_id)
-    system_prompt = (
-        "Ты — ИИ-функция внутри MAX Mini App. Отвечай на русском языке, кратко и "
-        "по существу. Используй только переданный контекст, не выдумывай измерения "
-        "или действия, которых не было. Для медицинских, юридических и финансовых "
-        "тем явно обозначай ограничения и не выдавай ответ за профессиональный диагноз."
-    )
-    if payload.instructions:
-        system_prompt += "\n\nЗадача продукта:\n" + payload.instructions
-    user_message = payload.message
-    if payload.context:
-        user_message += "\n\nКонтекст продукта (JSON):\n" + json.dumps(
-            payload.context,
-            ensure_ascii=False,
-            default=str,
+    if (
+        context.same_origin
+        and payload.provider is None
+        and await has_aitunnel_request(
+            get_redis, project_id=project_id, max_user_id=context.max_user_id, payload=payload,
         )
+    ):
+        raise ApiError(
+            "integration_operation_conflict",
+            "Этот запрос уже зарегистрирован для AITunnel. Запустите новое действие в приложении.",
+            status.HTTP_409_CONFLICT,
+        )
+    await _enforce_runtime_ai_limits(project_id, context.max_user_id)
+    system_prompt, user_message = _runtime_ai_messages(payload)
     return await _request_gateway_ai(
         owner_id=project.owner_id,
         project_id=project.id,

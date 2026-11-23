@@ -75,6 +75,18 @@ assert set(_CHECKOUT_RECEIPT_OVERRIDES) == {
     "src/lib/omnia/integration-client.ts",
 }
 
+_AITUNNEL_APP_AI_OVERRIDES = json.loads(
+    (
+        Path(__file__).parents[2]
+        / "orchestrator/tests/fixtures/max_template_aitunnel_app_ai_overrides.json"
+    ).read_text(encoding="utf-8")
+)
+assert set(_AITUNNEL_APP_AI_OVERRIDES) == {
+    "src/app/api/omnia/integrations/[...path]/route.ts",
+    "src/lib/omnia/integration-client.ts",
+    "tests/starter.test.mjs",
+}
+
 
 _LEGACY_PREVIEW_HASHES = {
     "src/app/api/max/session/route.ts": (
@@ -195,9 +207,8 @@ def _normalize_managed_order_receipts(files):
             )
         else:
             assert entry["sha256"] == action[path]["sha256"]
-        assert hashlib.sha256(actual.encode()).hexdigest() == (
-            _CHECKOUT_RECEIPT_OVERRIDES[path]["sha256"]
-        ), path
+        current = _AITUNNEL_APP_AI_OVERRIDES.get(path, _CHECKOUT_RECEIPT_OVERRIDES[path])
+        assert hashlib.sha256(actual.encode()).hexdigest() == current["sha256"], path
         normalized[path] = (
             baseline["source"].replace(
                 'const PROJECT_ID = process.env.OMNIA_PROJECT_ID || "";', declaration, 1
@@ -426,9 +437,29 @@ def _normalize_checkout_receipt(files):
     return normalized
 
 
+def _normalize_aitunnel_starter_test(files):
+    path = "tests/starter.test.mjs"
+    if path not in files:  # Only the starter renderer owns this file.
+        return files
+    legacy = json.loads(
+        (Path(__file__).parent / "fixtures/max_config_render_legacy_aitunnel_starter_test.json")
+        .read_text(encoding="utf-8")
+    )
+    assert legacy["revision"] == "31900de72c29b4883bfc60b43169ec32aef9eebf"
+    assert legacy["path"] == path
+    assert legacy["sha256"] == "eb2a65147905244ae36eb4a51c4540f38c918c04d9c832e403c886855e68bdd6"
+    assert hashlib.sha256(legacy["source"].encode()).hexdigest() == legacy["sha256"]
+    assert hashlib.sha256(files[path].encode()).hexdigest() == (
+        _AITUNNEL_APP_AI_OVERRIDES[path]["sha256"]
+    ), path
+    return {**files, path: legacy["source"]}
+
+
 def _reviewed_render_signature(files, *, portable=False):
     """Validate reviewed overrides before fingerprinting the historical SDK view."""
-    files = _normalize_checkout_receipt(_normalize_catalog(_normalize_owner_management(files)))
+    files = _normalize_aitunnel_starter_test(
+        _normalize_checkout_receipt(_normalize_catalog(_normalize_owner_management(files)))
+    )
     fixture_root = Path(__file__).parent / "fixtures"
     legacy = json.loads(
         (fixture_root / "max_config_render_legacy_dependencies.json").read_text(encoding="utf-8")
@@ -872,6 +903,7 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         "src/app/api/omnia/consents/route.ts",
         _CHECKOUT_RECEIPT_HELPER,
         "src/lib/omnia/integration-client.ts",
+        "tests/starter.test.mjs",
         "src/app/api/omnia/integrations/[...path]/route.ts",
     ],
 )

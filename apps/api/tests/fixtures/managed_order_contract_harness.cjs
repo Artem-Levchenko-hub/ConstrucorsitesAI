@@ -9,7 +9,7 @@ source = source.replace(/^import .*?;\n/gm, '').replace(/^export /gm, '');
 const context = { Buffer, Date, URL, URLSearchParams, Request, Response, Headers, AbortSignal, TextEncoder,
   crypto: require('node:crypto').webcrypto, Map, Set,
   process: { env: { OMNIA_PROJECT_ID: input.project, MAX_BOT_TOKEN: 'test-max-token',
-    OMNIA_PLATFORM_API_URL: 'https://yleum.ru' } },
+    OMNIA_PLATFORM_API_URL: 'https://yleum.ru', OMNIA_PUBLIC_APP_ORIGIN: input.publicOrigin } },
   createHash: require('node:crypto').createHash, createHmac: require('node:crypto').createHmac,
   getMaxWebApp: () => ({ initData: 'synthetic-init-data' }),
   getMaxUser: async () => input.actor === null ? null : ({ id: input.actor || '42' }),
@@ -41,9 +41,11 @@ vm.runInNewContext(source + `\nthis.api={${input.mode === 'checkout-sdk'
     }
     return;
   } else {
-    const response = await context.api.POST(new Request('https://app.test/api/omnia/integrations/'+input.operation,
+    const request = new Request('https://app.test/api/omnia/integrations/'+input.operation,
       {method:'POST',body:JSON.stringify({payload:input.payload || {}, expectedActor: input.expectedActor,
-        initData: input.initData})}),
+        initData: input.initData}), headers: input.headers});
+    request.nextUrl = new URL(request.url);
+    const response = await context.api.POST(request,
       {params:Promise.resolve({path:[input.operation]})});
     console.log(JSON.stringify({sent,status:response.status}));return;
   }

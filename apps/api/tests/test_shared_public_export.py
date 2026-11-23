@@ -92,6 +92,13 @@ CHECKOUT_RECEIPT_OVERRIDES = json.loads(
     ).read_text(encoding="utf-8")
 )
 
+AITUNNEL_APP_AI_OVERRIDES = json.loads(
+    (
+        Path(__file__).resolve().parents[2]
+        / "orchestrator/tests/fixtures/max_template_aitunnel_app_ai_overrides.json"
+    ).read_text(encoding="utf-8")
+)
+
 
 @pytest.mark.parametrize("template", GOLDEN["templates"])
 def test_real_template_export_keeps_standalone_public_assets_and_generated_overrides(template):
@@ -146,6 +153,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             expected.update(CATALOG_OVERRIDES)
             expected.update(OWNER_OVERRIDES)
             expected.update(CHECKOUT_RECEIPT_OVERRIDES)
+            expected.update(AITUNNEL_APP_AI_OVERRIDES)
         for relative in expected:
             shared_public = relative in {
                 "public/omnia-inspector.js",
@@ -189,6 +197,8 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             str(fixtures / "max_template_checkout_receipt_overrides.json"),
             "--catalog-overrides",
             str(fixtures / "max_template_catalog_overrides.json"),
+            "--aitunnel-app-ai-overrides",
+            str(fixtures / "max_template_aitunnel_app_ai_overrides.json"),
             "--compliance-overrides",
             str(fixtures / "max_template_compliance_overrides.json"),
         ],
@@ -224,6 +234,8 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
         str(fixtures / "max_template_checkout_receipt_overrides.json"),
         "--catalog-overrides",
         str(fixtures / "max_template_catalog_overrides.json"),
+        "--aitunnel-app-ai-overrides",
+        str(fixtures / "max_template_aitunnel_app_ai_overrides.json"),
         "--compliance-overrides",
         str(fixtures / "max_template_compliance_overrides.json"),
     ]
@@ -418,6 +430,41 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
     )
     assert rejected.returncode != 0
     assert f"unexpected checkout predecessor: {provider}" in rejected.stderr
+
+    aitunnel_index = valid_args.index("--aitunnel-app-ai-overrides")
+    for mutation in ("extra", "missing", "hash"):
+        invalid = dict(AITUNNEL_APP_AI_OVERRIDES)
+        if mutation == "extra":
+            invalid["src/lib/omnia/unreviewed.ts"] = {"sha256": "0" * 64}
+        elif mutation == "missing":
+            del invalid[sdk_relative]
+        else:
+            invalid[sdk_relative] = {"sha256": "0" * 64, "mode": "100644"}
+        invalid_path = tmp_path / "untrusted-aitunnel-app-ai.json"
+        invalid_path.write_text(json.dumps(invalid), encoding="utf-8")
+        invalid_args = valid_args.copy()
+        invalid_args[aitunnel_index + 1] = str(invalid_path)
+        rejected = subprocess.run(
+            invalid_args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30,
+        )
+        assert rejected.returncode != 0
+        assert (
+            f"max-miniapp-nextjs/{sdk_relative}" if mutation == "hash"
+            else "unexpected MAX AITunnel AI override paths"
+        ) in rejected.stderr
+
+    invalid_predecessor = tmp_path / "untrusted-aitunnel-predecessor.json"
+    invalid_predecessor.write_text(json.dumps({
+        **CHECKOUT_RECEIPT_OVERRIDES,
+        sdk_relative: AITUNNEL_APP_AI_OVERRIDES[sdk_relative],
+    }), encoding="utf-8")
+    invalid_args = valid_args.copy()
+    invalid_args[checkout_index + 1] = str(invalid_predecessor)
+    rejected = subprocess.run(
+        invalid_args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30,
+    )
+    assert rejected.returncode != 0
+    assert f"unexpected AITunnel AI predecessor: {sdk_relative}" in rejected.stderr
 
     helper = mounted / "max-miniapp-nextjs" / checkout_helper
     source = helper.read_bytes()

@@ -8,9 +8,16 @@ import hmac
 import json
 import re
 import time
+from dataclasses import dataclass
 from uuid import UUID
 
 _DOMAIN = b"omnia:integration-assertion:v1"
+
+
+@dataclass(frozen=True)
+class VerifiedIntegrationAssertion:
+    max_user_id: int
+    same_origin: bool
 
 
 def verify_integration_assertion(
@@ -22,6 +29,20 @@ def verify_integration_assertion(
     path: str,
     body: bytes,
 ) -> int:
+    return verify_integration_assertion_claims(
+        assertion, bot_token, project_id=project_id, method=method, path=path, body=body,
+    ).max_user_id
+
+
+def verify_integration_assertion_claims(
+    assertion: str,
+    bot_token: str,
+    *,
+    project_id: UUID,
+    method: str,
+    path: str,
+    body: bytes,
+) -> VerifiedIntegrationAssertion:
     return _verify_assertion(
         assertion, bot_token, project_id=project_id, method=method, path=path,
         body=body, purpose=_DOMAIN,
@@ -36,13 +57,13 @@ def verify_business_analytics_assertion(
     return _verify_assertion(
         assertion, bot_token, project_id=project_id, method=method, path=path,
         body=body, purpose=b"yleum:business-analytics:v1",
-    )
+    ).max_user_id
 
 
 def _verify_assertion(
     assertion: str, bot_token: str, *, project_id: UUID, method: str, path: str,
     body: bytes, purpose: bytes,
-) -> int:
+) -> VerifiedIntegrationAssertion:
     """Authenticate both the MAX identity and the exact upstream operation."""
     if len(assertion) > 4096:
         raise ValueError("invalid integration assertion")
@@ -79,4 +100,7 @@ def _verify_assertion(
         or not re.fullmatch(r"[1-9][0-9]{0,19}", user)
     ):
         raise ValueError("invalid integration assertion")
-    return int(user)
+    return VerifiedIntegrationAssertion(
+        max_user_id=int(user),
+        same_origin=claims.get("same_origin") is True,
+    )

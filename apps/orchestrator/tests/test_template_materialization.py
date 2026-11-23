@@ -133,6 +133,16 @@ assert set(CHECKOUT_RECEIPT_OVERRIDES) == {
     "src/lib/omnia/checkout-receipt.ts",
     "src/lib/omnia/integration-client.ts",
 }
+AITUNNEL_APP_AI_OVERRIDES = json.loads(
+    (Path(__file__).parent / "fixtures/max_template_aitunnel_app_ai_overrides.json").read_text(
+        encoding="utf-8"
+    )
+)
+assert set(AITUNNEL_APP_AI_OVERRIDES) == {
+    "src/app/api/omnia/integrations/[...path]/route.ts",
+    "src/lib/omnia/integration-client.ts",
+    "tests/starter.test.mjs",
+}
 
 # The frozen Git tree remains the baseline; deliberate MAX integration changes
 # are pinned as explicit overrides instead of rewriting historical hashes.
@@ -165,6 +175,7 @@ def assert_golden(name: str, root: Path) -> None:
         expected.update(CATALOG_OVERRIDES)
         expected.update(OWNER_OVERRIDES)
         expected.update(CHECKOUT_RECEIPT_OVERRIDES)
+        expected.update(AITUNNEL_APP_AI_OVERRIDES)
     actual = {
         p.relative_to(root).as_posix(): p
         for p in root.rglob("*")
@@ -182,6 +193,7 @@ def assert_golden(name: str, root: Path) -> None:
             entry = CATALOG_OVERRIDES.get(relative, entry)
             entry = OWNER_OVERRIDES.get(relative, entry)
             entry = CHECKOUT_RECEIPT_OVERRIDES.get(relative, entry)
+            entry = AITUNNEL_APP_AI_OVERRIDES.get(relative, entry)
         data = actual[relative].read_bytes()
         if os.name == "nt":
             data = data.replace(b"\r\n", b"\n")  # Git autocrlf; Linux gate checks raw bytes.

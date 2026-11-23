@@ -31,7 +31,7 @@ from yleum_api.core.config import get_settings
 
 _VERSIONS = Path(__file__).resolve().parent.parent / "migrations" / "versions"
 _API_ROOT = Path(__file__).resolve().parents[1]
-_CURRENT_HEAD = "0108_provider_retry_after"
+_CURRENT_HEAD = "0109_aitunnel_app_ai"
 _RECOVERY_REVISION = "0088_generation_recovery_effects"
 # Migrations use either bare (`revision = "x"`) or annotated
 # (`revision: str = "x"`, `down_revision: Union[str, None] = "x"`) declarations —
@@ -208,7 +208,8 @@ def test_security_and_analytics_extend_the_only_migration_head() -> None:
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
     assert heads == [_CURRENT_HEAD]
-    assert chain[_CURRENT_HEAD] == "0107_expired_provider_reservation"
+    assert chain[_CURRENT_HEAD] == "0108_provider_retry_after"
+    assert chain["0108_provider_retry_after"] == "0107_expired_provider_reservation"
     assert chain["0107_expired_provider_reservation"] == "0106_native_transcript_refusal"
     assert chain["0106_native_transcript_refusal"] == "0105_max_nutrition_ai"
     assert chain["0105_max_nutrition_ai"] == "0104_max_catalog_delivery"
@@ -343,6 +344,26 @@ def test_native_transcript_migration_retains_dispatch_evidence_on_downgrade(
         command.downgrade(database.config, parent)
         assert database.fetchval("SELECT version_num FROM alembic_version") == parent
         assert [dict(row) for row in database.fetch(query)] == before
+
+
+def test_aitunnel_permission_upgrade_preserves_existing_keys(
+    project_cell_migration_database: ProjectCellMigrationDatabase,
+) -> None:
+    database = project_cell_migration_database
+    database.upgrade("0108_provider_retry_after")
+    owner, project = uuid4(), uuid4()
+    asyncio.run(_execute(database.dsn, f"""
+        INSERT INTO users(id, email) VALUES ('{owner}', 'aitunnel-upgrade@example.invalid');
+        INSERT INTO projects(id, owner_id, name, slug, template, runtime_nutrition_ai_key_enc)
+        VALUES ('{project}', '{owner}', 'Existing app', 'aitunnel-upgrade',
+                'max_miniapp', 'synthetic-ciphertext');
+    """))
+
+    database.upgrade("head")
+
+    assert [tuple(row) for row in database.fetch(
+        "SELECT runtime_nutrition_ai_key_enc, runtime_aitunnel_ai_enabled FROM projects"
+    )] == [("synthetic-ciphertext", False)]
 
 
 def test_consent_upgrade_preserves_existing_data_without_enabling_projects(

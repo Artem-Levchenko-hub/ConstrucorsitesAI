@@ -4,6 +4,7 @@ import type { IntegrationProvider } from "@/lib/api/types";
 import {
   containsChatSecret,
   redactChatSecrets,
+  requestsAitunnelAppAi,
   resolveChatCredential,
 } from "@/lib/max-chat-credentials";
 
@@ -103,6 +104,30 @@ describe("MAX chat credential intake", () => {
     expect(result.value.safePrompt).toContain('provider: "aitunnel"');
     expect(result.value.safePrompt).toContain("nutrition_estimate");
     expect(result.value.safePrompt).toContain("requestOmniaAI");
+  });
+
+  it.each([
+    "Подключи сохранённый ключ AITunnel как провайдера ИИ для приложения",
+    "Используй AITunnel для ИИ-ответов в мини-приложении",
+    "Подключи АйТуннель к ИИ-генерации рациона",
+    "Подключи наш ключ AITunnel к функции генерации рациона.",
+    "Используй сохранённый ключ AITunnel для ИИ-функции генерации рациона на месяц.",
+    "Сделай генерацию рациона через AITunnel.",
+    "Настрой ИИ-помощника в приложении через сохранённый ключ АйТуннель.",
+  ])("recognizes explicit owner authorization in %s", (prompt) => {
+    expect(requestsAitunnelAppAi(prompt)).toBe(true);
+  });
+
+  it.each([
+    "Подключи AITunnel для ИИ приложения после моего подтверждения.",
+    "Подключи AITunnel для генерации рациона только в тестовом окружении.",
+    "Подключи AITunnel для ИИ приложения. Только после моего подтверждения.",
+    "«Сделай генерацию рациона через AITunnel»",
+    "Сделай генерацию рациона с надписью «через AITunnel».",
+    "Сделай генерацию рациона, затем покажи инструкцию через AITunnel.",
+    "Сделай генерацию рациона через AITunnel только в тестовом окружении.",
+  ])("does not treat %s as authorization for app AI", (prompt) => {
+    expect(requestsAitunnelAppAi(prompt)).toBe(false);
   });
 
   it("does not route a message with two different credentials to AITunnel", () => {

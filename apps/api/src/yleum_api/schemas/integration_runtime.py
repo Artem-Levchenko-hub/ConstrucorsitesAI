@@ -25,6 +25,7 @@ class RuntimeIntegrationStatus(BaseModel):
     providers: list[str]
     capabilities: list[str]
     analytics_counter_id: str | None = None
+    ai_provider: Literal["aitunnel", "llmgw"] | None = None
 
 
 class RuntimePaymentRequest(BaseModel):
@@ -214,6 +215,11 @@ class RuntimeAIRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4_000)
     instructions: str = Field(default="", max_length=2_000)
     context: dict[str, Any] = Field(default_factory=dict)
+    provider: Literal["aitunnel"] | None = None
+    json_mode: bool = Field(default=False, strict=True)
+    idempotency_key: str | None = Field(
+        default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$",
+    )
 
     @field_validator("context")
     @classmethod

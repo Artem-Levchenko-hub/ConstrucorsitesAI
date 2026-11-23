@@ -105,6 +105,18 @@ _CHECKOUT_RECEIPT_PREDECESSOR_HASHES = {
 }
 _CHECKOUT_RECEIPT_HELPER = "src/lib/omnia/checkout-receipt.ts"
 
+_AITUNNEL_APP_AI_PREDECESSOR_HASHES = {
+    "src/app/api/omnia/integrations/[...path]/route.ts": (
+        "2dc780aa4490a43be9648b200756bb648fab124e4cd81725fc410bc863865121"
+    ),
+    "src/lib/omnia/integration-client.ts": (
+        "5dc0407f27b4bf6c1a6324b38750587a371e6266330f2845521b8fd13a52994b"
+    ),
+    "tests/starter.test.mjs": (
+        "eb2a65147905244ae36eb4a51c4540f38c918c04d9c832e403c886855e68bdd6"
+    ),
+}
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -120,6 +132,7 @@ def main() -> None:
     parser.add_argument("--catalog-overrides", type=Path)
     parser.add_argument("--owner-management-overrides", type=Path)
     parser.add_argument("--checkout-receipt-overrides", type=Path)
+    parser.add_argument("--aitunnel-app-ai-overrides", type=Path)
     args = parser.parse_args()
     golden = json.loads(args.golden.read_text(encoding="utf-8"))["templates"]
     overrides = json.loads(args.readme_overrides.read_text(encoding="utf-8"))
@@ -185,6 +198,14 @@ def main() -> None:
             assert predecessors[path]["sha256"] == sha256, (
                 f"unexpected checkout predecessor: {path}"
             )
+    aitunnel_app_ai_overrides = {}
+    if args.aitunnel_app_ai_overrides is not None:
+        aitunnel_app_ai_overrides = json.loads(
+            args.aitunnel_app_ai_overrides.read_text(encoding="utf-8")
+        )
+        assert set(aitunnel_app_ai_overrides) == set(_AITUNNEL_APP_AI_PREDECESSOR_HASHES), (
+            "unexpected MAX AITunnel AI override paths"
+        )
     for name, complete_tree in golden.items():
         if name == "max-miniapp-nextjs":
             complete_tree = (
@@ -196,6 +217,7 @@ def main() -> None:
                 | catalog_overrides
                 | owner_overrides
                 | checkout_overrides
+                | aitunnel_app_ai_overrides
             )
         omissions = _EXPORT_OMISSIONS[name]
         assert omissions <= complete_tree.keys(), f"unknown frozen export omissions: {name}"
@@ -203,6 +225,12 @@ def main() -> None:
         exported = project_export.build_runnable_export(name, {})
         exported.pop("README.omnia.md", None)
         assert exported.keys() == expected.keys(), f"incomplete standalone export: {name}"
+        if name == "max-miniapp-nextjs" and aitunnel_app_ai_overrides:
+            predecessors = action_write_overrides | checkout_overrides
+            for path, sha256 in _AITUNNEL_APP_AI_PREDECESSOR_HASHES.items():
+                assert predecessors[path]["sha256"] == sha256, (
+                    f"unexpected AITunnel AI predecessor: {path}"
+                )
         for relative, entry in expected.items():
             entry = overrides.get(f"{name}/{relative}", entry)
             if name == "max-miniapp-nextjs":
@@ -214,6 +242,7 @@ def main() -> None:
                 entry = catalog_overrides.get(relative, entry)
                 entry = owner_overrides.get(relative, entry)
                 entry = checkout_overrides.get(relative, entry)
+                entry = aitunnel_app_ai_overrides.get(relative, entry)
             content = exported[relative]
             data = content.encode("utf-8") if isinstance(content, str) else content
             assert hashlib.sha256(data).hexdigest() == entry["sha256"], f"{name}/{relative}"

@@ -31,6 +31,17 @@ const upstreamOperations = {
 } as const;
 const managedOrderId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+function isSameOriginAIRequest(request: NextRequest): boolean {
+  const origin = request.headers.get("origin");
+  // Public cores receive the controller-owned origin. The upstream Host may be
+  // an internal service name and client-supplied forwarding headers are untrusted.
+  const expectedOrigin = process.env.OMNIA_PUBLIC_APP_ORIGIN ?? request.nextUrl.origin;
+  const mediaType = request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
+  const fetchSite = request.headers.get("sec-fetch-site");
+  return Boolean(origin && origin !== "null" && origin === expectedOrigin.replace(/\/$/, "") &&
+    mediaType === "application/json" && (!fetchSite || fetchSite === "same-origin"));
+}
+
 function checkoutPayload(payload: unknown, create: boolean): Record<string, string> | null {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
   const fields = payload as Record<string, unknown>;
@@ -57,6 +68,13 @@ export async function POST(request: NextRequest, context: Context) {
     return NextResponse.json(
       { error: { message: "Unknown capability" } },
       { status: 404 },
+    );
+  }
+  const ai = operation === "ai";
+  if (ai && !isSameOriginAIRequest(request)) {
+    return NextResponse.json(
+      { error: { code: "forbidden", message: "Откройте ИИ-функцию из самого приложения" } },
+      { status: 403 },
     );
   }
   const parsed: unknown = await request.json().catch(() => null);
@@ -127,6 +145,7 @@ export async function POST(request: NextRequest, context: Context) {
       method,
       path: upstreamPath,
       body_sha256: createHash("sha256").update(upstreamBody).digest("hex"),
+      ...(ai ? { same_origin: true } : {}),
     })).toString("base64url");
     const key = createHmac("sha256", token)
       .update("omnia:integration-assertion:v1").digest();

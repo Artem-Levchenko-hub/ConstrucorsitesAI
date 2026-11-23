@@ -28,12 +28,24 @@ export function connectAppIntegration(
 
 export function setNutritionAiKey(
   projectId: Uuid,
-  apiKey: string,
+  apiKey: string | null,
+  allowAppAi = false,
 ): Promise<{ enabled: boolean }> {
   return apiFetch(`/api/projects/${projectId}/nutrition-ai`, {
     method: "PUT",
-    json: { api_key: apiKey },
+    json: { api_key: apiKey, ...(allowAppAi ? { allow_app_ai: true } : {}) },
     timeoutMs: 30_000,
+  });
+}
+
+export function setAitunnelAi(
+  projectId: Uuid,
+  enabled: boolean,
+): Promise<{ enabled: boolean }> {
+  return apiFetch(`/api/projects/${projectId}/aitunnel-ai`, {
+    method: "PUT",
+    json: { enabled },
+    timeoutMs: 20_000,
   });
 }
 

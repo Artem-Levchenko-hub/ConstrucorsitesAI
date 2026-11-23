@@ -46,6 +46,7 @@ function ProjectPromptInput({
   draftRef,
   toolbarAction,
   sendDisabled = false,
+  canSendWithoutQuota,
   guardMaxDraft = false,
   quotaNotice,
   projectId,
@@ -75,6 +76,7 @@ function ProjectPromptInput({
   draftRef?: Ref<PromptInputHandle>;
   toolbarAction?: ReactNode;
   sendDisabled?: boolean;
+  canSendWithoutQuota?: (text: string) => boolean;
   guardMaxDraft?: boolean;
   quotaNotice?: ReactNode;
   projectId?: string;
@@ -157,6 +159,8 @@ function ProjectPromptInput({
   }, [value, references.items, fonts.items, generationEngine]);
 
   const currentDraft = prepareDraft(selections);
+  const bypassesQuota = useCallback(({ text, wire, images, fontSelections }: ReturnType<typeof prepareDraft>) =>
+    !wire.length && !images.length && !fontSelections.length && canSendWithoutQuota?.(text) === true, [canSendWithoutQuota]);
   const restoreExpired = () => {
     if (currentDraft.text || sendLockRef.current) return;
     const draft = onRestoreExpiredPending?.();
@@ -170,13 +174,14 @@ function ProjectPromptInput({
     setSubmitError("Срок хранения изображений истёк. Прикрепите их снова перед отправкой.");
     ref.current?.focus();
   };
-  const quotaBlocksDraft = sendDisabled && retryIdentity?.signature !== currentDraft.signature;
+  const sendsWithoutQuota = bypassesQuota(currentDraft);
+  const quotaBlocksDraft = sendDisabled && retryIdentity?.signature !== currentDraft.signature && !sendsWithoutQuota;
   const send = useCallback(async () => {
     if (sendLockRef.current || attachmentsBlocked) return;
     // Read fresh picks for the global shortcut as well as the send button.
     const draft = prepareDraft(useInspectorStore.getState().selections);
     const replay = retryIdentity?.signature === draft.signature;
-    if (!draft.text || (sendDisabled && !replay)) return;
+    if (!draft.text || (sendDisabled && !replay && !bypassesQuota(draft))) return;
     const key = replay ? retryIdentity.key : crypto.randomUUID();
     setRetryIdentity({ signature: draft.signature, key });
     sendLockRef.current = true;
@@ -214,7 +219,7 @@ function ProjectPromptInput({
         if (submissionEpoch.current === epoch) sendLockRef.current = false;
       });
     }
-  }, [attachmentsBlocked, clearSelections, onSubmit, sendDisabled, prepareDraft, retryIdentity, references, fonts]);
+  }, [attachmentsBlocked, bypassesQuota, clearSelections, onSubmit, sendDisabled, prepareDraft, retryIdentity, references, fonts]);
 
   // Cmd/Ctrl+Enter from anywhere submits — даже во время стрима (отправка
   // в этом случае ставится в очередь хуком).
@@ -483,7 +488,7 @@ function ProjectPromptInput({
               }
               className="prompt-input-send h-11 gap-1.5 rounded-full px-3.5 sm:h-8"
               title={
-                isStreaming
+                isStreaming && !sendsWithoutQuota
                   ? "Будет отправлено после текущей генерации"
                   : "Отправить"
               }

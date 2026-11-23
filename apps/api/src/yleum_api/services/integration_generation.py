@@ -124,6 +124,20 @@ _METHODS = {
         "through the platform gateway; charged to the owner's balance. Never request "
         "an API key or choose billing identity/model in the app."
     ),
+    "aitunnel": (
+        'requestOmniaAI({provider: "aitunnel", message, instructions?, context?, jsonMode?, '
+        'idempotencyKey?}). General text AI for this project uses the owner\'s server-held '
+        "AITunnel key. For example, turn survey answers into a complete plan. Use jsonMode "
+        "for an object response and validate the whole result before saving it. Keep one "
+        "idempotencyKey per explicit user action, including retries. Handle provider errors "
+        "in the app and keep the last valid result. Report mocked tests and application "
+        "startup as such; a real result in MAX requires a signed call through this route."
+    ),
+    "aitunnel_nutrition": (
+        'requestOmniaAI({message: dish, context: {task: "nutrition_estimate", '
+        "portion_g: grams}}). This is the existing one-dish nutrition operation. "
+        "Use a whole portion weight between 1 and 5000 grams."
+    ),
     "yandex_metrica": (
         "getYleumIntegrations() returns analytics_counter_id. Counter access does"
         " not prove events are installed."
@@ -151,9 +165,15 @@ async def generation_context(session: AsyncSession, project_id: UUID) -> str:
         ).all()
     )
     providers = [p for p in providers if p != "aitunnel"]
-    ai_enabled = await session.scalar(
-        select(Project.runtime_ai_enabled).where(Project.id == project_id)
-    )
+    ai_scope = (
+        await session.execute(
+            select(
+                Project.runtime_ai_enabled,
+                Project.runtime_aitunnel_ai_enabled,
+                Project.runtime_nutrition_ai_key_enc.is_not(None),
+            ).where(Project.id == project_id)
+        )
+    ).one_or_none()
     staff_order_mode = await session.scalar(
         select(MaxStaffSettings.orders_mode)
         .join(Project, Project.id == MaxStaffSettings.project_id)
@@ -163,8 +183,14 @@ async def generation_context(session: AsyncSession, project_id: UUID) -> str:
             MaxStaffSettings.orders_enabled_at.is_not(None),
         )
     )
-    if ai_enabled:
-        providers.append("llmgw")
+    if ai_scope is not None:
+        platform_ai_enabled, aitunnel_ai_enabled, nutrition_key_present = ai_scope
+        if nutrition_key_present:
+            providers.append("aitunnel_nutrition")
+        if aitunnel_ai_enabled and nutrition_key_present:
+            providers.append("aitunnel")
+        if platform_ai_enabled:
+            providers.append("llmgw")
     lines = [
         MANAGED_PRODUCT_GUIDE,
         (

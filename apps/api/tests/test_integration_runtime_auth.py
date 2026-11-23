@@ -94,7 +94,7 @@ def proxy(
     return json.loads(result.stdout)
 
 
-def assertion(project, path, method="GET", body=b"", **overrides):
+def assertion(project, path, method="GET", body=b"", *, bot_token="test-max-token", **overrides):
     now = int(time.time())
     claims = {
         "project_id": project,
@@ -107,7 +107,7 @@ def assertion(project, path, method="GET", body=b"", **overrides):
     }
     claims.update(overrides)
     encoded = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
-    key = hmac.digest(b"test-max-token", b"omnia:integration-assertion:v1", "sha256")
+    key = hmac.digest(bot_token.encode(), b"omnia:integration-assertion:v1", "sha256")
     return f"v1.{encoded}." + hmac.new(key, f"v1.{encoded}".encode(), "sha256").hexdigest()
 
 

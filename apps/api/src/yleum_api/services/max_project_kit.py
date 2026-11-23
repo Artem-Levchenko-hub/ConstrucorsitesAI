@@ -664,12 +664,13 @@ legacy arbitrary names remain generic and must not be guessed from free text.
 Do not send names, contacts, payloads or MAX profiles to platform analytics.
 Never call a public helper for `app_open`; only verified login records opens.
 Updating the managed kit alone does not instrument existing custom product flows.
-When the brief requests AI, use the exact typed call
-`const { answer } = await requestYleumAI({ message, instructions, context })`
-from `@/lib/omnia/integration-client`; the managed Google model runs server-side.
-Never embed a provider key in source or expose one to the browser. If a user pastes
-a credential into chat, do not write it or create an .env file: Yleum handles
-credentials only through the encrypted Studio Integration Hub.
+When the brief requests AI, choose the configured provider from the connected
+business integrations and use its typed helper from `@/lib/omnia/integration-client`.
+Choose the provider explicitly when the owner names it. Keep existing calls to
+other providers working. A key scoped to nutrition supports the dish-and-portion
+operation. General AI uses the app AI grant described in the integration context.
+Credentials pasted into Studio chat are handled by the server. Never write them
+to project files, request them again, or expose them to the browser.
 
 If the project sandbox shell is available, `bash` runs only inside the isolated
 project container without network: use it for offline generators, tests,

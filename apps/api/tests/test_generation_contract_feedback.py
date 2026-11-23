@@ -190,7 +190,8 @@ async def test_live_integration_contract_reaches_final_native_prompt(portable):
     )
     session = SimpleNamespace(
         scalars=AsyncMock(return_value=SimpleNamespace(all=lambda: ["amocrm"])),
-        scalar=AsyncMock(return_value=False),
+        execute=AsyncMock(return_value=SimpleNamespace(one_or_none=lambda: (False, False, False))),
+        scalar=AsyncMock(return_value=None),
     )
     context = await generation_context(session, uuid4())
     guide = await build_max_agent_guide(
@@ -397,6 +398,9 @@ async def test_prepare_stack_keeps_ready_contract_after_portable_replacement(mon
 
         async def scalars(self, *args):
             return SimpleNamespace(all=lambda: ["amocrm"])
+
+        async def execute(self, *args):
+            return SimpleNamespace(one_or_none=lambda: (False, False, False))
 
         async def scalar(self, *args):
             return False

@@ -482,6 +482,9 @@ type YleumAIInput = {
   prompt?: string;
   instructions?: string;
   context?: Record<string, unknown>;
+  provider?: "aitunnel";
+  jsonMode?: boolean;
+  idempotencyKey?: string;
 };
 
 export async function requestYleumAI(
@@ -493,6 +496,9 @@ export async function requestYleumAI(
     message,
     instructions: input.instructions,
     context: input.context,
+    provider: input.provider,
+    json_mode: input.jsonMode,
+    idempotency_key: input.idempotencyKey,
   });
   return { ...result, text: result.answer };
 }
