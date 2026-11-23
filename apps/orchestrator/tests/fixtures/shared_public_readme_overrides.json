@@ -19,6 +19,10 @@
     "sha256": "885c9e0acd5ffc57b7d4abb93e9a0a7a616af470b1a9f5b05e0db1d9365c85e0",
     "mode": "100644"
   },
+  "max-miniapp-nextjs/public/omnia-inspector.js": {
+    "sha256": "b868360154d08e60ffa28f4303e2543f2ccddccea30f4db7188a6db74215f1c2",
+    "mode": "100644"
+  },
   "max-miniapp-nextjs/.omnia/skills/max-ui-design.md": {
     "sha256": "7c8a9bad423d5623fd38782824c8e741db9cbbd439c907034617daf1fe2c135d",
     "mode": "100644"

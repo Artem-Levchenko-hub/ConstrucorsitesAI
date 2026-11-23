@@ -140,6 +140,7 @@ assert set(README_OVERRIDES) == {
     "max-miniapp-nextjs/.omnia/skills/max-ui-design.md",
     "max-miniapp-nextjs/README.md",
     "max-miniapp-nextjs/SYSTEM_PROMPT.md",
+    "max-miniapp-nextjs/public/omnia-inspector.js",
     "max-miniapp-nextjs/src/app/api/omnia/integrations/[...path]/route.ts",
     "max-miniapp-nextjs/src/lib/omnia/integration-client.ts",
 }
