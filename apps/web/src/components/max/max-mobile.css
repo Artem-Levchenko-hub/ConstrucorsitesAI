@@ -137,7 +137,7 @@
 .max-owner-period-toggle { display: none; }
 .max-owner-date-fields { display: contents; }
 @media (max-width: 600px) {
-  .max-project-menu-scroll, .max-project-workspace .max-project-main { scrollbar-width: none; }
+  .max-project-menu-scroll { scrollbar-width: none; }
   .max-project-workspace[data-max-studio] .max-owner-filters { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: 12px; gap: 10px; border-radius: 20px; }
   .max-owner-filters > label:first-child { grid-column: 1 / -1; }
   .max-owner-search-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
