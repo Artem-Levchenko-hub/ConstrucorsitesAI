@@ -26,7 +26,7 @@ it("opens owner app data as a project page with the chat action and active navig
   expect(document.querySelector("main h1")?.textContent).toBe("Данные приложения");
   expect(document.querySelector('main [data-project="owned"][data-display="page"]')).not.toBeNull();
   expect(document.querySelector('nav a[aria-current="page"]')?.getAttribute("href")).toBe("/max/owned/settings?tab=app");
-  expect(document.querySelector('header a[href="/max/owned"]')?.textContent).toContain("К чату");
+  expect(document.querySelector('header a[href="/max/owned"]')?.textContent).toContain("Чат");
   expect(document.querySelector('nav a[href="/max/owned/dashboard"]')).not.toBeNull();
 });
 
