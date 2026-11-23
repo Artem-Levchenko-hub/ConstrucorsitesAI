@@ -8,12 +8,21 @@ const {readFileSync}=require('node:fs');
 const {resolve}=require('node:path');
 const {createRequire}=require('node:module');
 const vm=require('node:vm');
-const {randomUUID}=require('node:crypto');
+const {randomUUID,webcrypto}=require('node:crypto');
 const root=process.env.OMNIA_ACTION_TEST_TEMPLATE_ROOT || resolve(__dirname,'../../templates/max-miniapp-nextjs');
 const qaRequire=createRequire(resolve(process.env.OMNIA_TEST_NODE_ROOT || root,'package.json'));
 const ts=qaRequire('typescript');
-const activity={exports:{}};
-vm.runInNewContext(ts.transpileModule(readFileSync(resolve(root,'src/lib/omnia/activity.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,activity);
+function loadShipped(relative, globals={}) {
+  const filename=resolve(root,relative);
+  const context={...globals,exports:{}};
+  const code=ts.transpileModule(readFileSync(filename,'utf8'),{
+    compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022},
+  }).outputText;
+  vm.runInNewContext(code,context,{filename});
+  return context.exports;
+}
+
+const activity=loadShipped('src/lib/omnia/activity.ts');
 let zod; try {zod=qaRequire('zod');} catch {zod=qaRequire('next/dist/compiled/zod');}
 function fixture() {
   const rows=[], audits=[], forwarded=[];
@@ -40,14 +49,17 @@ function fixture() {
       assert.equal(actor,'test-actor');assert.equal(kind,'action');
       assert.ok(rows.some(row=>row.id===eventId && row.maxUserId===actor));
       const action=rows.find(row=>row.id===eventId);
-      assert.equal(eventType,activity.exports.maxActivityKind(action.actionType)==='action'?action.actionType:undefined);
+      assert.equal(eventType,activity.maxActivityKind(action.actionType)==='action'?action.actionType:undefined);
       assert.ok(audits.some(receipt=>receipt.maxUserId===actor && receipt.details.actionId===eventId && receipt.details.healthProbe===false));
       forwarded.push(args);
     }},
     '@/lib/max/session':{getMaxUser:async()=>({id:'test-actor'})},
-    '@/lib/omnia/activity':activity.exports,
+    '@/lib/omnia/activity':activity,
   };
-  const load=(relative)=>{const context={exports:{},require:name=>{assert.ok(name in modules,`Unexpected import ${name}`);return modules[name];},TextEncoder,Date};vm.runInNewContext(ts.transpileModule(readFileSync(resolve(root,relative),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,context);return context.exports;};
+  const load=relative=>loadShipped(relative,{
+    require:name=>{assert.ok(Object.hasOwn(modules,name),`Unexpected import ${name}`);return modules[name];},
+    TextEncoder,Date,
+  });
   const item=load('src/app/api/omnia/actions/[id]/route.ts');
   return {rows,audits,forwarded,post:load('src/app/api/omnia/actions/route.ts').POST,patch:item.PATCH,get:item.GET,remove:item.DELETE};
 }
@@ -80,12 +92,39 @@ test('analytics forwards the durable successful receipt after commit; retries ke
 });
 test('legacy full-payload PATCH without expected baseline cannot overwrite a saved record',async()=>{const f=fixture();const saved=await(await f.post(request({...input,operationKey:randomUUID()}))).json();const response=await f.patch(request({payload:{slot:'changed'}}),{params:Promise.resolve({id:saved.action.id})});assert.equal(response.status,428);assert.equal(f.rows[0].payload.slot,input.payload.slot);});
 
-function clientFixture(fetch, saved=new Map(), storageOverride, sessionActor=()=>'test-actor') {
- const window={location:{origin:'https://test.invalid'},sessionStorage:storageOverride || {getItem:key=>saved.get(key)||null,setItem:(key,value)=>saved.set(key,value),removeItem:key=>saved.delete(key)}};
- const wrappedFetch=(url,init)=>url==='/api/max/session'?Promise.resolve(Response.json({user:{id:sessionActor()}})):fetch(url,init);
- const context={exports:{},require:name=>{assert.equal(name,'@/lib/max/bridge');return{getMaxWebApp:()=>null};},fetch:wrappedFetch,window,crypto:require('node:crypto').webcrypto,TextEncoder,URLSearchParams};
- vm.runInNewContext(ts.transpileModule(readFileSync(resolve(root,'src/lib/omnia/integration-client.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,context);
- return context.exports;
+const browserModules=new Set([
+  '@/lib/max/bridge',
+  '@/lib/max/owner-preview-renewal',
+  '@/lib/omnia/activity',
+  '@/lib/omnia/client',
+  '@/lib/omnia/identity-scope',
+  '@/lib/omnia/integration-client',
+]);
+
+function createBrowserLoader(window) {
+  // One module instance per browser fixture, including the identity state and
+  // the SDK exports shared by the legacy client. Only browser APIs are mocked.
+  const loaded=new Map();
+  return function load(name) {
+    assert.ok(browserModules.has(name),`Unexpected browser import ${name}`);
+    if (!loaded.has(name)) {
+      loaded.set(name,loadShipped(`src/${name.slice(2)}.ts`,{
+        require:load,window,fetch:(...args)=>window.fetch(...args),crypto:webcrypto,
+        TextEncoder,URLSearchParams,URL,Request,Response,AbortController,
+      }));
+    }
+    return loaded.get(name);
+  };
+}
+
+function createClientLoader(fetch, saved=new Map(), storageOverride, sessionActor=()=>'test-actor') {
+ const window={location:{origin:'https://test.invalid'},sessionStorage:storageOverride || {getItem:key=>saved.get(key)||null,setItem:(key,value)=>saved.set(key,value),removeItem:key=>saved.delete(key)},
+  fetch:(url,init)=>url==='/api/max/session'?Promise.resolve(Response.json({user:{id:sessionActor()}})):fetch(url,init)};
+ return createBrowserLoader(window);
+}
+
+function clientFixture(...args) {
+ return createClientLoader(...args)('@/lib/omnia/integration-client');
 }
 test('SDK normal retry after unknown create outcome retains operation identity; confirmed next intent renews it',async()=>{
  const sent=[];
@@ -192,9 +231,8 @@ test('a later authorization denial cannot clear an earlier unknown commit identi
 
 test('legacy client module create uses the same retry-safe managed helper and actor precondition',async()=>{
  const sent=[];const fetch=async(_url,init)=>{sent.push(JSON.parse(init.body));if(sent.length===1)throw Error('lost committed response');return Response.json({action:{id:randomUUID()}},{status:201});};
- const canonical=clientFixture(fetch);const context={exports:{},fetch,require:name=>{if(name==='@/lib/omnia/integration-client')return canonical;if(name==='@/lib/omnia/activity')return activity.exports;assert.equal(name,'@/lib/max/bridge');return{getMaxWebApp:()=>null};},URLSearchParams};
- vm.runInNewContext(ts.transpileModule(readFileSync(resolve(root,'src/lib/omnia/client.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,context);
- const legacy=context.exports;await assert.rejects(legacy.createMaxAction(input.actionType,input.payload));await legacy.createMaxAction(input.actionType,input.payload);
+ const load=createClientLoader(fetch);const canonical=load('@/lib/omnia/integration-client');const legacy=load('@/lib/omnia/client');
+ await assert.rejects(legacy.createMaxAction(input.actionType,input.payload));await legacy.createMaxAction(input.actionType,input.payload);
  assert.equal(typeof sent[0].operationKey,'string');assert.equal(sent[1].operationKey,sent[0].operationKey);assert.equal(legacy.createMaxAction,canonical.createMaxAction);
 });
 
@@ -215,18 +253,17 @@ function previewActionFixture({sessionStatus=401,changedActor=false,loseFirstRes
   if(loseFirstResponse&&sent.length===1){expired=true;throw new TypeError('synthetic response loss after commit');}
   return writeStatus===401?Response.json({error:'Denied'},{status:401}):Response.json({action:{id:'saved-action'}},{status:201});
  };
- const parent={postMessage(message){queueMicrotask(()=>listeners.forEach(fn=>fn({source:parent,origin:'https://yleum.ru',data:{type:'omnia:preview-session:result',nonce:message.nonce,url:origin+'/api/omnia/preview-session?signature=synthetic'}})));}};
- const window={fetch:native,location:{origin,href:origin+'/'},parent,crypto:require('node:crypto').webcrypto,
+ const editorOrigin='https://yleum.ru';
+ const parent={postMessage(message,targetOrigin){
+  if(targetOrigin!==editorOrigin)return;
+  queueMicrotask(()=>listeners.forEach(fn=>fn({source:parent,origin:editorOrigin,data:{type:'omnia:preview-session:result',nonce:message.nonce,url:origin+'/api/omnia/preview-session?signature=synthetic'}})));
+ }};
+ const window={fetch:native,location:{origin,href:origin+'/'},parent,crypto:webcrypto,
   sessionStorage:{getItem:key=>saved.get(key)||null,setItem:(key,value)=>saved.set(key,value),removeItem:key=>saved.delete(key)},
   setTimeout,clearTimeout,addEventListener:(_type,fn)=>listeners.add(fn),removeEventListener:(_type,fn)=>listeners.delete(fn)};
- function load(relative,modules={}) {
-  const context={exports:{},require:name=>{assert.ok(name in modules,`Unexpected import ${name}`);return modules[name];},
-   window,fetch:(...args)=>window.fetch(...args),crypto:window.crypto,TextEncoder,URLSearchParams,URL,Request,Response,AbortController};
-  vm.runInNewContext(ts.transpileModule(readFileSync(resolve(root,relative),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,context);
-  return context.exports;
- }
- const stop=load('src/lib/max/owner-preview-renewal.ts').installOwnerPreviewFetch(window);
- const sdk=load('src/lib/omnia/integration-client.ts',{'@/lib/max/bridge':{getMaxWebApp:()=>null}});
+ const load=createBrowserLoader(window);
+ const stop=load('@/lib/max/owner-preview-renewal').installOwnerPreviewFetch(window);
+ const sdk=load('@/lib/omnia/integration-client');
  return {sdk,stop,sent,saved,renewals:()=>renewals};
 }
 test('SDK create renews expired owner preview before actor preflight and dispatches one unchanged action',async()=>{
