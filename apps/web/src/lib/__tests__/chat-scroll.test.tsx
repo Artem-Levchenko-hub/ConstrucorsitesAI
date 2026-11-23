@@ -12,22 +12,26 @@ let root: Root;
 class ResizeObserverMock {
   observe = vi.fn();
   disconnect = vi.fn();
-  notify: () => void;
+  notify: (target?: Element) => void;
   constructor(callback: ResizeObserverCallback) {
-    this.notify = () => callback([], this as unknown as ResizeObserver);
+    this.notify = (target) => callback(target ? [{ target } as ResizeObserverEntry] : [], this as unknown as ResizeObserver);
     observers.push(this);
   }
 }
 
-function Harness({ content = "one", scopeKey = "p" }: { content?: string; scopeKey?: string }) {
+function Harness({ content = "one", scopeKey = "p", withFooter = false }: { content?: string; scopeKey?: string; withFooter?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  const scroll = useChatScroll(ref, content, { contentRef, scopeKey });
-  return <div ref={ref} onScroll={scroll.onScroll} data-following={scroll.following}>
-    <div ref={contentRef}>{content}</div>
-    <button onClick={scroll.scrollToLatest}>Последнее сообщение</button>
-    <button data-pause-follow onClick={scroll.pauseFollowing}>Читать блок</button>
-  </div>;
+  const footerRef = useRef<HTMLDivElement>(null);
+  const scroll = useChatScroll(ref, content, { contentRef, footerRef: withFooter ? footerRef : undefined, scopeKey });
+  return <>
+    <div ref={ref} onScroll={scroll.onScroll} data-following={scroll.following}>
+      <div ref={contentRef}>{content}</div>
+      <button onClick={scroll.scrollToLatest}>Последнее сообщение</button>
+      <button data-pause-follow onClick={scroll.pauseFollowing}>Читать блок</button>
+    </div>
+    {withFooter && <div ref={footerRef} />}
+  </>;
 }
 
 function flushFrame() {
@@ -79,6 +83,28 @@ it("follows actual content growth and animated heights without a message-token c
   flushFrame(); expect(pane.scrollTop).toBe(1200);
   resize(1300); observers[0].notify(); flushFrame();
   expect(pane.scrollTop).toBe(1300);
+});
+
+it("reserves room for a resizing composer while respecting the user's scroll position", () => {
+  act(() => root.render(<Harness withFooter />));
+  const { pane, resize } = metrics();
+  const footer = container.lastElementChild!;
+  let footerHeight = 80;
+  Object.defineProperty(footer, "offsetHeight", { get: () => footerHeight });
+
+  resize(1080);
+  observers[0].notify(footer);
+  flushFrame();
+  expect(pane.style.getPropertyValue("--max-chat-footer-height")).toBe("80px");
+  expect(pane.scrollTop).toBe(1080);
+
+  userScroll(pane, 120);
+  footerHeight = 146;
+  resize(1146);
+  observers[0].notify(footer);
+  flushFrame();
+  expect(pane.style.getPropertyValue("--max-chat-footer-height")).toBe("146px");
+  expect(pane.scrollTop).toBe(120);
 });
 
 it("retains the 72px history threshold and restores following only near the bottom or on an explicit jump", () => {

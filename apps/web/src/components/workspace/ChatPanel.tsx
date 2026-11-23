@@ -104,6 +104,7 @@ export function ChatPanel({
   const toggleChat = useWorkspaceStore((s) => s.toggleChat);
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollContentRef = useRef<HTMLDivElement>(null);
+  const chatFooterRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const composerDraftRef = useRef<PromptInputHandle>(null);
   const stagedStarterRef = useRef(false);
@@ -425,6 +426,7 @@ export function ChatPanel({
 
   const chatScroll = useChatScroll(scrollRef, `${messages?.length}:${last?.content}:${chips?.choices.join("|")}`, {
     contentRef: scrollContentRef,
+    footerRef: chatFooterRef,
     scopeKey: projectId,
   });
 
@@ -480,9 +482,7 @@ export function ChatPanel({
   }, [messages, submitWithCredentialIntake, basePath, projectId, initialCanChooseGenerationEngine, pendingPrompt, clearStarterHandoff]);
 
   return (
-    // h-full + min-h-0 нужны чтобы в grid-cell flex-колонка получила фиксированную
-    // высоту и `flex-1 + overflow-y-auto` ниже реально срабатывал, а не растягивал
-    // родителя (раньше из-за двойного скролла внутри ScrollArea инпут уезжал вниз).
+    // Keep history scrolling within the editor's height in both chat layouts.
     <div className="flex h-full min-h-0 flex-col max-studio-chat max-editor-chat bg-surface-raised">
       <div
         ref={scrollRef}
@@ -491,7 +491,7 @@ export function ChatPanel({
           const summary = event.target instanceof Element ? event.target.closest("summary") : null;
           if (summary?.parentElement instanceof HTMLDetailsElement) chatScroll.pauseFollowing();
         }}
-        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-elegant"
+        className="max-chat-history flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-elegant"
       >
         <div ref={scrollContentRef} className="flow-root">
           {isPending && (
@@ -547,7 +547,7 @@ export function ChatPanel({
         </div>
       </div>
 
-      <div className="max-chat-footer relative shrink-0">
+      <div ref={chatFooterRef} className="max-chat-footer relative shrink-0">
         {!chatScroll.following && <div className="max-chat-latest">
           <Button type="button" variant="secondary" size="sm" onClick={chatScroll.scrollToLatest}>
             <ArrowDown aria-hidden="true" /> К последнему сообщению

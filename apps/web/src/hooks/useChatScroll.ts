@@ -2,13 +2,14 @@ import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from "
 
 type ChatScrollOptions = {
   contentRef?: RefObject<HTMLDivElement | null>;
+  footerRef?: RefObject<HTMLDivElement | null>;
   scopeKey?: string;
 };
 
 export function useChatScroll(
   ref: RefObject<HTMLDivElement | null>,
   content: string,
-  { contentRef, scopeKey }: ChatScrollOptions = {},
+  { contentRef, footerRef, scopeKey }: ChatScrollOptions = {},
 ) {
   const followRef = useRef(true);
   const scheduleFollowRef = useRef<(() => void) | null>(null);
@@ -53,20 +54,32 @@ export function useChatScroll(
       });
     };
     scheduleFollowRef.current = scheduleFollow;
+    const pane = ref.current;
+    const footer = footerRef?.current;
+    const updateFooterInset = () => {
+      if (pane && footer) pane.style.setProperty("--max-chat-footer-height", `${footer.offsetHeight}px`);
+    };
+    updateFooterInset();
     // AgentTranscript can grow from its own query cache or animation without
     // changing the parent message. Measure the rendered content, not that token.
     const element = contentRef?.current;
-    const observer = element && typeof ResizeObserver !== "undefined"
-      ? new ResizeObserver(scheduleFollow) : null;
+    const observer = (element || footer) && typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver((entries) => {
+          if (!active) return;
+          if (entries.some((entry) => entry.target === footer)) updateFooterInset();
+          scheduleFollow();
+        }) : null;
     if (element) observer?.observe(element);
+    if (footer) observer?.observe(footer, { box: "border-box" });
     scheduleFollow();
     return () => {
       active = false;
       observer?.disconnect();
+      if (footer) pane?.style.removeProperty("--max-chat-footer-height");
       if (frame !== null) cancelAnimationFrame(frame);
       scheduleFollowRef.current = null;
     };
-  }, [ref, contentRef, scopeKey, scrollToBottom]);
+  }, [ref, contentRef, footerRef, scopeKey, scrollToBottom]);
 
   // Retain the message-text fallback for initial content and older browsers.
   useLayoutEffect(() => { scheduleFollowRef.current?.(); }, [content]);

@@ -40,8 +40,11 @@
 .max-chat-advice-skeleton span:nth-child(2) { width: 86%; }
 .max-chat-advice-skeleton span:nth-child(3) { width: 65%; }
 [data-max-editor] .max-studio-chat.max-editor-chat { background: var(--color-surface-raised); }
-[data-max-editor] .max-editor-chat > div:first-child { padding-top: 0; }
-[data-max-editor] .max-editor-chat .max-chat-composer { background: transparent; }
+[data-max-editor] .max-editor-chat > .max-chat-history { padding-top: 0; }
+[data-max-editor] .max-editor-chat .max-chat-composer {
+  --max-chat-composer-end-padding: 28px;
+  background: transparent;
+}
 [data-max-editor] .max-studio-prompt.max-chat-composer > .prompt-input-surface { background: var(--color-surface-raised); border-color: var(--color-border-default); box-shadow: none; }
 [data-max-editor] .max-studio-prompt.max-chat-composer > .prompt-input-surface > textarea {
   min-height: 46px; padding: 12px 14px; line-height: 1.5; overflow-y: auto; scrollbar-width: none;
@@ -94,7 +97,8 @@
     padding-bottom: env(safe-area-inset-bottom);
   }
   .max-editor .max-editor-chat .max-chat-composer {
-    padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+    --max-chat-composer-end-padding: max(12px, env(safe-area-inset-right));
+    padding: 8px var(--max-chat-composer-end-padding) 8px max(12px, env(safe-area-inset-left));
   }
   .max-editor .max-studio-prompt.max-chat-composer > .prompt-input-surface { border-radius: 18px; }
   .max-editor .max-studio-prompt.max-chat-composer > .prompt-input-surface > textarea {
@@ -149,9 +153,30 @@
   }
 }
 @media (min-width: 601px) and (hover: hover) and (pointer: fine) {
-  [data-max-editor] .max-editor-chat .max-chat-footer:has(.prompt-input-surface > textarea) {
+  [data-max-editor] .max-editor-chat:has(> .max-chat-footer .prompt-input-surface > textarea) {
+    display: grid;
+    grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  }
+  [data-max-editor] .max-chat-history:has(+ .max-chat-footer .prompt-input-surface > textarea) {
+    grid-area: 1 / 1;
+    scroll-padding-block-end: var(--max-chat-footer-height, 0px);
+  }
+  [data-max-editor] .max-chat-history:has(+ .max-chat-footer .prompt-input-surface > textarea)::after {
+    content: "";
+    display: block;
+    block-size: var(--max-chat-footer-height, 0px);
+  }
+  [data-max-editor] .max-editor-chat > .max-chat-footer:has(.prompt-input-surface > textarea) {
+    --max-chat-scrollbar-space: 12px;
+    grid-area: 1 / 1;
+    align-self: end;
+    margin-inline-end: var(--max-chat-scrollbar-space);
+    z-index: 1;
     background-color: transparent;
     border-top-color: transparent;
+  }
+  [data-max-editor] .max-chat-footer:has(.prompt-input-surface > textarea) .max-chat-composer {
+    padding-inline-end: calc(var(--max-chat-composer-end-padding) - var(--max-chat-scrollbar-space));
   }
   [data-max-editor] .max-editor-chat .max-chat-composer > .prompt-input-surface:has(> textarea) {
     background-color: transparent;
