@@ -582,7 +582,8 @@ finish_owned_release() { printf 'finish\\n' >> calls; }
         main = self.source().split('say "выкатка ', 1)[1]
         main = 'say "выкатка ' + main.split('say "core: ff-merge', 1)[0]
         functions = self.function("resume_owned_preflight")
-        for failure in ("", "control", "ancestor", "ingress-check", "owner-core", "owner-commerce", "resume-check"):
+        for failure in ("", "control", "ancestor", "ingress-check", "owner-core", "owner-commerce",
+                        "resume-check", "npm-seed"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temp:
                 script = '''set -euo pipefail
 SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -617,6 +618,7 @@ ingress_drain() {
 }
 reader_control() { [ "$2" = verify-owner ]; record "owner-$1"; }
 reader_resume_check() { record resume-check; }
+prepare_machine_npm_seed() { record npm-seed; }
 reader_prepare_retry() { [ "$READER_NONCE" = "$RESUME_NONCE" ]; record prepare; }
 quiescence_gate() { [ "$CONTROL_SHA" = bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ]; record physical; }
 reader_before() { [ "$READER_RETRY" = 1 ]; record before; }
@@ -627,12 +629,13 @@ reader_before() { [ "$READER_RETRY" = 1 ]; record before; }
                     self.assertNotEqual(result.returncode, 0, result.stderr)
                     self.assertFalse(set(calls) & {"ingress-begin", "prepare", "sql-begin", "before"})
                     self.assertFalse(any(item.startswith("build:") for item in calls))
+                    self.assertEqual("npm-seed" in calls, failure == "npm-seed")
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(calls, ["control", "lock", "describe", "ingress-parked-source-scope",
                                              "ancestor", "ingress-check",
-                                             "owner-core", "owner-commerce", "resume-check", "ingress-begin",
-                                             "prepare", "sql-begin", "physical", "before",
+                                             "owner-core", "owner-commerce", "resume-check", "npm-seed",
+                                             "ingress-begin", "prepare", "sql-begin", "physical", "before",
                                              "build:" + self.target + ":1:1", "unlock"])
 
     def test_control_only_supplies_standalone_gate_not_application_helpers(self):
