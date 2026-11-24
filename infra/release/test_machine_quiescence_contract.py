@@ -182,6 +182,7 @@ class PendingFastCheckTests(unittest.TestCase):
             self.checker._PORTABLE_QUIESCENCE_DISK_TEMP_SOURCES,
             self.checker._PORTABLE_QUIESCENCE_CHECKPOINT_PREVIEW_SOURCES,
             self.checker._PORTABLE_QUIESCENCE_CHECKPOINT_MIGRATION_SOURCES,
+            self.checker._PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES,
         ):
             self.assertEqual(
                 self.checker._pending_portable_commands(self.machine, sources=sources),
@@ -412,6 +413,26 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             self.checker._require_reviewed_portable_sources(cohort)
         with self.assertRaisesRegex(self.checker.PhysicalDrainError, "quiescence_unsupported_source"):
             self.checker._require_reviewed_portable_sources({**current, runtime: "0" * 64})
+
+    def test_npm_bootstrap_requires_the_complete_backend_egress_and_helper_cohort(self):
+        previous = self.checker._PORTABLE_QUIESCENCE_CHECKPOINT_MIGRATION_SOURCES
+        current = self.checker._PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES
+        changed = {"services.docker_machine_backend", "services.published_machine_backend", "services.machine_egress"}
+        added = {"services.machine_npm_seed", "services.machine_pnpm_install"}
+        self.assertEqual(set(current) - set(previous), added)
+        self.assertEqual({name for name in previous if previous[name] != current[name]}, changed)
+        for sources in (previous, current):
+            self.checker._require_reviewed_portable_sources(sources)
+        for name in changed:
+            with self.subTest(mixed=name), self.assertRaisesRegex(
+                self.checker.PhysicalDrainError, "quiescence_unsupported_source",
+            ):
+                self.checker._require_reviewed_portable_sources({**current, name: previous[name]})
+        for name in added:
+            with self.subTest(staged=name), self.assertRaisesRegex(
+                self.checker.PhysicalDrainError, "quiescence_unsupported_source",
+            ):
+                self.checker._require_reviewed_portable_sources({**previous, name: current[name]})
 
     def test_disk_temp_successor_changes_only_the_reviewed_backend_and_keeps_predecessor(self):
         previous = self.checker._PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES
@@ -709,7 +730,7 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             (Path(__file__).parent / "fixtures/source-guard-lease-quiescence-sources.json")
             .read_text()
         )
-        current = self.checker._PORTABLE_QUIESCENCE_CHECKPOINT_MIGRATION_SOURCES
+        current = self.checker._PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES
         self.checker._require_reviewed_portable_sources(previous)
         self.checker._require_reviewed_portable_sources(previous_lease)
         baseline = json.loads(
