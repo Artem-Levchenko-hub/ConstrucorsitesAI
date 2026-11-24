@@ -5,6 +5,27 @@ import { type MaxAppTypeId } from "@/lib/max-brief";
 
 const { buildMaxProjectPrompt, defaultManagementModules, newProjectManagementModules } = maxBrief;
 
+describe("support contact in the creation brief", () => {
+  it.each([
+    ["Для записи orders@studio.ru. Поддержка — Help+max@studio.ru.", "Help+max@studio.ru"],
+    ["Почта поддержки:care@example.org", "care@example.org"],
+    ["Пишите в поддержку на почту team@studio.ru.", "team@studio.ru"],
+    ["Support email: care@example.org", "care@example.org"],
+    ["Контакт владельца: owner@studio.ru", null],
+    ["Не используй поддержку: old@studio.ru", null],
+    ["Покажи надпись «Поддержка: demo@studio.ru»", null],
+    ["Например, поддержка: demo@studio.ru", null],
+    ["For example, support: demo@studio.ru. Support: care@studio.ru", "care@studio.ru"],
+    ["Поддержка: demo@private.test", null],
+    ["Поддержка: a@studio.ru; поддержка: b@studio.ru", null],
+    ["Поддержка: a@studio.ru или b@studio.ru", null],
+    ["Поддержка: help@studio.ru/unknown", null],
+    ["Поддержка: сломанный адрес", null],
+  ])("only suggests an unambiguous labelled address from %s", (source, expected) => {
+    expect(maxBrief.briefSupportEmail(source!)).toBe(expected);
+  });
+});
+
 describe("buildMaxProjectPrompt", () => {
   it("locks a guided project to the MAX mini-app platform", () => {
     const prompt = buildMaxProjectPrompt({

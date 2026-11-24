@@ -431,7 +431,7 @@ async def submit_publication(
             **evidence,
             "idempotency_key": publication_key,
             "runtime_env": integration_runtime_env(integration),
-            "business_config": public_business_config(config),
+            "business_config": public_business_config(config, project.id),
             "business_config_version": record.config_version if record is not None else 0,
         },
     )

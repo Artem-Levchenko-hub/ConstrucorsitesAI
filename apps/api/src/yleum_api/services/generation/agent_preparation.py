@@ -129,7 +129,7 @@ async def _seed_saved_max_config(
             raise ApiError(
                 "orchestrator_unavailable", "Не удалось подготовить каталог приложения", 503,
             )
-        await seed(version, public_business_config(config))
+        await seed(version, public_business_config(config, ids.project_id))
     files = render_max_managed_files(config, ids.project_id)
     current = await runtime.handle.snapshot_files() if runtime.handle is not None else {}
     core_path = "drizzle/0003_owner_management.sql"

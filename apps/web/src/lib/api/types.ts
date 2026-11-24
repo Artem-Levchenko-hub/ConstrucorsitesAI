@@ -760,6 +760,7 @@ export type MaxProjectConfigPayload = {
     personal_data_consent: boolean;
     // The owner's own privacy policy (https); the generated page then links to it.
     policy_url: string;
+    policy_text?: string;
     terms_accepted: boolean;
   };
   max_url_attached: boolean;

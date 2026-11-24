@@ -1735,7 +1735,7 @@ async def maybe_create_project_cell_executor(
             await project_cell_apply_business_config(
                 workspace_id, project_id=project_id, owner_id=user_id,
                 version=version,
-                config=public_business_config(config),
+                config=public_business_config(config, project_id),
                 generation_run_id=generation_run_id,
                 fencing_epoch=response.fencing_epoch,
             )
@@ -2867,7 +2867,7 @@ async def maybe_create_project_cell_executor(
         )
         assert config is not None
         await _seed_business_config(
-            version, public_business_config(config),
+            version, public_business_config(config, project_id),
         )
 
     return ProjectCellExecutorHandle(

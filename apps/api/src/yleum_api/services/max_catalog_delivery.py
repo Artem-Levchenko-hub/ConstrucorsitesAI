@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 import structlog
@@ -25,8 +26,13 @@ def schedule_catalog_delivery(record: MaxProjectConfig) -> None:
     record.catalog_delivery_after = datetime.now(UTC)
 
 
+def _public_record(record: MaxProjectConfig) -> dict[str, Any]:
+    payload = MaxProjectConfigPayload.model_validate(record.config)
+    return public_business_config(payload, record.project_id)
+
+
 async def _deliver_public(record: MaxProjectConfig, *, scheduled: bool = False) -> None:
-    config = public_business_config(MaxProjectConfigPayload.model_validate(record.config))
+    config = _public_record(record)
     version = record.config_version
     payload = {
         "owner_id": str(record.owner_id),
@@ -67,7 +73,7 @@ async def deliver_catalog_now(
     if include_public:
         effects["public"] = _deliver_public(record)
     if workspace_id is not None:
-        config = public_business_config(MaxProjectConfigPayload.model_validate(record.config))
+        config = _public_record(record)
         effects["preview"] = orchestrator_client.project_cell_apply_business_config(
             workspace_id, project_id=record.project_id, owner_id=record.owner_id,
             version=record.config_version, config=config,

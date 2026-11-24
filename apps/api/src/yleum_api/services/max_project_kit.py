@@ -146,9 +146,9 @@ def max_sast_source_view(files: Mapping[str, str], *, is_max: bool) -> dict[str,
     return view
 
 
-def _json(config: MaxProjectConfigPayload) -> str:
+def _json(config: MaxProjectConfigPayload, project_id: UUID | str | None) -> str:
     return json.dumps(
-        public_business_config(config),
+        public_business_config(config, project_id),
         ensure_ascii=False,
         indent=2,
         separators=(",", ": "),
@@ -218,7 +218,7 @@ def render_max_managed_files(
     config: MaxProjectConfigPayload, project_id: UUID | str | None = None
 ) -> dict[str, str]:
     """Files safe to apply to both a starter and an already-generated app."""
-    data = _json(config)
+    data = _json(config, project_id)
     project_literal = json.dumps(str(project_id) if project_id else "")
     preview_session_route = _template_file("src/app/api/omnia/preview-session/route.ts").replace(
         '"__OMNIA_PROJECT_ID__"', project_literal, 1

@@ -292,7 +292,9 @@ def read_files(project_id: UUID, commit_sha: str) -> dict[str, str]:
         return out
 
 
-def read_file(project_id: UUID, commit_sha: str, path: str) -> bytes | None:
+def read_file(
+    project_id: UUID, commit_sha: str, path: str, *, max_bytes: int | None = None,
+) -> bytes | None:
     """Возвращает bytes указанного файла из коммита, либо None если нет."""
     with _open_workdir(project_id, must_exist=True) as workdir:
         repo = pygit2.Repository(str(workdir))
@@ -306,6 +308,8 @@ def read_file(project_id: UUID, commit_sha: str, path: str) -> bytes | None:
         blob = repo[entry.id]
         if not isinstance(blob, pygit2.Blob):
             return None
+        if max_bytes is not None and blob.size > max_bytes:
+            raise ValueError("snapshot file exceeds size budget")
         return bytes(blob.data)
 
 

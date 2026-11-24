@@ -4,7 +4,8 @@ import re
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import Text, func, literal, or_, select
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yleum_api.models.generation_run import GenerationRun
@@ -146,6 +147,52 @@ async def record_manual_version(
     )
     session.add(version)
     await session.flush()
+    return version
+
+
+async def current_accepted_version(
+    session: AsyncSession, project: Project,
+) -> ProjectVersion | None:
+    if project.current_snapshot_id is None:
+        return None
+    project_id = project.id
+    query = select(ProjectVersion).where(ProjectVersion.project_id == project_id)
+    # Managed commits may change HEAD without accepting a new user version.
+    # Resolve the nearest represented ancestor, with an explicit depth bound
+    # and project membership checked at every edge (including corrupt cycles).
+    ancestors = (
+        select(Snapshot.id, Snapshot.parent_id, literal(0).label("depth"))
+        .where(Snapshot.id == project.current_snapshot_id, Snapshot.project_id == project_id)
+        .cte("version_ancestors", recursive=True)
+    )
+    ancestors = ancestors.union_all(
+        select(Snapshot.id, Snapshot.parent_id, (ancestors.c.depth + 1).label("depth"))
+        .join(ancestors, Snapshot.id == ancestors.c.parent_id)
+        .where(Snapshot.project_id == project_id, ancestors.c.depth < 256)
+    )
+    effective_id = func.coalesce(
+        sql_cast(Message.snapshot_id, Text),
+        GenerationRun.agent_state["snapshot_id"].astext,
+        sql_cast(ProjectVersion.snapshot_id, Text),
+    )
+    version: ProjectVersion | None = await session.scalar(
+        query.outerjoin(GenerationRun, ProjectVersion.generation_run_id == GenerationRun.id)
+        .outerjoin(
+            Message,
+            (GenerationRun.assistant_message_id == Message.id)
+            & (Message.project_id == project_id),
+        )
+        .join(ancestors, effective_id == sql_cast(ancestors.c.id, Text))
+        .where(
+            or_(
+                GenerationRun.status == "completed",
+                ProjectVersion.generation_run_id.is_(None)
+                & ProjectVersion.status.in_(["ready", "unchanged"]),
+            )
+        )
+        .order_by(ancestors.c.depth.asc(), ProjectVersion.number.desc())
+        .limit(1)
+    )
     return version
 
 

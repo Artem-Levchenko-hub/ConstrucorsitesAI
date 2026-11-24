@@ -29,13 +29,14 @@ export function hasMaxProjectDraftAnswers(draft: MaxProjectDraft): boolean {
 function validDraft(value: unknown): value is MaxProjectDraft {
   if (!value || typeof value !== "object") return false;
   const v = value as MaxProjectDraft;
-  const allowed = ["id", ...texts, "appType", "appTypes", "features", "managementModules", "managementModuleOptOuts", "catalogDraft"];
+  const allowed = ["id", ...texts, "supportEmail", "appType", "appTypes", "features", "managementModules", "managementModuleOptOuts", "catalogDraft"];
   const list = (items: unknown, options: readonly string[], maximum: number) => Array.isArray(items)
     && items.length <= maximum && new Set(items).size === items.length
     && items.every(item => typeof item === "string" && options.includes(item));
   if (Object.keys(v).some(key => !allowed.includes(key))
     || typeof v.id !== "string" || !/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/u.test(v.id)
     || !texts.every(key => typeof v[key] === "string" && v[key].length <= 100_000)
+    || (v.supportEmail !== undefined && (typeof v.supportEmail !== "string" || v.supportEmail.length > 254))
     || !list(v.appTypes, MAX_APP_TYPES.map(t => t.id), 6) || !v.appTypes.length || v.appType !== v.appTypes[0]
     || !list(v.features, MAX_FEATURES, 8)
     || !list(v.managementModules, MAX_MANAGEMENT_MODULES.map(t => t.id), 4)
@@ -90,6 +91,7 @@ function persist(owner: string, draft: MaxProjectDraft, now: number, start: bool
   } else if (previous && ((previous.completed && previous.id === draft.id)
     || (previous.id !== draft.id && (!start || !previous.completed)))) return false;
   const clean = { ...draft, ...Object.fromEntries(texts.map(key => [key, publicMaxBriefText(draft[key])])),
+    ...(draft.supportEmail !== undefined && { supportEmail: publicMaxBriefText(draft.supportEmail) }),
     catalogDraft: draft.catalogDraft ? { ...draft.catalogDraft, source: publicMaxBriefText(draft.catalogDraft.source),
       items: publicInitialCatalog(draft.catalogDraft.items) } : null };
   try {

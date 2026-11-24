@@ -34,11 +34,12 @@ function Intro({ title, children, publication = false }: { title: string; childr
   return <div className="max-setup-intro"><span className="max-setup-purpose" data-publication={publication}>{publication ? "Есть обязательные пункты для публикации" : "Можно заполнить позже"}</span><h3>{title}</h3><p>{children}</p></div>;
 }
 
-export function MaxProjectSetupSections({ section, projectId, current, showCatalogLink, onChange }: {
+export function MaxProjectSetupSections({ section, projectId, current, showCatalogLink, privacyEditor, onChange }: {
   section: SetupSection;
   projectId: string;
   current: MaxProjectConfigPayload;
   showCatalogLink?: boolean;
+  privacyEditor?: ReactNode;
   onChange: (value: MaxProjectConfigPayload) => void;
 }) {
   const contentList = useRef<HTMLDivElement>(null);
@@ -207,14 +208,17 @@ export function MaxProjectSetupSections({ section, projectId, current, showCatal
         <Label htmlFor="max-legal-name">Название владельца для документов</Label>
         <Input id="max-legal-name" value={current.operator.legal_name} placeholder={current.app_name} onChange={event => onChange({ ...current, operator: { legal_name: event.target.value } })} />
       </div>
+    </Group>
+    <Group title="Политика конфиденциальности">
       <div className="max-setup-field max-setup-wide">
         <Label htmlFor="max-policy-url">Ссылка на свою политику конфиденциальности</Label>
         <Input id="max-policy-url" type="url" value={current.legal.policy_url} placeholder="https://example.ru/privacy" inputMode="url"
           onChange={event => onChange({ ...current, legal: { ...current.legal, policy_url: event.target.value } })} />
         <p className="max-setup-group-note">Если у компании уже есть политика — укажите её, и страница конфиденциальности приложения будет вести на неё.</p>
       </div>
+      {!current.legal.policy_url.trim() && privacyEditor}
     </Group>
-    <Group title="Связь с поддержкой" description="Контакт, по которому пользователи приложения смогут задать вопрос.">
+    <Group title="Связь с поддержкой" description="Укажите до публикации, куда пользователям писать с вопросами о приложении.">
       <div className="max-setup-field">
         <Label htmlFor="max-support-email">Email поддержки</Label>
         <Input id="max-support-email" type="email" value={current.support.email ?? ""} placeholder="support@example.ru"

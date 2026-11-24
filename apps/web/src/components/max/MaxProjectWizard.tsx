@@ -225,7 +225,17 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
                 <p id="max-brand-hint" className="max-wizard-note">{fieldErrors.brandColors || `${characterCount(values.brandColors.trim())} / 200 символов. Другие пожелания к оформлению можно написать в описании идеи.`}</p>
               </div>
             </>}
-            {step === 3 && <>{initialCatalog}<MaxProjectReview {...values} /></>}
+            {step === 3 && <>
+              {initialCatalog}
+              <MaxProjectReview {...values} />
+              <div className="space-y-2">
+                <Label htmlFor="max-public-support-email">Email поддержки приложения</Label>
+                <Input id="max-public-support-email" type="email" maxLength={254} disabled={busy}
+                  value={values.supportEmail ?? ""} onChange={event => onChange({ supportEmail: event.target.value })}
+                  aria-describedby="max-public-support-email-hint" />
+                <p id="max-public-support-email-hint" className="max-wizard-note">Этот адрес увидят пользователи. Его можно указать позже в документах приложения.</p>
+              </div>
+            </>}
           </div>
           <footer className="max-wizard-footer">
             <Button type="button" variant="outline" disabled={busy} onClick={() => step === 0 ? onOpenChange(false) : setStep(step - 1)}>{step === 0 ? "Отмена" : "Назад"}</Button>

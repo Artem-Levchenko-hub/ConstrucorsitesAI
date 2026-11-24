@@ -10,10 +10,11 @@ from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, Depends, Header, Request, Response, status
+from fastapi.responses import HTMLResponse
 from minio.error import S3Error
 from sqlalchemy import case, func, literal, select, text
 
-from yleum_api.core.deps import CurrentUserDep, SessionDep
+from yleum_api.core.deps import CurrentUserDep, OptionalUserDep, SessionDep
 from yleum_api.core.errors import ApiError
 from yleum_api.core.ratelimit import rate_limit_max_content_image
 from yleum_api.models.generation_run import GenerationRun
@@ -32,6 +33,7 @@ from yleum_api.schemas.max_studio import (
     MaxContentPublicDelivery,
     MaxContentSaved,
     MaxPreviewSessionPublic,
+    MaxPrivacyDraft,
     MaxProjectConfigPayload,
     MaxProjectConfigPublic,
     MaxPublicationMigration,
@@ -53,11 +55,17 @@ from yleum_api.services.max_content_delivery import (
     public_business_config,
     validate_delivery_size,
 )
+from yleum_api.services.max_privacy_document import (
+    approved_policy_page,
+    has_public_release,
+    saved_privacy_draft,
+)
 from yleum_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
     render_max_managed_files,
     render_max_managed_kit_update,
 )
+from yleum_api.services.project_versions import current_accepted_version, resolve_version
 from yleum_api.services.usage_cost_summary import add_cost, cost_classification
 
 router = APIRouter(prefix="/api/projects", tags=["max-studio"])
@@ -214,6 +222,57 @@ async def get_max_config(
     if selection.selected:
         result.application_mode = "runtime"
     return result
+
+
+@router.get("/{project_id}/max/privacy-draft", response_model=MaxPrivacyDraft)
+async def get_max_privacy_draft(
+    project_id: UUID, session: SessionDep, current_user: CurrentUserDep, response: Response,
+) -> MaxPrivacyDraft:
+    project = await _owned_max_project(session, project_id, current_user.id)
+    version = await current_accepted_version(session, project)
+    if version is None:
+        raise ApiError("project_empty", "Сначала дождитесь первой готовой сборки приложения", 409)
+    state, snapshot = await resolve_version(session, version)
+    if state not in {"ready", "unchanged"} or snapshot is None or snapshot.project_id != project.id:
+        raise ApiError("conflict", "Версия приложения изменилась. Обновите страницу", 409)
+    record = await session.get(MaxProjectConfig, project_id)
+    if record is not None and record.owner_id != current_user.id:
+        raise ApiError("not_found", "Проект не найден", 404)
+    commit, config = snapshot.commit_sha, _config_payload(project, record)
+    await session.rollback()  # Release the read transaction before fetching immutable source.
+    try:
+        text = await asyncio.to_thread(saved_privacy_draft, project_id, commit, config)
+    except (S3Error, RuntimeError, OSError, ValueError) as exc:
+        raise ApiError(
+            "unavailable", "Не удалось прочитать сохранённую версию приложения", 503,
+        ) from exc
+    response.headers["Cache-Control"] = "private, no-store"
+    return MaxPrivacyDraft(text=text)
+
+
+@router.get("/{project_id}/max/privacy-policy", response_class=HTMLResponse)
+async def get_max_privacy_policy(
+    project_id: UUID, session: SessionDep, current_user: OptionalUserDep,
+) -> HTMLResponse:
+    project = await session.get(Project, project_id)
+    record = await session.get(MaxProjectConfig, project_id)
+    missing = ApiError("not_found", "Документ не найден", 404)
+    if project is None or project.template != "max_miniapp" or (
+        record is None or record.owner_id != project.owner_id
+    ):
+        raise missing
+    legal = _config_payload(project, record).legal
+    if not legal.policy_text or legal.policy_url:
+        raise missing
+    if current_user is None or current_user.id != project.owner_id:
+        await session.rollback()
+        try:
+            deployment = await orchestrator_client.get_deploy(project_id)
+        except ApiError as exc:
+            raise ApiError("unavailable", "Не удалось проверить публикацию", 503) from exc
+        if not has_public_release(project_id, deployment):
+            raise missing
+    return approved_policy_page(legal.policy_text)
 
 
 @router.post(
@@ -373,7 +432,7 @@ async def _put_max_config(
         current_version=record.config_version if record else 0,
         expected_version=x_max_config_version if isinstance(x_max_config_version, int) else None,
     )
-    validate_delivery_size(payload, (record.config_version if record else 0) + 1)
+    validate_delivery_size(payload, (record.config_version if record else 0) + 1, project.id)
     cell_selection = await project_cell_runtime.resolve_project_cell_public_selection(
         session,
         project,
@@ -516,7 +575,7 @@ async def _save_cell_business_config(
                 project.id,
                 {
                     "owner_id": str(current_user.id),
-                    "business_config": public_business_config(payload),
+                    "business_config": public_business_config(payload, project.id),
                     "business_config_version": version,
                 },
             )
@@ -537,7 +596,7 @@ async def _save_cell_business_config(
                 project_id=project.id,
                 owner_id=current_user.id,
                 version=version,
-                config=public_business_config(payload),
+                config=public_business_config(payload, project.id),
             )
         except Exception as exc:
             if isinstance(exc, ApiError) and exc.status_code < 500:
@@ -575,6 +634,9 @@ def _prepare_config_change(
         desired = desired.model_copy(update={"management_modules": current.management_modules})
     if "legacy_orders_table" not in desired.model_fields_set:
         desired = desired.model_copy(update={"legacy_orders_table": current.legacy_orders_table})
+    if "policy_text" not in desired.legal.model_fields_set and current.legal.policy_text:
+        legal = desired.legal.model_copy(update={"policy_text": current.legal.policy_text})
+        desired = desired.model_copy(update={"legal": legal})
     new_binding = (
         current.legacy_orders_table is None
         and legacy_orders_adoption is not None
@@ -628,7 +690,7 @@ async def _persist_business_config(
             "content": [item.model_dump(mode="json") for item in payload.content],
         }
     next_version = (record.config_version if record else 0) + 1
-    validate_delivery_size(payload, next_version)
+    validate_delivery_size(payload, next_version, project.id)
     if record is None:
         record = MaxProjectConfig(
             project_id=project.id, owner_id=project.owner_id, config=config_data,
@@ -653,7 +715,7 @@ async def _content_response(
     version = record.config_version if record else 0
     desired = {
         "owner_id": str(project.owner_id), "desired_config_version": version,
-        "desired_config_digest": config_digest(public_business_config(config)),
+        "desired_config_digest": config_digest(public_business_config(config, project.id)),
     }
     reads = [orchestrator_client.published_cell_config_status(project.id, desired)]
     if selection.workspace is not None:
@@ -690,7 +752,7 @@ async def _content_response(
             raise ApiError("conflict", "MAX configuration ownership mismatch", 409)
         fresh_version = fresh.config_version if fresh else 0
         fresh_config = _config_payload(project, fresh)
-        fresh_digest = config_digest(public_business_config(fresh_config))
+        fresh_digest = config_digest(public_business_config(fresh_config, project.id))
         if (fresh_version != version
                 or fresh_digest != desired["desired_config_digest"]):
             version, config = fresh_version, fresh_config

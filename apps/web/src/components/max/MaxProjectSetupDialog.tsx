@@ -29,6 +29,7 @@ import "./max-studio.css";
 import "./max-project-workspace.css";
 import "./max-project-setup.css";
 import { MaxProjectSetupSections, type SetupSection } from "./MaxProjectSetupSections";
+import { MaxPrivacyPolicyEditor } from "./MaxPrivacyPolicyEditor";
 import { MaxProjectDataApplyDialog } from "./MaxProjectDataApplyDialog";
 import { useMaxWorkspaceDraftGuard } from "./use-max-workspace-draft-guard";
 
@@ -225,6 +226,8 @@ export function MaxProjectSetupDialog({
   // Публикацию блокирует ровно одно поле данных — подтверждение документов.
   const termsAccepted = Boolean(current?.legal.terms_accepted);
   const saved = draft?.baseline.config ?? config.data?.config;
+  const policyEdited = (current?.legal.policy_text ?? "") !== (saved?.legal.policy_text ?? "");
+  const restoringDefaultPolicy = policyEdited && !current?.legal.policy_text?.trim() && !current?.legal.policy_url.trim();
   const changedSections = current && saved
     ? [
         !same(screenConfig(current), screenConfig(saved)),
@@ -278,6 +281,12 @@ export function MaxProjectSetupDialog({
     else toast.error("Не удалось загрузить актуальные данные", { description: "Правки остались в форме. Попробуйте ещё раз." });
   };
 
+  const editConfig = (payload: MaxProjectConfigPayload) => {
+    const baseline = config.data;
+    if (!baseline || save.isPending) return;
+    // Keep the original version for optimistic concurrency during background refreshes.
+    setDraft(previous => ({ baseline: previous?.baseline ?? baseline, payload }));
+  };
   const description = termsAccepted
     ? "Всё, что нужно для публикации, заполнено. Остальные разделы — по желанию: они делают приложение подробнее, но не блокируют запуск."
     : "Для публикации нужно одно: подтвердить документы приложения во вкладке «Политики». Реквизиты не нужны — их проверяет MAX, остальные разделы можно заполнить позже.";
@@ -341,12 +350,12 @@ export function MaxProjectSetupDialog({
             data-testid="max-settings-scroll-region"
           >
             <fieldset className="max-setup-form-fields" disabled={save.isPending}>
-              <MaxProjectSetupSections key={section} section={section} projectId={projectId} current={current} showCatalogLink={isPage} onChange={next => {
-                const baseline = config.data;
-                if (!baseline || save.isPending) return;
-                // Capture only on first edit: a background GET cannot rebase a dirty draft.
-                setDraft(previous => ({ baseline: previous?.baseline ?? baseline, payload: next }));
-              }} />
+              <MaxProjectSetupSections key={section} section={section} projectId={projectId} current={current}
+                showCatalogLink={isPage} onChange={editConfig}
+                privacyEditor={<MaxPrivacyPolicyEditor projectId={projectId} version={version}
+                  text={current.legal.policy_text ?? ""} dirty={Boolean(changedSections)}
+                  edited={policyEdited}
+                  onChange={text => editConfig({ ...current, legal: { ...current.legal, policy_text: text } })} />} />
             </fieldset>
           </div>
 
@@ -393,14 +402,14 @@ export function MaxProjectSetupDialog({
               {save.isPending && (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               )}
-              {reapply ? "Повторить применение" : "Сохранить изменения"}
+              {restoringDefaultPolicy ? "Вернуть стандартную политику" : policyEdited ? "Применить политику" : reapply ? "Повторить применение" : "Сохранить изменения"}
             </Button>
             {isPage && changedSections > 0 && <Button type="button" variant="ghost" className="max-setup-save" disabled={save.isPending} onClick={() => {
               setDraft(null); setLatest(null); save.reset();
               if (conflict && !latest) void config.refetch();
               document.getElementById(`${tabsId}-${section}`)?.focus();
             }}>Отменить правки</Button>}
-            {(section === "details" || section === "content") && <Button ref={isPage ? pageApplyTrigger : undefined} variant="outline" className="max-setup-save" disabled={save.isPending || conflict || Boolean(saveIssue)} onClick={requestScreenChanges}>Изменить экраны с ИИ</Button>}
+            {(section === "details" || section === "content") && <Button ref={isPage ? pageApplyTrigger : undefined} variant="outline" className="max-setup-save" disabled={save.isPending || conflict || policyEdited || Boolean(saveIssue)} onClick={requestScreenChanges}>Изменить экраны с ИИ</Button>}
           </div>
         </>
       )}

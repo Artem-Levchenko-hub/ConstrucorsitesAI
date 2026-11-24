@@ -252,9 +252,12 @@ def run(args):
                     require(worker_pid() == initial_worker, "Next worker restarted during recovery")
                     if (iteration + 1) % 5 == 0:
                         measure(f"reconcile-{iteration + 1}")
+                status, body, _ = request(gateway_ip, "/support")
+                require(status == 200 and b"mailto:" not in body, "missing owner email linked a mailbox")
                 config["app_name"] = "Updated cold core QA"
                 config["operator"]["legal_name"] = "Updated QA owner"
                 config["support"]["response_time"] = "Updated QA support"
+                config["support"]["email"] = "help@nutrition.example.com"
                 reconcile()
                 require(worker_pid() == initial_worker, "metadata update restarted core")
                 status, body, _ = request(gateway_ip, "/api/omnia/config")
@@ -265,6 +268,8 @@ def run(args):
                     status, body, _ = request(gateway_ip, path)
                     require(status == 200 and expected in body, "legal metadata stale")
                     require(b"Updated cold core QA" in body, "legal page title stale")
+                    if path == "/support":
+                        require(b"mailto:help@nutrition.example.com" in body, "owner contact stale")
                 emit("metadata_update", applied=True, restarted=False)
         emit("passed", cold_logins=4, reconciliations=20, persistence=True, cross_user_denied=True)
     except Exception as error:

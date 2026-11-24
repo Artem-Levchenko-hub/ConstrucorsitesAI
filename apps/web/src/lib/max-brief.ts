@@ -174,6 +174,27 @@ export function briefManagementModuleOptOuts(idea: string): ManagementModule[] {
   return MAX_MANAGEMENT_MODULES.filter(module => excluded.has(module.id)).map(module => module.id);
 }
 
+// Read an explicitly labelled contact. Account, order and example addresses in
+// free text must never become the public support mailbox just because they occur first.
+export function briefSupportEmail(idea: string): string | null {
+  const contacts = new Set<string>();
+  const label = /^(?:(?:(?:почта|адрес|e-?mail|контакт)\s+(?:для\s+)?|для\s+)?(?:тех)?поддержк[аиу]|(?:напишите|пишите)\s+в\s+(?:тех)?поддержку|(?:customer\s+)?support(?:\s+e-?mail)?)(?:\s+(?:пользователей|клиентов|приложения))?(?:\s+(?:пишите\s+)?(?:на(?:\s+почту)?|at))?(?:\s*[:=—–-]\s*|\s+)/iu;
+  // Keep an example marker attached to its clause when it is followed by a comma.
+  const request = unquotedRequest(idea).replace(/(?<!\p{L})(например|пример|(?:for\s+)?example)\s*,/giu, "$1 ");
+  for (const clause of request.split(/[,;\n]|[.!?](?=\s|$)/u)) {
+    const text = clause.trim();
+    const prefix = label.exec(text);
+    if (!prefix) continue;
+    const address = text.slice(prefix[0].length).trim();
+    // Prefer an empty field the owner can fill to guessing an ambiguous contact.
+    if (!/^[a-z0-9_+%-]+(?:\.[a-z0-9_+%-]+)*@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/iu.test(address)
+      || address.length > 254 || address.indexOf("@") > 64
+      || /\.(?:arpa|invalid|local|localhost|onion|test)$/iu.test(address)) return null;
+    contacts.add(address);
+  }
+  return contacts.size === 1 ? [...contacts][0] : null;
+}
+
 export type MaxProjectBrief = {
   name: string;
   idea: string;
@@ -186,6 +207,8 @@ export type MaxProjectBrief = {
   /** @deprecated Accepted from older clients; never supplies visual instructions. */
   style?: MaxProjectConfigPayload["style"];
   brandColors: string;
+  /** An explicit edit on the review step. Empty means clear the detected address. */
+  supportEmail?: string;
   managementModules?: ManagementModule[];
   managementModuleOptOuts?: readonly ManagementModule[];
   /** The reviewed catalog is already saved in the same project-creation request. */
@@ -251,6 +274,7 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
     ...(!apiOnly || brief.primaryAction.trim() ? [`Главное действие пользователя: ${primaryAction}.`] : []),
     ...(!apiOnly || brief.features.length ? [`Нужные возможности: ${features}.`] : []),
     ...(!apiOnly || brief.brandColors.trim() ? [`Цвета бренда: ${colors}.`] : []),
+    ...(brief.supportEmail !== undefined ? ["Контакт поддержки берётся из настроек проекта. Для обращений используй страницу /support, чтобы изменения контакта применялись без изменений кода."] : []),
     ...(apiOnly ? ["Режим только API не требует продуктового интерфейса. Явные функциональные пожелания выше сохраняются; пожелания к оформлению применимы только если интерфейс запрошен отдельно."] : []),
     `Управление в Yleum: ${moduleLabels(managementModules) || "не уточнено — используй возможности по задаче"}. Это явные пожелания, а не закрытый список функций. Перечень .omnia/management.json описывает доступные SDK-возможности, а не обязательные экраны или функции.${optedOut.length ? ` Явно исключено владельцем: ${moduleLabels(optedOut)}.` : ""} Личные данные пользователей не превращай в общий реестр владельца.`,
     "",

@@ -143,7 +143,7 @@ async def create_project(
         config.app_type, config.management_modules, excluded=payload.management_module_opt_outs,
     )
     config = config.model_copy(update={"management_modules": modules})
-    validate_delivery_size(config, 1)
+    validate_delivery_size(config, 1, project.id)
     if payload.staff_settings is not None:
         if (
             payload.staff_settings.orders_mode

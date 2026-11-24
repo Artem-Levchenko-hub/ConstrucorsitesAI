@@ -13,7 +13,7 @@ import { connectAppIntegration, getIntegrationCatalog } from "@/lib/api/app-inte
 import { describeApiError } from "@/lib/api/errors";
 import { peekLandingPrompt, takeLandingPrompt } from "@/lib/landing-prompt";
 import { createProject, listProjects } from "@/lib/api/projects";
-import { MAX_DEFAULT_SUMMARY, availableManagementModules, briefManagementModuleOptOuts, buildMaxProjectPrompt, newProjectManagementModules, selectedMaxAppTypes, serializeMaxProjectFeatures, type MaxProjectBrief } from "@/lib/max-brief";
+import { MAX_DEFAULT_SUMMARY, availableManagementModules, briefManagementModuleOptOuts, briefSupportEmail, buildMaxProjectPrompt, newProjectManagementModules, selectedMaxAppTypes, serializeMaxProjectFeatures, type MaxProjectBrief } from "@/lib/max-brief";
 import { completeMaxProjectDraft, dismissEmptyMaxProjectDraft, emptyMaxProjectDraft, hasMaxProjectDraftAnswers, readMaxProjectDraft, replaceMaxProjectDraft, saveMaxProjectDraft, startMaxProjectDraft, type MaxProjectDraft } from "@/lib/max-project-draft";
 import { containsChatSecret, resolveChatCredential } from "@/lib/max-chat-credentials";
 import { extractInitialCatalog } from "@/lib/max-catalog-brief";
@@ -53,14 +53,15 @@ function OwnedMaxStudio({ email }: { email: string }) {
   const { name, idea, appTypes, audience, primaryAction, features, brandColors, managementModules,
     managementModuleOptOuts, catalogDraft } = draft;
   const appType = appTypes[0];
-  const safeCatalogIdea = useMemo(() => publicMaxBriefText(idea), [idea]);
-  const moduleOptOuts = [...new Set([...managementModuleOptOuts, ...briefManagementModuleOptOuts(safeCatalogIdea)])];
+  const safeIdea = useMemo(() => publicMaxBriefText(idea), [idea]);
+  const supportEmail = draft.supportEmail ?? briefSupportEmail(safeIdea) ?? "";
+  const moduleOptOuts = [...new Set([...managementModuleOptOuts, ...briefManagementModuleOptOuts(safeIdea)])];
   const modules = newProjectManagementModules(appType, managementModules, appTypes, moduleOptOuts);
   const availableModules = availableManagementModules(moduleOptOuts);
   const proposedCatalog = useMemo(() => {
-    const result = extractInitialCatalog(safeCatalogIdea);
+    const result = extractInitialCatalog(safeIdea);
     return { ...result, items: result.items.map(item => ({ ...newMaxContentItem(), ...item })) };
-  }, [safeCatalogIdea]);
+  }, [safeIdea]);
   const initialContent = catalogDraft?.items ?? proposedCatalog.items;
   const tooManyItems = catalogDraft?.tooManyItems ?? proposedCatalog.tooManyItems;
   // Reviewing supplied data does not select a mandatory product catalog screen.
@@ -112,37 +113,26 @@ function OwnedMaxStudio({ email }: { email: string }) {
       if (quota.initialExhausted) throw new Error(FREE_CHAT_UPGRADE_MESSAGE);
       const content = reviewCatalog ? publicInitialCatalog(initialContent) : [];
       if (catalogError) throw new Error(catalogError);
-      const rawPrompt = buildMaxProjectPrompt({
-        name,
-        idea,
-        appType,
-        appTypes,
-        audience,
-        primaryAction,
-        features,
-        brandColors,
+      const brief = {
+        name, idea, appType, appTypes, audience, primaryAction, features, brandColors,
+        supportEmail: draft.supportEmail ?? (supportEmail || undefined),
         managementModules: modules,
         managementModuleOptOuts: moduleOptOuts,
         catalogItemCount: reviewCatalog ? content.length : undefined,
-      });
+      };
+      const rawPrompt = buildMaxProjectPrompt(brief);
       const hasCredential = containsChatSecret(rawPrompt);
       const safeName = publicMaxBriefText(name);
-      const safeIdea = publicMaxBriefText(idea);
       const safeAudience = publicMaxBriefText(audience);
       const safePrimaryAction = publicMaxBriefText(primaryAction);
       const safeBrandColors = publicMaxBriefText(brandColors);
       let prompt = buildMaxProjectPrompt({
+        ...brief,
         name: safeName,
         idea: safeIdea,
-        appType,
-        appTypes,
         audience: safeAudience,
         primaryAction: safePrimaryAction,
-        features,
         brandColors: safeBrandColors,
-        managementModules: modules,
-        managementModuleOptOuts: moduleOptOuts,
-        catalogItemCount: reviewCatalog ? content.length : undefined,
       });
       const project = await createProject({
         name: safeName, template: "max_miniapp",
@@ -163,7 +153,7 @@ function OwnedMaxStudio({ email }: { email: string }) {
           brand_colors: safeBrandColors,
           content,
           operator: { legal_name: "" },
-          support: { email: null, response_time: "Ответим в течение 2 рабочих дней" },
+          support: { email: supportEmail.trim() || null, response_time: "Ответим в течение 2 рабочих дней" },
           legal: {
             age_rating: "0+",
             has_sales: appTypes.includes("catalog"),
@@ -352,12 +342,12 @@ function OwnedMaxStudio({ email }: { email: string }) {
           items={initialContent}
           pending={create.isPending}
           tooManyItems={tooManyItems}
-          descriptionChanged={catalogDraft !== null && catalogDraft.source !== safeCatalogIdea}
+          descriptionChanged={catalogDraft !== null && catalogDraft.source !== safeIdea}
           error={catalogError}
-          onChange={(items) => updateDraft({ catalogDraft: { source: safeCatalogIdea, items, tooManyItems: tooManyItems && items.length > 0 } })}
+          onChange={(items) => updateDraft({ catalogDraft: { source: safeIdea, items, tooManyItems: tooManyItems && items.length > 0 } })}
           onReset={() => updateDraft({ catalogDraft: null })}
         />}
-        values={{ name, idea, appType, appTypes, audience, primaryAction, features, brandColors, managementModules, managementModuleOptOuts }}
+        values={{ name, idea, appType, appTypes, audience, primaryAction, features, brandColors, supportEmail, managementModules, managementModuleOptOuts }}
         onChange={updateBrief}
         onSubmit={() => create.mutateAsync()}
       />

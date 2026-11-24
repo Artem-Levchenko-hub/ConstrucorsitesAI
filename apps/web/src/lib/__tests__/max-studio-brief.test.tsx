@@ -77,11 +77,34 @@ it("starts neutral, keeps free design and leaves unchosen capabilities available
     await fill("#max-brand", "Белый фон, красные кнопки #b71c1c"); await click("Далее"); await create();
     const payload = mocks.create.mock.calls[0][0];
     expect(payload.max_config).toMatchObject({ app_type: "custom", features: [], management_modules: ["catalog", "orders", "leads", "bookings"], brand_colors: "Белый фон, красные кнопки #b71c1c", style: "brand" });
+    expect(payload.max_config.support.email).toBeNull();
     expect(payload.management_module_opt_outs).toEqual([]);
     expect(payload.staff_settings).toMatchObject({ leads_enabled: false, orders_mode: null });
     expect(sessionStorage.getItem("omnia:max:starter:neutral")).toContain("Цвета бренда: Белый фон, красные кнопки #b71c1c");
     expect(mocks.save).not.toHaveBeenCalled();
     expect(readMaxProjectDraft("qa@example.test")).toBeNull();
+  } finally { await page.dispose(); }
+});
+
+it.each(["original", "edited", "cleared"])("creates once with the %s support contact reviewed by the owner", async mode => {
+  mocks.create.mockResolvedValue({ id: "support-test" });
+  const page = await renderStudio();
+  try {
+    await initial("Создай дневник. Email поддержки: hello@nutrition.ru.");
+    await click("Далее"); await click("Далее"); await click("Далее");
+    expect(input("#max-public-support-email").value).toBe("hello@nutrition.ru");
+    const expected = mode === "original" ? "hello@nutrition.ru" : mode === "edited" ? "care@nutrition.ru" : "";
+    if (mode !== "original") {
+      await fill("#max-public-support-email", expected);
+      await click("Назад"); await click("Далее");
+      expect(input("#max-public-support-email").value).toBe(expected);
+      expect(readMaxProjectDraft("qa@example.test")?.supportEmail).toBe(expected);
+    }
+    await create();
+    expect(mocks.create).toHaveBeenCalledOnce();
+    expect(mocks.create.mock.calls[0][0].max_config.support.email).toBe(expected || null);
+    expect(sessionStorage.getItem("omnia:max:starter:support-test")).toContain("используй страницу /support");
+    expect(mocks.save).not.toHaveBeenCalled();
   } finally { await page.dispose(); }
 });
 

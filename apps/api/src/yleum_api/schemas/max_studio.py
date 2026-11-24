@@ -124,6 +124,13 @@ class MaxLegal(BaseModel):
     # generated privacy page then points to it instead of describing the
     # processing itself, and Studio needs no operator details at all.
     policy_url: str = Field(default="", max_length=300)
+    # Preserve the historical wire representation of apps without an approved policy.
+    policy_text: str = Field(default="", max_length=20_000, exclude_if=lambda value: not value)
+
+    @field_validator("policy_text")
+    @classmethod
+    def clean_policy_text(cls, value: str) -> str:
+        return value.strip()
 
     @field_validator("policy_url")
     @classmethod
@@ -211,6 +218,10 @@ class MaxProjectConfigPublic(BaseModel):
     synced_snapshot_id: UUID | None = None
     updated_at: datetime | None = None
     application_mode: Literal["source", "runtime"] = "source"
+
+
+class MaxPrivacyDraft(BaseModel):
+    text: str
 
 
 class MaxContentImagePublic(BaseModel):

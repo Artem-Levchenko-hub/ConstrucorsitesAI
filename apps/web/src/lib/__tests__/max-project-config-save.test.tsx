@@ -8,10 +8,11 @@ import { MaxProjectDataApplyDialog } from "@/components/max/MaxProjectDataApplyD
 import { ApiError } from "@/lib/api/client";
 import type { MaxProjectConfig, MaxProjectContent } from "@/lib/api/types";
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), content: vi.fn(), save: vi.fn(), success: vi.fn(), error: vi.fn(), info: vi.fn(), send: vi.fn(), push: vi.fn(), profile: vi.fn() }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), content: vi.fn(), save: vi.fn(), privacy: vi.fn(), success: vi.fn(), error: vi.fn(), info: vi.fn(), send: vi.fn(), push: vi.fn(), profile: vi.fn() }));
 vi.mock("@/lib/api/owner-profile", () => ({ getOwnerProfile: () => mocks.profile() ?? Promise.resolve({id:"owner",user_chat_messages_limit:null,user_chat_messages_remaining:null}) }));
 vi.mock("@/lib/api/max-studio", () => ({
   getMaxProjectConfig: mocks.get, getMaxProjectContent: mocks.content, saveMaxProjectConfig: mocks.save,
+  prepareMaxPrivacyDraft: mocks.privacy,
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
 vi.mock("@/lib/api/messages", () => ({ sendPrompt: mocks.send }));
@@ -73,6 +74,74 @@ async function mountCanonical() {
     cleanup: async () => { await act(async () => root.unmount()); client.clear(); container.remove(); },
   };
 }
+
+it("prepares a reviewable privacy draft and applies only the edited text when the owner asks", async () => {
+  mocks.get.mockResolvedValue(record);
+  mocks.privacy.mockResolvedValue("Черновик по сохранённой версии");
+  mocks.save.mockImplementation(async (_project, config) => ({ ...record, config_version: 2, config }));
+  const page = await mountCanonical();
+  try {
+    await page.click("Документы");
+    await page.click("Подготовить политику");
+    expect(mocks.privacy).toHaveBeenCalledExactlyOnceWith("qa");
+    expect(page.container.querySelector<HTMLTextAreaElement>("#max-policy-text")?.value).toBe("Черновик по сохранённой версии");
+    await page.change("max-policy-text", "Проверено владельцем");
+    await page.click("Основное");
+    expect(page.button("Изменить экраны с ИИ")?.disabled).toBe(true);
+    expect(mocks.save).not.toHaveBeenCalled();
+    await page.click("Документы");
+    await page.click("Применить политику");
+    expect(mocks.save).toHaveBeenCalledExactlyOnceWith("qa", {
+      ...record.config, legal: { ...record.config.legal, policy_text: "Проверено владельцем" },
+    }, 1);
+    expect(mocks.send).not.toHaveBeenCalled();
+  } finally { await page.cleanup(); }
+});
+
+it("restores the standard policy only when the owner confirms the cleared text", async () => {
+  const config = { ...record.config, legal: { ...record.config.legal, policy_text: "Текст владельца" } };
+  mocks.get.mockResolvedValue({ ...record, config });
+  mocks.save.mockResolvedValue({ ...record, config_version: 2 });
+  const page = await mountCanonical();
+  try {
+    await page.click("Документы");
+    await page.change("max-policy-text", "");
+    expect(mocks.save).not.toHaveBeenCalled();
+    await page.click("Вернуть стандартную политику");
+    expect(mocks.save.mock.calls[0][1].legal.policy_text).toBe("");
+    expect(mocks.send).not.toHaveBeenCalled();
+  } finally { await page.cleanup(); }
+});
+
+it("keeps the external policy and approved text during unrelated edits", async () => {
+  const legal = { ...record.config.legal, policy_url: "https://example.org/privacy", policy_text: "Встроенная политика" };
+  const saved = { ...record, config: { ...record.config, legal } };
+  mocks.get.mockResolvedValue(saved);
+  mocks.save.mockResolvedValue({ ...saved, config_version: 2 });
+  const page = await mountCanonical();
+  try {
+    await page.click("Документы");
+    expect(page.button("Подготовить новый черновик")).toBeUndefined();
+    expect(page.container.querySelector("#max-policy-text")).toBeNull();
+    await page.change("max-support-email", "owner@example.org");
+    await page.click("Сохранить изменения");
+    expect(mocks.save.mock.calls[0][1].legal).toEqual(legal);
+    expect(mocks.privacy).not.toHaveBeenCalled();
+  } finally { await page.cleanup(); }
+});
+
+it("keeps a failed draft read separate from saving or generating an app", async () => {
+  mocks.get.mockResolvedValue(record);
+  mocks.privacy.mockRejectedValue(new ApiError(409, { code: "project_empty", message: "Сборка ещё не готова" }));
+  const page = await mountCanonical();
+  try {
+    await page.click("Документы");
+    await page.click("Подготовить политику");
+    await page.expectText("после первой успешной сборки");
+    expect(mocks.save).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
+  } finally { await page.cleanup(); }
+});
 
 it.each(["brand", "clean", "bright"] as const)("preserves the saved legacy style during an unrelated edit: %s", async style => {
   const saved = { ...record, config: { ...record.config, style } };
