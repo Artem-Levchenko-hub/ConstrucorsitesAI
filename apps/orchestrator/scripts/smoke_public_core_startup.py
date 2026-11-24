@@ -253,7 +253,10 @@ def run(args):
                     if (iteration + 1) % 5 == 0:
                         measure(f"reconcile-{iteration + 1}")
                 status, body, _ = request(gateway_ip, "/support")
-                require(status == 200 and b"mailto:" not in body, "missing owner email linked a mailbox")
+                require(
+                    status == 200 and b"mailto:" not in body,
+                    "missing owner email linked a mailbox",
+                )
                 config["app_name"] = "Updated cold core QA"
                 config["operator"]["legal_name"] = "Updated QA owner"
                 config["support"]["response_time"] = "Updated QA support"
