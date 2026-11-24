@@ -26,6 +26,14 @@ product or a fixed package list. No model generation is part of deployment proof
   and explicitly authorized traffic. The proxy resolves and validates every
   destination and connects to the validated numeric address. It denies private,
   metadata, host, configured public platform addresses and cross-cell targets.
+  Before a full release drains ingress, both hosts fetch the public MAX starter
+  archives and supported fonts from `registry.npmjs.org` and verify their
+  SHA-512 digests against the platform lockfile and font catalog. Unchanged
+  archives are reused. The development proxy mounts the completed cache
+  read-only. During a default frozen install, pnpm verifies the tarballs against
+  the project's own lockfile and writes to its private store. To diagnose a
+  failed bootstrap, test the affected lockfile with an empty store in the same
+  machine image. A registry HTTP 200 alone does not prove the archive arrived.
 - The pristine MAX core owns managed PostgreSQL credentials and signing secrets.
   The gateway owns reserved `/api/omnia`, `/api/max`, `/auth`, `/__omnia` routes.
   Product servers receive trusted user/project/epoch headers, not signing keys.

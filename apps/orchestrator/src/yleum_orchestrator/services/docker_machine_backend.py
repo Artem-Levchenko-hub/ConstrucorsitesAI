@@ -20,7 +20,7 @@ import time
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
@@ -38,6 +38,8 @@ from yleum_orchestrator.services.machine_network_allocation import (
     choose_subnet,
     create_pool_network,
 )
+from yleum_orchestrator.services.machine_npm_seed import npm_seed_directory
+from yleum_orchestrator.services.machine_pnpm_install import FROZEN_INSTALL, frozen_install_command
 from yleum_orchestrator.services.machine_startup import (
     EnvironmentIdentity,
     MachineInventoryUnavailable,
@@ -170,6 +172,8 @@ def _archive_file(name: str, content: bytes) -> bytes:
 
 @dataclass
 class DockerMachineBackend:
+    development_npm_bootstrap: ClassVar[bool] = True
+
     client: Any
     workspace_id: UUID
     project_id: UUID
@@ -838,7 +842,7 @@ class DockerMachineBackend:
         )
         reader_dispatch(machine.start)
 
-    def _egress_proxy_command(self) -> list[str]:
+    def _egress_proxy_command(self, cache_directory: Path | None = None) -> list[str]:
         return [
             "python3",
             "-c",
@@ -849,12 +853,17 @@ class DockerMachineBackend:
             str(self.project_id),
             "--analytics-origin",
             platform_api_url(),
+            *(["--npm-tarball-cache", "/opt/yleum/npm-tarballs"] if cache_directory else []),
             *[arg for cidr in self.denied_cidrs for arg in ("--deny", cidr)],
         ]
 
     def _ensure_egress_proxy(self, internal: Any) -> str:
-        command = self._egress_proxy_command()
-        digest = hashlib.sha256(json.dumps(command).encode()).hexdigest()
+        cache_directory = npm_seed_directory() if self.development_npm_bootstrap else None
+        command = self._egress_proxy_command(cache_directory)
+        # The argv stays identical when the host publishes a new immutable seed.
+        # Keep the mounted generation in the proxy identity so the old bind is retired.
+        identity = [*command, str(cache_directory)] if cache_directory else command
+        digest = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
         outward = self._network(self.stem + "-public", internal=False)
         proxy = self._lookup(self.client.containers, self.stem + "-proxy", "egress-proxy")
         fixed_ip = None
@@ -887,6 +896,8 @@ class DockerMachineBackend:
                 nano_cpus=100_000_000,
                 pids_limit=64,
                 tmpfs={"/tmp": "size=8m"},
+                volumes=({str(cache_directory): {"bind": "/opt/yleum/npm-tarballs", "mode": "ro"}}
+                         if cache_directory else {}),
             )
             reader_dispatch(
                 internal.connect, proxy, **({"ipv4_address": fixed_ip} if fixed_ip else {})
@@ -1272,8 +1283,12 @@ class DockerMachineBackend:
         machine = self._container()
         if machine is None:
             raise CellResourceError("machine is missing")
-        log = "/run/omnia-logs/command-" + str(UUID(operation_id)) + ".log"
-        pidfile = "/run/omnia-logs/command-" + str(UUID(operation_id)) + ".pid"
+        command_path = "/run/omnia-logs/command-" + str(UUID(operation_id))
+        log, pidfile = command_path + ".log", command_path + ".pid"
+        # This works on existing machines too: ensure() records the current proxy
+        # address on the controller, independently of the product environment.
+        if self.development_npm_bootstrap and argv == FROZEN_INSTALL:
+            argv = frozen_install_command(argv, self._metadata().get("proxy_ip"))
         response = reader_dispatch(self.client.api.exec_create,
             machine.id,
             [

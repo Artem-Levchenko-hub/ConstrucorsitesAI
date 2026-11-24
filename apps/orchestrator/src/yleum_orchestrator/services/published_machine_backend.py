@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID
 
 from docker.errors import ImageNotFound  # type: ignore[import-untyped]
@@ -117,6 +117,8 @@ async def ensure_managed_infrastructure(manager: Any, state: Any) -> None:
 
 @dataclass
 class PublishedMachineBackend(DockerMachineBackend):
+    development_npm_bootstrap: ClassVar[bool] = False
+
     release_id: UUID | None = None
     release_layout: dict[str, str] = field(default_factory=dict)
     owner_management_env: dict[str, str] | None = field(default=None, repr=False)

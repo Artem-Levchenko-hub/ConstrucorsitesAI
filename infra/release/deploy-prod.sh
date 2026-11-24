@@ -341,6 +341,37 @@ print(value["container_id"], value["image_id"])
   gateway_cutover_gate
 }
 
+# Stage only trusted lock inputs from the target Git object. The target need
+# not be checked out and existing readers can continue serving during downloads.
+prepare_machine_npm_seed() {
+  local helper=apps/orchestrator/src/yleum_orchestrator/services/machine_npm_seed.py
+  local lock=apps/orchestrator/templates/max-miniapp-nextjs/pnpm-lock.yaml
+  local fonts=apps/api/src/yleum_api/data/typography-fontsource-v1.json
+  local entry stage command nested host
+  entry=$(git -C "$REPO" ls-tree --name-only "$SHA" -- "$helper")
+  if [ -z "$entry" ]; then
+    return 0  # An older target revision uses the pre-cache installer.
+  fi
+  stage=$(cat <<'NPM_SEED_HOST'
+set -euo pipefail
+umask 077
+stage=$(mktemp -d)
+trap 'rm -rf -- "$stage"' EXIT
+tar -xf - --no-same-owner --no-same-permissions -C "$stage"
+umask 022  # The published cache is readable by the unprivileged relay.
+exec_path="$stage/apps/orchestrator/src/yleum_orchestrator/services/machine_npm_seed.py"
+/opt/omnia/apps/orchestrator/.venv/bin/python -IB "$exec_path"
+NPM_SEED_HOST
+)
+  printf -v command 'sudo -n /bin/bash -c %q' "$stage"
+  printf -v nested 'ssh -o BatchMode=yes -o StrictHostKeyChecking=yes commerce %q' "$command"
+  for host in core commerce; do
+    say "$host: готовлю проверенные пакеты MAX"
+    if [ "$host" = commerce ]; then command="$nested"; fi
+    git -C "$REPO" archive "$SHA" -- "$helper" "$lock" "$fonts" | ssh max-core "$command"
+  done
+}
+
 reader_control() {
   local host="$1" action="$2"; shift 2
   local command="sudo -n /opt/omnia/apps/orchestrator/.venv/bin/python - $action --host $host $*"
@@ -1185,6 +1216,7 @@ if [ -n "${RESUME_NONCE:-}" ]; then
 fi
 
 if [ "$API" = 1 ]; then
+  prepare_machine_npm_seed
   if [ -n "${EXPIRED_SCOPE_DIGEST:-}" ]; then
     if [ "$API_RUNTIME_SHA" = "$EXPIRED_INCUMBENT" ]; then
       say "core: готовлю точные образы API и gateway до закрытия ingress"

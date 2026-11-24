@@ -12,15 +12,19 @@ import hashlib
 import http.client
 import ipaddress
 import json
+import os
 import re
 import select
 import socket
 import socketserver
 import ssl
+import stat
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from typing import cast
+from pathlib import PurePosixPath
+from typing import BinaryIO, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -87,6 +91,65 @@ class GuardPolicy:
 
 
 BUSINESS_RELAY_PATH = "/__yleum/business-analytics"
+NPM_RELAY_PREFIX = "/__yleum/npm/"
+NPM_HOST = "registry.npmjs.org"
+NPM_MAX_BYTES = 512 * 1024 * 1024
+NPM_MAX_SECONDS = 300
+NPM_IO_TIMEOUT = 20
+_PACKAGE = r"[a-zA-Z0-9][a-zA-Z0-9._-]*"
+_TARBALL = re.compile(
+    rf"(?:(?P<scope>@{_PACKAGE})/)?(?P<name>{_PACKAGE})/-/"
+    r"(?P=name)-[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?(?:\+[a-zA-Z0-9.-]+)?\.tgz"
+)
+
+
+def npm_tarball_path(target: str) -> str:
+    """Accept only npm's package/-/package-version.tgz route, including scoped packages."""
+    target = target.removeprefix(NPM_RELAY_PREFIX)
+    if len(target) > 1024:
+        raise DestinationDenied("invalid npm tarball")
+    # npm clients also encode the scope delimiter. Decode just that delimiter,
+    # leaving any other escape (including a second encoding layer) invalid.
+    target = re.sub(r"^(?:@|%40)(" + _PACKAGE + r")(?:%2[fF]|/)", r"@\1/", target)
+    target = re.sub(r"%2[bB]", "+", target)
+    if not _TARBALL.fullmatch(target):
+        raise DestinationDenied("invalid npm tarball")
+    return "/" + target
+
+
+def npm_io_budget(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("npm archive deadline")
+    return min(remaining, NPM_IO_TIMEOUT)
+
+
+def cached_npm_tarball(directory: str, path: str) -> tuple[BinaryIO, int] | None:
+    """Read a trusted, flat mount. Never follow links or open a blocking device/FIFO."""
+    parts = PurePosixPath(directory).parts
+    if os.name != "posix" or not parts or parts[0] != "/" or ".." in parts:
+        raise OSError("invalid npm cache mount")
+    flags = os.O_RDONLY | os.O_NOFOLLOW
+    directory_fd = os.open("/", flags | os.O_DIRECTORY)
+    try:
+        for part in parts[1:]:
+            following = os.open(part, flags | os.O_DIRECTORY, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = following
+        name = hashlib.sha256(path.encode("utf-8")).hexdigest() + ".tgz"
+        fd = os.open(name, flags | os.O_NONBLOCK, dir_fd=directory_fd)
+    except FileNotFoundError:
+        return None
+    finally:
+        os.close(directory_fd)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= NPM_MAX_BYTES:
+            raise OSError("invalid npm cache entry")
+        return os.fdopen(fd, "rb"), info.st_size
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def business_relay_origin(origin: str) -> tuple[str, int]:
@@ -97,23 +160,47 @@ def business_relay_origin(origin: str) -> tuple[str, int]:
     return parse_authority(parsed.netloc, 443)
 
 
-def deliver_business_receipt(origin: str, project: str, body: bytes, assertion: str) -> int:
-    """Fixed destination; the API verifies the purpose key and durable receipt ID.
-
-    Unlike general proxy requests this explicit capability may reach the public
-    platform address. It cannot select another host/path/method or follow redirects.
-    DNS is pinned before TLS, and the original hostname is verified by TLS.
-    """
-    host, port = business_relay_origin(origin)
-    path = f"/api/runtime/projects/{UUID(project)}/analytics"
+@contextmanager
+def pinned_https(
+    host: str, port: int, denied_cidrs: list[str], timeout: int,
+) -> Iterator[http.client.HTTPSConnection]:
     addresses = checked_addresses(
         [str(answer[4][0]) for answer in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)],
-        [],
+        denied_cidrs,
     )
-    connection = http.client.HTTPSConnection(host, port, timeout=2)
-    raw = socket.create_connection((addresses[0], port), timeout=2)
+    connection = http.client.HTTPSConnection(host, port, timeout=timeout)
+    deadline = time.monotonic() + timeout
+    connect_timeout: float = timeout
+    for index, address in enumerate(addresses):
+        try:
+            # Reserve part of the shared budget if the first network family is unreachable.
+            share = connect_timeout / (len(addresses) - index)
+            raw = socket.create_connection((address, port), timeout=share)
+            break
+        except OSError:
+            connect_timeout = deadline - time.monotonic()
+            if index == len(addresses) - 1 or connect_timeout <= 0:
+                raise
+    else:
+        raise OSError("no public upstream address")
     try:
+        if len(addresses) > 1:
+            tls_timeout = deadline - time.monotonic()
+            if tls_timeout <= 0:
+                raise TimeoutError("upstream connection deadline")
+            raw.settimeout(tls_timeout)
         connection.sock = ssl.create_default_context().wrap_socket(raw, server_hostname=host)
+        yield connection
+    finally:
+        connection.close()
+        raw.close()
+
+
+def deliver_business_receipt(origin: str, project: str, body: bytes, assertion: str) -> int:
+    """Send the signed receipt only to its configured and TLS-verified platform origin."""
+    host, port = business_relay_origin(origin)
+    path = f"/api/runtime/projects/{UUID(project)}/analytics"
+    with pinned_https(host, port, [], 2) as connection:
         connection.request("POST", path, body, {
             "Content-Type": "application/json", "X-Yleum-Business-Assertion": assertion,
             "Connection": "close",
@@ -121,9 +208,6 @@ def deliver_business_receipt(origin: str, project: str, body: bytes, assertion: 
         # No response body or redirect is proxied into the product namespace.
         status = connection.getresponse().status
         return status if status in {200, 201, 202, 204, 400, 401, 403, 409, 429} else 503
-    finally:
-        connection.close()
-        raw.close()
 
 
 class _Proxy(socketserver.ThreadingTCPServer):
@@ -134,6 +218,7 @@ class _Proxy(socketserver.ThreadingTCPServer):
     analytics_project: str = ""
     analytics_origin: str = ""
     relay_only: bool = False
+    npm_tarball_cache: str | None = None
 
 
 class _ConnectWriter:
@@ -208,6 +293,100 @@ class _ConnectWriter:
 
 
 class _Handler(socketserver.BaseRequestHandler):
+    @staticmethod
+    def relay_headers(lines: list[str]) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        for line in lines:
+            key, separator, value = line.partition(":")
+            key = key.lower()
+            if (not separator or not re.fullmatch(r"[a-z0-9!#$%&'*+.^_`|~-]+", key)
+                    or key in headers):
+                raise DestinationDenied("invalid relay headers")
+            headers[key] = value.strip()
+        return headers
+
+    def npm_status(self, status: str) -> None:
+        self.request.sendall(
+            f"HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".encode()
+        )
+
+    def send_npm_archive(
+        self, size: int, read: Callable[[int], bytes], deadline: float,
+        upstream: socket.socket | None = None,
+    ) -> None:
+        self.request.settimeout(npm_io_budget(deadline))
+        try:
+            self.request.sendall(
+                f"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
+                f"Content-Length: {size}\r\nConnection: close\r\n\r\n".encode()
+            )
+            remaining = size
+            while remaining:
+                if upstream is not None:
+                    upstream.settimeout(npm_io_budget(deadline))
+                chunk = read(min(65536, remaining))
+                if not chunk:
+                    return
+                self.request.settimeout(npm_io_budget(deadline))
+                self.request.sendall(chunk)
+                remaining -= len(chunk)
+        except (OSError, http.client.HTTPException):
+            # Never append an error page to an incomplete 200 response.
+            # Closing early exposes the actual length mismatch to the installer.
+            return
+
+    def npm_tarball(self, method: str, target: str, lines: list[str], body: bytes) -> None:
+        if method != "GET":
+            self.npm_status("405 Method Not Allowed")
+            return
+        try:
+            path = npm_tarball_path(target)
+            # This capability never forwards a client's headers, cookies, auth or body.
+            headers = self.relay_headers(lines)
+            if (body or "transfer-encoding" in headers or "expect" in headers
+                    or headers.get("content-length", "0") != "0"):
+                raise DestinationDenied("invalid npm request")
+        except DestinationDenied:
+            self.npm_status("400 Bad Request")
+            return
+
+        deadline = time.monotonic() + NPM_MAX_SECONDS
+        try:
+            server = cast(_Proxy, self.server)
+            if server.npm_tarball_cache:
+                cached = cached_npm_tarball(server.npm_tarball_cache, path)
+                if cached is not None:
+                    archive, size = cached
+                    with archive:
+                        self.send_npm_archive(size, archive.read, deadline)
+                    return
+            with pinned_https(NPM_HOST, 443, server.denied_cidrs, NPM_IO_TIMEOUT) as connection:
+                # Capture the socket before getresponse() detaches it for Connection: close.
+                upstream = connection.sock
+                if upstream is None:
+                    raise OSError("npm connection unavailable")
+                upstream.settimeout(npm_io_budget(deadline))
+                connection.request("GET", path, headers={"Connection": "close"})
+                with connection.getresponse() as response:
+                    if response.status != 200:
+                        status = {
+                            404: "404 Not Found", 429: "429 Too Many Requests",
+                            503: "503 Service Unavailable",
+                        }.get(response.status, "502 Bad Gateway")
+                        self.npm_status(status)
+                        return
+                    length = response.getheader("Content-Length", "")
+                    if (not re.fullmatch(r"[0-9]{1,9}", length)
+                            or not 0 < int(length) <= NPM_MAX_BYTES
+                            or response.getheader("Transfer-Encoding") is not None
+                            or response.getheader("Content-Encoding", "identity") != "identity"):
+                        raise OSError("unexpected npm archive framing")
+
+                    self.send_npm_archive(int(length), response.read1, deadline, upstream)
+        except (OSError, http.client.HTTPException, DestinationDenied) as exc:
+            self.npm_status("504 Gateway Timeout" if isinstance(exc, TimeoutError)
+                            else "502 Bad Gateway")
+
     def relay(self, remote: socket.socket, send_upstream: Callable[[bytes], None]) -> None:
         count = 0
         started = time.monotonic()
@@ -227,13 +406,7 @@ class _Handler(socketserver.BaseRequestHandler):
 
     def business_receipt(self, lines: list[str], body: bytes) -> None:
         server = cast(_Proxy, self.server)
-        headers: dict[str, str] = {}
-        for line in lines[1:]:
-            key, separator, value = line.partition(":")
-            key = key.lower()
-            if not separator or key in headers:
-                raise DestinationDenied("invalid relay headers")
-            headers[key] = value.strip()
+        headers = self.relay_headers(lines[1:])
         length = headers.get("content-length", "")
         assertion = headers.get("x-yleum-business-assertion", "")
         if (not server.analytics_project or not server.analytics_origin
@@ -286,6 +459,16 @@ class _Handler(socketserver.BaseRequestHandler):
                 return
             if cast(_Proxy, self.server).relay_only:
                 raise DestinationDenied("only business receipts allowed")
+            # pnpm may send an absolute URL to its configured HTTP proxy, even
+            # when the registry endpoint and that proxy share this listener.
+            if target.startswith("http://") and NPM_RELAY_PREFIX in target:
+                ip, port = self.request.getsockname()[:2]
+                local_origin = f"http://{ip}:{port}"
+                if target.startswith(local_origin + NPM_RELAY_PREFIX):
+                    target = target[len(local_origin):]
+            if target.startswith(NPM_RELAY_PREFIX):
+                self.npm_tarball(method, target, lines[1:], body)
+                return
             if method == "CONNECT":
                 host, port = parse_authority(target, 443)
                 request_data = body
@@ -360,6 +543,7 @@ def main() -> None:
     parser.add_argument("--analytics-project", default="")
     parser.add_argument("--analytics-origin", default="")
     parser.add_argument("--relay-only", action="store_true")
+    parser.add_argument("--npm-tarball-cache")
     args = parser.parse_args()
     if args.analytics_project or args.analytics_origin or args.relay_only:
         UUID(args.analytics_project)
@@ -371,6 +555,7 @@ def main() -> None:
         server.analytics_project = args.analytics_project
         server.analytics_origin = args.analytics_origin
         server.relay_only = args.relay_only
+        server.npm_tarball_cache = args.npm_tarball_cache
         server.serve_forever()
 
 

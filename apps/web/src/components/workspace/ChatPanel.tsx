@@ -84,7 +84,6 @@ export function ChatPanel({
   currentSnapshotId,
   draftRef,
   adaptationRef,
-  initialCanChooseGenerationEngine = false,
 }: {
   projectId: string;
   projectSlug: string;
@@ -93,7 +92,6 @@ export function ChatPanel({
   currentSnapshotId?: string | null;
   draftRef?: Ref<PromptInputHandle>;
   adaptationRef?: Ref<ChatPanelAdaptationHandle>;
-  initialCanChooseGenerationEngine?: boolean;
 }) {
   // This historical optimistic label is separate from the captured coding engine.
   const modelId = "topmix-v1";
@@ -111,7 +109,6 @@ export function ChatPanel({
   const chatFooterRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const composerDraftRef = useRef<PromptInputHandle>(null);
-  const stagedStarterRef = useRef(false);
   useImperativeHandle(draftRef, () => ({
     insertDraft: text => composerDraftRef.current?.insertDraft(text) ?? false,
   }), []);
@@ -119,18 +116,19 @@ export function ChatPanel({
     // Local housekeeping must not turn a confirmed paid submit into uncertainty.
     try { window.sessionStorage.removeItem(`omnia:max:starter:${projectId}`); }
     catch { /* The accepted server receipt remains authoritative. */ }
-    try { window.history.replaceState(null, "", basePath); }
-    catch { /* The run key still prevents a second generation. */ }
-    stagedStarterRef.current = false;
+    try {
+      if (window.location.pathname === basePath) window.history.replaceState(null, "", basePath);
+    } catch { /* The run key still prevents a second generation. */ }
   }, [basePath, projectId]);
   const credentialSubmitPending = useRef(false);
   const adaptationSubmitPending = useRef(false);
   const acceptedAdaptations = useRef(new Set<string>());
   const qc = useQueryClient();
 
-  const { data: history, isPending } = useQuery({
+  const { data: history, isPending, isFetchedAfterMount, isSuccess } = useQuery({
     queryKey: ["messages", projectId],
     queryFn: () => listMessages(projectId),
+    refetchOnMount: query => query.state.data?.length === 0 ? "always" : true,
   });
   // AgentTranscript owns the fetch/poll; observe its project cache so the whole
   // message (failure card, streaming state and timer) uses the same exact run.
@@ -270,13 +268,11 @@ export function ChatPanel({
   const handleSubmit = async (text: string, selections: SelectedElement[], { idempotencyKey, referenceImages, fontSelections, generationEngine }: PromptReferenceSubmit, replay: boolean): Promise<PromptInputSubmitResult> => {
     let referencesExpired = false;
     const accepted = await submitWithCredentialIntake(text, selections, {
-      idempotencyKey: stagedStarterRef.current ? `max-starter-${projectId}` : idempotencyKey,
-      ...(stagedStarterRef.current ? { skipClarify: true } : {}),
+      idempotencyKey,
       ...(generationEngine ? { generationEngine } : {}),
       ...(referenceImages.length ? { referenceImages, onReferenceImagesExpired: () => { referencesExpired = true; } } : {}),
       ...(fontSelections?.length ? { fontSelections } : {}),
     }, { replay });
-    if (accepted === true && stagedStarterRef.current) clearStarterHandoff();
     return referencesExpired ? { accepted: false, reason: "reference_images_expired" } : accepted;
   };
 
@@ -443,56 +439,40 @@ export function ChatPanel({
     scopeKey: projectId,
   });
 
-  // The starter flow hands the user's task over via `?p=`: auto-fire it ONCE on
-  // a fresh (empty) project so they land mid-agent-run instead of re-typing it.
-  // `skipClarify` sends it
-  // straight to the agent (no onboarding interview). Strip the param afterwards
-  // so a refresh never replays the prompt.
-  const autoFiredRef = useRef(false);
+  // Post the wizard brief once on an empty project. Across reloads the same
+  // server key resolves a lost response without starting a second generation.
+  const starterAttempted = useRef(false);
   useEffect(() => {
-    if (autoFiredRef.current) return;
-    if (messages === undefined) return; // wait for the first load
     const params = new URLSearchParams(window.location.search);
     const urlPrompt = params.get("p");
-    let p = urlPrompt;
     if (urlPrompt && containsChatSecret(urlPrompt)) {
       window.history.replaceState(null, "", basePath);
       toast.error("Ключ из ссылки не принят", {
         description: "Вставьте название провайдера и ключ прямо в поле чата.",
       });
-      p = null;
+      return;
     }
-    const starterStorageKey = `omnia:max:starter:${projectId}`;
-    if (!p && params.get("starter") === "1") {
-      p = window.sessionStorage.getItem(starterStorageKey);
+    if (starterAttempted.current || !isSuccess || !messages || pendingPrompt) return;
+    const prompt = (urlPrompt || (params.get("starter") === "1"
+      ? window.sessionStorage.getItem(`omnia:max:starter:${projectId}`) : null))?.trim();
+    if (!prompt) return;
+    if (messages.length > 0) {
+      // A reload may recover the accepted message before the POST response.
+      if (messages.some(message => message.project_id === projectId && message.role === "user"
+        && !message.id.startsWith("__opt_") && message.content === prompt)) clearStarterHandoff();
+      return;
     }
-    if (p && p.trim() && messages.length === 0) {
-      if (initialCanChooseGenerationEngine) {
-        if (pendingPrompt) return;
-        // Keep the first QA brief reviewable before submitting a paid request.
-        // Retain the handoff/key through F5 or unknown acceptance until success.
-        if (composerDraftRef.current?.insertDraft(p.trim())) {
-          autoFiredRef.current = true;
-          stagedStarterRef.current = true;
-        }
-        return;
-      }
-      autoFiredRef.current = true;
-      void submitWithCredentialIntake(p.trim(), [], {
-        skipClarify: true,
-        // Stable on the server across tabs/reloads/devices. Even if the handoff
-        // effect somehow fires twice, reserve_generation_run replays this exact
-        // run rather than creating a second generation.
-        idempotencyKey: `max-starter-${projectId}`,
-      }).then((submitted) => {
-        if (submitted) {
-          clearStarterHandoff();
-        } else {
-          autoFiredRef.current = false;
-        }
-      });
-    }
-  }, [messages, submitWithCredentialIntake, basePath, projectId, initialCanChooseGenerationEngine, pendingPrompt, clearStarterHandoff]);
+
+    // A cached empty history can predate a submit from another tab.
+    if (!isFetchedAfterMount) return;
+    starterAttempted.current = true;
+    void submitWithCredentialIntake(prompt, [], {
+      skipClarify: true,
+      idempotencyKey: `max-starter-${projectId}`,
+    }).then(submitted => {
+      if (submitted) clearStarterHandoff();
+    });
+  }, [messages, isSuccess, isFetchedAfterMount, pendingPrompt, basePath, projectId, submitWithCredentialIntake, clearStarterHandoff]);
 
   return (
     // Keep history scrolling within the editor's height in both chat layouts.

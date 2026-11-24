@@ -5,7 +5,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ChatPanel } from "@/components/workspace/ChatPanel";
 import type { IntegrationCatalog, Message } from "@/lib/api/types";
 
-const mocks = vi.hoisted(() => ({ catalog: vi.fn(), connect: vi.fn(), submit: vi.fn(), history: vi.fn(), profile: vi.fn(), error: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  pendingPrompt: null as string | null,
+  catalog: vi.fn(), connect: vi.fn(), submit: vi.fn(), history: vi.fn(), profile: vi.fn(), error: vi.fn(),
+}));
 const catalog: IntegrationCatalog = {
   providers: [{
     key: "aitunnel", name: "AITUNNEL", category: "ai", description: "ИИ", capabilities: [],
@@ -21,7 +24,7 @@ vi.mock("@/lib/api/app-integrations", async (importOriginal) => ({
   getIntegrationCatalog: mocks.catalog, connectAppIntegration: mocks.connect,
 }));
 vi.mock("@/hooks/usePromptStream", () => ({ usePromptStream: () => ({
-  submit: mocks.submit, pendingPrompt: null,
+  submit: mocks.submit, pendingPrompt: mocks.pendingPrompt,
 }) }));
 vi.mock("@/lib/api/messages", () => ({ listMessages: mocks.history, getLatestGeneration: vi.fn() }));
 vi.mock("@/lib/api/owner-profile", () => ({ getOwnerProfile: mocks.profile }));
@@ -39,6 +42,7 @@ let client: QueryClient, root: Root, host: HTMLDivElement;
 
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.pendingPrompt = null;
   mocks.catalog.mockResolvedValue(catalog);
   mocks.connect.mockResolvedValue(undefined);
   mocks.submit.mockResolvedValue(true);
@@ -57,9 +61,8 @@ afterEach(async () => {
   sessionStorage.clear(); window.history.replaceState(null, "", "/");
 });
 
-async function render(qa = false) {
-  await act(async () => root.render(<QueryClientProvider client={client}><ChatPanel projectId="p" projectSlug="p"
-    initialCanChooseGenerationEngine={qa} /></QueryClientProvider>));
+async function render() {
+  await act(async () => root.render(<QueryClientProvider client={client}><ChatPanel projectId="p" projectSlug="p" /></QueryClientProvider>));
 }
 
 const button = (name: string) => [...host.querySelectorAll("button")].find(candidate =>
@@ -266,6 +269,47 @@ it.each([
   expect(mocks.submit.mock.calls[0][0]).toBe(text);
 });
 
+it("cleans a secret URL even with a restored queue and unresolved history", async () => {
+  mocks.pendingPrompt = "Уже в очереди";
+  mocks.history.mockImplementation(() => new Promise(() => {}));
+  window.history.replaceState(null, "", `/max/p?p=${encodeURIComponent(prompt)}`);
+  await render();
+  expect(location.search).toBe("");
+  expect(mocks.submit).not.toHaveBeenCalled();
+  expect(mocks.connect).not.toHaveBeenCalled();
+});
+
+it("waits for current history before auto-sending a cached empty project", async () => {
+  const brief = "Создай дневник питания";
+  sessionStorage.setItem(starterKey, brief);
+  window.history.replaceState(null, "", "/max/p?starter=1");
+  client.setQueryData(["messages", "p"], []);
+  client.setQueryDefaults(["messages", "p"], { staleTime: 60_000 });
+  let finish!: () => void;
+  mocks.history.mockImplementation(() => new Promise(resolve => {
+    finish = () => resolve([{ id: "saved", project_id: "p", role: "user", content: brief, created_at: new Date().toISOString() }]);
+  }));
+  await render();
+  expect(mocks.history).toHaveBeenCalledOnce();
+  expect(mocks.submit).not.toHaveBeenCalled();
+  await act(async () => { finish(); });
+  await act(async () => vi.waitFor(() => expect(sessionStorage.getItem(starterKey)).toBeNull()));
+  expect(mocks.submit).not.toHaveBeenCalled();
+});
+
+it.each([["persisted", true], ["__opt_user_local", false]])("handles a saved wizard brief with history row %s", async (id, persisted) => {
+  const brief = "Создай дневник питания";
+  sessionStorage.setItem(starterKey, brief);
+  window.history.replaceState(null, "", "/max/p?starter=1");
+  mocks.history.mockResolvedValue([{ id, project_id: "p", role: "user", content: brief, created_at: new Date().toISOString() }]);
+  await render();
+  await act(async () => {
+    await vi.waitFor(() => expect(host.textContent).toContain(brief));
+  });
+  expect(sessionStorage.getItem(starterKey)).toBe(persisted ? null : brief);
+  expect(mocks.submit).not.toHaveBeenCalled();
+});
+
 it("does not grant AITunnel access from a URL starter", async () => {
   window.history.replaceState(null, "", `/max/p?p=${encodeURIComponent(savedAitunnelTask)}`);
   await render();
@@ -306,7 +350,7 @@ it("also verifies and redacts a credential from the saved starter before replay"
 it("keeps Sol captured through credential verification without model controls", async () => {
   let finish!: () => void;
   mocks.connect.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
-  await render(true);
+  await render();
   await sendFromComposer();
   expect(mocks.connect).toHaveBeenCalledOnce();
   expect(mocks.submit).not.toHaveBeenCalled();

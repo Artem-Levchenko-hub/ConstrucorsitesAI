@@ -23,12 +23,10 @@ import { MAX_CUSTOMER_VERSIONING } from "@/lib/max-product-policy";
 export function MaxWorkspaceShell({
   project,
   email,
-  canChooseGenerationEngine = false,
   initialPreview = false,
 }: {
   project: Project;
   email: string;
-  canChooseGenerationEngine?: boolean;
   initialPreview?: boolean;
 }) {
   const adaptationRef = useRef<ChatPanelAdaptationHandle>(null);
@@ -227,7 +225,6 @@ export function MaxWorkspaceShell({
         ownerId={project.owner_id}
         currentSnapshotId={currentSnapshotId}
         basePath={`/max/${project.id}`}
-        initialCanChooseGenerationEngine={canChooseGenerationEngine}
       />
       </div>
       {MAX_CUSTOMER_VERSIONING && <div className="max-h-[45%] shrink-0 overflow-y-auto">
