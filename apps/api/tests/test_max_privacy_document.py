@@ -1,5 +1,6 @@
 """Draft extraction, owner approval, legacy settings and public document visibility."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -22,6 +23,19 @@ export const recipes = table('recipes', {email: text('email'), calories: text('c
 export const starter = table('max_users', {maxUserId: text('uid'), phone: text('number')});
 function unrelated(table) { const fake = table('foo', {userId: 1, allergies: 1}); }
 """
+
+
+WRITE_ROUTE = """
+import { db, schema } from "@/lib/db";
+import { getMaxUser } from "@/lib/max/session";
+export async function POST(request: Request) {
+    const user = await getMaxUser();
+    if (!user) return new Response(null, { status: 401 });
+    const { foodPreferences, water_ml } = await request.json();
+    return db.insert(schema.profiles).values({userId: user.id, foodPreferences, water_ml});
+}
+"""
+ROUTE_PATH = "src/app/api/profile/route.ts"
 
 
 def config(**fields):
@@ -51,10 +65,10 @@ def active(project_id):
 def test_draft_uses_config_and_saved_user_schema_only():
     draft = max_privacy_document.build_privacy_draft(
         config(operator={"legal_name": "Студия питания"}, support={"email": "team@example.org"}),
-        SCHEMA,
+        {"src/lib/db/schema.ts": SCHEMA.decode(), ROUTE_PATH: WRITE_ROUTE},
     )
     assert all(
-        fact in draft
+        fact in draft.text
         for fact in (
             "Рацион",
             "Студия питания",
@@ -65,7 +79,7 @@ def test_draft_uses_config_and_saved_user_schema_only():
         )
     )
     assert all(
-        word not in draft
+        word not in draft.text
         for word in (
             "рецепт",
             "калорийность",
@@ -75,9 +89,106 @@ def test_draft_uses_config_and_saved_user_schema_only():
             "собирать адрес",
         )
     )
-    generic = max_privacy_document.build_privacy_draft(config(), b"")
+    generic = max_privacy_document.build_privacy_draft(config(), {}).text
     assert "личных записях" not in generic
     assert "оплат" not in generic
+
+
+def test_empty_product_screens_do_not_imply_storage_and_real_login_is_disclosed():
+    from yleum_api.services.max_project_kit import _template_file
+
+    auth = "src/app/api/max/session/route.ts"
+    files = {
+        auth: _template_file(auth),
+        "src/lib/db/schema.ts": _template_file("src/lib/db/schema.ts"),
+        "src/app/page.tsx": (
+            "export default function Home() {return <main>Анкета, рацион, история питания</main>}"
+        ),
+    }
+    draft = max_privacy_document.build_privacy_draft(config(), files)
+    assert all(term in draft.text for term in ("идентификатор", "cookie", "событие открытия"))
+    assert all(term not in draft.text for term in ("история питания", "анкета", "рацион на"))
+    assert "не подтверждено" in draft.review_note
+    assert draft.review_note not in draft.text
+    files[auth] = "export async function GET() { return 'response.cookies.set app_open'; }"
+    minimal = max_privacy_document.build_privacy_draft(config(), files)
+    assert "cookie" not in minimal.text and "событие открытия" not in minimal.text
+
+
+def test_split_personal_schema_and_current_migration_metadata_only():
+    def snapshot(field):
+        return json.dumps(
+            {
+                "dialect": "postgresql",
+                "tables": {
+                    "public.personal": {
+                        "name": "personal",
+                        "columns": {k: {"name": k} for k in ("user_id", field)},
+                    }
+                },
+            }
+        )
+
+    files = {
+        "src/lib/db/schema.ts": "export * from './profile';",
+        "src/lib/db/profile.ts": SCHEMA.decode(),
+        "drizzle/meta/_journal.json": '{"entries":[{"idx":0},{"idx":1}]}',
+        "drizzle/meta/0000_snapshot.json": snapshot("birth_date"),
+        "drizzle/meta/0001_snapshot.json": snapshot("meal_plan"),
+    }
+    draft = max_privacy_document.build_privacy_draft(config(), files)
+    assert "план питания" in draft.review_note and "пищевые предпочтения" in draft.review_note
+    assert "план питания" not in draft.text and "пищевые предпочтения" not in draft.text
+    assert "дата рождения" not in draft.text
+    del files["drizzle/meta/0001_snapshot.json"]
+    draft = max_privacy_document.build_privacy_draft(config(), files)
+    assert "дата рождения" not in draft.review_note and "план питания" not in draft.review_note
+    assert "нестандартные" in draft.review_note
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        WRITE_ROUTE.replace("function POST", "function neverCalled"),
+        WRITE_ROUTE.replace('from "@/lib/db"', 'from "./stub"'),
+        WRITE_ROUTE.replace("schema.profiles", "schema.recipes"),
+        WRITE_ROUTE.replace("return db.insert", "const unused = db.insert"),
+        WRITE_ROUTE.replace(
+            "foodPreferences, water_ml});", "foodPreferences: undefined, water_ml: null});"
+        ),
+    ],
+)
+def test_schema_only_fields_stay_in_owner_note_without_an_executed_product_write(handler):
+    files = {"src/lib/db/schema.ts": SCHEMA.decode(), ROUTE_PATH: handler}
+    draft = max_privacy_document.build_privacy_draft(config(), files)
+    assert "пищевые предпочтения" not in draft.text
+    assert "количество выпитой воды" not in draft.text
+    assert "пищевые предпочтения" in draft.review_note
+
+
+def test_draft_snapshot_file_filter_reads_source_and_schema_only():
+    include = max_privacy_document._privacy_source
+    assert all(
+        include(p)
+        for p in (
+            "app/page.tsx",
+            "src/lib/db/fields.ts",
+            "tsconfig.json",
+            "drizzle/meta/0003_snapshot.json",
+        )
+    )
+    assert not any(
+        include(p)
+        for p in (
+            ".env",
+            "exports/visitors.csv",
+            "data/records.json",
+            "drizzle/0001_seed.sql",
+            "src/__tests__/page.tsx",
+            "fixtures/visitors.ts",
+            "lib/profile.test.ts",
+        )
+    )
 
 
 def test_policy_approval_legacy_clients_and_public_projection(monkeypatch):
@@ -126,8 +237,8 @@ async def test_draft_reads_owned_accepted_snapshot_without_writes(monkeypatch):
     monkeypatch.setattr(max_studio, "_owned_max_project", owned)
     accepted = AsyncMock(return_value=None)
     monkeypatch.setattr(max_studio, "current_accepted_version", accepted)
-    read = Mock(return_value=SCHEMA)
-    monkeypatch.setattr(repo, "read_file", read)
+    read = Mock(return_value={"src/lib/db/schema.ts": SCHEMA.decode(), ROUTE_PATH: WRITE_ROUTE})
+    monkeypatch.setattr(repo, "read_files", read)
     session = AsyncMock()
     with pytest.raises(ApiError) as error:
         await max_studio.get_max_privacy_draft(project_id, session, owner, Response())
@@ -150,8 +261,7 @@ async def test_draft_reads_owned_accepted_snapshot_without_writes(monkeypatch):
     read.assert_called_once_with(
         project_id,
         snapshot.commit_sha,
-        "src/lib/db/schema.ts",
-        max_bytes=repo.MAX_FILE_BYTES,
+        include=max_privacy_document._privacy_source,
     )
     assert "пищевые предпочтения" in draft.text
     assert "no-store" in response.headers["cache-control"]
@@ -244,7 +354,9 @@ async def test_site_draft_uses_accepted_ancestor_and_approval_is_private(
     assert (await client.get(draft_url)).status_code == 401
 
     path = "src/lib/db/schema.ts"
-    commit = repo.init_from_files(project_id, {path: SCHEMA.decode()}, "Reviewed build")
+    commit = repo.init_from_files(
+        project_id, {path: SCHEMA.decode(), ROUTE_PATH: WRITE_ROUTE}, "Reviewed build"
+    )
     accepted = Snapshot(project_id=project_id, commit_sha=commit)
     db_session.add(accepted)
     await db_session.flush()
@@ -263,7 +375,8 @@ async def test_site_draft_uses_accepted_ancestor_and_approval_is_private(
 
     response = await client.get(draft_url, headers=owner_headers)
     assert response.status_code == 200, response.text
-    assert set(response.json()) == {"text"}
+    assert set(response.json()) == {"text", "review_note"}
+    assert response.json()["review_note"] not in response.json()["text"]
     assert "пищевые предпочтения" in response.json()["text"]
     assert "аллергии" not in response.json()["text"]
     assert (await client.get(document, headers=owner_headers)).status_code == 404

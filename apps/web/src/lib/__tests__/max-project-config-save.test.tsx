@@ -48,8 +48,8 @@ async function mountCanonical() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const container = document.createElement("div"); document.body.append(container);
   const root = createRoot(container);
-  const render = async () => {
-    await act(async () => root.render(<QueryClientProvider client={client}><MaxProjectSetupDialog projectId="qa" display="page" /></QueryClientProvider>));
+  const render = async (projectId = "qa") => {
+    await act(async () => root.render(<QueryClientProvider client={client}><MaxProjectSetupDialog projectId={projectId} display="page" /></QueryClientProvider>));
     await act(async () => { await vi.waitFor(() => expect(container.querySelector("#max-config-name")).not.toBeNull()); });
   };
   const button = (label: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].find(item => item.textContent?.trim() === label);
@@ -69,7 +69,7 @@ async function mountCanonical() {
     await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain(value)); });
   };
   await render();
-  return { container, button, click, change, expectText,
+  return { container, button, click, change, expectText, switchProject: render,
     reopen: async () => { await act(async () => root.render(null)); await render(); },
     cleanup: async () => { await act(async () => root.unmount()); client.clear(); container.remove(); },
   };
@@ -77,7 +77,8 @@ async function mountCanonical() {
 
 it("prepares a reviewable privacy draft and applies only the edited text when the owner asks", async () => {
   mocks.get.mockResolvedValue(record);
-  mocks.privacy.mockResolvedValue("Черновик по сохранённой версии");
+  const note = "Проверьте назначение поля из сохранённой версии.";
+  mocks.privacy.mockResolvedValue({ text: "Черновик по сохранённой версии", review_note: note });
   mocks.save.mockImplementation(async (_project, config) => ({ ...record, config_version: 2, config }));
   const page = await mountCanonical();
   try {
@@ -85,16 +86,76 @@ it("prepares a reviewable privacy draft and applies only the edited text when th
     await page.click("Подготовить политику");
     expect(mocks.privacy).toHaveBeenCalledExactlyOnceWith("qa");
     expect(page.container.querySelector<HTMLTextAreaElement>("#max-policy-text")?.value).toBe("Черновик по сохранённой версии");
+    expect(page.container.querySelector('[role="note"]')?.textContent).toBe(note);
     await page.change("max-policy-text", "Проверено владельцем");
     await page.click("Основное");
     expect(page.button("Изменить экраны с ИИ")?.disabled).toBe(true);
     expect(mocks.save).not.toHaveBeenCalled();
     await page.click("Документы");
+    expect(page.container.querySelector('[role="note"]')?.textContent).toBe(note);
     await page.click("Применить политику");
     expect(mocks.save).toHaveBeenCalledExactlyOnceWith("qa", {
       ...record.config, legal: { ...record.config.legal, policy_text: "Проверено владельцем" },
     }, 1);
+    expect(page.container.textContent).not.toContain(note);
     expect(mocks.send).not.toHaveBeenCalled();
+  } finally { await page.cleanup(); }
+});
+
+it("discards the owner's draft note on cancel and supports older drafts containing only text", async () => {
+  mocks.get.mockResolvedValue(record);
+  mocks.privacy.mockResolvedValueOnce({ text: "Первый черновик", review_note: "Заметка для владельца" })
+    .mockResolvedValueOnce({ text: "Черновик по старому API" });
+  const page = await mountCanonical();
+  try {
+    await page.click("Документы");
+    await page.click("Подготовить политику");
+    await page.expectText("Заметка для владельца");
+    await page.click("Отменить правки");
+    expect(page.container.textContent).not.toContain("Заметка для владельца");
+    await page.click("Подготовить политику");
+    expect(page.container.querySelector<HTMLTextAreaElement>("#max-policy-text")?.value).toBe("Черновик по старому API");
+    expect(page.container.querySelector('[role="note"]')).toBeNull();
+    expect(mocks.save).not.toHaveBeenCalled();
+  } finally { await page.cleanup(); }
+});
+
+it("drops the previous project's draft note when navigating between projects", async () => {
+  mocks.get.mockImplementation(async projectId => ({ ...record, project_id: projectId }));
+  mocks.privacy.mockResolvedValue({ text: "Черновик", review_note: "Только для первого проекта" });
+  const page = await mountCanonical();
+  try {
+    await page.click("Документы");
+    await page.click("Подготовить политику");
+    await page.expectText("Только для первого проекта");
+    await page.switchProject("other");
+    await page.click("Документы");
+    expect(page.container.querySelector('[role="note"]')).toBeNull();
+    expect(page.container.querySelector("#max-policy-text")).toBeNull();
+  } finally { await page.cleanup(); }
+});
+
+it("keeps a second project's draft when a save finishes for the first project", async () => {
+  mocks.get.mockImplementation(async projectId => ({ ...record, project_id: projectId }));
+  mocks.privacy.mockImplementation(async projectId => ({ text: `Политика ${projectId}`, review_note: `Заметка ${projectId}` }));
+  let finishSave!: (saved: MaxProjectConfig) => void;
+  mocks.save.mockImplementation(() => new Promise(resolve => { finishSave = resolve; }));
+  const page = await mountCanonical();
+  try {
+    await page.click("Документы");
+    await page.click("Подготовить политику");
+    await page.click("Применить политику");
+    const [firstProject, savedConfig] = mocks.save.mock.calls[0];
+    expect(firstProject).toBe("qa");
+    await page.switchProject("other");
+    await page.click("Документы");
+    await page.click("Подготовить политику");
+    await page.expectText("Заметка other");
+    await act(async () => finishSave({ ...record, config_version: 2, config: savedConfig }));
+    expect(page.container.querySelector<HTMLTextAreaElement>("#max-policy-text")?.value).toBe("Политика other");
+    expect(page.container.querySelector('[role="note"]')?.textContent).toBe("Заметка other");
+    expect(page.button("Применить политику")?.disabled).toBe(false);
+    expect(mocks.success).not.toHaveBeenCalled();
   } finally { await page.cleanup(); }
 });
 

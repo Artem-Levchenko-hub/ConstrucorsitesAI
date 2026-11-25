@@ -241,13 +241,13 @@ async def get_max_privacy_draft(
     commit, config = snapshot.commit_sha, _config_payload(project, record)
     await session.rollback()  # Release the read transaction before fetching immutable source.
     try:
-        text = await asyncio.to_thread(saved_privacy_draft, project_id, commit, config)
+        draft = await asyncio.to_thread(saved_privacy_draft, project_id, commit, config)
     except (S3Error, RuntimeError, OSError, ValueError) as exc:
         raise ApiError(
             "unavailable", "Не удалось прочитать сохранённую версию приложения", 503,
         ) from exc
     response.headers["Cache-Control"] = "private, no-store"
-    return MaxPrivacyDraft(text=text)
+    return draft
 
 
 @router.get("/{project_id}/max/privacy-policy", response_class=HTMLResponse)

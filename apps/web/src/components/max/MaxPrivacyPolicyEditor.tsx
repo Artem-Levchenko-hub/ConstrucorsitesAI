@@ -11,13 +11,15 @@ function PrepareDraftButton({ projectId, disabled, hasText, onPrepared }: {
   projectId: string;
   disabled: boolean;
   hasText: boolean;
-  onPrepared: (value: string) => void;
+  onPrepared: (value: string, reviewNote: string) => void;
 }) {
   const prepare = useMutation({ mutationFn: () => prepareMaxPrivacyDraft(projectId), retry: false });
   return <>
     <div><Button type="button" variant="outline" disabled={disabled || prepare.isPending}
       aria-busy={prepare.isPending}
-      onClick={() => prepare.mutate(undefined, { onSuccess: onPrepared })}>
+      onClick={() => prepare.mutate(undefined, {
+        onSuccess: draft => onPrepared(draft.text, draft.review_note ?? ""),
+      })}>
       {prepare.isPending ? "Готовим черновик…" : hasText ? "Подготовить новый черновик" : "Подготовить политику"}
     </Button></div>
     {prepare.isError && <p role="alert" className="max-setup-group-note">
@@ -30,20 +32,21 @@ function PrepareDraftButton({ projectId, disabled, hasText, onPrepared }: {
   </>;
 }
 
-export function MaxPrivacyPolicyEditor({ projectId, version, text, dirty, edited, onChange }: {
+export function MaxPrivacyPolicyEditor({ projectId, version, text, dirty, edited, reviewNote, onChange }: {
   projectId: string;
   version: number | undefined;
   text: string;
   dirty: boolean;
   edited: boolean;
-  onChange: (value: string) => void;
+  reviewNote?: string;
+  onChange: (value: string, reviewNote?: string) => void;
 }) {
   return <div className="max-setup-field max-setup-wide">
     {(text || edited) && <>
       <Label htmlFor="max-policy-text">Текст политики</Label>
       <Textarea id="max-policy-text" rows={12} maxLength={20_000}
         value={text} onChange={event => onChange(event.target.value)}
-        aria-describedby="max-policy-hint" />
+        aria-describedby={reviewNote ? "max-policy-hint max-policy-review-note" : "max-policy-hint"} />
     </>}
     <p id="max-policy-hint" className="max-setup-group-note">
       {edited && !text.trim() ? "После применения в приложении снова откроется стандартная политика."
@@ -51,6 +54,7 @@ export function MaxPrivacyPolicyEditor({ projectId, version, text, dirty, edited
         : dirty ? "Сохраните изменения, чтобы подготовить политику по актуальным данным."
         : "Черновик учитывает сохранённую версию приложения. Его можно отредактировать перед применением."}
     </p>
+    {reviewNote && <p id="max-policy-review-note" role="note" className="max-setup-group-note">{reviewNote}</p>}
     <PrepareDraftButton key={`${projectId}:${version}:${dirty}`}
       projectId={projectId} disabled={dirty} hasText={Boolean(text)} onPrepared={onChange} />
   </div>;

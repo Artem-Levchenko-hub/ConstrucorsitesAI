@@ -276,14 +276,16 @@ def commit_files(
         return str(commit_oid)
 
 
-def read_files(project_id: UUID, commit_sha: str) -> dict[str, str]:
+def read_files(
+    project_id: UUID, commit_sha: str, *, include: Callable[[str], bool] | None = None,
+) -> dict[str, str]:
     with _open_workdir(project_id, must_exist=True) as workdir:
         repo = pygit2.Repository(str(workdir))
         commit = repo.get(commit_sha)
         if not isinstance(commit, pygit2.Commit):
             raise ValueError(f"commit {commit_sha} not found")
         out: dict[str, str] = {}
-        _walk(repo, commit.tree, "", out)
+        _walk(repo, commit.tree, "", out, include)
         if len(out) > MAX_FILES:
             raise ValueError(f"too many files in commit: {len(out)} > {MAX_FILES}")
         total_bytes = sum(len(content.encode("utf-8")) for content in out.values())
@@ -341,7 +343,10 @@ def checkout(project_id: UUID, target_commit_sha: str) -> str:
         return str(commit_oid)
 
 
-def _walk(repo: pygit2.Repository, tree: pygit2.Tree, prefix: str, out: dict[str, str]) -> None:
+def _walk(
+    repo: pygit2.Repository, tree: pygit2.Tree, prefix: str, out: dict[str, str],
+    include: Callable[[str], bool] | None,
+) -> None:
     for entry in tree:
         if entry.name is None:
             continue
@@ -349,13 +354,19 @@ def _walk(repo: pygit2.Repository, tree: pygit2.Tree, prefix: str, out: dict[str
         if entry.type_str == "tree":
             child = repo[entry.id]
             if isinstance(child, pygit2.Tree):
-                _walk(repo, child, f"{path}/", out)
+                _walk(repo, child, f"{path}/", out, include)
             continue
         if entry.type_str != "blob":
+            continue
+        if include is not None and (
+            not include(path) or entry.filemode == pygit2.GIT_FILEMODE_LINK
+        ):
             continue
         blob = repo[entry.id]
         if not isinstance(blob, pygit2.Blob):
             continue
+        if include is not None and blob.size > MAX_FILE_BYTES:
+            raise ValueError("snapshot file exceeds size budget")
         try:
             out[path] = blob.data.decode("utf-8")
         except UnicodeDecodeError:

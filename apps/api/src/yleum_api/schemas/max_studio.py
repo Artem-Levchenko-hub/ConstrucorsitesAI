@@ -222,6 +222,7 @@ class MaxProjectConfigPublic(BaseModel):
 
 class MaxPrivacyDraft(BaseModel):
     text: str
+    review_note: str
 
 
 class MaxContentImagePublic(BaseModel):

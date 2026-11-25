@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, FileCheck2, Loader2, Settings2, CircleAlert, Circle } from "lucide-react";
 import { toast } from "sonner";
@@ -54,7 +54,7 @@ const deliveryTargets = [
   { id: "preview", label: "Предпросмотр" },
 ] as const;
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-type ConfigDraft = { baseline: MaxProjectConfig; payload: MaxProjectConfigPayload };
+type ConfigDraft = { baseline: MaxProjectConfig; payload: MaxProjectConfigPayload; policyReviewNote?: string };
 
 function rebaseFields<T extends object>(baseline: T, edited: T, latest: T) {
   const value = { ...latest };
@@ -100,15 +100,7 @@ function screenConfig(config: MaxProjectConfigPayload) {
   return { app_name, app_type, summary, audience, primary_action, features, style, brand_colors };
 }
 
-export function MaxProjectSetupDialog({
-  projectId,
-  display = "panel",
-  emphasized = false,
-  label = "Данные приложения",
-  open: controlledOpen,
-  onOpenChange,
-  initialSection = "details",
-}: {
+type SetupDialogProps = {
   projectId: string;
   display?: "panel" | "toolbar" | "header" | "page";
   emphasized?: boolean;
@@ -116,7 +108,21 @@ export function MaxProjectSetupDialog({
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   initialSection?: SetupSection;
-}) {
+};
+
+export function MaxProjectSetupDialog(props: SetupDialogProps) {
+  return <ProjectSetupEditor key={props.projectId} {...props} />;
+}
+
+function ProjectSetupEditor({
+  projectId,
+  display = "panel",
+  emphasized = false,
+  label = "Данные приложения",
+  open: controlledOpen,
+  onOpenChange,
+  initialSection = "details",
+}: SetupDialogProps) {
   const qc = useQueryClient();
   const tabsId = useId();
   const isPage = display === "page";
@@ -137,14 +143,14 @@ export function MaxProjectSetupDialog({
   const [aiConfig, setAiConfig] = useState<MaxProjectConfig | null>(null);
   const openAiAfterSave = useRef(false);
   const [section, setSection] = useState<SetupSection>(entrySection);
-  const [entry, setEntry] = useState({ open, entrySection, projectId });
-  if (entry.open !== open || entry.entrySection !== entrySection || entry.projectId !== projectId) {
-    setEntry({ open, entrySection, projectId });
-    if (entry.projectId !== projectId) {
-      setDraft(null);
-      setLatest(null);
-      setAiConfig(null);
-    }
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const [entry, setEntry] = useState({ open, entrySection });
+  if (entry.open !== open || entry.entrySection !== entrySection) {
+    setEntry({ open, entrySection });
     if (open) {
       setSection(entrySection);
       setAiConfig(null);
@@ -184,6 +190,7 @@ export function MaxProjectSetupDialog({
       void qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
       void qc.invalidateQueries({ queryKey: ["max-preview-session", projectId] });
       void qc.invalidateQueries({ queryKey: ["max-content", projectId] });
+      if (!mounted.current) return;
       toast.success("Данные сохранены", {
         id: `max-config-save-${projectId}`,
         description: data.application_mode === "runtime"
@@ -199,6 +206,13 @@ export function MaxProjectSetupDialog({
       setLatest(null);
     },
     onError: async (error, attempt) => {
+      if (!mounted.current) {
+        if (savedWithoutDelivery(error)) {
+          void qc.invalidateQueries({ queryKey: ["max-config", projectId] });
+          void qc.invalidateQueries({ queryKey: ["max-content", projectId] });
+        }
+        return;
+      }
       openAiAfterSave.current = false;
       if (error instanceof ApiError && error.code === "generation_draining") {
         toast.info("Сервис обновляется", { id: `max-config-save-${projectId}`, description: "Подождите несколько минут и повторите сохранение. Введённые данные останутся в форме.", duration: 8000 });
@@ -281,11 +295,11 @@ export function MaxProjectSetupDialog({
     else toast.error("Не удалось загрузить актуальные данные", { description: "Правки остались в форме. Попробуйте ещё раз." });
   };
 
-  const editConfig = (payload: MaxProjectConfigPayload) => {
+  const editConfig = (payload: MaxProjectConfigPayload, policyReviewNote = draft?.policyReviewNote) => {
     const baseline = config.data;
     if (!baseline || save.isPending) return;
     // Keep the original version for optimistic concurrency during background refreshes.
-    setDraft(previous => ({ baseline: previous?.baseline ?? baseline, payload }));
+    setDraft(previous => ({ baseline: previous?.baseline ?? baseline, payload, policyReviewNote }));
   };
   const description = termsAccepted
     ? "Всё, что нужно для публикации, заполнено. Остальные разделы — по желанию: они делают приложение подробнее, но не блокируют запуск."
@@ -354,8 +368,8 @@ export function MaxProjectSetupDialog({
                 showCatalogLink={isPage} onChange={editConfig}
                 privacyEditor={<MaxPrivacyPolicyEditor projectId={projectId} version={version}
                   text={current.legal.policy_text ?? ""} dirty={Boolean(changedSections)}
-                  edited={policyEdited}
-                  onChange={text => editConfig({ ...current, legal: { ...current.legal, policy_text: text } })} />} />
+                  edited={policyEdited} reviewNote={draft?.baseline.config_version === version ? draft?.policyReviewNote : undefined}
+                  onChange={(text, note) => editConfig({ ...current, legal: { ...current.legal, policy_text: text } }, note)} />} />
             </fieldset>
           </div>
 

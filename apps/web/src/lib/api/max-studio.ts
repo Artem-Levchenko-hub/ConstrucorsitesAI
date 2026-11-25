@@ -17,14 +17,16 @@ export function getMaxProjectConfig(projectId: Uuid): Promise<MaxProjectConfig> 
   return apiFetch<MaxProjectConfig>(`${path(projectId)}/config`, { timeoutMs: 15_000 });
 }
 
-export async function prepareMaxPrivacyDraft(projectId: Uuid): Promise<string> {
-  const draft = await apiFetch<{ text: string }>(`${path(projectId)}/privacy-draft`, {
+type MaxPrivacyDraft = { text: string; review_note?: string | null };
+
+export async function prepareMaxPrivacyDraft(projectId: Uuid): Promise<MaxPrivacyDraft> {
+  const draft = await apiFetch<MaxPrivacyDraft>(`${path(projectId)}/privacy-draft`, {
     cache: "no-store", timeoutMs: 30_000,
   });
   if (typeof draft?.text !== "string" || !draft.text.trim()) {
     throw new Error("Не удалось получить текст политики.");
   }
-  return draft.text;
+  return { text: draft.text, review_note: typeof draft.review_note === "string" ? draft.review_note.trim() : null };
 }
 
 export function saveMaxProjectConfig(
