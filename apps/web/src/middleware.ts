@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { MONITORING_COOKIE, MONITORING_DASHBOARD_PATH, MONITORING_LOGIN_PATH } from "@/lib/monitoring-access";
 import { isMaxOwnerPreviewPath } from "@/lib/max-owner-preview-path";
 import { MAX_STAFF_DISABLED_REDIRECT, MAX_STAFF_JOIN_PATH, MAX_STAFF_PATH, maxStaffEnabled, maxStaffReturnPath } from "@/lib/max-staff-path";
 
@@ -55,7 +56,7 @@ export function middleware(req: NextRequest) {
 
   const session = req.cookies.get(AUTH_COOKIE);
   const isGeneralAuthRoute = path === "/login" || path === "/register";
-  if (isGeneralAuthRoute || path === "/max/register" || path === "/oauth/complete" || path === MAX_STAFF_JOIN_PATH) {
+  if (isGeneralAuthRoute || path === MONITORING_LOGIN_PATH || path === "/max/register" || path === "/oauth/complete" || path === MAX_STAFF_JOIN_PATH) {
     const canonicalResponse = canonicalAuthNavigation(req);
     if (canonicalResponse) return canonicalResponse;
   }
@@ -92,7 +93,15 @@ export function middleware(req: NextRequest) {
     path === "/max" ||
     path.startsWith("/max/");
 
-  if (!session && !isGeneralAuthRoute && !isPublicMaxRoute && isProtectedRoute) {
+  const isMonitoringDashboard = path === MONITORING_DASHBOARD_PATH;
+  const monitoringSession = isMonitoringDashboard && req.cookies.has(MONITORING_COOKIE);
+  if (!session && !monitoringSession && !isGeneralAuthRoute && !isPublicMaxRoute && isProtectedRoute) {
+    if (isMonitoringDashboard) {
+      const url = req.nextUrl.clone();
+      url.pathname = MONITORING_LOGIN_PATH;
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
     const url = req.nextUrl.clone();
     const staffReturn = maxStaffReturnPath(path);
     url.pathname = path.startsWith("/max") && !isMaxOwnerPreviewPath(path) && !staffReturn ? "/max/register" : "/login";
@@ -123,5 +132,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/", "/account/:path*", "/billing/:path*", "/admin/:path*", "/max/:path*", "/login", "/register", "/oauth/complete"],
+  matcher: ["/", "/account/:path*", "/billing/:path*", "/admin/:path*", "/max/:path*", "/login", "/register", "/oauth/complete", "/monitoring/login"],
 };

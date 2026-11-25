@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import select
 
-from yleum_api.core.deps import get_admin_user, get_current_user
+from yleum_api.core.deps import get_current_user, get_optional_user
 from yleum_api.main import app
 from yleum_api.models.project import Project
 from yleum_api.models.studio_activity import StudioActivity
@@ -50,10 +50,10 @@ async def test_admin_queries_execute_on_postgres_and_degrade_explicitly(client, 
     assert (await client.get(BASE + "/catalog")).status_code == 401
     assert (await client.get(BASE + "/metrics/1")).status_code == 401
     assert (await client.get("/internal/monitoring/metrics")).status_code == 404
-    operator = User(email="monitoring-admin@example.test", password_hash="test")
+    operator = User(email="monitoring-admin@example.test", password_hash="test", role="admin")
     db_session.add(operator)
     await db_session.commit()
-    app.dependency_overrides[get_admin_user] = lambda: operator
+    app.dependency_overrides[get_optional_user] = lambda: operator
 
     response = await client.get(BASE + "/catalog")
     assert response.status_code == 200
@@ -74,7 +74,7 @@ async def test_admin_queries_execute_on_postgres_and_degrade_explicitly(client, 
 
 
 async def test_studio_receipts_deduplicate_and_keep_customer_scope(client, db_session):
-    owner = User(email="monitoring-actor@example.test", password_hash="test")
+    owner = User(email="monitoring-actor@example.test", password_hash="test", role="admin")
     other = User(email="monitoring-other@example.test", password_hash="test")
     db_session.add_all([owner, other])
     await db_session.flush()
@@ -88,7 +88,7 @@ async def test_studio_receipts_deduplicate_and_keep_customer_scope(client, db_se
     await db_session.commit()
 
     app.dependency_overrides[get_current_user] = lambda: owner
-    app.dependency_overrides[get_admin_user] = lambda: owner
+    app.dependency_overrides[get_optional_user] = lambda: owner
     for kind in ("open", "active", "error", "active"):
         receipt = {"project_id": str(project.id), "kind": kind, "release": "abc1234"}
         assert (await client.post("/api/studio/activity", json=receipt)).status_code == 204
@@ -121,7 +121,7 @@ async def test_studio_receipts_deduplicate_and_keep_customer_scope(client, db_se
 
 
 async def test_publication_metrics_use_terminal_controller_facts(client, db_session, monkeypatch):
-    operator = User(email="monitoring-publish@example.test", password_hash="test")
+    operator = User(email="monitoring-publish@example.test", password_hash="test", role="admin")
     db_session.add(operator)
     await db_session.flush()
     project = Project(
@@ -129,7 +129,7 @@ async def test_publication_metrics_use_terminal_controller_facts(client, db_sess
     )
     db_session.add(project)
     await db_session.commit()
-    app.dependency_overrides[get_admin_user] = lambda: operator
+    app.dependency_overrides[get_optional_user] = lambda: operator
 
     end = datetime.now(UTC) - timedelta(minutes=5)
     start = end - timedelta(seconds=22)

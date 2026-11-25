@@ -38,14 +38,18 @@ export type ServerFetchResult<T> =
 
 export async function serverApiFetchResult<T>(
   path: string,
+  additionalCookies: readonly string[] = [],
 ): Promise<ServerFetchResult<T>> {
   const c = await cookies();
-  const token = c.get(COOKIE_NAME)?.value;
-  if (!token) return { ok: false, status: 401 };
+  const forwarded = [COOKIE_NAME, ...additionalCookies].flatMap((name) => {
+    const value = c.get(name)?.value;
+    return value ? [`${name}=${value}`] : [];
+  });
+  if (forwarded.length === 0) return { ok: false, status: 401 };
 
   try {
     const r = await fetch(`${apiBaseUrl()}${path}`, {
-      headers: { Cookie: `${COOKIE_NAME}=${token}` },
+      headers: { Cookie: forwarded.join("; ") },
       cache: "no-store",
     });
     if (!r.ok) return { ok: false, status: r.status };

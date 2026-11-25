@@ -44,6 +44,8 @@
 
 .monitor-header { display: flex; justify-content: space-between; align-items: end; gap: 1rem; margin-bottom: 1.25rem; }
 .monitor-header h1 { font-size: 2rem; font-weight: 650; letter-spacing: -.025em; margin: .18rem 0 0; line-height: 1.18; }
+.monitor-context { display: flex; flex-wrap: wrap; align-items: center; gap: 0 .9rem; }
+.monitor-session-error { color: var(--series-rose); font-size: .75rem; }
 .monitor-back { display: inline-flex; align-items: center; gap: .4rem; color: var(--monitor-accent); text-decoration: none; min-height: 1.85rem; }
 .monitor-back:hover { text-decoration: underline; }
 .monitor-refresh, .monitor-live, .monitor-last, .monitor-reading-status {

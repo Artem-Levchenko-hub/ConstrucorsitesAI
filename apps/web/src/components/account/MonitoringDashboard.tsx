@@ -2,7 +2,7 @@
 
 import { useQueries, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import {
-  Activity, ArrowLeft, ArrowUpRight, ChevronRight, CircleAlert, Clock3, Database,
+  Activity, ArrowLeft, LogOut, ArrowUpRight, ChevronRight, CircleAlert, Clock3, Database,
   Layers3, List, Radio, RefreshCw, Search, Server, Workflow,
 } from "lucide-react";
 import Link from "next/link";
@@ -13,6 +13,8 @@ import {
   type MetricChoice, type MetricDefinition, type MetricGroup, type MetricPoint,
   type MetricResult, type MetricScope, type MonitorPeriod,
 } from "@/lib/api/monitoring";
+import { apiFetch } from "@/lib/api/client";
+import { MONITORING_LOGIN_PATH, MONITORING_SESSION_API, type MonitoringRole } from "@/lib/monitoring-access";
 import { appendSnapshots, CURRENT_METRICS, pointUnit } from "@/lib/monitoring-chart";
 import { formatDate, formatNumber, MonitoringChart } from "./MonitoringChart";
 import "./monitoring.css";
@@ -262,7 +264,41 @@ function MetricCatalog({ metrics, search, setSearch, onSelect }: {
   );
 }
 
-export function MonitoringDashboard() {
+function MonitoringSessionLinks({ role }: { role: MonitoringRole }) {
+  const [pending, setPending] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  async function signOut() {
+    setPending(true);
+    setFailed(false);
+    try {
+      await apiFetch<void>(MONITORING_SESSION_API, { method: "DELETE", timeoutMs: 10000 });
+      window.location.assign(MONITORING_LOGIN_PATH);
+    } catch {
+      setFailed(true);
+      setPending(false);
+    }
+  }
+
+  if (role === "admin") {
+    return (
+      <nav className="monitor-context" aria-label="Доступ к мониторингу">
+        <Link href="/admin/max" className="monitor-back"><ArrowLeft aria-hidden="true" size={15} />Админ-центр</Link>
+        <Link href={MONITORING_LOGIN_PATH} className="monitor-back">Вход наблюдателя</Link>
+      </nav>
+    );
+  }
+  return (
+    <div className="monitor-context">
+      <button className="monitor-back" type="button" disabled={pending} onClick={() => void signOut()}>
+        <LogOut aria-hidden="true" size={15} />{pending ? "Выходим…" : "Выйти из мониторинга"}
+      </button>
+      {failed && <span role="alert" className="monitor-session-error">Не удалось выйти. Повторите попытку.</span>}
+    </div>
+  );
+}
+
+export function MonitoringDashboard({ role }: { role: MonitoringRole }) {
   const [scope, setScope] = useState<MetricScope>(DEFAULT_SCOPE);
   const [view, setView] = useState<View>("overview");
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -321,7 +357,7 @@ export function MonitoringDashboard() {
       <div className="monitor-frame">
         <header className="monitor-header">
           <div>
-            <Link href="/admin/max" className="monitor-back"><ArrowLeft aria-hidden="true" size={15} />Админ-центр</Link>
+            <MonitoringSessionLinks role={role} />
             <h1>Мониторинг</h1>
           </div>
           <div className="monitor-refresh">

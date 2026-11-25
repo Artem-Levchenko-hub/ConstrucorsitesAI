@@ -47,6 +47,7 @@ from yleum_api.routers import max_studio as max_studio_router
 from yleum_api.routers import messages as messages_router
 from yleum_api.routers import models_router
 from yleum_api.routers import monitoring as monitoring_router
+from yleum_api.routers import monitoring_access as monitoring_access_router
 from yleum_api.routers import monitoring_ingress as monitoring_ingress_router
 from yleum_api.routers import moysklad_vendor as moysklad_vendor_router
 from yleum_api.routers import payments as payments_router
@@ -282,6 +283,7 @@ def create_app() -> FastAPI:
     app.include_router(billing_router.router)
     app.include_router(admin_router.router)
     app.include_router(monitoring_router.router)
+    app.include_router(monitoring_access_router.router)
     app.include_router(monitoring_ingress_router.router)
     app.include_router(support_router.router)
     app.include_router(account_router.router)

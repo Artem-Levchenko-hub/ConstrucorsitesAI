@@ -139,6 +139,22 @@ describe("auth middleware", () => {
     },
   );
 
+  it("routes a signed-out monitoring visitor to the dedicated entry", () => {
+    const response = middleware(request("/admin/max/monitoring"));
+    expect(new URL(response.headers.get("location")!).pathname).toBe("/monitoring/login");
+    expect(middleware(request("/monitoring/login")).headers.get("location")).toBeNull();
+  });
+
+  it("accepts the monitoring cookie at the dashboard boundary only", () => {
+    const withViewer = (path: string) => new NextRequest(
+      `https://constructor.lead-generator.ru${path}`,
+      { headers: { cookie: "__Host-yleum_monitoring=fixture" } },
+    );
+    expect(middleware(withViewer("/admin/max/monitoring")).headers.get("x-middleware-next")).toBe("1");
+    const ordinary = middleware(withViewer("/admin/max")).headers.get("location");
+    expect(new URL(ordinary!).pathname).toBe("/login");
+  });
+
   it("still sends unauthenticated protected routes to login", () => {
     const response = middleware(request("/billing/transactions?filter=recent"));
 

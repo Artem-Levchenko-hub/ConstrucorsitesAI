@@ -12,11 +12,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yleum_api.core.config import get_settings
-from yleum_api.core.deps import AdminUserDep, SessionDep
+from yleum_api.core.deps import SessionDep
 from yleum_api.core.errors import ApiError
 from yleum_api.models.deploy_target import DeployTarget
 from yleum_api.models.project import Project
 from yleum_api.models.user import User
+from yleum_api.routers.monitoring_access import MonitoringAccessDep
 from yleum_api.services import orchestrator_client
 from yleum_api.services.monitoring.catalog import METRICS
 from yleum_api.services.monitoring.database import DATABASE_METRICS
@@ -151,14 +152,14 @@ async def _vps_coverage(
 
 
 @router.get("/catalog")
-async def catalog(_admin: AdminUserDep, response: Response) -> list[Definition]:
+async def catalog(_access: MonitoringAccessDep, response: Response) -> list[Definition]:
     response.headers["Cache-Control"] = "no-store"
     return [_definition(metric_id) for metric_id in METRICS]
 
 
 @router.get("/filters")
 async def filters(
-    _admin: AdminUserDep,
+    _access: MonitoringAccessDep,
     session: SessionDep,
     response: Response,
 ) -> Filters:
@@ -348,7 +349,7 @@ async def _metric_result(
 @router.get("/metrics/{metric_id}")
 async def metric_data(
     metric_id: int,
-    _admin: AdminUserDep,
+    _access: MonitoringAccessDep,
     session: SessionDep,
     response: Response,
     period: Period = "24h",
