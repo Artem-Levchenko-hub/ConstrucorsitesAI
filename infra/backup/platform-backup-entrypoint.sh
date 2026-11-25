@@ -100,6 +100,17 @@ latest=$(find /opt/omnia-runtime/backups -mindepth 1 -maxdepth 1 -type d -name '
 name=$(basename "$latest")
 dest="$backup_day/platform-encrypted/$name"
 install -d -m 0700 "$dest"
-cp "$latest"/*.cms "$latest/OFFHOST_SHA256" "$dest/"
-chmod 0600 "$dest"/*
+shopt -s nullglob
+bundles=("$latest"/*.cms)
+[[ "${#bundles[@]}" -eq 1 ]]
+bundle=${bundles[0]}
+[[ -f "$bundle" && ! -L "$bundle" && "$(stat -c '%u:%a' -- "$bundle")" == 0:600 ]]
+# Two local paths on the same filesystem share one immutable ciphertext inode.
+# MinIO and off-host copies continue to have their own storage.
+if [[ "$(stat -c %d -- "$bundle")" == "$(stat -c %d -- "$dest")" ]]; then
+  ln -- "$bundle" "$dest/"
+else
+  cp -- "$bundle" "$dest/"
+fi
+install -m 0600 -- "$latest/OFFHOST_SHA256" "$dest/OFFHOST_SHA256"
 echo PLATFORM_BACKUP_DONE

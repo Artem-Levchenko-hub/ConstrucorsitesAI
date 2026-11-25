@@ -24,7 +24,10 @@ from yleum_orchestrator.services.build_retention import (
 from yleum_orchestrator.services.build_retention import (
     CheckpointSelection as CheckpointSelection,
 )
-from yleum_orchestrator.services.build_retention import checkpoint_selection
+from yleum_orchestrator.services.build_retention import (
+    checkpoint_selection,
+    deletion_fences_lifecycle,
+)
 from yleum_orchestrator.services.cell_state import CellWorkspaceState
 
 ARCHIVE = re.compile(r"[0-9a-f]{32}\.tar")
@@ -189,7 +192,11 @@ def _workspace_state(root: Path, path: Path, data: Any) -> CellWorkspaceState | 
     return state
 
 
-def _workspace_activity(state: CellWorkspaceState, busy_workspaces: set[str]) -> int:
+def _workspace_activity(
+    state: CellWorkspaceState, busy_workspaces: set[str], deletion_marker: object | None,
+) -> int:
+    if deletion_fences_lifecycle(state, deletion_marker):
+        return 0
     unresolved = sum(
         operation.status not in {"completed", "failed"} for operation in state.operations
     )
@@ -325,14 +332,14 @@ def scan_state(
             path = directory / name
             data = _read_json(path)
             state = _workspace_state(root, path, data)
-            if state is not None and busy_workspaces is not None:
-                active += _workspace_activity(state, busy_workspaces)
             declarations = _declared_checkpoints(data)
             planned = _planned_checkpoint(path, root, data)
             marker = root / "cell-deletions" / path.name
             deleted = None
             if path.parent == root / "project-cells" and (marker.exists() or marker.is_symlink()):
                 deleted = _read_json(marker)
+            if state is not None and busy_workspaces is not None:
+                active += _workspace_activity(state, busy_workspaces, deleted)
             selection = checkpoint_selection(root, path, data, deleted)
             if selection is not None:
                 if selections is not None:

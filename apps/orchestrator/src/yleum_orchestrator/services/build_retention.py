@@ -78,8 +78,34 @@ def _confirmed_deleted(state: CellWorkspaceState, marker: object | None) -> bool
         and current
         and current.kind == "destroy"
         and current.status == "completed"
+        and current.phase == "completed"
         and current.fencing_epoch == state.fencing_epoch
         and state.bundle_state == "retained"
+    )
+
+
+def deletion_fences_lifecycle(state: CellWorkspaceState, marker: object | None) -> bool:
+    """Earlier activity cannot reopen a workspace after a confirmed teardown."""
+    lease_epoch = state.active_generation_fencing_epoch
+    return (
+        state.project_id is not None
+        and state.owner_id is not None
+        and state.resource_names is not None
+        and state.phase == "completed"
+        and _confirmed_deleted(state, marker)
+        and (state.active_generation_run_id is None) == (lease_epoch is None)
+        and (lease_epoch is None or 0 < lease_epoch < state.fencing_epoch)
+        and all(
+            operation.kind in LIFECYCLE_KINDS
+            and (
+                operation.status in {"completed", "failed"}
+                or (
+                    operation.status in {"running", "indeterminate"}
+                    and operation.fencing_epoch < state.fencing_epoch
+                )
+            )
+            for operation in state.operations
+        )
     )
 
 

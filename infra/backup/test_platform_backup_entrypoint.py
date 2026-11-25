@@ -142,6 +142,30 @@ class PhysicalPrivateDay(unittest.TestCase):
         self.assertEqual(hashlib.sha256(marker.read_bytes()).hexdigest(), digest)
         self.assertEqual(stable_metadata(marker), before)
 
+    def test_local_mirror_shares_immutable_bytes_and_survives_source_unlink(self):
+        source = self.root / "source"
+        dest = self.root / "mirror"
+        source.mkdir(mode=0o700)
+        dest.mkdir(mode=0o700)
+        bundle = source / "verified.cms"
+        bundle.write_bytes(b"disposable encrypted fixture")
+        bundle.chmod(0o600)
+        witness = source / "OFFHOST_SHA256"
+        witness.write_text("fixture checksum", encoding="utf-8")
+        text = ENTRYPOINT.read_text(encoding="utf-8")
+        mirror = "shopt -s nullglob\n" + text.split("shopt -s nullglob\n", 1)[1]
+        subprocess.run(
+            ["bash", "-ec", 'latest=$1; dest=$2\n' + mirror, "fixture", str(source), str(dest)],
+            check=True,
+            capture_output=True,
+        )
+        linked = dest / bundle.name
+        self.assertTrue(linked.samefile(bundle))
+        self.assertEqual(stat.S_IMODE(linked.stat().st_mode), 0o600)
+        self.assertEqual((dest / witness.name).read_bytes(), witness.read_bytes())
+        bundle.unlink()
+        self.assertEqual(linked.read_bytes(), b"disposable encrypted fixture")
+
     def test_fresh_day_is_0700_and_existing_0700_is_idempotent(self):
         day = self.root / self.day
         self.assertFalse(day.exists())

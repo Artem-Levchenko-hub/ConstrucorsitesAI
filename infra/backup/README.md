@@ -191,6 +191,10 @@ application deployment path.
    explicit operator decision (`BACKUP_PRUNE_ENABLED=true`, positive
    `RETENTION_DAYS`); invalid policy values fail before taking a backup. Backup
    preservation directories are never considered timestamped expiry targets.
+   The encrypted local mirror uses a hard link when it shares a filesystem with
+   the canonical bundle and a copy on a separate filesystem. Pruning one local
+   path leaves the other path readable. The mirror is on the same host and
+   cannot substitute for verification of the independent off-host archive.
 4. Verify root's strict-host-key SSH aliases `commerce` and `runtime`, their
    noninteractive sudo, and the runtime `/usr/local/bin/kubectl` context `default`.
    The Commerce dump runs as `zeuszcz`; only a new private staging directory is

@@ -221,6 +221,62 @@ def test_nonterminal_operation_is_busy(tmp_path, without_checkpoints, status):
     assert roots.active_operations == 1
 
 
+@pytest.mark.parametrize(
+    ("marker_fault", "lease_epoch", "operation_epoch", "expected_busy"),
+    [
+        (None, 1, 1, False),
+        (None, None, 1, False),
+        ("missing", 1, 1, True),
+        ("foreign", 1, 1, True),
+        ("wrong_operation", 1, 1, True),
+        (None, 2, 1, True),
+        (None, None, 2, True),
+        ("incomplete", 1, 1, True),
+    ],
+)
+def test_completed_deletion_supersedes_only_earlier_activity(
+    tmp_path, without_checkpoints, marker_fault, lease_epoch, operation_epoch, expected_busy,
+):
+    path = edit_cell(tmp_path, bundle_state="retained")
+    value = json.loads(path.read_text())
+    workspace = value["workspace"]
+    destroy = workspace["operations"][-1]
+    destroy.update(kind="destroy", fencing_epoch=2, bundle_state="retained")
+    previous = {
+        **destroy,
+        "operation_id": str(UUID(int=201)),
+        "kind": "restore",
+        "status": "indeterminate",
+        "fencing_epoch": operation_epoch,
+    }
+    workspace.update(
+        operations=[previous, destroy],
+        fencing_epoch=2,
+        active_generation_run_id=str(UUID(int=202)) if lease_epoch is not None else None,
+        active_generation_fencing_epoch=lease_epoch,
+    )
+    if marker_fault == "incomplete":
+        destroy["status"] = "indeterminate"
+    write_json(path, value)
+
+    if marker_fault != "missing":
+        write_json(tmp_path / "cell-deletions" / path.name, {
+            "workspace_id": PRODUCTION if marker_fault == "foreign" else WORKSPACE,
+            "operation_id": (
+                previous["operation_id"] if marker_fault == "wrong_operation"
+                else destroy["operation_id"]
+            ),
+            "fencing_epoch": 2,
+        })
+    name = "c" * 32 + ".tar"
+    write_json(tmp_path / "retained.json", {"archive": name})
+
+    roots = collect(tmp_path)
+    assert bool(roots.active_operations) is expected_busy
+    assert (WORKSPACE in roots.busy_workspaces) is expected_busy
+    assert name in roots.archive_names
+
+
 def test_healthy_running_application_is_not_an_active_operation(tmp_path, without_checkpoints):
     edit_cell(tmp_path, bundle_state="resources_ready")
     roots = collect(tmp_path)

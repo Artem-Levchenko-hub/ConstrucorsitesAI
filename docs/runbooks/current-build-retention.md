@@ -35,7 +35,11 @@ investigation; an unreadable checkpoint is never treated as an empty inventory.
 An image error fails the run. Busy workspaces are preserved for a later sweep.
 An unresolved lifecycle also aborts the host archive sweep, including files
 whose checkpoint reference may not have been published before a crash. Reconcile
-the operation instead of deleting its metadata or bypassing this guard.
+the operation instead of deleting its metadata or bypassing this guard. A matching
+deletion fence and a completed destroy supersede known unresolved operations
+and generation leases at strictly older epochs. Their metadata and referenced
+archives remain protected. A missing fence, unknown status or same-epoch
+operation still blocks deletion.
 
 Before the first run, archive only the frozen metadata of already deleted test
 projects through the separately reviewed, exact-path retirement manifest and
