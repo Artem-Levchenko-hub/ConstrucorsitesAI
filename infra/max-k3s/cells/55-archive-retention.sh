@@ -38,7 +38,7 @@ WorkingDirectory=$ORCH
 EnvironmentFile=$ENV_FILE
 Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=$PYTHON $COLLECTOR --state-root $STATE_ROOT --min-age-seconds 7200 --report $RETENTION_ROOT/build-report.json --apply
-TimeoutStartSec=300
+TimeoutStartSec=900
 Nice=19
 IOSchedulingClass=idle
 NoNewPrivileges=true

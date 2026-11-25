@@ -1586,14 +1586,17 @@ class CellPublicationService:
             item["response"].get("run_id") in self._tasks for item in saved["history"]
         ):
             return None
-        for item in saved["history"]:
-            if item["response"]["phase"] in _ACTIVE:
-                item["response"].update(
+        interrupted = [
+            item["response"] for item in saved["history"] if item["response"]["phase"] in _ACTIVE
+        ]
+        if interrupted:
+            for response in interrupted:
+                response.update(
                     phase="failed",
                     finished_at=_now(),
                     error="publication interrupted; retained public release reconciled",
                 )
-        self._write(project_id, saved)
+            self._write(project_id, saved)
         release = saved.get("active_release")
         if KubernetesPlacement.placed(release) or (release is None and self.placement is not None):
             return await self._reconcile_kubernetes(project_id, path)
@@ -1633,8 +1636,9 @@ class CellPublicationService:
                 ):
                     raise CellResourceError("public HTTPS recovery failed")
                 saved = self._read(project_id)
-                saved["activation_pending"] = None
-                self._write(project_id, saved)
+                if saved.get("activation_pending") is not None:
+                    saved["activation_pending"] = None
+                    self._write(project_id, saved)
         return {"project_id": str(project_id), "state": "ready"}
 
     # ---- Phase 3 / stage A: the release lives in the runtime cluster ----------
@@ -2240,8 +2244,9 @@ class CellPublicationService:
                     runtime.prune_release_volumes, project_id, release["release_id"]
                 )
             saved = self._read(project_id)
-            saved["activation_pending"] = None
-            self._write(project_id, saved)
+            if saved.get("activation_pending") is not None:
+                saved["activation_pending"] = None
+                self._write(project_id, saved)
         return {"project_id": str(project_id), "state": "ready"}
 
 

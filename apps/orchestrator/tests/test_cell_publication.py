@@ -481,7 +481,7 @@ async def test_crash_after_candidate_start_reconciles_previous_code_without_rese
         value.project_id,
         {
             "project_id": str(value.project_id),
-            "history": [],
+            "history": [{"response": {"phase": "swapping", "run_id": str(UUID(int=22))}}],
             "active_release": accepted,
             "production_workspace_id": str(service.production_identity(value)),
             "activation_pending": str(UUID(int=22)),
@@ -527,7 +527,49 @@ async def test_crash_after_candidate_start_reconciles_previous_code_without_rese
         "code": str(UUID(int=21)),
         "data": ["created-before-update", "written-during-update"],
     }
-    assert service._read(value.project_id).get("activation_pending") is None
+    settled = service._read(value.project_id)
+    assert settled.get("activation_pending") is None
+    assert settled["history"][0]["response"]["phase"] == "failed"
+    journal = service._project_path(value.project_id)
+    identity = journal.stat()
+    assert await service.reconcile() == result
+    assert journal.stat().st_mtime_ns == identity.st_mtime_ns
+    assert journal.stat().st_ino == identity.st_ino
+
+
+@pytest.mark.parametrize("published", [False, True])
+async def test_reconcile_does_not_replace_settled_publication_journal(tmp_path, published):
+    from unittest.mock import AsyncMock
+
+    from yleum_orchestrator.services.cell_publication import CellPublicationService
+
+    value = request()
+    service = CellPublicationService(SimpleNamespace(), root=tmp_path)
+    image = "registry.yleum.ru/max-app/example:accepted"
+    release = {"placement": {"backend": "kubernetes", "app_image": image}}
+    if published:
+        runtime = SimpleNamespace(
+            status=lambda _project_id: {
+                "present": True, "ready": {"app": True}, "app_image": image,
+            },
+        )
+        service._k8s = SimpleNamespace(runtime=runtime)
+        service._upgrade_kubernetes_project_roles = AsyncMock()
+    service._write(
+        value.project_id,
+        {
+            "project_id": str(value.project_id),
+            "history": [{"response": {"phase": "done"}}],
+            "active_release": release if published else None,
+        },
+    )
+    journal = service._project_path(value.project_id)
+    identity = journal.stat()
+
+    expected = [{"project_id": str(value.project_id), "state": "ready"}] if published else []
+    assert await service.reconcile() == expected
+    assert journal.stat().st_mtime_ns == identity.st_mtime_ns
+    assert journal.stat().st_ino == identity.st_ino
 
 
 async def test_failed_public_data_quiesce_retains_runtime_and_requires_recovery(tmp_path):
