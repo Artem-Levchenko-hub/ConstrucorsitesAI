@@ -475,6 +475,13 @@ lock. An in-flight check retains its own operation limits. The guest command is
 never replayed by that check. An existing protection hold
 returns a bound pre-effect conflict before starting a new ensure mutation.
 
+The shell dispatch evidence successor binds the workspace router, command
+adapter, Docker command result and legacy Docker backend as one complete source
+bundle. The optional HTTP header carries dispatch evidence. Persisted receipts,
+workspace locks, deadlines and physical retirement checks use the same protocols.
+The complete dispatch-deadline predecessor remains supported. Mixing source
+files from these bundles denies quiescence.
+
 ### Recovering a stopped fast check after source verification failed
 
 The source-guard recovery bundle changes only the startup checker. A receipt

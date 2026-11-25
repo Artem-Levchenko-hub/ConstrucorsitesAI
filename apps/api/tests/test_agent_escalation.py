@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 
@@ -230,13 +231,31 @@ def _trace_stalled_loop(escalate_model, *, misses):
     return result, requests, events
 
 
+def _assert_matching_stalled_events(events, expected_events):
+    """Compare both event traces after validating their independent stall identities."""
+    seen: set[UUID] = set()
+
+    def comparable(trace):
+        events_without_ids = deepcopy(trace)
+        for event, data in events_without_ids:
+            if event == "agent.stalled":
+                call_id = data["tool_diagnostic"].pop("call_id")
+                identity = UUID(call_id)
+                assert identity.version == 4 and str(identity) == call_id
+                assert identity not in seen
+                seen.add(identity)
+        return events_without_ids
+
+    assert comparable(events) == comparable(expected_events)
+
+
 @pytest.mark.parametrize("misses", [2, 99])
 def test_same_model_consumes_fallback_without_false_upgrade_or_request_changes(misses, capsys):
     expected, expected_requests, expected_events = _trace_stalled_loop(None, misses=misses)
     result, requests, events = _trace_stalled_loop("claude-sonnet-5.5", misses=misses)
 
     assert requests == expected_requests
-    assert events == expected_events
+    _assert_matching_stalled_events(events, expected_events)
     assert (result.done, result.stop_reason, result.steps) == (
         expected.done, expected.stop_reason, expected.steps,
     )
@@ -269,7 +288,8 @@ def test_absent_fallback_keeps_identical_requests_events_and_abort(fallback, cap
     expected, expected_requests, expected_events = _trace_stalled_loop(None, misses=99)
     result, requests, events = _trace_stalled_loop(fallback, misses=99)
 
-    assert requests == expected_requests and events == expected_events
+    assert requests == expected_requests
+    _assert_matching_stalled_events(events, expected_events)
     assert result.stop_reason == expected.stop_reason == "stalled"
     assert len(requests) == ab._NO_ACTION_ABORT_AT
     assert "ESCALATE" not in capsys.readouterr().out

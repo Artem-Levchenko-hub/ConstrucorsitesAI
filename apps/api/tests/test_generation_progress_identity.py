@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from yleum_api.models.generation_event import GenerationEvent
 from yleum_api.schemas.message import MessagePublic
 from yleum_api.services.agent_progress import sanitize_agent_step
 from yleum_api.services.generation import progress
@@ -56,33 +57,19 @@ async def test_storage_and_wire_share_exact_identity_despite_different_detail_li
     recorder = progress.GenerationProgress(lambda: session, uuid4(), uuid4(), uuid4())
     session.message.project_id = recorder.project_id
     event_id = uuid4()
+    committed_at_publication = []
 
     async def append(_session, **kwargs):
         if not durable:
             return None
-        return SimpleNamespace(
-            id=event_id, generation_run_id=kwargs["run_id"], seq=7,
+        return GenerationEvent(
+            id=event_id, generation_run_id=kwargs["run_id"],
+            project_id=kwargs["project_id"], message_id=kwargs["message_id"], seq=7,
             event_type=kwargs["event_type"], payload=redact_event_payload(kwargs["payload"]),
         )
 
-    async def publish(project_id, event_type, payload):
-        assert session.committed
-        assert project_id == recorder.project_id
-        saved = session.message.agent_steps[0]
-        UUID(saved["eventId"])
-        assert saved["runId"] == str(recorder.run_id)
-        assert saved["detail"] == "x" * 4112
-        assert sanitize_agent_step(saved) == saved
-        if durable:
-            assert event_type == "generation.event"
-            assert (payload["event_id"], payload["run_id"], payload["seq"]) == (
-                saved["eventId"], saved["runId"], saved["seq"],
-            )
-            assert len(payload["data"]["detail"]) == 4096
-        else:
-            assert event_type == "agent.step"
-            assert payload == {"message_id": str(recorder.assistant_message_id), **saved}
-            assert "seq" not in saved and "seq" not in payload
+    async def publish(_project_id, _event_type, _payload):
+        committed_at_publication.append(session.committed)
 
     monkeypatch.setattr(progress, "append_generation_event", append)
     published = AsyncMock(side_effect=publish)
@@ -92,6 +79,25 @@ async def test_storage_and_wire_share_exact_identity_despite_different_detail_li
         "detail": "x" * 4112, "ok": True,
     })
     published.assert_awaited_once()
+    assert committed_at_publication == [True]
+    project_id, event_type, payload = published.await_args.args
+    assert project_id == recorder.project_id
+    saved = session.message.agent_steps[0]
+    UUID(saved["eventId"])
+    assert saved["runId"] == str(recorder.run_id)
+    assert saved["detail"] == "x" * 4112
+    assert sanitize_agent_step(saved) == saved
+    if durable:
+        assert event_type == "generation.event"
+        assert payload["data"]["message_id"] == str(recorder.assistant_message_id)
+        assert (payload["event_id"], payload["run_id"], payload["seq"]) == (
+            saved["eventId"], saved["runId"], saved["seq"],
+        )
+        assert len(payload["data"]["detail"]) == 4096
+    else:
+        assert event_type == "agent.step"
+        assert payload == {"message_id": str(recorder.assistant_message_id), **saved}
+        assert "seq" not in saved and "seq" not in payload
     assert recorder.steps == session.message.agent_steps
 
 
@@ -173,9 +179,11 @@ async def test_full_count_and_latest_survive_cap_restart_and_failed_commit(monke
         sequence += 1
         if not durable:
             return None
-        return SimpleNamespace(id=uuid4(), generation_run_id=recorder.run_id, seq=sequence,
-                               event_type=kwargs["event_type"],
-                               payload=redact_event_payload(kwargs["payload"]))
+        return GenerationEvent(
+            id=uuid4(), generation_run_id=kwargs["run_id"], project_id=kwargs["project_id"],
+            message_id=kwargs["message_id"], seq=sequence, event_type=kwargs["event_type"],
+            payload=redact_event_payload(kwargs["payload"]),
+        )
 
     async def publish(_project_id, event_type, payload):
         published.append(payload["data"] if event_type == "generation.event" else payload)

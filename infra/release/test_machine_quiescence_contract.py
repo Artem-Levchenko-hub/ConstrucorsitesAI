@@ -185,6 +185,7 @@ class PendingFastCheckTests(unittest.TestCase):
             self.checker._PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES,
             self.checker._PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES,
             self.checker._PORTABLE_QUIESCENCE_COMMAND_DISPATCH_DEADLINE_SOURCES,
+            self.checker._PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES,
         ):
             self.assertEqual(
                 self.checker._pending_portable_commands(self.machine, sources=sources),
@@ -469,6 +470,15 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
         self.assert_command_cohorts(before, after, (
             "routers.workspace", "services.generation_reader_inventory", "services.machine_adapter",
             "services.docker_machine_backend", "services.project_machine", added,
+        ))
+
+    def test_shell_dispatch_evidence_accepts_only_complete_predecessor_or_successor(self):
+        before = self.checker._PORTABLE_QUIESCENCE_COMMAND_DISPATCH_DEADLINE_SOURCES
+        after = self.checker._PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES
+        self.assertEqual(before.keys(), after.keys())
+        self.assert_command_cohorts(before, after, (
+            "routers.workspace", "services.docker_cell_resources",
+            "services.docker_py_cell_backend", "services.machine_adapter",
         ))
 
     def test_disk_temp_successor_changes_only_the_reviewed_backend_and_keeps_predecessor(self):
@@ -767,7 +777,7 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             (Path(__file__).parent / "fixtures/source-guard-lease-quiescence-sources.json")
             .read_text()
         )
-        current = self.checker._PORTABLE_QUIESCENCE_COMMAND_DISPATCH_DEADLINE_SOURCES
+        current = self.checker._PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES
         self.checker._require_reviewed_portable_sources(previous)
         self.checker._require_reviewed_portable_sources(previous_lease)
         baseline = json.loads(

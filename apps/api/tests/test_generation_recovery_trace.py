@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from yleum_api.models.generation_event import GenerationEvent
 from yleum_api.services.agent_progress import sanitize_agent_step
 from yleum_api.services.generation.progress import GenerationProgress
 from yleum_api.services.generation.recovery_trace import safe_recovery_trace as normalize
@@ -127,8 +128,9 @@ async def test_generation_trace_boundary_uses_run_identity_and_allowlist(monkeyp
 
 def test_event_replay_sanitizes_historical_trace_and_binds_run():
     run_id = uuid4()
-    event = SimpleNamespace(
-        id=uuid4(), generation_run_id=run_id, seq=1, event_type="generation.trace",
+    event = GenerationEvent(
+        id=uuid4(), generation_run_id=run_id, project_id=uuid4(), message_id=None,
+        seq=1, event_type="generation.trace",
         payload={"run_id": "foreign-run", "stage": "repair", "raw_response": "private-body",
                  "error_origin": "browser", "console_error": {
                      "message": "TypeError", "url": "https://app.test/?secret=private-query"}},
@@ -140,8 +142,9 @@ def test_event_replay_sanitizes_historical_trace_and_binds_run():
 
 
 def test_event_replay_filters_incomplete_historical_provider_row():
-    event = SimpleNamespace(
-        id=uuid4(), generation_run_id=uuid4(), seq=1, event_type="agent.step",
+    event = GenerationEvent(
+        id=uuid4(), generation_run_id=uuid4(), project_id=uuid4(), message_id=None,
+        seq=1, event_type="agent.step",
         payload={"kind": "provider_error", "raw_response": "private-body"},
     )
     assert "private-body" not in str(generation_event_envelope(event))
@@ -263,8 +266,9 @@ def test_nested_trace_replay_binds_authoritative_run_without_mutating_history(ev
     payload = {"step": 1, "kind": "provider_error", "action": "Failure", "recovery_trace": {
         "run_id": "foreign-run", "error_origin": "provider", "provider_call_id": "call-1",
     }}
-    event = SimpleNamespace(
-        id=uuid4(), generation_run_id=run_id, seq=1, event_type=event_type, payload=payload,
+    event = GenerationEvent(
+        id=uuid4(), generation_run_id=run_id, project_id=uuid4(), message_id=None,
+        seq=1, event_type=event_type, payload=payload,
     )
     trace = generation_event_envelope(event)["data"]["recovery_trace"]
     assert trace["run_id"] == str(run_id) and trace["provider_call_id"] == "call-1"

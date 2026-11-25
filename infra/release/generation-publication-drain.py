@@ -335,6 +335,15 @@ _PORTABLE_QUIESCENCE_COMMAND_DISPATCH_DEADLINE_SOURCES = {
     "services.machine_adapter": "00a52e53646ba0fb283267347564989856d674f269109d19c06628b8c1279fd3",
     "services.project_machine": "3eed3f62d8df074d3479904e998a38e5007414248edcbadb7ede884f0645848e",
 }
+# Dispatch evidence travels in the shell response header. The closed command
+# result, lock, deadline and journal protocols still require the full bundle.
+_PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES = {
+    **_PORTABLE_QUIESCENCE_COMMAND_DISPATCH_DEADLINE_SOURCES,
+    "routers.workspace": "a76ebeb6df4a62321526a86a7e28d0f55fc41e48fff88148dc1ca701b66ab8f8",
+    "services.docker_cell_resources": "4feaade6d239dc81a4b7aad1a5c1de41b9d685148d0307e4b4acb49c1b07339e",
+    "services.docker_py_cell_backend": "5cc742b1529bfc9489627a481cdac66d85af9d768319b17aaf4cf70d5ddb9c23",
+    "services.machine_adapter": "35012589071ba3d0d3c7660b9370d1f013a4da9259fe6567568f5ee3029a0ffb",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -367,6 +376,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES,
     _PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES,
     _PORTABLE_QUIESCENCE_COMMAND_DISPATCH_DEADLINE_SOURCES,
+    _PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES,
 )
 # Only these reviewed producers may attest a pending fast_check wrapper.
 _PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES = (
@@ -384,6 +394,7 @@ _PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES = (
     _PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES,
     _PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES,
     _PORTABLE_QUIESCENCE_COMMAND_DISPATCH_DEADLINE_SOURCES,
+    _PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.
