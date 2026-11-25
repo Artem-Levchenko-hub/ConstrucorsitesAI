@@ -37,6 +37,11 @@ def test_saved_snapshot_does_not_imply_main_action_or_customer_obligation():
     assert "Подключить источник рецептов." in result and "От вас" not in result
 
 
+def test_standard_ready_snapshot_uses_one_sentence():
+    result = snapshot_outcome(proof("green", "green"), None, None, owner_message="")
+    assert result == "Приложение готово."
+
+
 def test_private_input_requires_original_commitment_and_displays_the_original():
     advice = {"owner_input": "Внесите предоплату", "owner_request_quote": "Я пришлю свои цены"}
     result = snapshot_outcome(proof("unknown", "unknown"), None, advice,

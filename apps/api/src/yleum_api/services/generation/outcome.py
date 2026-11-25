@@ -12,6 +12,14 @@ from yleum_api.services.generation.recovery_acceptance import (
 from yleum_api.services.max_finalization import ProofBundle
 from yleum_api.services.project_cell_proofs import ProofOutcome
 
+_SNAPSHOT_SAVED = "Версия приложения сохранена."
+_BUILD_PASSED = "Сборка прошла."
+_PREVIEW_STARTED = "Приложение запустилось в среде превью."
+_GENERIC_PREVIEW_CHECK = "Осталось проверить основное действие в превью."
+_STANDARD_SNAPSHOT_OUTCOME = "\n\n".join((
+    _SNAPSHOT_SAVED, _BUILD_PASSED, _PREVIEW_STARTED, _GENERIC_PREVIEW_CHECK,
+))
+
 # Only an explicit commitment can transfer a dependency to the app owner.
 _OWNER_COMMITMENT = re.compile(
     r"(?:(?:я|мы)\s+(?:сам[аи]?\s+)?(?:предоставлю|предоставим|пришлю|пришлём|пришлем|"
@@ -42,16 +50,21 @@ def advice_for_published_source(
     return advice if {**initial, **authored} == published else None
 
 
+def compact_snapshot_outcome(content: str) -> str:
+    """Shorten the exact boilerplate shared by new and historical results."""
+    return "Приложение готово." if content == _STANDARD_SNAPSHOT_OUTCOME else content
+
+
 def snapshot_outcome(
     proof: ProofBundle, acceptance: Acceptance | None, advice: object, *, owner_message: str,
     saw_failed_actions: bool = False,
 ) -> str:
     details = normalize_handoff(advice) or {}
-    paragraphs = ["Версия приложения сохранена."]
+    paragraphs = [_SNAPSHOT_SAVED]
     if proof.full_build is not None and proof.full_build.outcome == ProofOutcome.GREEN:
-        paragraphs.append("Сборка прошла.")
+        paragraphs.append(_BUILD_PASSED)
     if proof.runtime is not None and proof.runtime.outcome == ProofOutcome.GREEN:
-        paragraphs.append("Приложение запустилось в среде превью.")
+        paragraphs.append(_PREVIEW_STARTED)
     if isinstance(acceptance, MealAcceptanceSeal):
         paragraphs.append("В превью проверен сценарий работы с рационом.")
     elif isinstance(acceptance, AcceptanceSealV2):
@@ -62,7 +75,7 @@ def snapshot_outcome(
         action = details.get("primary_action")
         paragraphs.append(
             f"Осталось проверить в превью действие «{action.rstrip('.')}»."
-            if action else "Осталось проверить основное действие в превью."
+            if action else _GENERIC_PREVIEW_CHECK
         )
     if saw_failed_actions:
         paragraphs.append(
@@ -75,4 +88,4 @@ def snapshot_outcome(
         # Display the owner's own commitment. Do not turn model-authored advice
         # into a new demand on the customer.
         paragraphs.append(f"От вас по исходному запросу — «{quote}».")
-    return "\n\n".join(paragraphs)
+    return compact_snapshot_outcome("\n\n".join(paragraphs))
