@@ -175,6 +175,7 @@ function ProjectPromptInput({
     ref.current?.focus();
   };
   const sendsWithoutQuota = bypassesQuota(currentDraft);
+  const queuesOnSend = isStreaming && !sendsWithoutQuota;
   const quotaBlocksDraft = sendDisabled && retryIdentity?.signature !== currentDraft.signature && !sendsWithoutQuota;
   const send = useCallback(async () => {
     if (sendLockRef.current || attachmentsBlocked) return;
@@ -260,8 +261,12 @@ function ProjectPromptInput({
   const pickImages = () => filesRef.current?.click();
   const toggleFonts = () => setFontPanelOpen(open => !open);
   const queuedPlaceholder = compact
-    ? "Напишите следующую правку…"
+    ? placeholder ?? "Напишите следующую правку…"
     : "Можно писать следующий — отправится после текущей генерации";
+  const preserveInputFocus: React.PointerEventHandler<HTMLButtonElement> = event => {
+    const field = ref.current;
+    if (guardMaxDraft && field && field.ownerDocument.activeElement === field) event.preventDefault();
+  };
 
   return (
     <div
@@ -464,6 +469,7 @@ function ProjectPromptInput({
                 type="button"
                 variant="secondary"
                 size="sm"
+                onPointerDown={preserveInputFocus}
                 onClick={onCancel}
                 className="h-11 px-2.5 sm:h-8"
                 title="Прервать текущую генерацию"
@@ -476,10 +482,7 @@ function ProjectPromptInput({
             <Button
               type="button"
               size="sm"
-              onPointerDown={event => {
-                const field = ref.current;
-                if (guardMaxDraft && field && field.ownerDocument.activeElement === field) event.preventDefault();
-              }}
+              onPointerDown={preserveInputFocus}
               onClick={() => {
                 void send();
               }}
@@ -488,7 +491,7 @@ function ProjectPromptInput({
               }
               className="prompt-input-send h-11 gap-1.5 rounded-full px-3.5 sm:h-8"
               title={
-                isStreaming && !sendsWithoutQuota
+                queuesOnSend
                   ? "Будет отправлено после текущей генерации"
                   : "Отправить"
               }
@@ -501,7 +504,7 @@ function ProjectPromptInput({
               <span className="prompt-input-send-label">
                 {isSubmitting
                   ? "Отправляю…"
-                  : isStreaming
+                  : queuesOnSend
                     ? "В очередь"
                     : "Отправить"}
               </span>

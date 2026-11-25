@@ -24,6 +24,7 @@ import { mergeAgentStepsBySequence } from "@/lib/agent-steps";
 import { readAgentToolDiagnostic } from "@/lib/agent-tool-diagnostic";
 import { generationEventStep } from "@/lib/generation-event-step";
 import { generationEventBelongsToRun } from "@/lib/generation-recovery";
+import { isChatMessageStreaming, lastPromptMessage } from "@/lib/chat-message-status";
 import {
   cancelGeneration,
   getLatestGeneration,
@@ -47,6 +48,7 @@ import { readQueuedPrompt, studioPromptQueueKey, writeQueuedPrompt, type QueuedP
 const PROMPT_REFUSALS: Record<string, string> = {
   generation_draining: "Сервис обновляется. Подождите несколько минут и повторите запрос.",
   project_busy: "Проект сейчас занят другой операцией. Подождите немного и отправьте запрос ещё раз.",
+  project_question_required: "Задайте этот вопрос в поле чата.",
   generation_active:
     "Сейчас идёт другая сборка. Дождитесь её завершения и отправьте запрос ещё раз.",
   idempotency_conflict:
@@ -1289,11 +1291,8 @@ export function usePromptStream(projectId: string, projectSlug: string, ownerId?
   }, [queueKey, projectId, connect, recoverSilentStream, watchMessage, cancelPending, fireQueued, updatePending]);
 
   // Reconnect to an in-flight generation we did NOT start in this mount — i.e.
-  // the page was refreshed mid-build. THE fix for "F5 → realtime freezes": the
-  // old code only opened the WS inside submit(), so after reload nobody listened
-  // and the preview stalled forever. We detect the dangling assistant message
-  // (real id, tokens_out === null) and reopen the socket; the server replays the
-  // buffer via stream.sync. Guarded so it never double-connects.
+  // the page was refreshed mid-build. Probe the ordinary assistant message.
+  // When questions fill the history window, recover the message ID from the run.
   useEffect(() => {
     if (USE_MOCKS) return;
     let current = true;
@@ -1301,47 +1300,45 @@ export function usePromptStream(projectId: string, projectSlug: string, ownerId?
       if (cancelRef.current) return; // already have a socket
       if (streamingRef.current) return; // submit owns the active stream
       if (reconnectProbeRef.current) return;
-      const msgs = qc.getQueryData<Message[]>(["messages", projectId]);
-      const last = msgs?.[msgs.length - 1];
-      if (
-        last &&
-        last.role === "assistant" &&
-        last.tokens_out === null &&
-        !last.id.startsWith("__opt_") && // real server id, not an optimistic row
-        !terminalGenerationMessagesRef.current.has(last.id)
-      ) {
-        reconnectProbeRef.current = true;
-        void getLatestGeneration(projectId)
-          .then((generation) => {
-            if (!current || streamingRef.current) return;
-            if (!isActiveGenerationForMessage(generation, last.id)) {
-              refreshOwnerAllowances(qc);
-              terminalGenerationMessagesRef.current.add(last.id);
-              qc.invalidateQueries({ queryKey: ["messages", projectId] });
-              qc.invalidateQueries({ queryKey: ["generation", projectId] });
-              return;
-            }
-            terminalGenerationMessagesRef.current.delete(last.id);
-            streamingRef.current = true;
-            activeGenerationRunRef.current = generation?.id ?? null;
-            activeGenerationMessageRef.current = { projectId, messageId: last.id };
-            reconnectAttemptsRef.current = 0;
-            connect();
-            watchMessage(last.id, () => recoverSilentStream(last.id));
-          })
-          .catch(() => {
-            if (!current || streamingRef.current) return;
-            // The status probe may be the broken transport. Reattaching the
-            // project socket is safe and cannot create a generation.
-            streamingRef.current = true;
-            reconnectAttemptsRef.current = 0;
-            connect();
-            watchMessage(last.id, () => recoverSilentStream(last.id));
-          })
-          .finally(() => {
-            if (current) reconnectProbeRef.current = false;
-          });
-      }
+      const history = qc.getQueryData<Message[]>(["messages", projectId]);
+      if (!history?.length) return;
+      const last = lastPromptMessage(history);
+      if (last && (!isChatMessageStreaming(last) || last.id.startsWith("__opt_")
+        || terminalGenerationMessagesRef.current.has(last.id))) return;
+
+      reconnectProbeRef.current = true;
+      const probe = last ? getLatestGeneration(projectId) : qc.fetchQuery({
+        queryKey: ["generation", projectId], queryFn: () => getLatestGeneration(projectId), retry: false,
+      });
+      void probe.then((generation) => {
+        if (!current || streamingRef.current) return;
+        const messageId = last?.id ?? generation?.assistant_message_id;
+        if (!messageId || generation?.project_id !== projectId || !isActiveGenerationForMessage(generation, messageId)) {
+          if (last) {
+            refreshOwnerAllowances(qc);
+            terminalGenerationMessagesRef.current.add(last.id);
+            qc.invalidateQueries({ queryKey: ["messages", projectId] });
+            qc.invalidateQueries({ queryKey: ["generation", projectId] });
+          }
+          return;
+        }
+        terminalGenerationMessagesRef.current.delete(messageId);
+        streamingRef.current = true;
+        activeGenerationRunRef.current = generation.id;
+        activeGenerationMessageRef.current = { projectId, messageId };
+        reconnectAttemptsRef.current = 0;
+        connect();
+        watchMessage(messageId, () => recoverSilentStream(messageId));
+      }).catch(() => {
+        if (!current || streamingRef.current || !last) return;
+        // A project socket can recover the message when the status probe fails.
+        streamingRef.current = true;
+        reconnectAttemptsRef.current = 0;
+        connect();
+        watchMessage(last.id, () => recoverSilentStream(last.id));
+      }).finally(() => {
+        if (current) reconnectProbeRef.current = false;
+      });
     };
     maybeReconnect();
     const unsub = qc.getQueryCache().subscribe((evt) => {

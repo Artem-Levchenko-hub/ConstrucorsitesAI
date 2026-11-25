@@ -48,7 +48,7 @@ from yleum_api.schemas.integration_runtime import (
     RuntimePaymentRequest,
     RuntimePaymentStatusRequest,
 )
-from yleum_api.services import integration_providers
+from yleum_api.services import integration_providers, max_runtime_observation
 from yleum_api.services.integration_auth import (
     verify_business_analytics_assertion,
     verify_integration_assertion_claims,
@@ -590,6 +590,24 @@ async def request_runtime_ai(
     project = await session.get(Project, project_id)
     if project is None:
         raise ApiError("not_found", "Проект не найден", status.HTTP_404_NOT_FOUND)
+    operation = max_runtime_observation.ai_operation(payload.context.get("task"))
+    try:
+        result = await _run_authenticated_ai(context, project, payload, session, request)
+    except ApiError as exc:
+        await max_runtime_observation.record_ai_outcome(project_id, operation, exc.code)
+        raise
+    await max_runtime_observation.record_ai_outcome(project_id, operation, "ok")
+    return result
+
+
+async def _run_authenticated_ai(
+    context: RuntimeContext,
+    project: Project,
+    payload: RuntimeAIRequest,
+    session: SessionDep,
+    request: Request,
+) -> RuntimeAIPublic:
+    project_id = context.project_id
     if payload.context.get("task") == NUTRITION_TASK:
         encrypted_key = _require_aitunnel_key(
             project, request, general=payload.provider is not None,

@@ -135,7 +135,7 @@ export function ChatMessage({
               Not gated on `streaming` — it self-hides when the message has no
               agent steps, and stays visible after the build so the user can
               review what the agent did. */}
-          {!isUser && projectId && (
+          {!isUser && !message.chat_question && projectId && (
             <AgentTranscript
               projectId={projectId}
               messageId={message.id}

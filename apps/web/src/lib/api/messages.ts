@@ -18,7 +18,9 @@ export type RestorationAdaptationReference = {
 
 export async function listMessages(projectId: string): Promise<Message[]> {
   if (USE_MOCKS) return mockApi.listMessages(projectId);
-  return apiFetch<Message[]>(`/api/projects/${projectId}/messages`);
+  // The MAX editor and preview share this history cache. Keep the real latest
+  // generation turn available even when newer questions fill the page.
+  return apiFetch<Message[]>(`/api/projects/${projectId}/messages?include_generation_context=true`);
 }
 
 /** An uncaught JS error the inspector observed inside the live preview. The

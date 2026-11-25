@@ -8,7 +8,7 @@ import { MaxEditorLayout } from "./MaxEditorLayout";
 import { ChatPanel, type ChatPanelAdaptationHandle } from "@/components/workspace/ChatPanel";
 import { rollback as rollbackSnapshot } from "@/lib/api/snapshots";
 import type { Message, Project, Snapshot } from "@/lib/api/types";
-import { isChatMessageStreaming } from "@/lib/chat-message-status";
+import { isChatMessageStreaming, lastPromptMessage } from "@/lib/chat-message-status";
 import { readMaxLaunch } from "@/lib/max-launch-runner";
 import { upsertSnapshotNewest } from "@/lib/snapshot-history";
 import { MaxLivePreview } from "./MaxLivePreview";
@@ -112,7 +112,7 @@ export function MaxWorkspaceShell({
       const messages = queryClient.getQueryData<Message[]>(["messages", attachment.projectId]);
       return !controller.signal.aborted
         && head === attachment.reference.expected_draft_snapshot_id
-        && !isChatMessageStreaming(messages?.[messages.length - 1])
+        && !isChatMessageStreaming(lastPromptMessage(messages))
         && !readMaxLaunch(attachment.projectId);
     };
     try {

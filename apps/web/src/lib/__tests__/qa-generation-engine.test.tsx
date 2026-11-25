@@ -18,6 +18,7 @@ vi.mock("@/lib/api/messages", async importOriginal => ({
   getLatestGeneration: async () => null,
 }));
 vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));
+vi.mock("@/lib/api/project-chat-question", () => ({ askProjectChatQuestion: async () => ({ answered: false }) }));
 vi.mock("@/lib/api/max-studio", () => ({ getMaxProjectConfig: async () => ({ config_version: 1 }) }));
 vi.mock("@/components/workspace/AgentTranscript", () => ({ AgentTranscript: () => null }));
 vi.mock("@/hooks/useVoiceInput", () => ({ useVoiceInput: () => ({ supported: false, state: "idle" }) }));

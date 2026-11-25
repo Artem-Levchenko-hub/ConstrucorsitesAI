@@ -64,6 +64,20 @@ def no_providers(monkeypatch, owner, **overrides):
     return jobs
 
 
+async def test_owner_help_preserves_first_free_build(db_session):
+    from yleum_api.services.entitlements import admit_free_chat_message, free_chat_allowance
+
+    owner, [project], _ = await owner_projects(db_session, count=1)
+    db_session.add(Message(
+        project_id=project.id, role="user", content="Где посмотреть заявки?", chat_question=True,
+    ))
+    await db_session.flush()
+
+    assert await free_chat_allowance(db_session, owner.id) == (1, 1)
+    assert await admit_free_chat_message(db_session, user_id=owner.id, run_id=uuid4())
+    assert await free_chat_allowance(db_session, owner.id) == (1, 0)
+
+
 async def test_free_second_human_message_other_project_is_denied_before_dispatch(
     client, db_session, monkeypatch
 ):

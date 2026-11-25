@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import { AnimatePresence } from "framer-motion";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, PanelLeftClose } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowDown } from "lucide-react";
 import { toast } from "sonner";
 import {
   connectAppIntegration,
@@ -13,9 +13,8 @@ import {
 } from "@/lib/api/app-integrations";
 import { getLatestGeneration, listMessages } from "@/lib/api/messages";
 import { getMaxProjectConfig } from "@/lib/api/max-studio";
-import {
-  getProductAdviceSnapshotId,
-} from "@/lib/api/product-advice";
+import { getProductAdviceSnapshotId } from "@/lib/api/product-advice";
+import { askProjectChatQuestion } from "@/lib/api/project-chat-question";
 import type {
   AgentStep,
   GenerationRun,
@@ -24,7 +23,7 @@ import type {
   SurveyQuestion,
 } from "@/lib/api/types";
 import { ChatMessage } from "./ChatMessage";
-import { PromptInput, type PromptInputHandle, type PromptReferenceSubmit, type PromptInputSubmitResult } from "./PromptInput";
+import type { PromptInputHandle, PromptReferenceSubmit, PromptInputSubmitResult } from "./PromptInput";
 import { DiscoveryChips } from "./DiscoveryChips";
 import { DiscoveryFrame } from "./DiscoveryFrame";
 import { OnboardingSurvey } from "./OnboardingSurvey";
@@ -33,7 +32,6 @@ import {
   type PromptSubmitOptions,
 } from "@/hooks/usePromptStream";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useWorkspaceStore } from "@/store/workspace";
 import { restorePersistedAgentSteps } from "@/lib/agent-steps";
 import {
   buildAitunnelChatPrompt,
@@ -45,15 +43,15 @@ import {
 } from "@/lib/max-chat-credentials";
 import { MaxChatComposer } from "@/components/max/MaxChatComposer";
 import { useOwnerChatQuota } from "@/hooks/useOwnerChatQuota";
-import { FREE_CHAT_UPGRADE_MESSAGE } from "@/lib/owner-chat-quota";
+import { FREE_CHAT_UPGRADE_MESSAGE, OWNER_PROFILE_QUERY_KEY, ownerChatQuota } from "@/lib/owner-chat-quota";
 import { OwnerChatQuotaNotice } from "./OwnerChatQuotaNotice";
 import { useChatScroll } from "@/hooks/useChatScroll";
 import { Button } from "@/components/ui/button";
 import { bindMessageGeneration, generationContinuationForMessage, isGenerationActive } from "@/lib/generation-lifecycle";
-import { isChatMessageStreaming } from "@/lib/chat-message-status";
+import { isChatMessageStreaming, lastPromptMessage } from "@/lib/chat-message-status";
 import { readMaxLaunch } from "@/lib/max-launch-runner";
 import type { MaxAdaptationAttachment } from "@/lib/use-max-adaptation";
-import type { Message, Snapshot } from "@/lib/api/types";
+import type { Message, Snapshot, User } from "@/lib/api/types";
 import { DEFAULT_GENERATION_ENGINE } from "@/lib/generation-engine";
 
 export type ChatPanelAdaptationHandle = {
@@ -98,12 +96,12 @@ export function ChatPanel({
   const quota = useOwnerChatQuota();
   const engine = DEFAULT_GENERATION_ENGINE;
   const authoredPending = useRef(false);
+  const composerSubmission = useRef<{ key: string; route: "question" | "generation" } | null>(null);
   const { submit, cancel, cancelPending, retryPending, restoreExpiredPending, pendingPrompt, pendingPhase } = usePromptStream(
     projectId,
     projectSlug,
     ownerId,
   );
-  const toggleChat = useWorkspaceStore((s) => s.toggleChat);
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollContentRef = useRef<HTMLDivElement>(null);
   const chatFooterRef = useRef<HTMLDivElement>(null);
@@ -131,9 +129,45 @@ export function ChatPanel({
     refetchOnMount: query => query.state.data?.length === 0 ? "always" : true,
   });
   // AgentTranscript owns the fetch/poll; observe its project cache so the whole
-  // message (failure card, streaming state and timer) uses the same exact run.
-  const latest = useQuery({ queryKey: ["generation", projectId], queryFn: () => getLatestGeneration(projectId), enabled: false });
+  // message uses the same run. Read it here when questions fill the history window.
+  const questionOnlyHistory = Boolean(history?.length) && !lastPromptMessage(history);
+  const latest = useQuery({ queryKey: ["generation", projectId], queryFn: () => getLatestGeneration(projectId), enabled: questionOnlyHistory });
   const messages = useMemo(() => history?.map(message => bindMessageGeneration(message, latest.data, projectId)), [history, latest.data, projectId]);
+  const readLastPromptMessage = useCallback(() => {
+    const message = lastPromptMessage(qc.getQueryData<Message[]>(["messages", projectId]));
+    const generation = qc.getQueryData<GenerationRun>(["generation", projectId]);
+    return message && bindMessageGeneration(message, generation, projectId);
+  }, [qc, projectId]);
+  const readProjectStreaming = useCallback(() => {
+    const message = readLastPromptMessage();
+    if (message) return isChatMessageStreaming(message);
+    const generation = qc.getQueryData<GenerationRun>(["generation", projectId]);
+    return generation?.project_id === projectId && Boolean(generation.assistant_message_id) && isGenerationActive(generation);
+  }, [projectId, qc, readLastPromptMessage]);
+  const { mutateAsync: askQuestion, isPending: checkingQuestion } = useMutation({
+    mutationFn: ({ prompt, key }: { prompt: string; key: string }) => askProjectChatQuestion(projectId, prompt, key),
+    networkMode: "always",
+    retry: false,
+    onSuccess: (result, { prompt }) => {
+      if (!result.answered) return;
+      const queryKey = ["messages", projectId];
+      const base = {
+        project_id: projectId, snapshot_id: null, model_id: null, tokens_in: 0, tokens_out: 0,
+        chat_question: true, created_at: new Date().toISOString(),
+      };
+      const confirmed: Message[] = [
+        { ...base, id: result.user_message_id, role: "user", content: prompt },
+        { ...base, id: result.assistant_message_id, role: "assistant", content: result.answer },
+      ];
+      qc.setQueryData<Message[]>(queryKey, (rows = []) => [
+        ...rows, ...confirmed.filter(message => !rows.some(row => row.id === message.id)),
+      ]);
+      // A history read started before the receipt may omit the confirmed pair.
+      if (qc.getQueryState(queryKey)?.fetchStatus === "fetching") {
+        void qc.invalidateQueries({ queryKey, exact: true });
+      }
+    },
+  });
 
   // Re-hydrate the agentic transcript from history: the backend persists each
   // assistant reply's steps on `message.agent_steps`, so after a reload we seed
@@ -159,23 +193,15 @@ export function ChatPanel({
       text: string,
       selections: SelectedElement[],
       opts?: PromptSubmitOptions,
-      composer?: { replay: boolean },
+      composer?: { replay: boolean; checkQuestion: boolean },
     ): Promise<boolean> => {
       const replay = composer?.replay ?? Boolean(opts?.idempotencyKey);
-      const command = composer && !selections.length && !opts?.referenceImages?.length && !opts?.fontSelections?.length
-        ? getAitunnelSettingsCommand(text)
-        : null;
+      const plainText = !selections.length && !opts?.referenceImages?.length && !opts?.fontSelections?.length;
+      const command = composer && plainText ? getAitunnelSettingsCommand(text) : null;
       // Capture fresh choices before async work. A legacy stable-key replay with
       // no choice must let the server recover its original accepted engine.
       if (opts?.generationEngine === undefined && !opts?.continuation && !replay) {
         opts = { ...opts, generationEngine: engine };
-      }
-      // An explicit stable key may be an already accepted request whose response
-      // was lost; only the server can adjudicate that replay. Fresh manual sends
-      // must not become a second queued message on Free.
-      if (command === null && !replay && (quota.exhausted || (quota.limited && authoredPending.current))) {
-        toast.info(FREE_CHAT_UPGRADE_MESSAGE);
-        return false;
       }
       const selectionText = selections
         .flatMap((selection) => Object.values(selection))
@@ -189,6 +215,25 @@ export function ChatPanel({
         && (resolution.kind === "none" || resolution.kind === "aitunnel_key")
         && requestsAitunnelAppAi(text, resolution.kind === "aitunnel_key" ? resolution.value.secret : undefined);
       const updateSavedKey = command !== null || (resolution.kind === "none" && allowAppAi);
+      const key = opts?.idempotencyKey;
+      if (composer?.checkQuestion && !replay && key && plainText && !updateSavedKey && resolution.kind === "none") {
+        composerSubmission.current = { key, route: "question" };
+        if ((await askQuestion({ prompt: text, key })).answered) return true;
+      }
+
+      // Quota can change while the question is being checked. Only an earlier
+      // generation attempt with this key can replay outside the fresh-send gate.
+      const { exhausted, limited } = ownerChatQuota(qc.getQueryData<User>(OWNER_PROFILE_QUERY_KEY));
+      if (command === null && !replay) {
+        if (exhausted || (limited && authoredPending.current)) {
+          toast.info(FREE_CHAT_UPGRADE_MESSAGE);
+          return false;
+        }
+        if (limited && composer && readProjectStreaming()) {
+          toast.info("Дождитесь завершения сборки и отправьте правку ещё раз.");
+          return false;
+        }
+      }
       let safePrompt = text;
       let safeSelections = selections;
 
@@ -258,23 +303,13 @@ export function ChatPanel({
         }
       }
       if (command !== null) return true;
-      if (quota.limited) authoredPending.current = true;
+      if (composer && key) composerSubmission.current = { key, route: "generation" };
+      if (limited) authoredPending.current = true;
       try { return await submit(safePrompt, modelId, safeSelections, opts); }
       finally { authoredPending.current = false; }
     },
-    [modelId, projectId, qc, submit, quota.exhausted, quota.limited, engine],
+    [modelId, projectId, qc, submit, engine, askQuestion, readProjectStreaming],
   );
-
-  const handleSubmit = async (text: string, selections: SelectedElement[], { idempotencyKey, referenceImages, fontSelections, generationEngine }: PromptReferenceSubmit, replay: boolean): Promise<PromptInputSubmitResult> => {
-    let referencesExpired = false;
-    const accepted = await submitWithCredentialIntake(text, selections, {
-      idempotencyKey,
-      ...(generationEngine ? { generationEngine } : {}),
-      ...(referenceImages.length ? { referenceImages, onReferenceImagesExpired: () => { referencesExpired = true; } } : {}),
-      ...(fontSelections?.length ? { fontSelections } : {}),
-    }, { replay });
-    return referencesExpired ? { accepted: false, reason: "reference_images_expired" } : accepted;
-  };
 
   // Only an explicit button calls this handle. Restoring its durable attachment
   // on mount never sends a model request and never replaces the user's draft.
@@ -287,9 +322,8 @@ export function ChatPanel({
         return false;
       }
       if (acceptedAdaptations.current.has(reference.operation_id)) return true;
-      const history = qc.getQueryData<Message[]>(["messages", projectId]);
       if (adaptationSubmitPending.current || credentialSubmitPending.current || isPending
-        || pendingPrompt || isChatMessageStreaming(history?.[history.length - 1])) {
+        || pendingPrompt || readProjectStreaming()) {
         toast.info("Дождитесь завершения текущего запроса и повторите адаптацию.");
         return false;
       }
@@ -313,7 +347,7 @@ export function ChatPanel({
         adaptationSubmitPending.current = false;
       }
     },
-  }), [projectId, currentSnapshotId, qc, isPending, pendingPrompt, submitWithCredentialIntake]);
+  }), [projectId, currentSnapshotId, qc, isPending, pendingPrompt, readProjectStreaming, submitWithCredentialIntake]);
 
   // «Починить» on an error card → submit a follow-up fix prompt through the
   // normal pipeline (surgical edit / rebuild as the triage decides).
@@ -343,17 +377,18 @@ export function ChatPanel({
   };
 
   // Durable server status wins; interrupted runs may never receive usage totals.
-  const last = messages?.[messages.length - 1];
-  const isStreaming = isChatMessageStreaming(last);
-  const streamingId = isStreaming ? last?.id : null;
+  const last = lastPromptMessage(messages);
   const generationActive = latest.data?.project_id === projectId && isGenerationActive(latest.data);
+  const isStreaming = isChatMessageStreaming(last) ||
+    (questionOnlyHistory && generationActive && Boolean(latest.data?.assistant_message_id));
+  const streamingId = isStreaming ? last?.id : null;
   const retryAvailable = !quota.exhausted && !isPending && !pendingPrompt && !isStreaming && !generationActive;
   const continuation = generationContinuationForMessage(latest.data, last, projectId);
   const retryLatestRequest = () => {
     if (!continuation) return submitWithCredentialIntake("Попробуй ещё раз", []);
     const current = generationContinuationForMessage(
       qc.getQueryData<GenerationRun>(["generation", projectId]),
-      qc.getQueryData<Message[]>(["messages", projectId])?.at(-1), projectId,
+      readLastPromptMessage(), projectId,
     );
     if (!current || JSON.stringify(current) !== JSON.stringify(continuation)) {
       toast.info("Черновик изменился. Дождитесь обновления и выберите продолжение заново.");
@@ -401,6 +436,20 @@ export function ChatPanel({
     staleTime: Infinity,
   });
   const showSurvey = !!survey && survey.length > 0 && !surveyDismissed && !quota.exhausted;
+  const canCheckQuestions = !showSurvey;
+
+  const handleSubmit = async (text: string, selections: SelectedElement[], { idempotencyKey, referenceImages, fontSelections, generationEngine }: PromptReferenceSubmit, replay: boolean): Promise<PromptInputSubmitResult> => {
+    const previousRoute = replay && composerSubmission.current?.key === idempotencyKey
+      ? composerSubmission.current.route : null;
+    let referencesExpired = false;
+    const accepted = await submitWithCredentialIntake(text, selections, {
+      idempotencyKey,
+      ...(generationEngine ? { generationEngine } : {}),
+      ...(referenceImages.length ? { referenceImages, onReferenceImagesExpired: () => { referencesExpired = true; } } : {}),
+      ...(fontSelections?.length ? { fontSelections } : {}),
+    }, { replay: previousRoute === "generation", checkQuestion: previousRoute === "question" || canCheckQuestions });
+    return referencesExpired ? { accepted: false, reason: "reference_images_expired" } : accepted;
+  };
 
   const { data: currentConfig } = useQuery({
     queryKey: ["max-config", projectId],
@@ -408,7 +457,6 @@ export function ChatPanel({
   });
   const adviceSnapshotId = !showSurvey
     ? getProductAdviceSnapshotId(messages ?? [], currentSnapshotId) : null;
-  const Composer = MaxChatComposer;
 
   const clearSurvey = () => {
     qc.setQueryData(["onboarding-survey", projectId], null);
@@ -433,7 +481,7 @@ export function ChatPanel({
     });
   };
 
-  const chatScroll = useChatScroll(scrollRef, `${messages?.length}:${last?.content}:${chips?.choices.join("|")}`, {
+  const chatScroll = useChatScroll(scrollRef, `${messages?.at(-1)?.id}:${last?.content}:${chips?.choices.join("|")}`, {
     contentRef: scrollContentRef,
     footerRef: chatFooterRef,
     scopeKey: projectId,
@@ -456,10 +504,10 @@ export function ChatPanel({
     const prompt = (urlPrompt || (params.get("starter") === "1"
       ? window.sessionStorage.getItem(`omnia:max:starter:${projectId}`) : null))?.trim();
     if (!prompt) return;
-    if (messages.length > 0) {
+    if (last) {
       // A reload may recover the accepted message before the POST response.
       if (messages.some(message => message.project_id === projectId && message.role === "user"
-        && !message.id.startsWith("__opt_") && message.content === prompt)) clearStarterHandoff();
+        && !message.chat_question && !message.id.startsWith("__opt_") && message.content === prompt)) clearStarterHandoff();
       return;
     }
 
@@ -472,7 +520,7 @@ export function ChatPanel({
     }).then(submitted => {
       if (submitted) clearStarterHandoff();
     });
-  }, [messages, isSuccess, isFetchedAfterMount, pendingPrompt, basePath, projectId, submitWithCredentialIntake, clearStarterHandoff]);
+  }, [messages, last, isSuccess, isFetchedAfterMount, pendingPrompt, basePath, projectId, submitWithCredentialIntake, clearStarterHandoff]);
 
   return (
     // Keep history scrolling within the editor's height in both chat layouts.
@@ -510,11 +558,11 @@ export function ChatPanel({
               message={m}
               streaming={m.id === streamingId}
               projectId={projectId}
-              onFix={quota.exhausted ? undefined : handleFix}
+              onFix={quota.exhausted || m.chat_question ? undefined : handleFix}
               onRetry={retryAvailable && m.id === last?.id ? retryLatestRequest : undefined}
               continueFromDraft={Boolean(continuation && m.id === last?.id)}
               onReturnToPrompt={!isPending && m.id === last?.id ? returnToPrompt : undefined}
-              onSuggest={quota.exhausted ? undefined : handleSuggest}
+              onSuggest={quota.exhausted || m.chat_question ? undefined : handleSuggest}
               presentation="studio"
             />
           ))}
@@ -546,7 +594,14 @@ export function ChatPanel({
             <ArrowDown aria-hidden="true" /> К последнему сообщению
           </Button>
         </div>}
-        <Composer
+        {(checkingQuestion || canCheckQuestions) && (
+          <p role="status" className="mx-3 rounded-md bg-surface-raised px-3 py-1 text-xs text-fg-secondary">
+            {checkingQuestion ? "Проверяю запрос…"
+              : isStreaming ? "Можно спросить «Как идёт сборка?»"
+                : "Вопросы бесплатны. Можно спросить «Что делать дальше?»"}
+          </p>
+        )}
+        <MaxChatComposer
           key={projectId}
           draftRef={composerDraftRef}
           projectId={projectId}
@@ -555,7 +610,8 @@ export function ChatPanel({
           contextVersion={currentConfig?.config_version}
           onSubmit={handleSubmit}
           sendDisabled={quota.exhausted || (quota.limited && isStreaming)}
-          canSendWithoutQuota={(text) => getAitunnelSettingsCommand(text) !== null}
+          canSendWithoutQuota={(text) => getAitunnelSettingsCommand(text) !== null
+            || (canCheckQuestions && !containsChatSecret(text) && !requestsAitunnelAppAi(text))}
           quotaNotice={<OwnerChatQuotaNotice {...quota} />}
           onCancel={cancel}
           onCancelPending={cancelPending}
@@ -565,8 +621,8 @@ export function ChatPanel({
           pendingPrompt={pendingPrompt}
           pendingPhase={pendingPhase}
           textareaRef={inputRef}
-          placeholder="Что создадим или изменим?"
-          ariaLabel="Опишите изменение MAX Mini App"
+          placeholder={canCheckQuestions ? "Задайте вопрос или опишите, что сделать…" : "Что создадим или изменим?"}
+          ariaLabel="Сообщение в чате приложения MAX"
           className="max-studio-prompt"
         />
       </div>

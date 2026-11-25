@@ -18,7 +18,7 @@ vi.mock("@/lib/api/runtime", () => ({ getRuntime: api.runtime, startRuntime: api
 vi.mock("@/lib/api/max-studio", () => ({ syncMaxManagedKit: api.sync, createMaxPreviewSession: api.session, getMaxReadiness: async () => ({ items: [] }) }));
 vi.mock("@/lib/api/snapshots", () => ({ listSnapshots: api.snapshots, listProjectVersions: api.versions, rollback: api.rollback }));
 vi.mock("@/lib/api/projects", () => ({ listProjects: async () => [], getProject: async () => ({ ...project, template: "fullstack" }) }));
-vi.mock("@/lib/api/messages", () => ({ listMessages: async () => [], reportClientError: vi.fn(), getLatestGeneration: async () => ({ id: "run", status: "running", assistant_message_id: "a" }), sendPrompt: api.send, cancelGeneration: vi.fn() }));
+vi.mock("@/lib/api/messages", () => ({ listMessages: async () => [], reportClientError: vi.fn(), getLatestGeneration: async () => ({ id: "run", project_id: "p", status: "running", assistant_message_id: "a" }), sendPrompt: api.send, cancelGeneration: vi.fn() }));
 vi.mock("@/components/workspace/ChatPanel", () => ({ ChatPanel: () => null }));
 vi.mock("@/components/workspace/DownloadButton", () => ({ DownloadButton: () => null }));
 vi.mock("@/components/max/MaxLaunchPanel", () => ({ MaxLaunchPanel: () => null }));

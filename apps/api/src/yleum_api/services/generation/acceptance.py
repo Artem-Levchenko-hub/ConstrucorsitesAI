@@ -7,7 +7,7 @@ from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import status
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yleum_api.core.config import (
@@ -69,12 +69,14 @@ from yleum_api.services.generation_runs import (
     reserve_generation_run,
     store_generation_dispatch,
 )
+from yleum_api.services.generation_runs import try_prompt_project_lock as _try_prompt_project_lock
 from yleum_api.services.intent_triage import (
     EXPLAIN_FAILED_BUILD,
     ORCHESTRATE,
     decide_failed_build_followup,
     decide_intent,
 )
+from yleum_api.services.max_owner_question_chat import guard_unaccepted_max_prompt
 from yleum_api.services.restoration_adaptation import (
     adaptation_reservation_prompt,
     prepare_adaptation,
@@ -82,24 +84,6 @@ from yleum_api.services.restoration_adaptation import (
 from yleum_api.services.secret_safety import redact_provider_secrets
 
 RESERVED_BALANCE = Decimal("5.0000")
-
-
-async def _try_prompt_project_lock(session: AsyncSession, project_id: UUID) -> None:
-    """Refuse contention before reservations without waiting through preview HTTP."""
-    acquired = await session.scalar(
-        text("SELECT pg_try_advisory_xact_lock(hashtext(:project_id))"),
-        {"project_id": str(project_id)},
-    )
-    if acquired is not True:
-        # Keep the canonical transaction lock when acquired. A busy response
-        # does not establish whether an earlier same-key request was accepted.
-        raise ApiError(
-            "project_busy",
-            "Проект сейчас занят другой операцией. "
-            "Подождите немного и отправьте запрос ещё раз.",
-            status.HTTP_409_CONFLICT,
-            details={"reason": "project_admission_busy", "retryable": True, "retry_after": 2},
-        )
 
 
 class PromptAcceptance:
@@ -232,6 +216,10 @@ class PromptAcceptance:
             GenerationRun.project_id == self.project_id,
             GenerationRun.idempotency_key == idempotency_key,
         ).execution_options(populate_existing=True))
+        if existing is None and self.project.template == "max_miniapp":
+            await guard_unaccepted_max_prompt(
+                self.session, self.project_id, self.current_user.id, self.payload,
+            )
         from yleum_api.services.generation.draft_continuation import prepare
 
         self.draft_continuation = await prepare(
@@ -649,7 +637,9 @@ class PromptAcceptance:
                 (
                     await self.session.execute(
                         select(Message)
-                        .where(Message.project_id == self.project_id)
+                        .where(
+                            Message.project_id == self.project_id, Message.chat_question.is_(False)
+                        )
                         .order_by(Message.created_at.asc())
                         # 40 so discovery sees the whole interview thread, not just the
                         # last ~20 rows, before it classifies/builds (owner 2026-06-18).
@@ -729,7 +719,9 @@ class PromptAcceptance:
             # answers — the NEXT message — generate normally). Reply "генерируй" to skip.
             _has_prior_msg = (
                 await self.session.execute(
-                    select(Message.id).where(Message.project_id == self.project_id).limit(1)
+                    select(Message.id)
+                    .where(Message.project_id == self.project_id, Message.chat_question.is_(False))
+                    .limit(1)
                 )
             ).first() is not None
             self.do_clarify = not _has_prior_msg

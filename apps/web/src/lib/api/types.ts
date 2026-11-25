@@ -161,6 +161,8 @@ export type Message = {
   snapshot_id: Uuid | null;
   role: MessageRole;
   content: string;
+  /** A question or answer posted outside the generation flow. */
+  chat_question?: boolean;
   model_id: string | null;
   tokens_in: number | null;
   tokens_out: number | null;

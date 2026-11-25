@@ -132,6 +132,24 @@ it("shows the reason and concrete unfinished work above the addressed continuati
   expect(mocks.submit).not.toHaveBeenCalled();
 });
 
+it("keeps addressed continuation on the real failed build after a full window of questions", async () => {
+  const questions = Array.from({ length: 25 }, (_, index): Message[] => [
+    { ...failure, id: `q-${index}`, role: "user", content: "Как проверить меню?", chat_question: true,
+      generation_status: null, generation_failure: null, tokens_out: 0 },
+    { ...failure, id: `a-${index}`, content: "Откройте меню в предпросмотре.", chat_question: true,
+      generation_status: null, generation_failure: null, tokens_out: 0 },
+  ]).flat();
+  mocks.history.mockResolvedValue([failure, ...questions]);
+  client.setQueryData(["generation", "p"], failedRun());
+  await render();
+  const proceed = button("Продолжить сборку");
+  expect(proceed).toBeDefined();
+  await act(async () => proceed!.click());
+  expect(mocks.submit).toHaveBeenCalledExactlyOnceWith("Продолжи сборку", "topmix-v1", [], {
+    continuation, idempotencyKey: "continue:failed-run:failed-message:saved-draft",
+  });
+});
+
 it("allows clarification of an oversized request without spending or discarding the draft", async () => {
   mocks.history.mockResolvedValue([{ ...failure, generation_failure: {
     code: "request_too_large", message: "Запрос к модели превысил допустимый размер.", retryable: false,

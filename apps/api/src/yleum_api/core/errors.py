@@ -49,6 +49,7 @@ ErrorCode = Literal[
     "restoration_active",
     "publication_migration_active",
     "idempotency_conflict",
+    "project_question_required",
     "source_changed",
     # V2: orchestrator-proxy errors surfaced through apps/api/services/orchestrator_client.
     # `unavailable` = transport / 5xx / token missing (503). `rejected` = orchestrator

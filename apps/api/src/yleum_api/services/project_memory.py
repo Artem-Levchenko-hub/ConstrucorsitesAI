@@ -145,6 +145,7 @@ async def _user_message(session: AsyncSession, run: GenerationRun) -> Message | 
             .where(
                 Message.project_id == run.project_id,
                 Message.role == "user",
+                Message.chat_question.is_(False),
                 Message.created_at < assistant.created_at,
             )
             .order_by(Message.created_at.desc())

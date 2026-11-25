@@ -72,15 +72,17 @@ it("new included generation and edit allowances replace the old human-message no
  expect(container.textContent).not.toContain("Осталось сообщений");
 });
 
-it("shows the account-wide Free1 allowance, then accepted first send refreshes to0 and blocks button/Enter/global shortcut",async()=>{
+it("shows the account-wide Free1 allowance, then blocks a second edit after checking the message on button or keyboard",async()=>{
  mocks.submit.mockImplementation(async()=>{profile={...profile,user_chat_messages_remaining:0};refreshOwnerAfterAcceptedPrompt(client);return true;});
  await render();expect(container.textContent).toContain("Осталось сообщений: 1 из 1 на весь аккаунт");
  await draft("Создай кофейню");await act(async()=>button("Отправить")!.click());
  await act(async()=>{await vi.waitFor(()=>expect(container.textContent).toContain("Осталось сообщений: 0"));});
  expect(mocks.profile.mock.calls.length).toBeGreaterThan(1);expect(mocks.submit).toHaveBeenCalledTimes(1);
- const input=await draft("Второе сообщение");expect(button("Отправить")?.disabled).toBe(true);
- await act(async()=>{input.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",bubbles:true}));window.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",ctrlKey:true,bubbles:true}));});
- expect(mocks.submit).toHaveBeenCalledTimes(1);expect(input.value).toBe("Второе сообщение");
+ const input=await draft("Удали меню");expect(button("Отправить")?.disabled).toBe(false);
+ await act(async()=>button("Отправить")!.click());
+ await act(async()=>input.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",bubbles:true})));
+ await act(async()=>window.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",ctrlKey:true,bubbles:true})));
+ expect(mocks.submit).toHaveBeenCalledTimes(1);expect(input.value).toBe("Удали меню");
  expect(container.querySelector('a[href="/billing/plan"]')?.textContent).toBe("Выбрать тариф");
 });
 it("Free0 keeps history and hides manual retry/fix/suggestion/discovery/survey alternatives",async()=>{

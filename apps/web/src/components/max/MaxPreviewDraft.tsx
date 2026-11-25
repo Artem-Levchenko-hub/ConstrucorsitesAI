@@ -6,7 +6,7 @@ import { ApiError, apiUrl } from "@/lib/api/client";
 import { createMaxPreviewSession } from "@/lib/api/max-studio";
 import { getRuntime } from "@/lib/api/runtime";
 import { isGenerationActive } from "@/lib/generation-lifecycle";
-import { isChatMessageStreaming } from "@/lib/chat-message-status";
+import { isChatMessageStreaming, lastPromptMessage } from "@/lib/chat-message-status";
 import type { GenerationRun, GenerationRunStatus, Message } from "@/lib/api/types";
 
 export type DraftTarget = {
@@ -98,7 +98,7 @@ export function useMaxPreviewDraft(target: DraftTarget | null) {
       if (!target) return null;
       return openDraft(target, signal, () => {
         const run = queryClient.getQueryData<GenerationRun | null>(["generation", target.projectId]);
-        const message = queryClient.getQueryData<Message[]>(["messages", target.projectId])?.at(-1);
+        const message = lastPromptMessage(queryClient.getQueryData<Message[]>(["messages", target.projectId]));
         if (!target.runId) return run === null && (message?.id ?? null) === target.messageId;
         return run?.project_id === target.projectId && run.id === target.runId && run.status === target.phase
           && !(isChatMessageStreaming(message) && message?.id !== run.assistant_message_id);

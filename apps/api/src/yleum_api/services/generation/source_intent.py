@@ -207,3 +207,46 @@ def source_change_required(prompt: str) -> bool:
 def readonly_source_request(prompt: str) -> bool:
     """Identify requests that can go directly to a source-only answer."""
     return _source_intent(prompt) == "readonly"
+
+
+_HELP_OPENING = re.compile(
+    r"^(?:(?:привет|здравствуйте|смотри(?:те)?|подскажи(?:те)?|пожалуйста|"
+    r"hi|please|tell me)[\s,.!?:;—-]+)*"
+    r"(?:почему|зачем|куда|откуда|где|как|когда|сколько|како[йея]|какая|какие|"
+    r"что\s+(?:делать|дальше|происходит|случилось|нужно|значит|означает|с\s+)|"
+    r"на\s+каком\s+этапе|в\s+ч[её]м|можно\s+ли|нужно\s+ли|"
+    r"why|where|how|when|what|can\s+i|is\s+(?:my|the))\b"
+)
+_MISSING_OUTCOME = re.compile(
+    r"\b(?:не\s+(?:могу|можем|уда[её]тся|получается|работа\w*|открыва\w*|"
+    r"появ\w*|запуска\w*|загружа\w*|сохраня\w*|отправля\w*|"
+    r"приш[её]л|пришл[аои]|вижу|видно|составил\w*|сохранил\w*|прош[еёл]\w*)|"
+    r"ничего\s+не\s+\w+|(?:^|там\s+)пусто|^нет\s+\w+|"
+    r"ошибка\s+(?:при|после|в)|"
+    r"(?:выда[её]т|возвращает|показывает|появляется|возникает|вылетает)\s+ошибк[ау]|"
+    r"(?:оста[её]тся|остал(?:ся|ась|ось|ись))\s+пуст\w*|пропал[аои]?|завис(?:ла|ло|ли)?|"
+    r"(?:а|но)\s+[^.!?\n]{0,100}\b(?:нет|пусто)|"
+    r"nothing\s+(?:happen\w*|show\w*)|(?:can['’]?t|cannot)\s+\w+|"
+    r"(?:doesn['’]?t|didn['’]?t|won['’]?t)\s+\w+)\b"
+)
+_REQUESTED_BEHAVIOR = re.compile(
+    r"\b(?:пусть|хочу\s*,?\s*чтобы|(?:нужно|надо)\s*,?\s*чтобы|"
+    r"(?:подключи|отключи|настрой|запусти|перезапусти|добавь|исправь|почини|"
+    r"измени|удали|создай|сохрани|убери|перенеси)(?:те)?|"
+    r"(?:если|когда|when|if)\b[^.!?\n]{0,200}?[,—:–-]\s*"
+    r"(?:покажи|показывай|выведи|выводи|скрой|открой|открывай|закрой|"
+    r"show|display|open|hide|save|send|redirect)\b|"
+    r"i\s+want\s+(?:you|the app|it)\s+to)\b"
+)
+
+
+def is_max_owner_question(prompt: str) -> bool:
+    """Route owner questions and reports to project help before edit admission."""
+    text = _without_polite_prefix(_unquoted_request(prompt))
+    if not text or _REQUESTED_BEHAVIOR.search(text) or requested_source_edit(prompt):
+        return False
+    return bool(
+        readonly_source_request(prompt)
+        or _HELP_OPENING.match(text)
+        or _MISSING_OUTCOME.search(text)
+    )

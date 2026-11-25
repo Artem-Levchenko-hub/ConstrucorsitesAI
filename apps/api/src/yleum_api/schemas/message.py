@@ -100,6 +100,7 @@ class MessagePublic(BaseModel):
     snapshot_id: UUID | None = None
     role: Literal["user", "assistant", "system"]
     content: str
+    chat_question: bool = False
     model_id: str | None = None
     tokens_in: int | None = None
     tokens_out: int | None = None
@@ -192,6 +193,24 @@ class PromptRequest(BaseModel):
     # directly (the palette question is a preset swatch). Optional → ignored when
     # absent. Applied to the project before the build (additive, back-compat).
     design_preset_id: str | None = Field(default=None, max_length=64)
+
+
+class ChatQuestionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str = Field(min_length=1, max_length=30_000, pattern=r"^[^\x00]+$")
+    idempotency_key: str = Field(min_length=8, max_length=128, pattern=r"^[^\x00]+$")
+
+
+class ChatQuestionAnswer(BaseModel):
+    answered: Literal[True] = True
+    user_message_id: UUID
+    assistant_message_id: UUID
+    answer: str
+
+
+class ChatQuestionDeclined(BaseModel):
+    answered: Literal[False] = False
 
 
 class SurveyQuestion(BaseModel):

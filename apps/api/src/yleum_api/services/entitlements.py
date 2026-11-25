@@ -414,6 +414,18 @@ def is_free_plan(plan: BillingPlan | None) -> bool:
     return plan is not None and plan.code == "free"
 
 
+async def _has_generation_history(
+    session: AsyncSession, user_id: UUID, *, except_run: UUID | None = None,
+) -> bool:
+    runs = select(GenerationRun.id).where(GenerationRun.user_id == user_id)
+    if except_run is not None:
+        runs = runs.where(GenerationRun.id != except_run)
+    prompts = select(Message.id).join(Project, Project.id == Message.project_id).where(
+        Project.owner_id == user_id, Message.role == "user", Message.chat_question.is_(False),
+    )
+    return bool(await session.scalar(select(or_(runs.exists(), prompts.exists()))))
+
+
 async def admit_free_chat_message(session: AsyncSession, *, user_id: UUID, run_id: UUID) -> bool:
     """Spend one Free human-message allowance in the admission transaction.
 
@@ -435,19 +447,7 @@ async def admit_free_chat_message(session: AsyncSession, *, user_id: UUID, run_i
     )
     if owner is None:
         raise ApiError("not_found", "user not found", 404)
-    historical = await session.scalar(
-        select(
-            or_(
-                select(GenerationRun.id)
-                .where(GenerationRun.user_id == user_id, GenerationRun.id != run_id)
-                .exists(),
-                select(Message.id)
-                .join(Project, Project.id == Message.project_id)
-                .where(Project.owner_id == user_id, Message.role == "user")
-                .exists(),
-            )
-        )
-    )
+    historical = await _has_generation_history(session, user_id, except_run=run_id)
     if owner.free_chat_messages_used or owner.free_generations_used or historical:
         raise ApiError(
             "entitlement_exceeded",
@@ -526,16 +526,6 @@ async def free_chat_allowance(
         raise ApiError("not_found", "user not found", 404)
     # Counter is authoritative after migration/admission. Surviving historical
     # evidence keeps this read consistent with admission for old/downgraded users.
-    historical = await session.scalar(
-        select(
-            or_(
-                select(GenerationRun.id).where(GenerationRun.user_id == user_id).exists(),
-                select(Message.id)
-                .join(Project, Project.id == Message.project_id)
-                .where(Project.owner_id == user_id, Message.role == "user")
-                .exists(),
-            )
-        )
-    )
+    historical = await _has_generation_history(session, user_id)
     spent = bool(owner.free_chat_messages_used or owner.free_generations_used or historical)
     return 1, int(not spent)

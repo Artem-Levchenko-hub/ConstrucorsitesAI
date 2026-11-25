@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, Query, Request, Response, UploadFile, status
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -14,7 +14,7 @@ from yleum_api.core.config import (
 from yleum_api.core.db import get_engine
 from yleum_api.core.deps import CurrentUserDep, SessionDep
 from yleum_api.core.errors import ApiError
-from yleum_api.core.ratelimit import rate_limit_prompt
+from yleum_api.core.ratelimit import rate_limit_chat_question, rate_limit_prompt
 from yleum_api.core.redis import (
     publish_event,
     request_generation_cancel,
@@ -23,6 +23,9 @@ from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.project import Project
 from yleum_api.schemas.message import (
+    ChatQuestionAnswer,
+    ChatQuestionDeclined,
+    ChatQuestionRequest,
     ClientErrorReport,
     FontAssetPublic,
     FontResolveRequest,
@@ -44,6 +47,7 @@ from yleum_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
     apply_cancelled_generation_locked,
 )
+from yleum_api.services.max_owner_question_chat import submit_max_owner_question
 
 router = APIRouter(prefix="/api/projects", tags=["messages"])
 
@@ -148,6 +152,7 @@ async def report_client_error(
         select(Message)
         .where(Message.project_id == project_id)
         .where(Message.role == "assistant")
+        .where(Message.chat_question.is_(False))
         .where(Message.tokens_out.is_not(None))
         .order_by(Message.created_at.desc())
         .limit(1)
@@ -175,6 +180,23 @@ async def report_client_error(
         file=file,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/{project_id}/chat/question",
+    response_model=ChatQuestionAnswer | ChatQuestionDeclined,
+)
+async def post_chat_question(
+    project_id: UUID,
+    payload: ChatQuestionRequest,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+    request: Request,
+) -> ChatQuestionAnswer | ChatQuestionDeclined:
+    project = await _ensure_owner(session, project_id, current_user.id)
+    return await submit_max_owner_question(
+        session, project, current_user.id, payload, lambda: rate_limit_chat_question(request),
+    )
 
 
 @router.post(
@@ -308,16 +330,25 @@ async def list_messages(
     session: SessionDep,
     current_user: CurrentUserDep,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    include_generation_context: bool = False,
 ) -> Sequence[MessagePublic]:
-    await _ensure_owner(session, project_id, current_user.id)
-    res = await session.execute(
-        select(Message)
-        .where(Message.project_id == project_id)
-        .order_by(Message.created_at.desc(), Message.id.desc())
-        .limit(limit)
+    project = await _ensure_owner(session, project_id, current_user.id)
+    history = select(Message).where(Message.project_id == project_id).order_by(
+        Message.created_at.desc(), Message.id.desc(),
     )
-    rows = list(reversed(list(res.scalars().all())))
-    assistant_ids = [row.id for row in rows if row.role == "assistant"]
+    rows = list(await session.scalars(history.limit(limit)))
+    if (include_generation_context and project.template == "max_miniapp"
+            and len(rows) == limit and any(row.chat_question for row in rows)):
+        # An owner may ask many questions while a run is working or paused.
+        # Keep its last real turns in reach of resume/retry after a reload.
+        for role in {"user", "assistant"} - {row.role for row in rows if not row.chat_question}:
+            previous = await session.scalar(history.where(
+                Message.chat_question.is_(False), Message.role == role,
+            ).limit(1))
+            if previous is not None:
+                rows.append(previous)
+    rows.sort(key=lambda row: (row.created_at, row.id))
+    assistant_ids = [row.id for row in rows if row.role == "assistant" and not row.chat_question]
     runs_by_message: dict[UUID, GenerationRun] = {}
     if assistant_ids:
         run_rows = await session.execute(
@@ -341,7 +372,10 @@ async def list_messages(
     for row in rows:
         message_run = runs_by_message.get(row.id)
         failure = public_generation_failure(message_run)
-        content = public_message_content(row.role, row.content, has_failure=failure is not None)
+        content = (
+            row.content if row.chat_question
+            else public_message_content(row.role, row.content, has_failure=failure is not None)
+        )
         if (
             row.snapshot_id is not None
             and message_run is not None

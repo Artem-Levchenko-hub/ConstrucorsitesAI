@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +34,29 @@ async def _project(session: AsyncSession) -> tuple[User, Project]:
     session.add(project)
     await session.commit()
     return owner, project
+
+
+async def test_historical_build_does_not_use_later_help_question_as_its_request(db_session):
+    from yleum_api.services.project_memory import _user_message
+
+    owner, project = await _project(db_session)
+    now = datetime.now(UTC)
+    edit = Message(project_id=project.id, role="user", content="Добавь форму", created_at=now)
+    question = Message(
+        project_id=project.id, role="user", content="Где найти форму?", chat_question=True,
+        created_at=now + timedelta(seconds=1),
+    )
+    reply = Message(
+        project_id=project.id, role="assistant", content="Готово",
+        created_at=now + timedelta(seconds=2),
+    )
+    db_session.add_all([edit, question, reply])
+    await db_session.flush()
+    historical_run = GenerationRun(
+        project_id=project.id, user_id=owner.id, assistant_message_id=reply.id,
+    )
+
+    assert await _user_message(db_session, historical_run) is edit
 
 
 async def test_memory_revision_links_verified_prompt_and_snapshot(

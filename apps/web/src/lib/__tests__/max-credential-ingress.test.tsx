@@ -328,7 +328,9 @@ it.each([
   await render();
   const input = host.querySelector("textarea")!;
   await enterPrompt(input, "Добавь ещё экран");
-  expect(button("Отправить")?.disabled).toBe(true);
+  await act(async () => button("Отправить")!.click());
+  expect(input.value).toBe("Добавь ещё экран");
+  expect(fetchAccess).not.toHaveBeenCalled();
   await sendFromComposer(text);
   expect(fetchAccess).toHaveBeenCalledExactlyOnceWith("/api/projects/p/aitunnel-ai", expect.objectContaining({
     method: "PUT", body: JSON.stringify({ enabled }),

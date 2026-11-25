@@ -107,6 +107,12 @@ describe("prompt stream reconnect", () => {
   });
 
   it("F5 reattaches active canonical run and reconnects after 1 second with replay watermark", async () => {
+    const history = client.getQueryData<Message[]>(["messages", "p"])!;
+    client.setQueryData(["messages", "p"], [
+      ...history,
+      { ...history[0], id: "question", role: "user", chat_question: true, content: "Как идёт сборка?" },
+      { ...history[0], id: "answer", chat_question: true, content: "Сборка продолжается", tokens_out: 0 },
+    ]);
     await mount(); const first = Socket.instances[0];
     expect(first.url).toContain("/api/ws/projects/p?run_id=run-p&after_seq=0");
     await act(async () => first.emit({
@@ -123,6 +129,17 @@ describe("prompt stream reconnect", () => {
     expect(first.close).toHaveBeenCalledTimes(1); expect(first.onclose).toBeNull();
     await act(async () => vi.advanceTimersByTime(25_000));
     expect(Socket.instances).toHaveLength(1); expect(first.send).not.toHaveBeenCalled();
+  });
+  it("recovers the actual run when recent history contains only questions", async () => {
+    const base = client.getQueryData<Message[]>(["messages", "p"])![0];
+    client.setQueryData(["messages", "p"], [
+      { ...base, id: "question", role: "user", chat_question: true },
+      { ...base, id: "answer", chat_question: true, tokens_out: 0 },
+    ]);
+    await mount();
+    expect(Socket.instances[0]?.url).toContain("run_id=run-p");
+    expect(client.getQueryData(["generation", "p"])).toMatchObject({ assistant_message_id: "message-p" });
+    expect(sendPrompt).not.toHaveBeenCalled();
   });
 });
 

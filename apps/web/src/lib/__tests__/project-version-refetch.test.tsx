@@ -19,8 +19,8 @@ function preview(): PreviewProps {
 
 vi.mock("@/lib/api/messages", () => ({
   cancelGeneration: vi.fn(), sendPrompt: vi.fn(),
-  getLatestGeneration: vi.fn(async () => ({
-    id: "run-1", assistant_message_id: "message-1", status: "running",
+  getLatestGeneration: vi.fn(async (projectId: string) => ({
+    id: "run-1", project_id: projectId, assistant_message_id: "message-1", status: "running",
   })),
 }));
 vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));

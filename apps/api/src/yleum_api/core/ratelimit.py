@@ -72,28 +72,34 @@ def _rate_key(request: Request) -> str:
     return f"ip:{_client_ip(request)}"
 
 
-async def rate_limit_prompt(request: Request) -> None:
-    """Dependency: throttle the costly generate/edit/transcribe endpoints.
-
-    Tunable via ``PROMPT_RATE_LIMIT`` (default 20/minute) and killable via
-    ``RATE_LIMIT_ENABLED=false`` — no code change. Raises 429 when exceeded."""
+def _rate_limit_submission(request: Request, bucket: str) -> None:
     settings = get_settings()
     if not settings.rate_limit_enabled:
         return
     ip_item = parse(settings.prompt_ip_rate_limit)
-    if not _limiter.hit(ip_item, f"prompt-ip:{_client_ip(request)}"):
+    if not _limiter.hit(ip_item, f"{bucket}-ip:{_client_ip(request)}"):
         raise ApiError(
             "rate_limited",
             "слишком часто — подождите немного",
             status.HTTP_429_TOO_MANY_REQUESTS,
         )
     actor_item = parse(settings.prompt_rate_limit)
-    if not _limiter.hit(actor_item, f"prompt-actor:{_rate_key(request)}"):
+    if not _limiter.hit(actor_item, f"{bucket}-actor:{_rate_key(request)}"):
         raise ApiError(
             "rate_limited",
             "слишком часто — подождите немного",
             status.HTTP_429_TOO_MANY_REQUESTS,
         )
+
+
+async def rate_limit_prompt(request: Request) -> None:
+    """Throttle generation, editing and media submissions."""
+    _rate_limit_submission(request, "prompt")
+
+
+def rate_limit_chat_question(request: Request) -> None:
+    """Throttle fresh answers after classifying edits and replaying receipts."""
+    _rate_limit_submission(request, "chat-question")
 
 
 def _auth_rate_error() -> ApiError:
@@ -196,6 +202,7 @@ async def rate_limit_max_content_image(request: Request) -> None:
 __all__ = [
     "clear_login_account_limit",
     "rate_limit_auth",
+    "rate_limit_chat_question",
     "rate_limit_email",
     "rate_limit_login_account",
     "rate_limit_max_content_image",

@@ -34,6 +34,22 @@ PREVIOUS_CELL_ENSURE_RECONCILIATION_REQUIRED = "Previous Project Cell ensure nee
 _COMPILED_DISPATCH_KEY = "compiled_generation_dispatch_v1"
 
 
+async def try_prompt_project_lock(session: AsyncSession, project_id: UUID) -> None:
+    """Refuse contention before committing a chat or generation admission."""
+    acquired = await session.scalar(
+        text("SELECT pg_try_advisory_xact_lock(hashtext(:project_id))"),
+        {"project_id": str(project_id)},
+    )
+    if acquired is not True:
+        raise ApiError(
+            "project_busy",
+            "Проект сейчас занят другой операцией. "
+            "Подождите немного и отправьте запрос ещё раз.",
+            status.HTTP_409_CONFLICT,
+            details={"reason": "project_admission_busy", "retryable": True, "retry_after": 2},
+        )
+
+
 def note_generation_release(run: GenerationRun) -> None:
     from yleum_api.core.config import get_settings
 

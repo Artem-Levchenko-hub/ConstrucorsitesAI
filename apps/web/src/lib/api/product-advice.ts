@@ -1,6 +1,6 @@
 import { apiFetch } from "./client";
 import type { Message } from "./types";
-import { isChatMessageStreaming } from "@/lib/chat-message-status";
+import { isChatMessageStreaming, lastPromptMessage } from "@/lib/chat-message-status";
 
 export type ProductAdviceItem = {
   id: string;
@@ -22,14 +22,14 @@ export type ProductAdviceResponse = {
 
 type AdviceMessage = Pick<
   Message,
-  "role" | "snapshot_id" | "tokens_out" | "generation_status"
+  "role" | "snapshot_id" | "tokens_out" | "generation_status" | "chat_question"
 >;
 
 export function getProductAdviceSnapshotId(
   messages: readonly AdviceMessage[],
   currentSnapshotId?: string | null,
 ): string | null {
-  const last = messages.at(-1);
+  const last = lastPromptMessage(messages);
   if (!last || last.role !== "assistant" || isChatMessageStreaming(last)) return null;
   const ready = messages.findLast((message) => message.role === "assistant" &&
     message.snapshot_id && message.tokens_out !== null &&

@@ -36,7 +36,7 @@ import {
 import { getLatestGeneration, listMessages } from "@/lib/api/messages";
 import { isGenerationActive } from "@/lib/generation-lifecycle";
 import { acceptedPreviewLabel, acceptedPreviewState, isGenerationResultConfirmed } from "@/lib/generation-recovery";
-import { isChatMessageStreaming } from "@/lib/chat-message-status";
+import { isChatMessageStreaming, lastPromptMessage } from "@/lib/chat-message-status";
 import { getRuntime, startRuntime } from "@/lib/api/runtime";
 import type { Project, ProjectVersion } from "@/lib/api/types";
 import { versionStatusLabel } from "@/lib/project-version";
@@ -169,7 +169,7 @@ export function MaxLivePreview({
     queryFn: () => listMessages(project.id),
     enabled: !viewingHistorical,
   });
-  const lastMessage = messages.data?.[messages.data.length - 1];
+  const lastMessage = lastPromptMessage(messages.data);
   const latestGeneration = useQuery({
     queryKey: ["generation", project.id],
     queryFn: () => getLatestGeneration(project.id),
