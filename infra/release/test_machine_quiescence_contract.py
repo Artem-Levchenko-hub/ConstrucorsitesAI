@@ -183,6 +183,7 @@ class PendingFastCheckTests(unittest.TestCase):
             self.checker._PORTABLE_QUIESCENCE_CHECKPOINT_PREVIEW_SOURCES,
             self.checker._PORTABLE_QUIESCENCE_CHECKPOINT_MIGRATION_SOURCES,
             self.checker._PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES,
+            self.checker._PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES,
         ):
             self.assertEqual(
                 self.checker._pending_portable_commands(self.machine, sources=sources),
@@ -433,6 +434,24 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
                 self.checker.PhysicalDrainError, "quiescence_unsupported_source",
             ):
                 self.checker._require_reviewed_portable_sources({**previous, name: current[name]})
+
+    def test_command_reader_wait_accepts_only_complete_predecessor_or_successor(self):
+        before = self.checker._PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES
+        after = self.checker._PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES
+        changed = ("routers.workspace", "services.generation_reader_inventory", "services.machine_adapter")
+        self.assertEqual(before.keys(), after.keys())
+        self.assertEqual({name for name in before if before[name] != after[name]}, set(changed))
+        for sources in (before, after):
+            self.checker._require_reviewed_portable_sources(sources)
+            self.assertIn(sources, self.checker._PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES)
+        for choices in product((False, True), repeat=len(changed)):
+            if any(choices) and not all(choices):
+                mixed = dict(before)
+                mixed.update({name: after[name] for name, new in zip(changed, choices, strict=True) if new})
+                with self.subTest(choices=choices), self.assertRaisesRegex(
+                    self.checker.PhysicalDrainError, "quiescence_unsupported_source",
+                ):
+                    self.checker._require_reviewed_portable_sources(mixed)
 
     def test_disk_temp_successor_changes_only_the_reviewed_backend_and_keeps_predecessor(self):
         previous = self.checker._PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES
@@ -730,7 +749,7 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             (Path(__file__).parent / "fixtures/source-guard-lease-quiescence-sources.json")
             .read_text()
         )
-        current = self.checker._PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES
+        current = self.checker._PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES
         self.checker._require_reviewed_portable_sources(previous)
         self.checker._require_reviewed_portable_sources(previous_lease)
         baseline = json.loads(

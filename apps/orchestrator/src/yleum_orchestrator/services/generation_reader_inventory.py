@@ -14,6 +14,7 @@ from concurrent.futures import Future
 from contextlib import asynccontextmanager, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from math import ceil
 from pathlib import Path
 from time import monotonic
 from typing import Annotated, Any, Literal
@@ -475,13 +476,23 @@ def wait_for_reader_dispatch(
 
 
 @contextmanager
-def build_reader_dispatch_wait(
+def command_reader_dispatch_wait(
     role: str | None, *, remaining: Callable[[float], float], deadline: float,
 ) -> Iterator[None]:
-    if role not in _BUILD_ROLES:
+    """Wait at a physical dispatch boundary inside the current workspace lock."""
+    if role is None:
+        # A plain agent shell has no task role. Its original deadline bounds waits
+        # before dispatch and while collecting the result of that same command.
+        seconds = max(0.0, deadline - monotonic())
+    elif role in _BUILD_ROLES:
+        seconds = float(TTL)
+    else:
         yield
         return
-    with wait_for_reader_dispatch(TTL, remaining=remaining), limit_reader_dispatch_wait(deadline):
+    with (
+        wait_for_reader_dispatch(seconds, remaining=remaining),
+        limit_reader_dispatch_wait(deadline),
+    ):
         yield
 
 
@@ -513,7 +524,7 @@ def _recheck_dispatch(wait: _DispatchWait, denial: ReaderInventoryUnavailable) -
         raise denial from None
     with suppress(OSError):
         _log.info("cell.reader_inventory_wait", reason=denial.message)
-    for _ in range(TTL):
+    for _ in range(ceil(remaining)):
         if not wait.active(deadline):
             break
         _wait_for_dispatch_retry(wait, min(1.0, max(0.0, deadline - monotonic())))

@@ -69,6 +69,15 @@ def test_similar_text_cannot_claim_a_classified_source_failure(prefix):
     assert failure.code == "verification"
 
 
+def test_reader_outage_is_distinguished_from_an_unsuccessful_build():
+    failure = public_generation_failure(SimpleNamespace(
+        status="failed", error="reader_inventory_unavailable", agent_state={},
+    ))
+    assert failure.code == "runtime_unavailable"
+    assert "рабочей среде" in failure.message
+    assert failure.retryable
+
+
 def test_platform_wallet_exhaustion_is_not_provider_funds_exhaustion():
     failure = public_generation_failure(SimpleNamespace(
         status="failed", error="PLATFORM_WALLET_EMPTY: private-key", agent_state={},

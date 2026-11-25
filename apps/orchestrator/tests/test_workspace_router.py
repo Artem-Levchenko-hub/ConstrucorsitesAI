@@ -1086,6 +1086,46 @@ async def test_agent_write_allows_idempotent_retry_when_patch_already_applied(
     }
 
 
+@pytest.mark.parametrize("after_command", [False, True], ids=["before-shell", "after-shell"])
+async def test_shell_waits_for_reader_recovery_without_replaying_command(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, after_command: bool,
+) -> None:
+    from yleum_orchestrator.services import generation_reader_inventory as readers
+
+    workspace_id, run_id = uuid4(), uuid4()
+    provider, _, docker, _ = await _ready_provider(tmp_path, workspace_id, generation_run_id=run_id)
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _: provider)
+    docker.workspace_command_volume_files = {"result.txt": b"one"}
+    original_read = docker.read_volume_files
+    waits = []
+
+    def guard():
+        if bool(docker.workspace_command_calls) == after_command and not waits:
+            raise readers.ReaderInventoryUnavailable("reader epoch changed")
+
+    async def read_files(name):
+        await asyncio.to_thread(readers.reader_dispatch, lambda: None)
+        return await original_read(name)
+
+    monkeypatch.setattr(docker, "read_volume_files", read_files)
+    monkeypatch.setattr(readers, "require_if_configured", guard)
+    monkeypatch.setattr(readers, "_wait_for_dispatch_retry", lambda *_: waits.append(True))
+
+    async with _client() as client:
+        response = await client.post(
+            f"/internal/workspaces/{workspace_id}/agent/exec",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json={"generation_run_id": str(run_id), "fencing_epoch": 4,
+                  "expected_revision": workspace._workspace_revision({}), "cmd": "echo one"},
+        )
+
+    assert response.status_code == 200, response.text
+    expected = workspace._workspace_revision({"result.txt": "one"})
+    assert response.json()["workspace_revision"] == expected
+    assert waits == [True]
+    assert [call["command"] for call in docker.workspace_command_calls] == ["echo one"]
+
+
 async def test_exec_workspace_agent_command_runs_inside_cell_bundle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

@@ -12,6 +12,10 @@ No silent exceptions are allowed. If verification, commit, push, credentials, SS
 
 Use only the documented production deployment path. Do not deploy the development `infra/` stack in place of production. Preserve unrelated working-tree changes and never force-push or rewrite history.
 
+## Observe a production generation
+
+Use the project owner's editor or `GET /api/projects/{project_id}/generation` and match the returned run ID. For server-side Python diagnostics, use the [Core maintenance launcher](infra/release/generation-drain.md#observe-one-generation). Running Python with `docker exec` inside the serving API or workers can interrupt an active generation, even for a read-only query.
+
 ## Refactor touched code as part of every change (mandatory)
 
 - Whenever changing a function, review and refactor that function and the directly related surrounding code in the same change. Remove relevant duplication, simplify control flow, clarify names and responsibilities, and reuse existing helpers where this improves the work. Do not postpone necessary local cleanup to an unspecified future task.

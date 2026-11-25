@@ -278,6 +278,9 @@ def failure_for_error(raw_error: object, *, restoration: bool = False) -> Genera
                 "Требуется дождаться восстановления доступности модели."
             ),
         }[category]
+    elif re.fullmatch(r"reader_inventory_unavailable(?: \(operation_id=[0-9a-f-]{36}\))?", error):
+        code = "runtime_unavailable"
+        message = "Сборка на паузе. Когда доступ к рабочей среде восстановится, можно продолжить."
     elif re.match(r"\Amax_verification_unavailable(?:$|[\s:(])", error):
         code = "runtime_unavailable"
         retryable = False

@@ -31,6 +31,41 @@ directory. Database zero counts alone are insufficient: queued/building/swapping
 unknown or malformed publication journals block restart. Only the latest known
 terminal journal response is accepted; the helper never reconciles or edits it.
 
+## Observe one generation
+
+The editor and its authenticated `GET /api/projects/{project_id}/generation` return the owner's latest run. Check its `id` before attributing a status to a specific generation.
+
+For an exact run from Core, set `PROJECT_ID`, `OWNER_ID` and `RUN_ID` to the authorized UUIDs. This uses the same status projection as the editor, in a read-only transaction outside the serving API cgroup:
+
+```bash
+set -euo pipefail
+launcher=/opt/omnia/infra/release/api-maintenance.py
+wire() { python3 -c 'import base64,json,sys; print(base64.b64encode(json.dumps(sys.argv[1:]).encode()).decode())' "$@"; }
+live=$(sudo -n python3 "$launcher" "$(wire '' --describe-runtime)")
+sudo -n python3 "$launcher" "$(wire "$live" - "${PROJECT_ID:?}" "${OWNER_ID:?}" "${RUN_ID:?}")" <<'PY'
+import asyncio, sys
+from uuid import UUID
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker
+from yleum_api.core.db import dispose_engine, get_engine
+from yleum_api.services.generation.recovery_public import project_generation_public
+
+async def main():
+    project, owner, run = map(UUID, sys.argv[1:])
+    try:
+        async with async_sessionmaker(get_engine())() as session:
+            await session.execute(text("SET TRANSACTION READ ONLY"))
+            result = await project_generation_public(session, project_id=project, user_id=owner, run_id=run)
+            if result is None or result.id != run:
+                raise SystemExit("No matching generation for this project and owner")
+            print(result.model_dump_json(include={"id", "status", "started_at", "finished_at"}))
+    finally:
+        await dispose_engine()
+
+asyncio.run(main())
+PY
+```
+
 ## Durable waiters and complete reader inventory
 
 A saved recovery wait is excluded from the generation count only after its

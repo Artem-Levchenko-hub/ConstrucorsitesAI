@@ -100,7 +100,7 @@ from yleum_orchestrator.services.cell_draft_support import (
 from yleum_orchestrator.services.cell_state import CellWorkspaceState
 from yleum_orchestrator.services.docker_cell_resources import DockerCellResourceManager
 from yleum_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
-from yleum_orchestrator.services.generation_reader_inventory import build_reader_dispatch_wait
+from yleum_orchestrator.services.generation_reader_inventory import command_reader_dispatch_wait
 from yleum_orchestrator.services.machine_environment import (
     EnvironmentIntegrityError,
     MachineEnvironmentRef,
@@ -765,7 +765,7 @@ async def exec_workspace_agent_command(
 
     try:
         async with manager.operation_lock.hold(workspace_id):
-            with build_reader_dispatch_wait(
+            with command_reader_dispatch_wait(
                 request.task_role,
                 remaining=machine_remaining_seconds,
                 deadline=time.monotonic() + request.timeout_seconds,

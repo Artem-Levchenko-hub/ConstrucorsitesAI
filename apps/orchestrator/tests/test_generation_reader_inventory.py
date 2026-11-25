@@ -390,6 +390,38 @@ def test_fenced_build_waits_for_admission_without_replaying_docker(monkeypatch, 
             }[outcome]
 
 
+def test_shell_tolerates_separate_reader_outages_within_its_original_deadline(monkeypatch):
+    from yleum_orchestrator.services import generation_reader_inventory as readers
+
+    now = 0.0
+    ready_at = 16.0
+    effects = []
+
+    def guard():
+        if now < ready_at:
+            raise readers.ReaderInventoryUnavailable("reader epoch changed")
+
+    def wait(_scope, seconds):
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr(readers, "monotonic", lambda: now)
+    monkeypatch.setattr(readers, "require_if_configured", guard)
+    monkeypatch.setattr(readers, "_wait_for_dispatch_retry", wait)
+    with readers.command_reader_dispatch_wait(None, remaining=lambda n: n, deadline=120):
+        readers.reader_dispatch(effects.append, "shell")
+        now = 65.0
+        ready_at = 105.0
+        readers.reader_dispatch(effects.append, "collect")
+
+        ready_at = 130.0
+        with pytest.raises(readers.ReaderInventoryUnavailable):
+            readers.reader_dispatch(effects.append, "late")
+
+    assert now == 120.0
+    assert effects == ["shell", "collect"]
+
+
 async def test_cancelling_build_releases_wait_without_dispatching_docker(monkeypatch):
     from yleum_orchestrator.services import generation_reader_inventory as readers
 

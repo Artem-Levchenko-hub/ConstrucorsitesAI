@@ -43,7 +43,7 @@ from yleum_orchestrator.services.docker_cell_resources import DockerCommandResul
 from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend
 from yleum_orchestrator.services.generation_reader_inventory import (
     ReaderInventoryUnavailable,
-    build_reader_dispatch_wait,
+    command_reader_dispatch_wait,
     limit_reader_dispatch_wait,
     reader_dispatch,
 )
@@ -456,7 +456,7 @@ class MachineAdapter:
         try:
             with (
                 machine_budget(request.timeout_seconds + cleanup_reserve),
-                build_reader_dispatch_wait(
+                command_reader_dispatch_wait(
                     request.task_role,
                     remaining=machine_remaining_seconds,
                     deadline=time.monotonic() + request.timeout_seconds,

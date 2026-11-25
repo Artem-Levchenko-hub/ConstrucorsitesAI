@@ -316,6 +316,14 @@ _PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES = {
     "services.machine_npm_seed": "59f73bde51d96771720afb82027add18bc16b7a20c1a1789557792924f26fda1",
     "services.machine_pnpm_install": "467a30c26ceb03063e15ff6fa5be4f5a402e06d2a114d37901706a4485ecead9",
 }
+# Shell commands now wait for reader readiness under the same lock as builds.
+# Keep the dispatch guard, router and command adapter bound to one revision.
+_PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES = {
+    **_PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES,
+    "routers.workspace": "0c6271bccf33f4f28f195b4c13b30066f276722395ce6a80b91a5724acafa311",
+    "services.generation_reader_inventory": "cf99110cfc53cf88016f40fe1af7b50fbc1ad71785e2dbeb37e9ce505ff33749",
+    "services.machine_adapter": "edd28997ef26149988f5c07fc7be94a7acf5276db0110ea367f22177933e0bc5",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -346,6 +354,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_CHECKPOINT_PREVIEW_SOURCES,
     _PORTABLE_QUIESCENCE_CHECKPOINT_MIGRATION_SOURCES,
     _PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES,
+    _PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES,
 )
 # Only these reviewed producers may attest a pending fast_check wrapper.
 _PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES = (
@@ -361,6 +370,7 @@ _PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES = (
     _PORTABLE_QUIESCENCE_CHECKPOINT_PREVIEW_SOURCES,
     _PORTABLE_QUIESCENCE_CHECKPOINT_MIGRATION_SOURCES,
     _PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES,
+    _PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.
