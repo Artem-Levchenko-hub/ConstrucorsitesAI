@@ -27,6 +27,21 @@ backup_prune_local() {
     -type d -regex '.*/20[0-9]{6}-[0-9]{6}' -mtime "+$days" -exec rm -rf -- {} +
 }
 
+backup_prune_platform_mirrors() {
+  local root="$1" days="$2" enabled="$3" day mirror
+  backup_retention_validate "$enabled" "$days" || return
+  [[ "$enabled" == true ]] || return 0
+  [[ -d "$root" && ! -L "$root" && "$(realpath -e -- "$root")" == "$root" && "$root" != / ]] || {
+    echo 'Platform backup mirror root must be a canonical directory' >&2; return 65;
+  }
+  for day in "$root"/20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]; do
+    [[ -d "$day" && ! -L "$day" ]] || continue
+    mirror="$day/platform-encrypted"
+    [[ -d "$mirror" && ! -L "$mirror" ]] || continue
+    backup_prune_local "$mirror" "$days" "$enabled" || return
+  done
+}
+
 backup_prune_minio() {
   local bucket="$1" days="$2" enabled="$3" cutoff listing prefix
   backup_retention_validate "$enabled" "$days" || return

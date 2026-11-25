@@ -153,7 +153,9 @@ class PhysicalPrivateDay(unittest.TestCase):
         witness = source / "OFFHOST_SHA256"
         witness.write_text("fixture checksum", encoding="utf-8")
         text = ENTRYPOINT.read_text(encoding="utf-8")
-        mirror = "shopt -s nullglob\n" + text.split("shopt -s nullglob\n", 1)[1]
+        mirror = "shopt -s nullglob\n" + text.split("shopt -s nullglob\n", 1)[1].split(
+            "# Expire old mirror names", 1,
+        )[0]
         subprocess.run(
             ["bash", "-ec", 'latest=$1; dest=$2\n' + mirror, "fixture", str(source), str(dest)],
             check=True,

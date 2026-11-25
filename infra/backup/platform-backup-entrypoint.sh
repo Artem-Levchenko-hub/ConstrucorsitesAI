@@ -113,4 +113,7 @@ else
   cp -- "$bundle" "$dest/"
 fi
 install -m 0600 -- "$latest/OFFHOST_SHA256" "$dest/OFFHOST_SHA256"
+# Expire old mirror names under the same explicit policy as the canonical backup.
+source /opt/omnia/infra/backup/retention.sh
+backup_prune_platform_mirrors "$(dirname -- "$backup_day")" "${RETENTION_DAYS:-14}" "$BACKUP_PRUNE_ENABLED"
 echo PLATFORM_BACKUP_DONE

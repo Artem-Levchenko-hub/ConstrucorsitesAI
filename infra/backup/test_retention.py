@@ -55,6 +55,28 @@ class RetentionTests(unittest.TestCase):
             self.assertTrue(fresh.exists())
             self.assertTrue(preservation.exists())
 
+    @unittest.skipUnless(os.name == "posix", "requires POSIX canonical path")
+    def test_platform_mirror_policy_only_expires_timestamped_mirrors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            day = root / "2026-10-01"
+            mirror = day / "platform-encrypted"
+            old = mirror / "20261001-000000"
+            fresh = mirror / "20261125-000000"
+            physical_db = day / "20261001-000000"
+            for path in (old, fresh, physical_db):
+                path.mkdir(parents=True)
+            for path in (old, physical_db):
+                os.utime(path, (time.time() - 40 * 86400,) * 2)
+            for enabled in ("false", "true"):
+                outcome = self.run_shell(
+                    'backup_prune_platform_mirrors "$1" 30 "$2"', root.as_posix(), enabled,
+                )
+                self.assertEqual(outcome.returncode, 0, outcome.stderr)
+                self.assertIs(old.exists(), enabled == "false")
+                self.assertTrue(fresh.exists())
+                self.assertTrue(physical_db.exists())
+
     def test_rotation_never_calls_remote_delete_or_listing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             calls = Path(tmp) / "calls"
