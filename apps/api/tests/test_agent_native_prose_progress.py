@@ -9,6 +9,7 @@ import pytest
 
 from yleum_api.core.config import get_settings
 from yleum_api.services import agent_native
+from yleum_api.services.agent_output_budget import SOL_MODEL
 
 
 @pytest.fixture(autouse=True)
@@ -25,10 +26,12 @@ def narration() -> dict[str, Any]:
     return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "I will build it."}]}
 
 
-def tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
+def tool(name: str, args: dict[str, Any], *, call_id: str | None = None) -> dict[str, Any]:
     return {
         "stop_reason": "tool_use",
-        "content": [{"type": "tool_use", "id": f"tool-{name}", "name": name, "input": args}],
+        "content": [{
+            "type": "tool_use", "id": call_id or f"tool-{name}", "name": name, "input": args,
+        }],
     }
 
 
@@ -101,3 +104,115 @@ async def test_product_progress_resets_narration_budget_and_green_completion_sur
     assert result.stop_reason == "done_green"
     assert set(result.files) == {"part-6.ts", "part-12.ts"}
     assert actions == ["write_file", "write_file", "build"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_repair", [True, False])
+async def test_sol_continues_reported_work_in_the_same_source_tree(
+    monkeypatch: pytest.MonkeyPatch, finish_repair: bool,
+) -> None:
+    entry = "src/app/page.tsx"
+    handler = "src/app/api/questionnaire/route.ts"
+    missing = "Сохранить анкету и восстановить ответы после обновления страницы."
+    workspace = {}
+    observations = []
+
+    def done(remaining: str, call_id: str) -> dict[str, Any]:
+        return tool("done", {"summary": "Анкета нутрициолога", "remaining_work": remaining},
+                    call_id=call_id)
+
+    turns = [
+        tool("write_file", {"path": entry, "content": "questionnaire interface"}),
+        done(missing, "report-partial"),
+        tool("write_file", {"path": "README.md", "content": "Documentation"},
+             call_id="write-documentation"),
+        done("", "close-unchanged"),
+    ]
+    if finish_repair:
+        turns += [
+            tool("write_file", {"path": handler, "content": "save and reload"},
+                 call_id="write-questionnaire-handler"),
+            tool("build", {}),
+            done("", "close-repaired"),
+        ]
+    responses = iter(turns)
+
+    async def provider(_client, _url, conversation, _system, **kwargs):
+        schema = next(row["input_schema"] for row in kwargs["tools"] if row["name"] == "done")
+        assert "remaining_work" in schema["required"]
+        for row in conversation[-1]["content"]:
+            if isinstance(row, dict) and row.get("type") == "tool_result":
+                observations.append(row)
+        return next(responses)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        if action.name == "write_file":
+            workspace[action.path] = action.args["content"]
+        return {"ok": True}
+
+    async def snapshot() -> dict[str, str]:
+        return workspace.copy()
+
+    monkeypatch.setattr(agent_native, "_call_messages", provider)
+    result = await agent_native.run_native_build(
+        model=SOL_MODEL, system="MAX VERIFICATION OVERRIDE", task="Сделай нутрициолога",
+        execute=execute, snapshot_files=snapshot, max_steps=len(turns),
+        portable_cell=True, coordinator_handoff=True,
+    )
+
+    assert result.files[entry] == "questionnaire interface"
+    reported, = [r for r in observations if r["tool_use_id"] == "report-partial"]
+    assert reported["is_error"] and missing in reported["content"]
+    assert "current workspace" in reported["content"]
+    assert result.done is finish_repair
+    assert not result.needs_finalization
+    if finish_repair:
+        refused, = [r for r in observations if r["tool_use_id"] == "close-unchanged"]
+        assert refused["is_error"] and missing in refused["content"]
+        assert workspace[handler] == "save and reload"
+        assert result.files[handler] == "save and reload"
+    else:
+        assert result.stop_reason == "product_work_remaining"
+        assert missing in result.summary
+
+
+@pytest.mark.asyncio
+async def test_sol_keeps_reported_work_across_a_native_segment_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = "src/app/page.tsx"
+    missing = "Connect questionnaire persistence."
+    responses = iter([
+        tool("write_file", {"path": entry, "content": "interface"}),
+        tool("done", {"summary": "Draft", "remaining_work": missing}, call_id="partial"),
+        tool("done", {"summary": "Ready", "remaining_work": ""}, call_id="unchanged"),
+        tool("write_file", {"path": entry, "content": "interface and persistence"}),
+        tool("build", {}),
+        tool("done", {"summary": "Ready", "remaining_work": ""}, call_id="complete"),
+    ])
+    workspace = {}
+    conversations = []
+
+    async def provider(_client, _url, conversation, _system, **_kwargs):
+        conversations.append(str(conversation))
+        return next(responses)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        if action.name == "write_file":
+            workspace[action.path] = action.args["content"]
+        return {"ok": True}
+
+    async def snapshot() -> dict[str, str]:
+        return workspace.copy()
+
+    monkeypatch.setattr(agent_native, "_call_messages", provider)
+    result = await agent_native.run_native_build(
+        model=SOL_MODEL, system="MAX VERIFICATION OVERRIDE", task="Build a nutrition journal",
+        execute=execute, snapshot_files=snapshot, max_steps=2, max_segments=3,
+        portable_cell=True, coordinator_handoff=True,
+    )
+
+    assert missing in conversations[2]
+    assert "Implement the reported work in source" in conversations[3]
+    assert result.done and result.segments == 3
+    assert result.files == {entry: "interface and persistence"}

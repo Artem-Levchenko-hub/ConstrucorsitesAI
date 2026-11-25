@@ -22,7 +22,7 @@ import hashlib
 import json
 import posixpath
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from itertools import count as segment_numbers
@@ -46,6 +46,7 @@ from yleum_api.services.agent_output_budget import (
     KIMI_PILOT_MODEL,
     SONNET55_REPAIR_OUTPUT_TOKENS,
     agent_output_tokens,
+    is_sol_model,
     is_sonnet55_model,
 )
 from yleum_api.services.generation.continuation import (
@@ -110,6 +111,24 @@ if TYPE_CHECKING:
     from yleum_api.services.generation.recovery_execution import ExecutionDriver
 
 
+_PRODUCT_WORK_REMAINING = "product_work_remaining"
+_REQUEST_PRODUCT_REPORT = (
+    "Use remaining_work in the done tool to report what is missing, "
+    "or an empty string when complete."
+)
+
+
+class _OutstandingProductWork(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    detail: str
+    source: str | None
+
+
+@dataclass
+class _ProductHandoff:
+    outstanding: _OutstandingProductWork | None = None
+
+
 class _NativeLoopFrame(BaseModel):
     """Executable data only. Historical green flags are invalidated on cold entry."""
 
@@ -145,6 +164,9 @@ class _NativeLoopFrame(BaseModel):
     compiler_signature: str | None = Field(default=None, exclude_if=lambda v: v is None)
     recovery_output_cap: int | None = Field(default=None, exclude_if=lambda v: v is None)
     transcript_recovery_used: bool = Field(default=False, exclude_if=lambda value: value is False)
+    outstanding_product_work: _OutstandingProductWork | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     request: dict[str, Any]
 
 
@@ -755,6 +777,43 @@ def _build_max_tools(
 
 def _cache_toolset(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [*tools[:-1], {**tools[-1], "cache_control": _CACHE}]
+
+
+def _with_product_handoff(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            **tool,
+            "description": tool["description"] + (
+                " Include remaining_work: report the concrete requested behavior still missing "
+                "in the current source, or use an empty string when all requested behavior is "
+                "implemented. Report only work within this request. A nonempty report asks to "
+                "continue editing the same source before final checks."
+            ),
+            "input_schema": {
+                **tool["input_schema"],
+                "properties": {**tool["input_schema"]["properties"], "remaining_work": _STR},
+                "required": [*tool["input_schema"]["required"], "remaining_work"],
+            },
+        } if tool["name"] == "done" else tool
+        for tool in tools
+    ]
+
+
+def _offers_product_report(tools: list[dict[str, Any]] | None) -> bool:
+    return any(
+        tool["name"] == "done"
+        and "remaining_work" in tool["input_schema"].get("properties", {})
+        for tool in tools or ()
+    )
+
+
+def _reported_product_work(inputs: Iterable[Mapping[str, Any]]) -> str:
+    details = dict.fromkeys(
+        value.strip()
+        for args in inputs
+        if isinstance(value := args.get("remaining_work"), str) and value.strip()
+    )
+    return bounded_recovery_diagnostic("\n".join(details), max_bytes=1400)
 
 
 _MAX_TOOLS: list[dict[str, Any]] = _build_max_tools(allow_bash=False)
@@ -1830,6 +1889,7 @@ async def _run_native_segment(
     directed_path: str | None = None,
     snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None,
     allow_filtered_source_handoff: bool = False,
+    product_handoff: _ProductHandoff | None = None,
 ) -> AgentResult:
     """Drive the native tool-use loop until the model calls ``done`` (with a clean
     build) or the step budget is hit. Returns the written files + transcript.
@@ -1896,6 +1956,8 @@ async def _run_native_segment(
     )
     if coordinated_max and MAX_COORDINATOR_HANDOFF not in system:
         system += "\n\n" + MAX_COORDINATOR_HANDOFF
+    report_product_work = coordinated_max and is_sol_model(model) and not source_repair
+    product_handoff = product_handoff if product_handoff is not None else _ProductHandoff()
     managed_build_gap: ManagedSourceGap | None = None
     reported_managed_rejection = prior_managed_rejection
 
@@ -1943,6 +2005,7 @@ async def _run_native_segment(
         compiler_signature = saved_frame.compiler_signature
         recovery_output_cap = saved_frame.recovery_output_cap
         transcript_recovery_used = saved_frame.transcript_recovery_used
+        product_handoff.outstanding = saved_frame.outstanding_product_work
         response_recovery.budget = IncompleteResponseBudget(
             total=max(response_recovery.budget.total, saved_frame.response_budget.total),
             since_progress=max(
@@ -1997,6 +2060,17 @@ async def _run_native_segment(
         if snapshot_files is not None:
             return await snapshot_files()
         return {**baseline_files, **written}
+
+    async def _product_source_fingerprint() -> str:
+        from yleum_api.services.generation.agent_finalization import _is_edit_source_path
+
+        return source_fingerprint({
+            path: content for path, content in (await _current_source()).items()
+            if _is_edit_source_path(path)
+            and not path.startswith(("test/", "tests/", "e2e/"))
+            and "/__tests__/" not in path
+            and not re.search(r"\.(?:test|spec)\.[^.]+$", path)
+        })
 
     def _remember_build_check(observation: dict[str, Any]) -> None:
         nonlocal last_build_ok, wrote_since_build, managed_build_gap, unverified_response_problem
@@ -2079,6 +2153,12 @@ async def _run_native_segment(
 
     async def _finish_without_provider(*, steps: int, reason: str, detail: str) -> AgentResult:
         """Stop provider traffic; flagged MAX transfers proof to finalization."""
+        if product_handoff.outstanding is not None:
+            return AgentResult(
+                done=False, summary=product_handoff.outstanding.detail,
+                files=written, steps=steps, transcript=convo,
+                stop_reason=_PRODUCT_WORK_REMAINING, evidence=_evidence(),
+            )
         if edit_source_changed is not None and not edit_source_changed():
             return AgentResult(
                 done=False, summary=_EDIT_SOURCE_NUDGE, files=written, steps=steps,
@@ -2305,7 +2385,7 @@ async def _run_native_segment(
                         "step": step, "action": "build", "path": "",
                         "detail": detail, "ok": last_build_ok,
                     })
-                if not source_repair:
+                if not source_repair and product_handoff.outstanding is None:
                     repair_gap = _managed_repair_after_feedback(managed_gap)
                     if repair_gap is not None:
                         return _handoff_managed_repair(repair_gap, step)
@@ -2397,6 +2477,8 @@ async def _run_native_segment(
                             else _MAX_ENTRY_WRITE_CHOICE if force_max_entry_write else None
                         ),
                     )
+                    if report_product_work:
+                        request["tools"] = _with_product_handoff(request["tools"])
                     if limited_output:
                         request["max_tokens"] = SONNET55_REPAIR_OUTPUT_TOKENS
                     if (active_recovery == "output_limit" and is_sonnet55_model(model)
@@ -2452,6 +2534,10 @@ async def _run_native_segment(
                     elif narrow_turn:
                         assert active_recovery is not None and current_source is not None
                         diagnostic = source_diagnostic or await _completion_gap()
+                        if product_handoff.outstanding is not None:
+                            diagnostic = "\n".join(filter(None, (
+                                diagnostic, product_handoff.outstanding.detail,
+                            )))
                         checking_only = (
                             not force_max_entry_write and not repair_write_required
                             and not edit_write_required and completion_check is not None
@@ -2591,6 +2677,7 @@ async def _run_native_segment(
                             compiler_signature=compiler_signature,
                             recovery_output_cap=recovery_output_cap,
                             transcript_recovery_used=transcript_recovery_used,
+                            outstanding_product_work=product_handoff.outstanding,
                         )
                         assert frame is not None
                         # Defaults are for interpretation only. Replay must use
@@ -2622,6 +2709,31 @@ async def _run_native_segment(
                     _validate_response_stop_reason(resp)
                     if (restoring and edit_deadline is not None
                             and datetime.now(UTC) >= edit_deadline):
+                        content = resp.get("content")
+                        if (
+                            report_product_work and _offers_product_report(request["tools"])
+                            and isinstance(content, list)
+                            and not _incomplete_tool_response(
+                                resp, content, request_history=request["convo"],
+                            )
+                        ):
+                            reports = [
+                                block["input"] for block in content
+                                if isinstance(block, dict) and block.get("type") == "tool_use"
+                                and block.get("name") == "done"
+                            ]
+                            detail = _reported_product_work(reports)
+                            report_missing = any(
+                                not isinstance(args.get("remaining_work"), str) for args in reports
+                            )
+                            if detail or report_missing or resp.get("stop_reason") == "end_turn":
+                                # Only read the settled declaration here. Editing
+                                # tools must not run after the original deadline.
+                                product_handoff.outstanding = (
+                                    product_handoff.outstanding or _OutstandingProductWork(
+                                        detail=detail or _REQUEST_PRODUCT_REPORT, source=None,
+                                    )
+                                )
                         return await _finish_without_provider(
                             steps=step, reason="finalization_reserve",
                             detail="Saved response reconciled after the original editing deadline.",
@@ -2666,7 +2778,7 @@ async def _run_native_segment(
                 )
                 if (
                     settled_filter and allow_filtered_source_handoff and not source_repair
-                    and coordinated_max
+                    and coordinated_max and product_handoff.outstanding is None
                 ):
                     return AgentResult(
                         done=False, summary="Черновик передан на финальную проверку.",
@@ -2895,6 +3007,12 @@ async def _run_native_segment(
                 gap = await _completion_gap() if _done and (
                     last_build_ok is True or edit_source_changed is not None
                 ) else None
+                if _done and report_product_work:
+                    if product_handoff.outstanding is None:
+                        product_handoff.outstanding = _OutstandingProductWork(
+                            detail=_REQUEST_PRODUCT_REPORT, source=None,
+                        )
+                    gap = gap or product_handoff.outstanding.detail
                 if _done and last_build_ok is True and not wrote_since_build and not gap:
                     return AgentResult(
                         done=True,
@@ -2922,7 +3040,7 @@ async def _run_native_segment(
                         ),
                     }
                 )
-                if _done:
+                if _done and product_handoff.outstanding is None:
                     managed_gap = (
                         gap if source_repair and isinstance(gap, ManagedSourceGap)
                         else _current_managed_gap()
@@ -2950,7 +3068,7 @@ async def _run_native_segment(
             batch = PureCheckBatch(pure_check)
             results: list[dict[str, Any]] = []
             done_summary: str | None = None
-            pending_done: list[tuple[str, dict[str, Any]]] = []
+            pending_done: list[tuple[dict[str, Any], dict[str, Any]]] = []
             product_progress_this_turn = False
             inspection_actions: list[Action] = []
             checked_build_this_turn = False
@@ -2966,9 +3084,7 @@ async def _run_native_segment(
                         "type": "tool_result", "tool_use_id": tu_id, "content": "done",
                     }
                     results.append(done_result)
-                    pending_done.append((
-                        str((tu.get("input") or {}).get("summary", "")), done_result,
-                    ))
+                    pending_done.append((tu["input"], done_result))
                     continue
 
                 action = _tool_use_to_action(tu, portable_cell=portable_cell)
@@ -3213,7 +3329,51 @@ async def _run_native_segment(
             current_managed_gap = _current_managed_gap()
             checked_repair_completion = False
             if pending_done:
-                if edit_source_changed is not None and not edit_source_changed():
+                # A retained provider request still uses the schema it was sent with.
+                requested_report = product_handoff.outstanding is not None or (
+                    report_product_work and _offers_product_report(request["tools"])
+                )
+                detail = (
+                    _reported_product_work(args for args, _ in pending_done)
+                    if requested_report else ""
+                )
+                product_feedback = ""
+                if detail:
+                    previous_work = product_handoff.outstanding
+                    product_handoff.outstanding = _OutstandingProductWork(
+                        detail=detail, source=await _product_source_fingerprint(),
+                    )
+                    product_feedback = (
+                        "Continue in the current workspace with the saved source. Implement "
+                        "the following missing behavior from the original request:\n" + detail
+                        + "\nRun build after the change, then update remaining_work."
+                    )
+                    if emit and (previous_work is None or previous_work.detail != detail):
+                        await emit("agent.step", {
+                            "step": step, "action": "complete_product_work", "path": "",
+                            "human": "Дорабатываю функции приложения", "ok": None,
+                        })
+                elif requested_report and any(
+                    not isinstance(args.get("remaining_work"), str) for args, _ in pending_done
+                ):
+                    product_handoff.outstanding = (
+                        product_handoff.outstanding or _OutstandingProductWork(
+                            detail=_REQUEST_PRODUCT_REPORT, source=None,
+                        )
+                    )
+                    product_feedback = _REQUEST_PRODUCT_REPORT
+                elif (outstanding := product_handoff.outstanding) is not None and (
+                    outstanding.source is not None
+                    and outstanding.source == await _product_source_fingerprint()
+                ):
+                    product_feedback = (
+                        "Implement the reported work in source before closing it:\n"
+                        + outstanding.detail
+                    )
+
+                if product_feedback:
+                    done_gap = product_feedback
+                elif edit_source_changed is not None and not edit_source_changed():
                     done_gap = _EDIT_SOURCE_NUDGE
                 elif wrote_since_build or last_build_ok is not True:
                     done_gap = (
@@ -3225,11 +3385,13 @@ async def _run_native_segment(
                     checked_repair_completion = source_repair
                     if source_repair and isinstance(done_gap, ManagedSourceGap):
                         current_managed_gap = done_gap
-                for summary, done_result in pending_done:
+                for args, done_result in pending_done:
                     if done_gap:
                         done_result.update(is_error=True, content="Not done yet: " + done_gap)
                     else:
-                        done_summary = summary
+                        done_summary = str(args.get("summary", ""))
+                if done_summary is not None:
+                    product_handoff.outstanding = None
 
             # In source repair, a quick build does not run the managed source
             # contract. Only a fresh completion check can replace its rejection.
@@ -3241,10 +3403,11 @@ async def _run_native_segment(
             ):
                 if current_managed_gap is not None and not pending_done:
                     results.append({"type": "text", "text": str(current_managed_gap)})
-                repair_gap = _managed_repair_after_feedback(current_managed_gap)
-                if repair_gap is not None:
-                    convo.append({"role": "user", "content": results})
-                    return _handoff_managed_repair(repair_gap, step + 1)
+                if product_handoff.outstanding is None:
+                    repair_gap = _managed_repair_after_feedback(current_managed_gap)
+                    if repair_gap is not None:
+                        convo.append({"role": "user", "content": results})
+                        return _handoff_managed_repair(repair_gap, step + 1)
 
             if (
                 max_runtime
@@ -3524,6 +3687,8 @@ async def _run_native_segments(
             and edit_deadline is not None
             and datetime.now(UTC) >= edit_deadline
         ):
+            if last_result is not None and last_result.stop_reason == _PRODUCT_WORK_REMAINING:
+                return last_result
             return AgentResult(
                 done=False, summary="Source deadline reached", files=cumulative_files,
                 steps=total_steps, transcript=cumulative_transcript,
@@ -3542,7 +3707,6 @@ async def _run_native_segments(
             observed_source if novelty is not None else effective_files_before
         )
         restored = None  # Only the saved segment may reconcile beyond the source deadline.
-        last_result = result
         total_steps += result.steps
         cumulative_transcript.extend(result.transcript)
         wrote_files = bool(result.files)
@@ -3566,6 +3730,7 @@ async def _run_native_segments(
             proof_checkpoint=result.proof_checkpoint,
             continuation_reason=result.continuation_reason,
         )
+        last_result = combined
         budget_boundary = segment_limit is None and result.stop_reason in {
             "max_steps", "max_steps_green", "max_steps_red",
         }
@@ -3593,13 +3758,21 @@ async def _run_native_segments(
             assert snapshot_files is not None and edit_deadline is not None
             remaining = (edit_deadline - datetime.now(UTC)).total_seconds()
             if remaining <= 0:
-                combined.stop_reason = "finalization_reserve"
+                if combined.stop_reason != _PRODUCT_WORK_REMAINING:
+                    combined.stop_reason = "finalization_reserve"
                 return combined
-            async with asyncio.timeout(remaining):
-                observed_source = await snapshot_files()
+            try:
+                async with asyncio.timeout(remaining):
+                    observed_source = await snapshot_files()
+            except TimeoutError:
+                if combined.stop_reason == _PRODUCT_WORK_REMAINING:
+                    return combined
+                raise
             file_progress = novelty.observe(observed_source)
             evidence_progress = False  # Counters are not validated server proof receipts.
         if not file_progress and not evidence_progress:
+            if combined.stop_reason == _PRODUCT_WORK_REMAINING:
+                return combined
             combined.summary = (
                 "Автономная генерация остановлена: целый сегмент не изменил "
                 "продукт и не добавил проверяемых доказательств готовности."
@@ -3607,6 +3780,8 @@ async def _run_native_segments(
             combined.stop_reason = "no_progress"
             return combined
         if segment == segment_limit:
+            if combined.stop_reason == _PRODUCT_WORK_REMAINING:
+                return combined
             combined.summary = (
                 f"{result.summary}\n\nДостигнут защитный предел автономного продолжения "
                 f"({segment_limit} сегм.)."
@@ -3677,6 +3852,7 @@ async def run_native_build(
     )
     prior_source_writes = False
     prior_managed_rejection: str | None = None
+    product_handoff = _ProductHandoff()
 
     async def run_segment(
         segment_task: str,
@@ -3722,7 +3898,15 @@ async def run_native_build(
             ),
             snapshot_files=snapshot_files,
             allow_filtered_source_handoff=allow_filtered_source_handoff,
+            product_handoff=product_handoff,
         )
+        if (
+            product_handoff.outstanding is not None
+            and result.stop_reason in {"output_limit", "incomplete_response"}
+        ):
+            # A compiler-only recovery cannot finish an acknowledged product gap.
+            result.stop_reason = _PRODUCT_WORK_REMAINING
+            result.summary = product_handoff.outstanding.detail
         prior_source_writes = prior_source_writes or bool(result.files)
         # The next segment is prompted with this exact summary. The rejection
         # is actionable only if a fresh check in that segment confirms it.
