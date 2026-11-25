@@ -184,6 +184,7 @@ class PendingFastCheckTests(unittest.TestCase):
             self.checker._PORTABLE_QUIESCENCE_CHECKPOINT_MIGRATION_SOURCES,
             self.checker._PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES,
             self.checker._PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES,
+            self.checker._PORTABLE_QUIESCENCE_COMMAND_DISPATCH_DEADLINE_SOURCES,
         ):
             self.assertEqual(
                 self.checker._pending_portable_commands(self.machine, sources=sources),
@@ -435,23 +436,40 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             ):
                 self.checker._require_reviewed_portable_sources({**previous, name: current[name]})
 
-    def test_command_reader_wait_accepts_only_complete_predecessor_or_successor(self):
-        before = self.checker._PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES
-        after = self.checker._PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES
-        changed = ("routers.workspace", "services.generation_reader_inventory", "services.machine_adapter")
-        self.assertEqual(before.keys(), after.keys())
-        self.assertEqual({name for name in before if before[name] != after[name]}, set(changed))
+    def assert_command_cohorts(self, before, after, changed):
+        self.assertTrue(before.keys() <= after.keys())
+        self.assertEqual({key for key in after if after[key] != before.get(key)}, set(changed))
         for sources in (before, after):
             self.checker._require_reviewed_portable_sources(sources)
             self.assertIn(sources, self.checker._PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES)
         for choices in product((False, True), repeat=len(changed)):
-            if any(choices) and not all(choices):
-                mixed = dict(before)
-                mixed.update({name: after[name] for name, new in zip(changed, choices, strict=True) if new})
-                with self.subTest(choices=choices), self.assertRaisesRegex(
-                    self.checker.PhysicalDrainError, "quiescence_unsupported_source",
-                ):
-                    self.checker._require_reviewed_portable_sources(mixed)
+            selected = [name for name, new in zip(changed, choices, strict=True) if new]
+            if not selected or len(selected) == len(changed):
+                continue
+            mixed = {**before, **{name: after[name] for name in selected}}
+            with self.subTest(mixed=selected), self.assertRaisesRegex(
+                self.checker.PhysicalDrainError, "quiescence_unsupported_source",
+            ):
+                self.checker._require_reviewed_portable_sources(mixed)
+
+    def test_command_reader_wait_accepts_only_complete_predecessor_or_successor(self):
+        before = self.checker._PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES
+        after = self.checker._PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES
+        self.assertEqual(before.keys(), after.keys())
+        self.assert_command_cohorts(
+            before, after, ("routers.workspace", "services.generation_reader_inventory", "services.machine_adapter"),
+        )
+
+    def test_command_deadline_binds_dispatch_and_both_execution_backends_together(self):
+        before = self.checker._PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES
+        after = self.checker._PORTABLE_QUIESCENCE_COMMAND_DISPATCH_DEADLINE_SOURCES
+        added = "services.docker_py_cell_backend"
+        self.assertEqual(after.keys() - before.keys(), {added})
+        self.assertIn(added, self.checker._PORTABLE_QUIESCENCE_CONDITIONAL_SOURCE_NAMES)
+        self.assert_command_cohorts(before, after, (
+            "routers.workspace", "services.generation_reader_inventory", "services.machine_adapter",
+            "services.docker_machine_backend", "services.project_machine", added,
+        ))
 
     def test_disk_temp_successor_changes_only_the_reviewed_backend_and_keeps_predecessor(self):
         previous = self.checker._PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES
@@ -749,7 +767,7 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             (Path(__file__).parent / "fixtures/source-guard-lease-quiescence-sources.json")
             .read_text()
         )
-        current = self.checker._PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES
+        current = self.checker._PORTABLE_QUIESCENCE_COMMAND_DISPATCH_DEADLINE_SOURCES
         self.checker._require_reviewed_portable_sources(previous)
         self.checker._require_reviewed_portable_sources(previous_lease)
         baseline = json.loads(

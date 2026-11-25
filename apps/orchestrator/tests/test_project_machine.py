@@ -67,6 +67,41 @@ async def test_command_replay_returns_result_without_repeating_side_effect(tmp_p
     assert len(backend.commands) == 1
 
 
+@pytest.mark.parametrize("confirmed_no_start", [True, False])
+async def test_only_proven_undispatched_shell_releases_child_intent(
+    tmp_path, monkeypatch, confirmed_no_start,
+):
+    from yleum_orchestrator.services import generation_reader_inventory as readers
+
+    machine, backend, _lease, mutation = fixture(tmp_path)
+    await machine.ensure(MachineManifest.model_validate(payload()), mutation)
+    physical_starts = []
+
+    def physical_start():
+        physical_starts.append(1)
+        raise TimeoutError("Docker response lost")
+
+    monkeypatch.setattr(backend, "exec_start", lambda *_: readers.dispatch_command_start(
+        physical_start,
+    ))
+    now = 300 if confirmed_no_start else 299
+    monkeypatch.setattr(readers, "monotonic", lambda: now)
+    monkeypatch.setattr(readers, "require_if_configured", lambda: None)
+    with (
+        readers.command_reader_dispatch_wait(None, remaining=lambda n: n, deadline=300),
+        pytest.raises(TimeoutError) as error,
+    ):
+        await machine.exec_start(["sh", "-c", "true"], ".", mutation)
+
+    assert isinstance(error.value, readers.ShellStartDeadlineExceeded) is confirmed_no_start
+    assert len(physical_starts) == (0 if confirmed_no_start else 1)
+    intent = machine.state()["operations"].get(str(mutation.operation_id))
+    if confirmed_no_start:
+        assert intent is None
+    else:
+        assert intent["state"] == "starting"
+
+
 async def test_startup_ensure_ack_binds_exact_envelope_and_actual_incarnation(tmp_path):
     from yleum_orchestrator.services.machine_startup import PrepareBinding
 

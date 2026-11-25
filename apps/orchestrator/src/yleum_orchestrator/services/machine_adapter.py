@@ -43,9 +43,11 @@ from yleum_orchestrator.services.docker_cell_resources import DockerCommandResul
 from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend
 from yleum_orchestrator.services.generation_reader_inventory import (
     ReaderInventoryUnavailable,
+    ShellStartDeadlineExceeded,
     command_reader_dispatch_wait,
     limit_reader_dispatch_wait,
     reader_dispatch,
+    remaining_shell_work,
 )
 from yleum_orchestrator.services.machine_environment import (
     EnvironmentIntegrityError,
@@ -451,20 +453,19 @@ class MachineAdapter:
         require_candidate_writers_allowed(self.manager.state_store.root, state.workspace_id)
         command_grace = int(getattr(self.settings, "cell_machine_command_grace_seconds", 20))
         cleanup_reserve = command_grace + 5
+        total_seconds = remaining_shell_work(request.timeout_seconds) + cleanup_reserve
         succeeded = False
         restore_effects = {"started": False}
         try:
             with (
-                machine_budget(request.timeout_seconds + cleanup_reserve),
+                machine_budget(total_seconds),
                 command_reader_dispatch_wait(
                     request.task_role,
                     remaining=machine_remaining_seconds,
                     deadline=time.monotonic() + request.timeout_seconds,
                 ),
             ):
-                async with asyncio.timeout(
-                    machine_remaining_seconds(request.timeout_seconds + cleanup_reserve)
-                ):
+                async with asyncio.timeout(machine_remaining_seconds(total_seconds)):
                     if request.task_role == "restore_runtime":
                         from yleum_orchestrator.services.machine_startup import restoration_writer
 
@@ -494,6 +495,8 @@ class MachineAdapter:
                     )
                 if status.state in {"starting", "running"}:
                     active_names = {task.name for task in manifest.tasks}
+                    if request.task_role is None:
+                        active_names.add("shell")
                     if request.task_role in {
                         "fast_check",
                         "full_build",
@@ -510,7 +513,7 @@ class MachineAdapter:
                                     request.fencing_epoch,
                                     digest,
                                 ),
-                                    grace_seconds=command_grace,
+                                grace_seconds=command_grace,
                             )
                         except CellFenceRejected:
                             # The request budget can expire just before exec_start
@@ -780,7 +783,8 @@ class MachineAdapter:
         *,
         restore_effects: dict[str, bool] | None = None,
     ) -> DockerCommandResult:
-        request_deadline = time.monotonic() + machine_remaining_seconds(request.timeout_seconds)
+        work_seconds = machine_remaining_seconds(remaining_shell_work(request.timeout_seconds))
+        request_deadline = time.monotonic() + work_seconds
         role = request.task_role
         if role == "build" and not any(task.role == "test" for task in manifest.tasks):
             raise ValueError("portable build requires a declared test task")
@@ -809,7 +813,9 @@ class MachineAdapter:
         replayed = await machine.request_start(
             mutation,
             phase=role or "shell",
-            deadline_at=datetime.now(UTC) + timedelta(seconds=request.timeout_seconds),
+            deadline_at=datetime.now(UTC) + timedelta(
+                seconds=remaining_shell_work(request.timeout_seconds),
+            ),
         )
         if replayed is not None:
             return DockerCommandResult(
@@ -893,8 +899,11 @@ class MachineAdapter:
                     timed_out=True,
                 )
             deadline = min(request_deadline, time.monotonic() + timeout)
-            with limit_reader_dispatch_wait(deadline):
-                operation = await machine.exec_start(argv, cwd, operation_mutation)
+            try:
+                with limit_reader_dispatch_wait(deadline):
+                    operation = await machine.exec_start(argv, cwd, operation_mutation)
+            except ShellStartDeadlineExceeded as exc:
+                return await finish(exit_code=124, output=str(exc), timed_out=True)
             while True:
                 result = await machine.exec_status(operation, operation_mutation)
                 await machine.request_heartbeat(

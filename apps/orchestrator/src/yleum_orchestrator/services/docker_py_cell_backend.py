@@ -11,6 +11,7 @@ import tarfile
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from math import ceil
 from pathlib import PurePosixPath
 from types import SimpleNamespace
 from typing import Any, cast
@@ -30,7 +31,10 @@ from yleum_orchestrator.services.docker_cell_resources import (
     DockerVolumeRecord,
 )
 from yleum_orchestrator.services.generation_reader_inventory import (
+    ShellStartDeadlineExceeded,
+    dispatch_command_start,
     reader_dispatch,
+    remaining_shell_work,
     require_if_configured,
 )
 from yleum_orchestrator.services.project_machine import machine_budget, machine_effect
@@ -1198,7 +1202,10 @@ printf '%s\n' 'empty'
                 self._client_obj().networks.get(egress_network_name).connect,
                 container,
             )
-            await asyncio.to_thread(reader_dispatch, container.start)
+            try:
+                await asyncio.to_thread(dispatch_command_start, container.start)
+            except ShellStartDeadlineExceeded as exc:
+                return DockerCommandResult(exit_code=124, output=str(exc), timed_out=True)
             if hasattr(container, "reload"):
                 await asyncio.to_thread(container.reload)
             try:
@@ -1206,7 +1213,7 @@ printf '%s\n' 'empty'
                     self._wait_status,
                     container,
                     f"run workspace command {container_name}",
-                    timeout_seconds=timeout_seconds,
+                    timeout_seconds=max(1, ceil(remaining_shell_work(timeout_seconds))),
                 )
             except requests.exceptions.ReadTimeout:
                 timed_out = True

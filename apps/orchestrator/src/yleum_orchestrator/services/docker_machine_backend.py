@@ -29,6 +29,7 @@ import docker  # type: ignore[import-untyped]
 from yleum_orchestrator.core.cell_resources import CellIdentityConflict, CellResourceError
 from yleum_orchestrator.core.project_machine import MachineManifest, MachineService
 from yleum_orchestrator.services.generation_reader_inventory import (
+    dispatch_command_start,
     reader_dispatch,
     require_if_configured,
 )
@@ -1314,7 +1315,7 @@ class DockerMachineBackend:
         metadata["exec_logs"][exec_id] = log
         metadata["exec_pids"][exec_id] = pidfile
         write_controller_json(self.metadata_path, metadata)
-        reader_dispatch(self.client.api.exec_start, exec_id, detach=True)
+        dispatch_command_start(self.client.api.exec_start, exec_id, detach=True)
         return str(exec_id)
 
     def _read_log(self, path: str) -> str:

@@ -324,6 +324,17 @@ _PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES = {
     "services.generation_reader_inventory": "cf99110cfc53cf88016f40fe1af7b50fbc1ad71785e2dbeb37e9ce505ff33749",
     "services.machine_adapter": "edd28997ef26149988f5c07fc7be94a7acf5276db0110ea367f22177933e0bc5",
 }
+# The command deadline is checked at physical dispatch in both backends; bind
+# the owning route and machine journal to those exact implementations.
+_PORTABLE_QUIESCENCE_COMMAND_DISPATCH_DEADLINE_SOURCES = {
+    **_PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES,
+    "routers.workspace": "5e997952a5f33b34d2b7befab96876034f9d9577dff9f04408cca3716f61170b",
+    "services.docker_machine_backend": "d423d701e5df58b801103bc56f1e5e7ce261b87ad7eee0326ea9e76827369397",
+    "services.docker_py_cell_backend": "a85097123c6709ec724f84785c81e18b336f0e64edd60692eb9c285e19ad9eba",
+    "services.generation_reader_inventory": "fbb6b0134b875b701bc2b7b6e5d0ab734825299a2e9ffe4da68d35402752d99e",
+    "services.machine_adapter": "00a52e53646ba0fb283267347564989856d674f269109d19c06628b8c1279fd3",
+    "services.project_machine": "3eed3f62d8df074d3479904e998a38e5007414248edcbadb7ede884f0645848e",
+}
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -355,6 +366,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_CHECKPOINT_MIGRATION_SOURCES,
     _PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES,
     _PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES,
+    _PORTABLE_QUIESCENCE_COMMAND_DISPATCH_DEADLINE_SOURCES,
 )
 # Only these reviewed producers may attest a pending fast_check wrapper.
 _PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES = (
@@ -371,6 +383,7 @@ _PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES = (
     _PORTABLE_QUIESCENCE_CHECKPOINT_MIGRATION_SOURCES,
     _PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES,
     _PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES,
+    _PORTABLE_QUIESCENCE_COMMAND_DISPATCH_DEADLINE_SOURCES,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.
@@ -382,6 +395,7 @@ _PORTABLE_QUIESCENCE_CONDITIONAL_SOURCE_NAMES = frozenset(
         "services.source_write_journal",
         "services.command_receipts",
         "services.docker_owner_canary_provider",
+        "services.docker_py_cell_backend",
         "services.project_migrations",
         "services.checkpoint_preview",
         "services.checkpoint_preview_runtime",

@@ -401,6 +401,7 @@ class _DispatchWait:
     seconds: float
     owner: asyncio.Task[Any] | None
     remaining: Callable[[float], float]
+    shell_deadline: float | None = None
     retry_deadline: float | None = None
     closed: threading.Event = field(default_factory=threading.Event)
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -457,6 +458,7 @@ def limit_reader_dispatch_wait(deadline: float) -> Iterator[None]:
 @contextmanager
 def wait_for_reader_dispatch(
     seconds: float, *, remaining: Callable[[float], float] | None = None,
+    shell_deadline: float | None = None,
 ) -> Iterator[None]:
     """Bound admission waits inside one locked command, not a replay of it."""
     if _DISPATCH_WAIT.get() is not None:
@@ -466,7 +468,7 @@ def wait_for_reader_dispatch(
         owner = asyncio.current_task()
     except RuntimeError:
         owner = None
-    wait = _DispatchWait(seconds, owner, remaining or (lambda limit: limit))
+    wait = _DispatchWait(seconds, owner, remaining or (lambda limit: limit), shell_deadline)
     token = _DISPATCH_WAIT.set(wait)
     try:
         yield
@@ -490,10 +492,35 @@ def command_reader_dispatch_wait(
         yield
         return
     with (
-        wait_for_reader_dispatch(seconds, remaining=remaining),
+        wait_for_reader_dispatch(
+            seconds, remaining=remaining, shell_deadline=deadline if role is None else None,
+        ),
         limit_reader_dispatch_wait(deadline),
     ):
         yield
+
+
+def remaining_shell_work(seconds: float) -> float:
+    """Deduct time spent acquiring the lock and waiting for readiness before execution."""
+    wait = _DISPATCH_WAIT.get()
+    if wait is None or wait.shell_deadline is None:
+        return seconds
+    return min(seconds, max(0.0, wait.shell_deadline - monotonic()))
+
+
+class ShellStartDeadlineExceeded(TimeoutError):
+    """The command definitively did not start before the admitted shell deadline."""
+
+
+def dispatch_command_start[Result](
+    call: Callable[..., Result], *args: Any, **kwargs: Any,
+) -> Result:
+    def start() -> Result:
+        if remaining_shell_work(1) <= 0:
+            raise ShellStartDeadlineExceeded("command deadline reached before start")
+        return call(*args, **kwargs)
+
+    return reader_dispatch(start)
 
 
 def _wait_for_dispatch_retry(wait: _DispatchWait, seconds: float) -> None:

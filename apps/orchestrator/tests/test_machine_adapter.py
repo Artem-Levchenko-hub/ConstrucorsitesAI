@@ -901,6 +901,62 @@ async def test_halt_certifies_retained_volumes_only_after_complete_capture_and_t
         assert events == expected
 
 
+@pytest.mark.parametrize("elapsed", [250, 300])
+async def test_plain_shell_keeps_original_deadline_after_admission(monkeypatch, elapsed):
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock
+
+    from yleum_orchestrator.services import generation_reader_inventory as readers
+
+    api = module()
+    now = 0
+    starts = []
+
+    async def start(argv, cwd, mutation):
+        starts.append((now, argv))
+        return "shell-exec"
+
+    async def status(operation, mutation):
+        nonlocal now
+        assert operation == "shell-exec"
+        assert now < 300, "polled the shell beyond its original deadline"
+        now = 300
+        return SimpleNamespace(state="running", output="")
+
+    machine = SimpleNamespace(
+        ensure=AsyncMock(), request_start=AsyncMock(return_value=None),
+        request_heartbeat=AsyncMock(),
+        exec_start=start, exec_status=status, exec_terminate=AsyncMock(),
+        request_finish=AsyncMock(side_effect=lambda _mutation, result: result),
+    )
+    runtime = api.MachineAdapter(SimpleNamespace(), SimpleNamespace())
+    runtime.parts = lambda _: (machine, object())
+    monkeypatch.setattr(readers, "monotonic", lambda: now)
+    monkeypatch.setattr(api, "time", SimpleNamespace(monotonic=lambda: now))
+    request = WorkspaceAgentExecRequest(
+        generation_run_id=uuid4(), fencing_epoch=7, expected_revision="a" * 64,
+        cmd="echo nutrition", timeout_seconds=300,
+    )
+    with readers.command_reader_dispatch_wait(
+        None, remaining=lambda seconds: seconds, deadline=300,
+    ):
+        now = elapsed
+        before = datetime.now(UTC)
+        result = await runtime.execute(
+            SimpleNamespace(workspace_id=uuid4()), MachineManifest.model_validate(payload()),
+            request,
+        )
+        after = datetime.now(UTC)
+
+    remaining = 300 - elapsed
+    journal_deadline = machine.request_start.await_args.kwargs["deadline_at"]
+    assert (journal_deadline - after).total_seconds() <= remaining
+    assert (journal_deadline - before).total_seconds() >= remaining
+    assert result.timed_out and result.exit_code == 124
+    assert starts == ([(250, ["sh", "-lc", request.cmd])] if remaining else [])
+    assert machine.exec_terminate.await_count == (1 if remaining else 0)
+
+
 @pytest.mark.parametrize("budget", [600, 900])
 @pytest.mark.parametrize("role", ["build", "fast_check"])
 async def test_sequential_install_build_share_one_request_budget(monkeypatch, budget, role):

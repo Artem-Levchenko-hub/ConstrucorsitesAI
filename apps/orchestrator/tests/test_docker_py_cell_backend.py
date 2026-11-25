@@ -2098,6 +2098,50 @@ async def test_run_workspace_command_uses_cell_mounts_and_networks() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("elapsed", [250, 300])
+async def test_workspace_shell_only_uses_time_left_after_admission(monkeypatch, elapsed):
+    from yleum_orchestrator.services import generation_reader_inventory as readers
+
+    client = _FakeClient()
+    for name, kind in [("workspace-vol", "workspace"), ("agent-home-vol", "agent-home")]:
+        client.volumes.items[name] = _FakeVolume(name, _labels(kind))
+    for name in ("internal", "egress"):
+        client.networks.items[name] = _FakeNetwork(
+            name, _labels(name + "-network"), internal=name == "internal",
+        )
+    waits = []
+    original_wait = _FakeContainer.wait
+
+    def wait(container, timeout):
+        waits.append(timeout)
+        return original_wait(container, timeout)
+
+    monkeypatch.setattr(_FakeContainer, "wait", wait)
+    now = 0
+    monkeypatch.setattr(readers, "monotonic", lambda: now)
+    with readers.command_reader_dispatch_wait(
+        None, remaining=lambda seconds: seconds, deadline=300,
+    ):
+        now = elapsed
+        result = await _backend(client).run_workspace_command(
+            workspace_volume_name="workspace-vol", agent_home_volume_name="agent-home-vol",
+            labels=_labels("workspace"), image="omnia-template-max-miniapp-nextjs:dev",
+            command="true", internal_network_name="internal", egress_network_name="egress",
+            environment={}, timeout_seconds=300,
+        )
+
+    starts = [event for event in client.events if event.startswith("start:")]
+    if elapsed == 250:
+        assert result.exit_code == 0 and not result.timed_out
+        assert starts == ["start:workspace-vol-agent-exec"]
+        assert waits == [50]
+    else:
+        assert result.exit_code == 124 and result.timed_out
+        assert starts == waits == []
+    assert client.containers.items == {}
+
+
+@pytest.mark.asyncio
 async def test_run_workspace_command_preserves_nonzero_exit_status() -> None:
     client = _FakeClient()
     client.volumes.items["workspace-vol"] = _FakeVolume("workspace-vol", _labels("workspace"))

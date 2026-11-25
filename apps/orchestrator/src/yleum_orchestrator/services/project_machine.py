@@ -29,6 +29,7 @@ from yleum_orchestrator.core.cell_resources import (
 )
 from yleum_orchestrator.core.project_machine import MachineCommand, MachineManifest
 from yleum_orchestrator.services.cell_state import _ensure_secure_dir, _read_plain_json_file
+from yleum_orchestrator.services.generation_reader_inventory import ShellStartDeadlineExceeded
 from yleum_orchestrator.services.machine_startup import PrepareBinding
 
 
@@ -272,12 +273,15 @@ class ProjectMachine:
         }
         state["operations"][operation_id] = record
         self._save(state)
-        exec_id = await machine_effect(
-            self.backend.exec_start,
-            command.argv,
-            command.cwd,
-            operation_id,
-        )
+        try:
+            exec_id = await machine_effect(
+                self.backend.exec_start, command.argv, command.cwd, operation_id,
+            )
+        except ShellStartDeadlineExceeded:
+            # The physical start was never dispatched. All uncertain starts retain their intent.
+            del state["operations"][operation_id]
+            self._save(state)
+            raise
         record.update(exec_id=exec_id, state="running")
         self._save(state)
         return operation_id

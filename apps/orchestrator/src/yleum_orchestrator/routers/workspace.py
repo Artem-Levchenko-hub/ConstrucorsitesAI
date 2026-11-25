@@ -763,12 +763,14 @@ async def exec_workspace_agent_command(
     manager = _require_docker_resource_manager(provider)
     from yleum_orchestrator.services.command_receipts import CommandJournal
 
+    received_at = time.monotonic()
     try:
         async with manager.operation_lock.hold(workspace_id):
+            started_at = received_at if request.task_role is None else time.monotonic()
             with command_reader_dispatch_wait(
                 request.task_role,
                 remaining=machine_remaining_seconds,
-                deadline=time.monotonic() + request.timeout_seconds,
+                deadline=started_at + request.timeout_seconds,
             ):
                 if request.track_receipt:
                     return await _tracked_agent_command_locked(manager, workspace_id, request)

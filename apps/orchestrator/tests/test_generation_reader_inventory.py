@@ -410,14 +410,17 @@ def test_shell_tolerates_separate_reader_outages_within_its_original_deadline(mo
     monkeypatch.setattr(readers, "_wait_for_dispatch_retry", wait)
     with readers.command_reader_dispatch_wait(None, remaining=lambda n: n, deadline=120):
         readers.reader_dispatch(effects.append, "shell")
+        assert readers.remaining_shell_work(300) == 104
         now = 65.0
         ready_at = 105.0
         readers.reader_dispatch(effects.append, "collect")
 
+        assert readers.remaining_shell_work(300) == 15
         ready_at = 130.0
         with pytest.raises(readers.ReaderInventoryUnavailable):
             readers.reader_dispatch(effects.append, "late")
 
+    assert readers.remaining_shell_work(300) == 300
     assert now == 120.0
     assert effects == ["shell", "collect"]
 
