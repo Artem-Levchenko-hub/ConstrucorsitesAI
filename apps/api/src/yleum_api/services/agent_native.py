@@ -2062,15 +2062,9 @@ async def _run_native_segment(
         return {**baseline_files, **written}
 
     async def _product_source_fingerprint() -> str:
-        from yleum_api.services.generation.agent_finalization import _is_edit_source_path
+        from yleum_api.services.agent_product_work import product_source_fingerprint
 
-        return source_fingerprint({
-            path: content for path, content in (await _current_source()).items()
-            if _is_edit_source_path(path)
-            and not path.startswith(("test/", "tests/", "e2e/"))
-            and "/__tests__/" not in path
-            and not re.search(r"\.(?:test|spec)\.[^.]+$", path)
-        })
+        return product_source_fingerprint(await _current_source())
 
     def _remember_build_check(observation: dict[str, Any]) -> None:
         nonlocal last_build_ok, wrote_since_build, managed_build_gap, unverified_response_problem

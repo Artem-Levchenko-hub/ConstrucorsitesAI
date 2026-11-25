@@ -31,6 +31,7 @@ from yleum_api.services.generation.source_intent import (
 )
 from yleum_api.services.generation.source_repair_context import directed_repair_target
 from yleum_api.services.project_cell_errors import ProjectCellInfrastructureError
+from yleum_api.services.project_cell_executor import _diff_files
 
 _log = logging.getLogger("yleum_api.routers.messages")
 
@@ -739,6 +740,15 @@ async def execute_agent_turn(
         _agent_res.files = await runtime.handle.export_files()
     if _agent_res.stop_reason == "checkpoint_error":
         return _agent_res, _provider_failure
+    if _agent_res.stop_reason == agent_builder.PRODUCT_WORK_REMAINING:
+        # A reacquired cell exports only this lease's changes. Restore all paths
+        # changed since acceptance, including deletions from the retained draft.
+        if callable(snapshot_reader):
+            reference = runtime.migration_baseline or {**baseline.files, **_max_seed_files}
+            _agent_res.files = _diff_files(reference, await snapshot_reader())
+        else:
+            _agent_res.files = {**recorded_writes, **_agent_res.files}
+        return _agent_res, _provider_failure
     filtered = _agent_res.requires_verification_only
     if edit_source_changed is not None and not edit_source_changed() and not _provider_failure:
         if filtered:
@@ -781,10 +791,7 @@ async def execute_agent_turn(
 
             reference = runtime.migration_baseline or {**baseline.files, **_max_seed_files}
             current = current_tree if current_tree is not None else await snapshot_reader()
-            source_delta = {
-                path: content for path, content in current.items() if reference.get(path) != content
-            }
-            source_delta.update(dict.fromkeys(reference.keys() - current.keys(), ""))
+            source_delta = _diff_files(reference, current)
             is_candidate_source = _is_edit_source_path if _is_edit else _is_product_source
             resumed_product = resumed_product or any(
                 recorded_writes.get(path) == content

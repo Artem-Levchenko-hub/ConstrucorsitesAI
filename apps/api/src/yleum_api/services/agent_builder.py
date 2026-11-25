@@ -67,8 +67,14 @@ from yleum_api.services.agent_discovery_context import (
 from yleum_api.services.agent_output_budget import (
     KIMI_PILOT_MODEL,
     agent_output_tokens,
+    is_sol_model,
     is_sonnet55_model,
     repair_output_tokens,
+)
+from yleum_api.services.agent_product_work import (
+    SOL_COMPLETION_REPORT,
+    SolProductWork,
+    reported_omission,
 )
 from yleum_api.services.agent_progress import bounded_redacted_diagnostic
 from yleum_api.services.generation.continuation import (
@@ -123,6 +129,7 @@ class _LegacyLoopFrame(BaseModel):
     sig_seen: dict[str, NonNegativeInt]
     blocked_cycles: dict[str, NonNegativeInt]
     read_sigs: dict[str, list[str]]
+    product_work: SolProductWork | None = None
     source_repair_gap: str | None = None
     source_repair_read_used: bool = False
     source_repair_context_path: str | None = None
@@ -156,6 +163,7 @@ class _LegacyOuterFrame(BaseModel):
     transcript: list[dict[str, Any]]
     task: str
     source_history: list[str] | None
+    product_work: SolProductWork | None = None
     source_repair_gap: str | None = None
     source_repair_read_used: bool = False
     source_repair_context_path: str | None = None
@@ -212,6 +220,7 @@ _MIN_MAX_PROVIDER_WINDOW_SECONDS = (
 )
 _SOURCE_HANDOFF_SNAPSHOT_SECONDS = 5.0
 _DURABLE_DEADLINE_CHECK_SECONDS = 60.0
+PRODUCT_WORK_REMAINING = "product_work_remaining"
 SOURCE_FINALIZATION_HANDOFF = "source_finalization_handoff"
 SOURCE_REPAIR_HANDOFF = "source_repair_handoff"
 FILTERED_PROVIDER_OUTPUT = "provider_output_filtered"
@@ -622,6 +631,9 @@ async def run_agent_build(
         context_path=restored.source_repair_context_path if restored is not None else None,
         rejections=restored.source_repair_rejections if restored is not None else {},
     )
+    product_work = None
+    if coordinator_handoff and is_sol_model(model):
+        product_work = (restored.product_work if restored else None) or SolProductWork()
     novelty = None
     if segment_limit is None and restored is None:
         assert snapshot_files is not None and edit_deadline is not None
@@ -647,9 +659,17 @@ async def run_agent_build(
     def finish(result: AgentResult) -> AgentResult:
         if continuation is not None:
             continuation.context.pop("legacy_outer", None)
+        if product_work is not None and product_work.detail and result.stop_reason not in {
+            "checkpoint_error", "infra_error", "provider_error",
+        }:
+            return replace(
+                result, done=False, needs_finalization=False, proof_checkpoint=None,
+                stop_reason=PRODUCT_WORK_REMAINING, summary=product_work.detail,
+            )
         return result
 
     for segment in segment_numbers(start_segment):
+        prior_report = product_work.detail if product_work is not None else None
         offset = total_steps
         source_progress = False
 
@@ -679,17 +699,17 @@ async def run_agent_build(
             and datetime.now(UTC) >= edit_deadline
             and not (can_check_handoff and cumulative_files)
         ):
-            return AgentResult(
+            return finish(AgentResult(
                 done=False, summary="Source deadline reached", files=cumulative_files,
                 steps=total_steps, transcript=transcript, stop_reason="source_deadline",
                 segments=segment - 1,
-            )
+            ))
         if continuation is not None:
             outer = _LegacyOuterFrame(
                 contract=contract, segment=segment, total_steps=total_steps,
                 cumulative_files=cumulative_files, transcript=transcript, task=task,
                 source_history=list(novelty.source_history()) if novelty is not None else None,
-                source_repair_gap=source_repair.gap,
+                product_work=product_work, source_repair_gap=source_repair.gap,
                 source_repair_read_used=source_repair.read_used,
                 source_repair_context_path=source_repair.context_path,
                 source_repair_rejections=source_repair.rejections,
@@ -713,7 +733,7 @@ async def run_agent_build(
             response_recovery=response_recovery, take_verified_progress=take_verified_progress,
             on_progress=segment_progress,
             edit_deadline=edit_deadline, continuation=continuation,
-            source_repair=source_repair,
+            source_repair=source_repair, product_work=product_work,
             discovery_history=transcript,
             report_managed_build_gap=report_managed_build_gap,
             reserve_full_provider_window=reserve_full_provider_window,
@@ -752,7 +772,8 @@ async def run_agent_build(
             else:
                 async with asyncio.timeout(remaining):
                     source_progress = novelty.observe(await snapshot_files())
-        if not source_progress:
+        newly_reported = product_work is not None and product_work.detail and not prior_report
+        if not source_progress and not newly_reported:
             result.stop_reason = "no_progress"
             result.summary = "Остановлено: сегмент не изменил исходники приложения."
             return finish(result)
@@ -811,6 +832,7 @@ async def _run_agent_segment(
     edit_deadline: datetime | None = None,
     continuation: ExecutionDriver | None = None,
     source_repair: _SourceRepairState | None = None,
+    product_work: SolProductWork | None = None,
     report_managed_build_gap: bool = False,
     reserve_full_provider_window: bool = False,
     bounded_repair: bool = False,
@@ -902,6 +924,9 @@ async def _run_agent_segment(
         source_repair.read_used = saved_frame.source_repair_read_used
         source_repair.context_path = saved_frame.source_repair_context_path
         source_repair.rejections = saved_frame.source_repair_rejections
+        if product_work is not None and saved_frame.product_work is not None:
+            product_work.detail = saved_frame.product_work.detail
+            product_work.source_at_report = saved_frame.product_work.source_at_report
         content_receipts_seen = saved_frame.content_receipts_seen
         last_build_ok, fast_check_fresh = saved_frame.last_build_ok, saved_frame.fast_check_fresh
         pending_source_build, red_build_streak = (
@@ -930,6 +955,28 @@ async def _run_agent_segment(
         # A cold/next-segment call must validate retained readings before they
         # reach a new provider request, not only after its first tool execution.
         completion_inventory = dict(await snapshot_files())
+
+    def completion_action(reply: str) -> Action | None:
+        action = parse_action(reply)
+        if action is None and product_work is not None and "<omnia:action" not in reply:
+            if reported_omission(reply):
+                return Action(name="done", args={"summary": reply})
+        return action
+
+    async def product_report_feedback(action: Action, *, reply_text: str, requested: bool) -> str:
+        if product_work is None:
+            return ""
+        inventory = completion_inventory
+        if inventory is None and snapshot_files is not None:
+            inventory = await snapshot_files()
+        narration = ""
+        if action.raw:
+            before, _, after = reply_text.rpartition(action.raw)
+            narration = before + "\n" + after
+        return product_work.feedback(
+            action.args, inventory if inventory is not None else written,
+            requested=requested, preamble=narration,
+        )
 
     async def _step_result(
         action: Action,
@@ -1072,7 +1119,7 @@ async def _run_agent_segment(
         coordinator still owns acceptance; an old clean tree never proves a
         required modification, regardless of why the loop stopped.
         """
-        if _source_change_pending():
+        if _source_change_pending() or (product_work is not None and product_work.detail):
             return fallback
         if ship_green_on_abort and not pending_truncation and fast_check_fresh and (
             coordinator_handoff or not require_green_before_done
@@ -1117,6 +1164,7 @@ async def _run_agent_segment(
     def _can_finalize_source() -> bool:
         return (
             coordinator_handoff and ship_green_on_abort and bool(written)
+            and not (product_work is not None and product_work.detail)
             and completion_check is not None and snapshot_files is not None
             and not pending_truncation and not _source_change_pending()
             and edit_deadline is not None
@@ -1263,6 +1311,14 @@ async def _run_agent_segment(
                 written, last_build_ok if not coordinator_handoff or fast_check_fresh else None,
                 source_change_pending=_source_change_pending(),
             )
+            if product_work is not None:
+                note += "\n" + SOL_COMPLETION_REPORT
+                if product_work.detail:
+                    call_msgs = [*call_msgs, {"role": "user", "content": (
+                        "Outstanding work reported for the original request: "
+                        + json.dumps(product_work.detail, ensure_ascii=False)
+                        + "\nContinue that work in the current workspace."
+                    )}]
             if note:
                 call_msgs = [
                     {"role": call_msgs[0]["role"], "content": call_msgs[0]["content"] + note},
@@ -1376,7 +1432,7 @@ async def _run_agent_segment(
                             infra_dead_streak=infra_dead_streak, sig_seen=sig_seen,
                             blocked_cycles=blocked_cycles,
                             read_sigs={path: sorted(values) for path, values in read_sigs.items()},
-                            source_repair_gap=source_repair.gap,
+                            product_work=product_work, source_repair_gap=source_repair.gap,
                             source_repair_read_used=source_repair.read_used,
                             source_repair_context_path=source_repair.context_path,
                             source_repair_rejections=source_repair.rejections,
@@ -1404,6 +1460,12 @@ async def _run_agent_segment(
                         last_build_ok = last_runtime_ok = None
                         fast_check_fresh = False
                         if edit_deadline is not None and datetime.now(UTC) >= edit_deadline:
+                            action_at_deadline = completion_action(reply)
+                            if product_work is not None and action_at_deadline and action_at_deadline.name == "done":
+                                await product_report_feedback(
+                                    action_at_deadline, reply_text=reply,
+                                    requested=SOL_COMPLETION_REPORT in call_msgs[0]["content"],
+                                )
                             return AgentResult(
                                 done=False, summary="Saved response reconciled after source deadline",
                                 files=written, steps=step, transcript=convo,
@@ -1549,7 +1611,7 @@ async def _run_agent_segment(
             )
 
         convo.append({"role": "assistant", "content": reply})
-        action = parse_action(reply)
+        action = completion_action(reply)
 
         if action is None:
             # DIAGNOSTIC: the "stalled, 0 files" failure is opus emitting replies
@@ -1591,6 +1653,24 @@ async def _run_agent_segment(
             convo.append({"role": "user", "content": _NO_ACTION_NUDGE})
             continue
         stalls = 0
+
+        if action.name == "done":
+            feedback = await product_report_feedback(
+                action, reply_text=reply,
+                requested=product_work is not None and SOL_COMPLETION_REPORT in call_msgs[0]["content"],
+            )
+            if feedback:
+                await _step_result(action, step, {"ok": False, "detail": feedback})
+                convo.append({"role": "user", "content": feedback})
+                no_write_streak += 1
+                repeat_count = repeat_count + 1 if last_sig == PRODUCT_WORK_REMAINING else 0
+                last_sig = PRODUCT_WORK_REMAINING
+                if repeat_count >= _REPEAT_ABORT_AT or no_write_streak >= _NO_WRITE_ABORT_AT:
+                    return AgentResult(
+                        done=False, summary=feedback, files=written, steps=step + 1,
+                        transcript=convo, stop_reason="looping",
+                    )
+                continue
 
         if action.name in _SOURCE_PROOF_ACTIONS and _source_change_pending():
             await _skip_action(action, step, _SOURCE_CHANGE_REQUIRED)
@@ -1666,6 +1746,8 @@ async def _run_agent_segment(
                     ):
                         await _nudge_exploration(step)
                 continue
+            if product_work is not None:
+                product_work.detail = product_work.source_at_report = None
             await _step_result(action, step, {"ok": True, "detail": action.args.get("summary", "")})
             return AgentResult(
                 done=True, summary=str(action.args.get("summary", "")),

@@ -83,7 +83,10 @@ async def recover_stopped_candidate(
     # о завершённости по брифу (включая локальное восстановление доказательства
     # выше). Выкатить её безопаснее, чем выбросить готовый продукт только
     # потому, что ход провайдера закончился.
-    _must_restore_previous = not _agent_res.done and not _agent_res.needs_finalization
+    reported_product_gap = _agent_res.stop_reason == agent_builder.PRODUCT_WORK_REMAINING
+    _must_restore_previous = reported_product_gap or (
+        not _agent_res.done and not _agent_res.needs_finalization
+    )
     _source_only = getattr(runtime, "coordinator", None) is not None
     _first_max_without_product = not _max_has_generated_snapshot
     autonomous_repair = uses_autonomous_max_source_repair(runtime)
@@ -149,11 +152,13 @@ async def recover_stopped_candidate(
         f"generation stopped ({_agent_res.stop_reason or 'incomplete'}): {_agent_res.summary}",
         max_bytes=2000,
     )
-    if _must_restore_previous and _agent_res.stop_reason == agent_builder.FILTERED_PROVIDER_OUTPUT:
+    filtered_output = _agent_res.stop_reason == agent_builder.FILTERED_PROVIDER_OUTPUT
+    if _must_restore_previous and (reported_product_gap or filtered_output):
         from yleum_api.services.generation.source_checkpoint import checkpoint_before_rollback
 
         await checkpoint_before_rollback(operations)
-        raise RuntimeError(_stopped_cause)
+        if filtered_output:
+            raise RuntimeError(_stopped_cause)
     _rollback_error: Exception | None = None
     _rollback_verified = False
     if _must_restore_previous and baseline.sha and not _first_max_without_product:
@@ -281,7 +286,7 @@ async def recover_stopped_candidate(
     # A restored (or unverified) stopped tree is never a candidate for
     # finalization. Preserve the original cause before the unchanged-tree
     # guard can mistake the restored baseline for a failed accepted edit.
-    if _must_restore_previous and _source_only:
+    if _must_restore_previous and (_source_only or reported_product_gap):
         status = "rolled_back" if _rollback_verified else "rollback_unverified"
         detail = f": {_rollback_error}" if _rollback_error is not None else ""
         raise RuntimeError(f"{_stopped_cause}; {status}{detail}") from _rollback_error

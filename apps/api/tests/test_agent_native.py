@@ -255,10 +255,7 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "_seg < 2" not in source
     assert "_first_max_without_product" in source
     assert "func.length(func.trim(Snapshot.prompt_text)) > 0" in source
-    assert (
-        "_must_restore_previous = not _agent_res.done and not _agent_res.needs_finalization"
-        in source
-    )
+    assert "not _agent_res.done and not _agent_res.needs_finalization" in source
     assert "MAX_SECURITY_LOCKED_FILES" in source
     assert "MAX_MODEL_LOCKED_FILES" in source
     assert "Direct DB access is forbidden in MAX product files." in source
