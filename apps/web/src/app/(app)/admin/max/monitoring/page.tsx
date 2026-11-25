@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
-import { AccountShell } from "@/components/account/AccountShell";
 import { MonitoringDashboard } from "@/components/account/MonitoringDashboard";
 import { getMaxAdminAccessServer, getSession } from "@/lib/auth-mock";
 
@@ -15,9 +14,5 @@ export default async function MonitoringPage() {
   if (!session) redirect("/login?next=/admin/max/monitoring");
   if (!(await getMaxAdminAccessServer())) redirect("/account");
 
-  return (
-    <AccountShell active="admin" email={session.email} hideHeading>
-      <MonitoringDashboard />
-    </AccountShell>
-  );
+  return <MonitoringDashboard />;
 }
