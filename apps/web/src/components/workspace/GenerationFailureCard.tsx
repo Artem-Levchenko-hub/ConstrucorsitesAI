@@ -19,6 +19,9 @@ export function GenerationFailureCard({ failure, onRetry, onReturnToPrompt, cont
   // submit a new request; the usual server quota/access/recovery checks still own it.
   const manualProviderRequest = !failure.retryable
     && (failure.code === "provider_unavailable" || failure.code === "provider_access");
+  const remaining = failure.remaining_work ?? [];
+  const title = continueFromDraft ? "Продолжим сборку"
+    : failure.code === "product_work_remaining" ? "Осталось доделать" : "Что остановило работу";
   const canRetry = Boolean(onRetry && (continueFromDraft || failure.retryable || manualProviderRequest));
   const retry = async () => {
     if (!canRetry || !onRetry || submitting.current) return;
@@ -36,11 +39,13 @@ export function GenerationFailureCard({ failure, onRetry, onReturnToPrompt, cont
     }
   };
   return <div role="status" className="generation-failure-card rounded-xl border border-border-default bg-surface-raised p-4 space-y-3">
-    <p className="flex items-center gap-2 font-medium text-fg-primary"><Pause aria-hidden="true" className="size-5 shrink-0 text-fg-secondary" />{continueFromDraft ? "Продолжим сборку" : "Повторим запрос"}</p>
-    <p className="text-sm text-fg-secondary">{continueFromDraft
-      ? "Продолжим с сохранённого черновика"
-      : canRetry ? "Запрос можно отправить повторно, когда будете готовы."
-      : "Можно вернуться к запросу и уточнить следующий шаг."}</p>
+    <p className="flex items-center gap-2 font-medium text-fg-primary"><Pause aria-hidden="true" className="size-5 shrink-0 text-fg-secondary" />{title}</p>
+    <p className="text-sm text-fg-secondary">{failure.message}</p>
+    {remaining.length > 0 && <ul aria-label="Что осталось сделать" className="list-disc space-y-1 pl-5 text-sm text-fg-primary">
+      {remaining.map(item => <li key={item}>{item}</li>)}
+    </ul>}
+    {continueFromDraft && <p className="text-sm text-fg-secondary">Продолжим с сохранённого черновика.</p>}
+    {!continueFromDraft && failure.draft_saved && <p className="text-sm text-fg-secondary">Черновик этого запуска сохранён.</p>}
     {error && <p className="text-sm text-fg-secondary">Запрос пока не принят. Попробуйте продолжить чуть позже.</p>}
     {canRetry ? <div className="space-y-2">
       {manualProviderRequest && <p className="text-sm text-fg-secondary">{continueFromDraft
@@ -50,12 +55,12 @@ export function GenerationFailureCard({ failure, onRetry, onReturnToPrompt, cont
         {pending ? <Loader2 aria-hidden="true" className="size-4 animate-spin" /> : <ArrowRight aria-hidden="true" className="size-4" />}
         {pending ? (continueFromDraft ? "Продолжаю…" : "Отправляю…") : (continueFromDraft ? "Продолжить сборку" : "Повторить запрос")}
       </Button>
+      {failure.code === "request_too_large" && onReturnToPrompt &&
+        <Button type="button" variant="outline" disabled={pending} onClick={onReturnToPrompt}>
+          Уточнить задачу в чате
+        </Button>}
     </div> : onReturnToPrompt && <Button type="button" variant="outline" onClick={onReturnToPrompt} className="generation-failure-action gap-2">
       <ArrowLeft aria-hidden="true" className="size-4" />Вернуться к запросу
     </Button>}
-    <details className="text-sm text-fg-secondary">
-      <summary className="cursor-pointer">Подробнее</summary>
-      <p className="mt-2">{failure.message}</p>
-    </details>
   </div>;
 }

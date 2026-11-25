@@ -7,6 +7,7 @@ from yleum_api.models.generation_event import GenerationEvent
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.schemas.message import GenerationFailure, GenerationFailureDiagnostics
+from yleum_api.services.generation.handoff_failure import reported_stop, saved_draft
 
 NO_TERMINAL_EVENTS = object()
 _LOCAL_DISPATCH_DEADLINE = "generation deadline exceeded before provider dispatch:"
@@ -38,20 +39,10 @@ def public_generation_failure(
         # reason to borrow a provider error from the capped UI transcript.
         agent_steps = _terminal_provider_steps(run, terminal_events, snapshot)
     failure.diagnostics = _provider_diagnostics(run.error, agent_steps)
-    if not restoration and str(run.error or "").startswith(_LOCAL_DISPATCH_DEADLINE):
-        checkpoint = state.get("source_checkpoint")
-        if (isinstance(checkpoint, dict)
-                and isinstance(checkpoint.get("digest"), str)
-                and re.fullmatch(r"[a-f0-9]{64}", checkpoint["digest"])
-                and "baseline_sha" in checkpoint
-                and (checkpoint["baseline_sha"] is None or (
-                    isinstance(checkpoint["baseline_sha"], str)
-                    and re.fullmatch(r"[a-f0-9]{40}", checkpoint["baseline_sha"])
-                ))):
-            failure.message += (
-                " Черновик сохранён, но ещё не прошёл все проверки. "
-                "Для продолжения напишите «Продолжи сборку»."
-            )
+    if not restoration and saved_draft(state):
+        failure.draft_saved = True
+        if str(run.error or "").startswith(_LOCAL_DISPATCH_DEADLINE):
+            failure.message += " Черновик сохранён."
     return failure
 
 
@@ -218,12 +209,38 @@ def _provider_diagnostics(
 
 
 def failure_for_error(raw_error: object, *, restoration: bool = False) -> GenerationFailure:
-    error = str(raw_error).casefold()
+    raw = str(raw_error)
+    error = raw.casefold()
+    stop = reported_stop(raw)
+    remaining_work: list[str] = []
     retryable = True
     # The gateway category reaches terminal/history errors as an internal marker.
     # Exact prefixes prevent arbitrary provider text from claiming a category.
     refusal = re.match(r"\Aprovider_refusal_(access|funds|rate_limit):", error)
-    if error.startswith(_LOCAL_RESPONSE_DEADLINE):
+    if stop and stop[0] == "product_work_remaining":
+        code = "product_work_remaining"
+        remaining_work = stop[1]
+        message = "Часть функций из вашего запроса ещё предстоит доделать."
+    elif stop and stop[0] in {"max_steps", "max_steps_green", "max_steps_red", "max_segments"}:
+        code = "step_limit"
+        message = "Закончились шаги этой попытки. На завершение работы нужны ещё шаги."
+    elif (stop and stop[0] == "source_deadline") or error in {
+        "generation deadline exceeded before source repair",
+        "generation deadline exceeded during source repair",
+    }:
+        code = "deadline"
+        message = "Время на работу с кодом закончилось до завершения приложения."
+    elif error.startswith("generation deadline exceeded;"):
+        code = "deadline"
+        message = "Время этой попытки закончилось до завершения работы над приложением."
+    elif error.startswith("provider_http_413:"):
+        code = "request_too_large"
+        retryable = False
+        message = (
+            "Запрос к модели превысил допустимый размер. В этот объём входят описание, "
+            "контекст проекта и вложения."
+        )
+    elif error.startswith(_LOCAL_RESPONSE_DEADLINE):
         code = "deadline"
         retryable = False
         message = (
@@ -349,10 +366,7 @@ def failure_for_error(raw_error: object, *, restoration: bool = False) -> Genera
         message = "Модель не ответила после повторных попыток. Попробуйте продолжить генерацию."
     elif "deadline" in error or "timeout" in error:
         code = "deadline"
-        message = (
-            "Генерация не успела завершить все проверки в отведённое время. "
-            "Можно повторить исходный запрос."
-        )
+        message = "Не удалось вовремя получить результат одного из шагов."
     elif "no source changes" in error:
         code = "no_changes"
         message = "Генератор не применил запрошенные изменения. Можно повторить исходный запрос."
@@ -369,7 +383,9 @@ def failure_for_error(raw_error: object, *, restoration: bool = False) -> Genera
         message += (
             " Для продолжения восстановления откройте историю версий и выберите проверенную версию."
         )
-    return GenerationFailure(code=code, message=message, retryable=retryable)
+    return GenerationFailure(
+        code=code, message=message, retryable=retryable, remaining_work=remaining_work,
+    )
 
 
 def public_message_content(role: str, content: str, *, has_failure: bool = False) -> str:

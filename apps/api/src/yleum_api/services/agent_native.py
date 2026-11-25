@@ -56,6 +56,11 @@ from yleum_api.services.generation.continuation import (
     shadow_recovery_executor,
     source_fingerprint,
 )
+from yleum_api.services.generation.handoff_advice import (
+    HANDOFF_FIELDS,
+    HANDOFF_NOTE,
+    normalize_handoff,
+)
 from yleum_api.services.generation.native_strategy import (
     INSPECTION_TOOLS,
     NativeRecoveryMode,
@@ -127,6 +132,7 @@ class _OutstandingProductWork(BaseModel):
 @dataclass
 class _ProductHandoff:
     outstanding: _OutstandingProductWork | None = None
+    advice: dict[str, str] | None = None
 
 
 class _NativeLoopFrame(BaseModel):
@@ -167,6 +173,7 @@ class _NativeLoopFrame(BaseModel):
     outstanding_product_work: _OutstandingProductWork | None = Field(
         default=None, exclude_if=lambda value: value is None,
     )
+    handoff: dict[str, str] | None = Field(default=None, exclude_if=lambda v: v is None)
     request: dict[str, Any]
 
 
@@ -779,24 +786,34 @@ def _cache_toolset(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [*tools[:-1], {**tools[-1], "cache_control": _CACHE}]
 
 
-def _with_product_handoff(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        {
-            **tool,
-            "description": tool["description"] + (
+def _with_product_handoff(
+    tools: list[dict[str, Any]], *, require_remaining: bool = True,
+) -> list[dict[str, Any]]:
+    updated = []
+    for tool in tools:
+        if tool["name"] != "done":
+            updated.append(tool)
+            continue
+        schema = tool["input_schema"]
+        properties = {**schema["properties"], "handoff": {
+            "type": "object", "properties": {name: _STR for name in HANDOFF_FIELDS},
+        }}
+        required = list(schema["required"])
+        description = tool["description"] + " " + HANDOFF_NOTE
+        if require_remaining:
+            properties["remaining_work"] = _STR
+            required.append("remaining_work")
+            description += (
                 " Include remaining_work: report the concrete requested behavior still missing "
                 "in the current source, or use an empty string when all requested behavior is "
                 "implemented. Report only work within this request. A nonempty report asks to "
                 "continue editing the same source before final checks."
-            ),
-            "input_schema": {
-                **tool["input_schema"],
-                "properties": {**tool["input_schema"]["properties"], "remaining_work": _STR},
-                "required": [*tool["input_schema"]["required"], "remaining_work"],
-            },
-        } if tool["name"] == "done" else tool
-        for tool in tools
-    ]
+            )
+        updated.append({
+            **tool, "description": description,
+            "input_schema": {**schema, "properties": properties, "required": required},
+        })
+    return updated
 
 
 def _offers_product_report(tools: list[dict[str, Any]] | None) -> bool:
@@ -2006,6 +2023,7 @@ async def _run_native_segment(
         recovery_output_cap = saved_frame.recovery_output_cap
         transcript_recovery_used = saved_frame.transcript_recovery_used
         product_handoff.outstanding = saved_frame.outstanding_product_work
+        product_handoff.advice = normalize_handoff(saved_frame.handoff)
         response_recovery.budget = IncompleteResponseBudget(
             total=max(response_recovery.budget.total, saved_frame.response_budget.total),
             since_progress=max(
@@ -2471,8 +2489,10 @@ async def _run_native_segment(
                             else _MAX_ENTRY_WRITE_CHOICE if force_max_entry_write else None
                         ),
                     )
-                    if report_product_work:
-                        request["tools"] = _with_product_handoff(request["tools"])
+                    if coordinated_max:
+                        request["tools"] = _with_product_handoff(
+                            request["tools"], require_remaining=report_product_work,
+                        )
                     if limited_output:
                         request["max_tokens"] = SONNET55_REPAIR_OUTPUT_TOKENS
                     if (active_recovery == "output_limit" and is_sonnet55_model(model)
@@ -2672,6 +2692,7 @@ async def _run_native_segment(
                             recovery_output_cap=recovery_output_cap,
                             transcript_recovery_used=transcript_recovery_used,
                             outstanding_product_work=product_handoff.outstanding,
+                            handoff=product_handoff.advice,
                         )
                         assert frame is not None
                         # Defaults are for interpretation only. Replay must use
@@ -2704,9 +2725,9 @@ async def _run_native_segment(
                     if (restoring and edit_deadline is not None
                             and datetime.now(UTC) >= edit_deadline):
                         content = resp.get("content")
+                        reports = None
                         if (
-                            report_product_work and _offers_product_report(request["tools"])
-                            and isinstance(content, list)
+                            coordinated_max and isinstance(content, list)
                             and not _incomplete_tool_response(
                                 resp, content, request_history=request["convo"],
                             )
@@ -2716,6 +2737,12 @@ async def _run_native_segment(
                                 if isinstance(block, dict) and block.get("type") == "tool_use"
                                 and block.get("name") == "done"
                             ]
+                            if reports:
+                                product_handoff.advice = normalize_handoff(
+                                    reports[-1].get("handoff"),
+                                )
+                        if (reports is not None and report_product_work
+                                and _offers_product_report(request["tools"])):
                             detail = _reported_product_work(reports)
                             report_missing = any(
                                 not isinstance(args.get("remaining_work"), str) for args in reports
@@ -3072,6 +3099,8 @@ async def _run_native_segment(
                 name = tu.get("name", "")
                 tu_id = tu.get("id", "")
                 if name == "done":
+                    if coordinated_max:
+                        product_handoff.advice = normalize_handoff(tu["input"].get("handoff"))
                     # Later tools in this response can mutate source or invalidate
                     # proof. Evaluate every done request only after the whole batch.
                     done_result = {
@@ -3185,6 +3214,12 @@ async def _run_native_segment(
                         obs = {"ok": False, "error": f"tool {name} crashed: {exc}"}
                 if not action_executed:
                     batch.clear()
+                if action_executed and (
+                    name in {"write_file", "edit_file", "delete_file"} or obs.get("files")
+                    or obs.get("environment_mutated") is True
+                    or (name == "bash" and obs.get("environment_mutated") is not False)
+                ):
+                    product_handoff.advice = None
                 if obs.get("environment_mutated"):
                     _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
                     wrote_since_build = True
@@ -3424,6 +3459,7 @@ async def _run_native_segment(
                     transcript=convo,
                     stop_reason="done",
                     evidence=_evidence(),
+                    handoff=product_handoff.advice,
                 )
             # Infra circuit breaker: a turn where EVERY executed op died on
             # infra means the container/orchestrator is gone — the model can't
@@ -3723,6 +3759,7 @@ async def _run_native_segments(
             needs_finalization=result.needs_finalization,
             proof_checkpoint=result.proof_checkpoint,
             continuation_reason=result.continuation_reason,
+            handoff=result.handoff,
         )
         last_result = combined
         budget_boundary = segment_limit is None and result.stop_reason in {
@@ -3901,6 +3938,7 @@ async def run_native_build(
             # A compiler-only recovery cannot finish an acknowledged product gap.
             result.stop_reason = _PRODUCT_WORK_REMAINING
             result.summary = product_handoff.outstanding.detail
+        result.handoff = product_handoff.advice
         prior_source_writes = prior_source_writes or bool(result.files)
         # The next segment is prompted with this exact summary. The rejection
         # is actionable only if a fresh check in that segment confirms it.

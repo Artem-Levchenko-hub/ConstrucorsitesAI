@@ -30,7 +30,7 @@ export function GenerationPhaseCard({ phase, motionActive }: {
 }) {
   const explanation = phase.active ? phase.detail : phase.explanation;
   const backgroundNotice = phase.active
-    ? "20–30 мин, иногда дольше. Вкладку можно закрыть."
+    ? "Создание может занять до 90 минут. Вкладку можно закрыть — работа продолжится."
     : phase.id === "queued" || phase.id === "waiting"
       ? "Вкладку можно закрыть — задача сохранена на сервере."
       : null;

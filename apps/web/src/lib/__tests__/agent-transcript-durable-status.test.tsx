@@ -25,7 +25,7 @@ function render(messageId: string, generation: GenerationRun, streaming = false)
 }
 it("renders the exact completed run and its durable duration despite a failed tool step and stale streaming state", () => {
   const html = render("current-message", completed, true);
-  expect(html).toContain("Изменения готовы");
+  expect(html).toContain("Итог запроса");
   expect(html).toContain("7м 26с");
   expect(html).not.toContain("Подготовка на паузе");
   expect(html).toContain('data-agent-transcript="idle"');
@@ -44,7 +44,7 @@ it.each(["running", "completed", "failed"] as const)("keeps an older completed r
   expect(html).toContain("Запрос завершён");
   expect(html).toContain("7м 26с");
   expect(html).not.toContain("Проверка результата не подтверждена");
-  expect(html).not.toContain("Изменения готовы");
+  expect(html).not.toContain("Итог запроса");
 });
 it("never transfers a foreign project's lifecycle even when its message id matches", () => {
   expect(render("current-message", { ...completed, project_id: "foreign" })).toContain("Подготовка на паузе");
@@ -53,7 +53,7 @@ it("keeps a current completed request without its receipt unconfirmed", () => {
   const html = render("current-message", { ...completed, acceptance: null });
   expect(html).toContain("Проверка результата не подтверждена");
   expect(html).not.toContain("Запрос завершён");
-  expect(html).not.toContain("Изменения готовы");
+  expect(html).not.toContain("Итог запроса");
 });
 it("can omit projectId without reading an absent latest record", () => {
   const client = new QueryClient();
@@ -74,7 +74,7 @@ it("hydrates exact authoritative completion after reload, while keeping the fail
   const root = createRoot(container);
   try {
     await act(async () => root.render(<QueryClientProvider client={client}><AgentTranscript projectId="p" messageId="current-message" generationStatus="failed" initialSteps={[step]} /></QueryClientProvider>));
-    await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain("Изменения готовы")); });
+    await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain("Итог запроса")); });
     expect(api.latest).toHaveBeenCalledWith("p");
     expect(container.textContent).toContain("7м 26с");
     await act(async () => container.querySelector("button")!.click());

@@ -1321,7 +1321,15 @@ async def run_agent_generation(
             flush=True,
         )
     async def _publish_candidate() -> None:
+        from yleum_api.services.generation.outcome import advice_for_published_source
+
+        advice = advice_for_published_source(
+            getattr(_agent_res, "handoff", None), authored=_agent_res.files,
+            base=runtime.migration_baseline or baseline.files, restored=workspace_context_files,
+            published=files,
+        )
         await publish_agent_candidate(
+            handoff=advice,
             _att_capture=_att_capture,
             _attestation_stack=_attestation_stack,
             _consume_free_generation=_consume_free_generation,

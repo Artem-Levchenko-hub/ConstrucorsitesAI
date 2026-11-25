@@ -1231,15 +1231,19 @@ class MaxFinalizationCoordinator:
             if continuation is not None and retired is None:
                 await continuation.soft_boundary(exhausted=True)
             raise TimeoutError("generation deadline exceeded before source repair")
+        repair_window = asyncio.timeout(remaining)
         try:
-            async with asyncio.timeout(remaining):
+            async with repair_window:
                 if failure is not None:
                     if repair_source is None:
                         raise MaxFinalizationConflict("fresh source repair guard is unavailable")
                     return await repair_source(detail, failure) is True
                 return await repair(detail) is True
         except TimeoutError as exc:
+            # A timeout inside the repair can also leave a controller command in flight.
             await self._settle_timed_out_source_repair()
+            if not repair_window.expired():
+                raise
             if continuation is not None and retired is None:
                 await continuation.soft_boundary(exhausted=True)
             raise TimeoutError("generation deadline exceeded during source repair") from exc

@@ -46,6 +46,8 @@ class GenerationFailure(BaseModel):
     message: str
     retryable: bool
     diagnostics: GenerationFailureDiagnostics | None = None
+    remaining_work: list[str] = Field(default_factory=list)
+    draft_saved: bool = False
 
 
 class ReferenceImagePublic(BaseModel):

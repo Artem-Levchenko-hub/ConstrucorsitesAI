@@ -116,6 +116,35 @@ it.each(["gpt-6.2-sol", "claude-sonnet", "legacy-model"])(
   },
 );
 
+it("shows the reason and concrete unfinished work above the addressed continuation on reload", async () => {
+  const remaining = ["Подключить отправку заявки в магазин.", "Проверить выгрузку PDF."];
+  mocks.history.mockResolvedValue([{ ...failure, generation_failure: {
+    code: "product_work_remaining", message: "Часть функций ещё требует доработки.",
+    retryable: false, draft_saved: true, remaining_work: remaining,
+  } }]);
+  client.setQueryData(["generation", "p"], failedRun());
+  await render();
+  const list = container.querySelector('[aria-label="Что осталось сделать"]')!;
+  expect(Array.from(list.querySelectorAll("li"), li => li.textContent)).toEqual(remaining);
+  const next = button("Продолжить сборку")!;
+  expect(list.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(container.textContent).toContain("Часть функций ещё требует доработки.");
+  expect(mocks.submit).not.toHaveBeenCalled();
+});
+
+it("allows clarification of an oversized request without spending or discarding the draft", async () => {
+  mocks.history.mockResolvedValue([{ ...failure, generation_failure: {
+    code: "request_too_large", message: "Запрос к модели превысил допустимый размер.", retryable: false,
+  } }]);
+  client.setQueryData(["generation", "p"], failedRun());
+  await render();
+  const input = await draft("Моё уточнение");
+  await act(async () => button("Уточнить задачу в чате")!.click());
+  expect(document.activeElement).toBe(input);
+  expect(input.value).toBe("Моё уточнение");
+  expect(mocks.submit).not.toHaveBeenCalled();
+});
+
 it("keeps the same addressed identity after remount and preserves a null source snapshot", async () => {
   client.setQueryData(["generation", "p"], failedRun({ continuation: { ...continuation, expected_snapshot_id: null } }));
   mocks.submit.mockResolvedValue(false);

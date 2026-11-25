@@ -85,7 +85,8 @@ async def test_actual_publication_keeps_committed_full_count_with_any_recorder_c
         _consume_free_generation=quota,
         _max_finalization_proof=green["_max_finalization_proof"] if has_files else None,
         _promotion_permit=green["_promotion_permit"] if has_files else None,
-        _orch_name=None,
+        _orch_name="max-miniapp-nextjs" if cache == "fresh" else None,
+        handoff={"primary_action": "Составить рацион"},
         accumulated="Ready and verified",
         baseline=SourceBaseline(parent.id, parent.commit_sha, {}),
         factory=factory,
@@ -103,7 +104,11 @@ async def test_actual_publication_keeps_committed_full_count_with_any_recorder_c
     assert len(durable.agent_steps) == 200
     assert durable.agent_steps[-1]["actionCount"] == (202 if cache == "fresh" else 201)
     assert durable.agent_steps[-1]["historyTruncated"] is True
-    assert durable.content == "Ready and verified"
+    if has_files and cache == "fresh":
+        assert "Сборка прошла." in durable.content
+        assert "Осталось проверить в превью действие «Составить рацион»." in durable.content
+    else:
+        assert durable.content == "Ready and verified"
     assert durable.tokens_in == 7 and durable.tokens_out == 0
     assert quota.await_count == int(has_files)
     assert commit.call_count == int(has_files)

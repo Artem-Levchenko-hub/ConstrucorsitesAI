@@ -178,6 +178,9 @@ async def test_timeout_without_active_command_keeps_existing_error(
     monkeypatch.setattr(finalization, "generation_deadline", lambda run: SimpleNamespace(
         at=datetime.now(UTC) + timedelta(seconds=0.02),
     ))
+    coordinator.continuation = SimpleNamespace(
+        state=None, soft_edit_deadline=lambda deadline: deadline, soft_boundary=AsyncMock(),
+    )
 
     async def stalled_repair(_detail):
         await asyncio.Event().wait()
@@ -187,6 +190,39 @@ async def test_timeout_without_active_command_keeps_existing_error(
             detail="source error", repair=stalled_repair, repair_source=None, failure=None,
         )
     coordinator.executor.operation_status.assert_not_awaited()
+    coordinator.executor.run_role.assert_not_awaited()
+    coordinator.continuation.soft_boundary.assert_awaited_once_with(exhausted=True)
+
+
+@pytest.mark.parametrize("writer_settled", [False, True])
+async def test_inner_repair_timeout_settles_the_writer_without_exhausting_the_clock(
+    repair_case, monkeypatch, writer_settled,
+):
+    case, coordinator = repair_case, repair_case.coordinator
+    coordinator.continuation = SimpleNamespace(
+        state=None, soft_edit_deadline=lambda deadline: deadline, soft_boundary=AsyncMock(),
+    )
+    monkeypatch.setattr(finalization, "source_edit_deadline", lambda deadline, **kwargs: deadline)
+    monkeypatch.setattr(finalization, "generation_deadline", lambda run: SimpleNamespace(
+        at=datetime.now(UTC) + timedelta(minutes=15),
+    ))
+    coordinator.executor.operation_status.return_value = case.status(
+        state="completed" if writer_settled else "running",
+    )
+    primary = TimeoutError("provider_timeout: test provider")
+    repair = AsyncMock(side_effect=primary)
+    expected = TimeoutError if writer_settled else MaxVerificationUnavailable
+    with pytest.raises(expected) as caught:
+        await coordinator._invoke_source_repair(
+            detail="specific source repair", repair=repair, repair_source=None, failure=None,
+        )
+    if writer_settled:
+        assert caught.value is primary
+    else:
+        assert caught.value.operation_id == case.lease.operation_id
+    repair.assert_awaited_once()
+    coordinator.executor.operation_status.assert_awaited_once_with(case.lease.operation_id)
+    coordinator.continuation.soft_boundary.assert_not_awaited()
     coordinator.executor.run_role.assert_not_awaited()
 
 
@@ -199,13 +235,23 @@ async def test_source_timeout_keeps_draft_after_three_pending_cancellation_polls
     monkeypatch.setattr(finalization, "MIN_SOURCE_REPAIR_SECONDS", 0)
     monkeypatch.setattr(finalization, "source_edit_deadline", lambda deadline, **kwargs: deadline)
     monkeypatch.setattr(finalization, "generation_deadline", lambda run: SimpleNamespace(
-        at=datetime.now(UTC) + timedelta(seconds=0.04),
+        at=datetime.now(UTC) + timedelta(minutes=5),
     ))
+    # Expire the real outer timer once the command owns the writer. A small
+    # wall-clock delay can expire in earlier DB work and test a different case.
+    repair_window = asyncio.timeout(None)
+    first_window = [repair_window]
+
+    def timeout(seconds):
+        return first_window.pop() if first_window else asyncio.timeout(seconds)
+
+    monkeypatch.setattr(finalization, "asyncio", SimpleNamespace(timeout=timeout))
     dispatches = 0
 
     async def controller_work():
         nonlocal dispatches
         dispatches += 1
+        repair_window.reschedule(asyncio.get_running_loop().time())
         await asyncio.Event().wait()  # Cancelling this HTTP await does not stop the remote work.
 
     async def repair(_detail):

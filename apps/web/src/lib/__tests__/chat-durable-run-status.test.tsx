@@ -30,7 +30,7 @@ it.each(["completed", "foreign", "failed"])("binds latest %s lifecycle only to i
       expect(container.textContent).toContain("Историческая ошибка доступа");
       if (mode === "completed") {
         expect(container.textContent).not.toContain("Устаревший сбой текущей попытки");
-        expect(container.textContent).toContain("Изменения готовы");
+        expect(container.textContent).toContain("Итог запроса");
         expect(container.textContent).toContain("7м 26с");
       } else expect(container.textContent).toContain("Устаревший сбой текущей попытки");
     }); });

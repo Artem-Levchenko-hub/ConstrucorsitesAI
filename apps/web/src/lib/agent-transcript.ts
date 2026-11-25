@@ -27,7 +27,7 @@ export function agentTranscriptTitle(
   if (generationStatus === "failed") return "Подготовка на паузе";
   if (generationStatus === "cancelled") return "Работа остановлена";
   if (generationStatus === "completed") {
-    if (currentRequestComplete === true) return "Изменения готовы";
+    if (currentRequestComplete === true) return "Итог запроса";
     // A later request replacing `latest` does not revoke this request's durable
     // completion. History makes no claim about the currently served preview.
     return historicalRequest ? "Запрос завершён" : "Проверка результата не подтверждена";

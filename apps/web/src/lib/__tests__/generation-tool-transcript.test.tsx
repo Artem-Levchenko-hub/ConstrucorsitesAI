@@ -190,7 +190,7 @@ describe("tool liveness in the actual stream and transcript", () => {
     await act(async () => button.click());
     expect(container.textContent).toContain("Проверка результата не подтверждена");
     expect(container.querySelector("ol > li")?.getAttribute("title")).toBe("Правки подготовлены");
-    expect(container.textContent).not.toContain("Изменения готовы");
+    expect(container.textContent).not.toContain("Итог запроса");
     await act(async () => {
       client.setQueryData<GenerationRun>(["generation", "project-1"], previous => ({
         ...previous!, acceptance: { run_id: "run-1", assistant_message_id: "message-1",
@@ -199,7 +199,7 @@ describe("tool liveness in the actual stream and transcript", () => {
       await vi.advanceTimersByTimeAsync(1);
     });
     expect(container.textContent).toContain("Готово");
-    expect(container.textContent).toContain("Изменения готовы");
+    expect(container.textContent).toContain("Итог запроса");
     expect(container.querySelector("ol > li")?.getAttribute("title")).toBe("Готово");
   });
 
@@ -207,7 +207,7 @@ describe("tool liveness in the actual stream and transcript", () => {
     await emit("generation.phase", { phase: "complete" });
     expect(container.textContent).toContain("Завершаю проверку результата");
     expect(container.textContent).not.toContain("complete");
-    expect(container.textContent).not.toContain("Изменения готовы");
+    expect(container.textContent).not.toContain("Итог запроса");
     expect(container.textContent).not.toContain("Готово");
   });
 });

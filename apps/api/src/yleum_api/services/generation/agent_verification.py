@@ -951,15 +951,11 @@ async def check_coverage_gate(
         raise_if_terminal_cell_error(_cov_exc)
         print(f"[PP] coverage_gate skipped: {_cov_exc!r}", flush=True)
 
-    if (
-        _coverage_verdict is not None
-        and _coverage_verdict.hard_missing()
-        and get_settings().use_build_attestation
-    ):
-        _att_capture = _capture_hard_coverage_attestation(
-            _att_capture,
-            _coverage_verdict,
-            enabled=True,
-        )
+    # Keep an observed MAX failure for the owner's outcome even when optional
+    # attestation storage is disabled. Publication controls that separate write.
+    _att_capture = _capture_hard_coverage_attestation(
+        _att_capture, _coverage_verdict,
+        enabled=_orch_name == "max-miniapp-nextjs" or get_settings().use_build_attestation,
+    )
 
     return _att_capture, accumulated

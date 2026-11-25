@@ -84,6 +84,7 @@ from yleum_api.services.generation.continuation import (
     shadow_recovery_executor,
     source_fingerprint,
 )
+from yleum_api.services.generation.handoff_advice import HANDOFF_NOTE, normalize_handoff
 from yleum_api.services.generation.recovery_actions import (
     ProgressReader,
     ResponseRecovery,
@@ -130,6 +131,7 @@ class _LegacyLoopFrame(BaseModel):
     blocked_cycles: dict[str, NonNegativeInt]
     read_sigs: dict[str, list[str]]
     product_work: SolProductWork | None = None
+    handoff: dict[str, str] | None = Field(default=None, exclude_if=lambda v: v is None)
     source_repair_gap: str | None = None
     source_repair_read_used: bool = False
     source_repair_context_path: str | None = None
@@ -164,6 +166,7 @@ class _LegacyOuterFrame(BaseModel):
     task: str
     source_history: list[str] | None
     product_work: SolProductWork | None = None
+    handoff: dict[str, str] | None = Field(default=None, exclude_if=lambda v: v is None)
     source_repair_gap: str | None = None
     source_repair_read_used: bool = False
     source_repair_context_path: str | None = None
@@ -255,6 +258,8 @@ class AgentResult:
     proof_checkpoint: object | None = None
     # Preserve the cause when finite legacy loops promote a green abort to done.
     continuation_reason: str = ""
+    # Author-provided display advice only; never used for acceptance or accounting.
+    handoff: dict[str, str] | None = None
 
     @property
     def requires_verification_only(self) -> bool:
@@ -632,6 +637,9 @@ async def run_agent_build(
         rejections=restored.source_repair_rejections if restored is not None else {},
     )
     product_work = None
+    handoff: dict[str, str] | None = None
+    if coordinator_handoff:
+        handoff = (normalize_handoff(restored.handoff) if restored else None) or {}
     if coordinator_handoff and is_sol_model(model):
         product_work = (restored.product_work if restored else None) or SolProductWork()
     novelty = None
@@ -657,6 +665,7 @@ async def run_agent_build(
             novelty = SourceNoveltyTracker.from_source_history(tuple(restored.source_history))
 
     def finish(result: AgentResult) -> AgentResult:
+        result.handoff = dict(handoff) if handoff else None
         if continuation is not None:
             continuation.context.pop("legacy_outer", None)
         if product_work is not None and product_work.detail and result.stop_reason not in {
@@ -709,7 +718,8 @@ async def run_agent_build(
                 contract=contract, segment=segment, total_steps=total_steps,
                 cumulative_files=cumulative_files, transcript=transcript, task=task,
                 source_history=list(novelty.source_history()) if novelty is not None else None,
-                product_work=product_work, source_repair_gap=source_repair.gap,
+                product_work=product_work, handoff=handoff or None,
+                source_repair_gap=source_repair.gap,
                 source_repair_read_used=source_repair.read_used,
                 source_repair_context_path=source_repair.context_path,
                 source_repair_rejections=source_repair.rejections,
@@ -733,7 +743,7 @@ async def run_agent_build(
             response_recovery=response_recovery, take_verified_progress=take_verified_progress,
             on_progress=segment_progress,
             edit_deadline=edit_deadline, continuation=continuation,
-            source_repair=source_repair, product_work=product_work,
+            source_repair=source_repair, product_work=product_work, handoff=handoff,
             discovery_history=transcript,
             report_managed_build_gap=report_managed_build_gap,
             reserve_full_provider_window=reserve_full_provider_window,
@@ -833,6 +843,7 @@ async def _run_agent_segment(
     continuation: ExecutionDriver | None = None,
     source_repair: _SourceRepairState | None = None,
     product_work: SolProductWork | None = None,
+    handoff: dict[str, str] | None = None,
     report_managed_build_gap: bool = False,
     reserve_full_provider_window: bool = False,
     bounded_repair: bool = False,
@@ -927,6 +938,9 @@ async def _run_agent_segment(
         if product_work is not None and saved_frame.product_work is not None:
             product_work.detail = saved_frame.product_work.detail
             product_work.source_at_report = saved_frame.product_work.source_at_report
+        if handoff is not None:
+            handoff.clear()
+            handoff.update(normalize_handoff(saved_frame.handoff) or {})
         content_receipts_seen = saved_frame.content_receipts_seen
         last_build_ok, fast_check_fresh = saved_frame.last_build_ok, saved_frame.fast_check_fresh
         pending_source_build, red_build_streak = (
@@ -964,6 +978,9 @@ async def _run_agent_segment(
         return action
 
     async def product_report_feedback(action: Action, *, reply_text: str, requested: bool) -> str:
+        if handoff is not None:
+            handoff.clear()
+            handoff.update(normalize_handoff(action.args.get("handoff")) or {})
         if product_work is None:
             return ""
         inventory = completion_inventory
@@ -1228,6 +1245,8 @@ async def _run_agent_segment(
         await _step_result(action, step_no, obs)
         stopped.steps = step_no + 1
         if before != after or obs.get("files") or obs.get("environment_mutated") is True:
+            if handoff is not None:
+                handoff.clear()
             fast_check_fresh = False
             return stopped
         await _record_build_observation(obs, step_no)
@@ -1311,6 +1330,11 @@ async def _run_agent_segment(
                 written, last_build_ok if not coordinator_handoff or fast_check_fresh else None,
                 source_change_pending=_source_change_pending(),
             )
+            if handoff is not None:
+                note += (
+                    "\nIn done (or the last write_file/edit_file), you may include handoff. "
+                    + HANDOFF_NOTE
+                )
             if product_work is not None:
                 note += "\n" + SOL_COMPLETION_REPORT
                 if product_work.detail:
@@ -1432,7 +1456,8 @@ async def _run_agent_segment(
                             infra_dead_streak=infra_dead_streak, sig_seen=sig_seen,
                             blocked_cycles=blocked_cycles,
                             read_sigs={path: sorted(values) for path, values in read_sigs.items()},
-                            product_work=product_work, source_repair_gap=source_repair.gap,
+                            product_work=product_work, handoff=handoff or None,
+                            source_repair_gap=source_repair.gap,
                             source_repair_read_used=source_repair.read_used,
                             source_repair_context_path=source_repair.context_path,
                             source_repair_rejections=source_repair.rejections,
@@ -1461,7 +1486,8 @@ async def _run_agent_segment(
                         fast_check_fresh = False
                         if edit_deadline is not None and datetime.now(UTC) >= edit_deadline:
                             action_at_deadline = completion_action(reply)
-                            if product_work is not None and action_at_deadline and action_at_deadline.name == "done":
+                            if (handoff is not None and action_at_deadline
+                                    and action_at_deadline.name == "done"):
                                 await product_report_feedback(
                                     action_at_deadline, reply_text=reply,
                                     requested=SOL_COMPLETION_REPORT in call_msgs[0]["content"],
@@ -1654,6 +1680,12 @@ async def _run_agent_segment(
             continue
         stalls = 0
 
+        edit_handoff = None
+        if (handoff is not None and action.name in {"write_file", "edit_file"}
+                and "handoff" in action.args):
+            edit_handoff = normalize_handoff(action.args["handoff"])
+            # Display suggestions never change the tool identity, signature, or executor arguments.
+            action = replace(action, args={k: v for k, v in action.args.items() if k != "handoff"})
         if action.name == "done":
             feedback = await product_report_feedback(
                 action, reply_text=reply,
@@ -2008,6 +2040,16 @@ async def _run_agent_segment(
             )
         if changed_source_paths:
             pending_source_build = obs.get("ok") is True
+        if handoff is not None and (
+            changed_source_paths or obs.get("files") or obs.get("environment_mutated") is True
+            or (source_after is None and (
+                ((file_edit or action.name == "delete_file") and obs.get("ok") is True)
+                or (action.name == "bash" and obs.get("environment_mutated") is not False)
+            ))
+        ):
+            handoff.clear()
+            if changed_source_paths and obs.get("ok") is True and edit_handoff:
+                handoff.update(edit_handoff)
         if action.name == "build":
             # Consume the allowance even on red builds; no extra model/retry budget.
             pending_source_build = False

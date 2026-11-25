@@ -18,6 +18,7 @@ from structlog import get_logger
 from yleum_api.services.agent_builder import AgentResult
 from yleum_api.services.design_plugin import DesignContract
 from yleum_api.services.generation.contracts import AgentPromptPlan, StackPrompt
+from yleum_api.services.generation.handoff_advice import normalize_handoff
 from yleum_api.services.generation.recovery_actions import recovery_binding
 from yleum_api.services.generation.recovery_contract import (
     CompilerWitness,
@@ -401,13 +402,19 @@ async def reconcile_pending_role(
 def _result_data(result: AgentResult) -> dict[str, Any]:
     # Process-local proof summaries cannot survive a lease/process boundary.
     # Keep the full transcript and arithmetic; finalization obtains fresh proofs.
-    return asdict(replace(result, proof_checkpoint=None))
+    payload = asdict(replace(result, proof_checkpoint=None))
+    if result.handoff is None:
+        payload.pop("handoff")
+    return payload
 
 
 def _result_from_data(raw: Any) -> AgentResult:
     if type(raw) is not dict or raw.get("proof_checkpoint") is not None:
         raise RecoveryContractError("serialized agent proof authority is unsupported")
-    return cast(AgentResult, _record(AgentResult, raw))
+    # Old completion records predate optional author advice. All other fields remain exact.
+    return cast(AgentResult, _record(AgentResult, {
+        **raw, "handoff": normalize_handoff(raw.get("handoff")),
+    }))
 
 
 @dataclass(frozen=True)

@@ -61,7 +61,7 @@ async def test_local_deadline_ends_agent_without_retry_and_reports_safe_cause(mo
     run.agent_state = {"source_checkpoint": {"digest": "a" * 64, "baseline_sha": "b" * 40}}
     saved = public_generation_failure(run, agent_steps=[safe])
     assert "Черновик сохранён" in saved.message
-    assert "Продолжи сборку" in saved.message
+    assert saved.draft_saved and "Продолжи сборку" not in saved.message
 
 
 @pytest.mark.parametrize("details", [

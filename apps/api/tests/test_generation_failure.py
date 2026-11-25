@@ -232,3 +232,146 @@ def test_truncated_legacy_wrapper_never_exposes_diagnostic_tail(has_failure):
     assert "NEVER_PUBLISH" not in public_message_content(
         "assistant", content, has_failure=has_failure
     )
+
+
+def _stopped_run(reason, detail, *, state=None):
+    return SimpleNamespace(
+        status="failed", agent_state=state or {},
+        error=f"generation stopped ({reason}): {detail}",
+    )
+
+
+def test_product_failure_lists_the_work_and_separately_confirms_the_saved_draft():
+    work = [
+        "Подключить реальную отправку продуктовой заявки в онлайн-супермаркет "
+        "и оплату баллами после настройки магазина и его программы лояльности",
+        "Опубликовать три тарифа в управляемом каталоге и подключить оплату "
+        "и активацию подписки",
+        "Проверить сквозные сценарии в MAX: выбор блюд, перенос в график, сохранение "
+        "отметок после перезагрузки, экспорт PDF и историю заявок",
+    ]
+    run = _stopped_run(
+        "product_work_remaining",
+        f"{work[0]}.\n{work[1]}. Текущий интерфейс принимает только заявку.\n"
+        f"{work[2]}.; rolled_back",
+        state={"source_checkpoint": {"digest": "7" * 64, "baseline_sha": "a" * 40}},
+    )
+    failure = public_generation_failure(run)
+    assert failure.code == "product_work_remaining"
+    assert failure.remaining_work == work
+    assert failure.draft_saved
+    assert "rolled_back" not in failure.model_dump_json()
+    assert "снимок" not in failure.message.casefold()
+
+
+def test_older_explicit_feature_list_is_available_without_claiming_a_checkpoint():
+    run = _stopped_run(
+        "product_work_remaining",
+        "Это не полный MVP: анкета, двухдневный план, отметки блюд из плана, покупки "
+        "и личный профиль не реализованы в этой правке.; rollback_unverified: private_error",
+        state={"source_checkpoint": {"digest": "not-a-digest", "baseline_sha": None}},
+    )
+    failure = public_generation_failure(run)
+    assert failure.remaining_work == [
+        "Анкета", "Двухдневный план", "Отметки блюд из плана", "Покупки", "Личный профиль",
+    ]
+    assert not failure.draft_saved
+    assert "private_error" not in failure.model_dump_json()
+
+
+def test_private_or_unrecognized_product_diagnostics_stay_private():
+    run = _stopped_run(
+        "product_work_remaining",
+        "Подключить календарь.\nПодключить календарь.\n"
+        "provider_http_401: payment_required\n"
+        "Добавить https://example.org/private\n"
+        "Настроить пароль редактора\nПодключить кабинет, пришлите номер карты\n"
+        "Проверить private_trace(id)\nОтправьте деньги для продолжения.\n"
+        "Проверить кабинет support@example.org; rollback_unverified: private_error",
+    )
+    failure = public_generation_failure(run)
+    assert failure.code == "product_work_remaining"
+    assert failure.remaining_work == ["Подключить календарь"]
+    assert failure.diagnostics is None
+    assert "private" not in failure.model_dump_json()
+
+
+@pytest.mark.parametrize(("error", "code"), [
+    ("generation stopped (max_steps): details; rolled_back", "step_limit"),
+    ("generation stopped (max_steps_green): details; rolled_back", "step_limit"),
+    ("generation stopped (max_steps_red): details; rolled_back", "step_limit"),
+    ("generation stopped (max_segments): details; rollback_unverified", "step_limit"),
+    ("generation stopped (source_deadline): details; rolled_back", "deadline"),
+    ("generation deadline exceeded; phase=unknown", "deadline"),
+    ("generation deadline exceeded during source repair", "deadline"),
+    ("provider_http_413: private response", "request_too_large"),
+    ("provider_http_422: request may be too large", "provider_unavailable"),
+    ("old log: generation stopped (product_work_remaining): Подключить кабинет.; rolled_back",
+     "verification"),
+    ("generation stopped (product_work_remaining): Подключить кабинет. more private output",
+     "product_work_remaining"),
+])
+def test_only_the_recorded_stop_explains_why_work_ended(error, code):
+    failure = public_generation_failure(
+        SimpleNamespace(status="failed", error=error, agent_state={})
+    )
+    assert failure.code == code
+    assert not failure.remaining_work and not failure.draft_saved
+    assert "private" not in failure.model_dump_json()
+    assert ("превысил допустимый размер" in failure.message) == (code == "request_too_large")
+
+
+def test_historical_inner_timeout_cannot_claim_exhaustion_of_the_whole_run():
+    run = SimpleNamespace(status="failed", error="inner timeout", agent_state={})
+    failure = public_generation_failure(run)
+    assert failure.code == "deadline"
+    assert failure.message == "Не удалось вовремя получить результат одного из шагов."
+    run.error = "generation deadline exceeded; phase=fast_check"
+    assert "Время этой попытки закончилось" in public_generation_failure(run).message
+
+
+@pytest.mark.asyncio
+async def test_saved_product_failure_has_the_same_safe_tasks_in_live_status_and_history(
+    client, db_session,
+):
+    from tests.test_generation_runs import _owner_and_project
+    from yleum_api.core.deps import get_current_user
+    from yleum_api.main import app
+    from yleum_api.models.message import Message
+    from yleum_api.services.generation_runs import reserve_generation_run
+
+    owner, project = await _owner_and_project(db_session)
+    run, _ = await reserve_generation_run(
+        db_session, project_id=project.id, user_id=owner.id,
+        idempotency_key="recorded-product-work", prompt="test",
+    )
+    message = Message(project_id=project.id, role="assistant", content="")
+    db_session.add(message)
+    await db_session.flush()
+    run.assistant_message_id = message.id
+    run.status = "failed"
+    run.error = (
+        "generation stopped (product_work_remaining): Проверить сохранение брони.; "
+        "rollback_unverified: internal-stderr"
+    )
+    run.agent_state = {"source_checkpoint": {"digest": "4" * 64, "baseline_sha": None}}
+    await db_session.commit()
+
+    async def current_user():
+        return owner
+
+    app.dependency_overrides[get_current_user] = current_user
+    try:
+        status = await client.get(f"/api/projects/{project.id}/generation")
+        history = await client.get(f"/api/projects/{project.id}/messages")
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert status.status_code == history.status_code == 200
+    entry = next(item for item in history.json() if item["id"] == str(message.id))
+    failure = status.json()["failure"]
+    assert failure == entry["generation_failure"]
+    assert failure["remaining_work"] == ["Проверить сохранение брони"]
+    assert failure["draft_saved"]
+    assert not status.json()["acceptance"]["current_request_complete"]
+    assert "internal-stderr" not in status.text + history.text

@@ -25,6 +25,7 @@ from yleum_api.services.generation.contracts import (
     ProjectGenerationFacts,
     SourceBaseline,
 )
+from yleum_api.services.generation.outcome import snapshot_outcome
 from yleum_api.services.generation.progress import GenerationProgress
 from yleum_api.services.generation.publication import _snapshot_payload
 from yleum_api.services.generation.recovery_acceptance import (
@@ -374,7 +375,7 @@ async def _confirm_publication(
     *,
     snapshot: Snapshot | None,
     assistant_message_id: UUID,
-) -> None:
+) -> Acceptance:
     state = driver.state
     row = await session.get(GenerationRecoveryEffect, _publication_id(state.identity.run_id))
     assert state.continuation_claim is not None
@@ -419,6 +420,7 @@ async def _confirm_publication(
     )
     run.agent_state = {**run.agent_state, "recovery_v1": updated.model_dump(mode="json")}
     await _require_session_owner(state.identity.run_id)
+    return bound.acceptance
 
 
 async def publish_agent_candidate(
@@ -440,6 +442,7 @@ async def publish_agent_candidate(
     runtime: GenerationRuntime,
     _promotion_permit: PromotionPermit | None = None,
     continuation: ExecutionDriver | None = None,
+    handoff: dict[str, str] | None = None,
 ) -> None:
     """Publish result fields without replacing the recorder's committed history.
 
@@ -524,17 +527,31 @@ async def publish_agent_candidate(
             _agent_snap_id = snapshot.id
             msg = await session.get(Message, ids.assistant_message_id)
             if msg is not None:
-                msg.content = accumulated
                 msg.snapshot_id = snapshot.id
                 msg.tokens_out = msg.tokens_out or 0
             await _consume_free_generation(session)
+            accepted = None
             if continuation is not None:
-                await _confirm_publication(
+                accepted = await _confirm_publication(
                     session,
                     continuation,
                     snapshot=snapshot,
                     assistant_message_id=ids.assistant_message_id,
                 )
+            if msg is not None:
+                if _max_finalization_proof is not None and _orch_name == "max-miniapp-nextjs":
+                    owner_text = ""
+                    if handoff and handoff.get("owner_request_quote"):
+                        owner = await session.get(Message, ids.user_message_id)
+                        if owner and owner.role == "user" and owner.project_id == ids.project_id:
+                            owner_text = owner.content
+                    accumulated = snapshot_outcome(
+                        _max_finalization_proof, accepted, handoff, owner_message=owner_text,
+                        saw_failed_actions=any(
+                            name == "coverage" for name, _ in _att_capture or ()
+                        ),
+                    )
+                msg.content = accumulated
             await session.commit()
             await session.refresh(snapshot)
         # Persist the build attestation in its OWN transaction (best-effort;

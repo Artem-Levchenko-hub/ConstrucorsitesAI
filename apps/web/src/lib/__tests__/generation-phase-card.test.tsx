@@ -148,7 +148,7 @@ it.each([
   await act(async () => root.render(<GenerationPhaseCard
     phase={{ id, active, title: "Current phase", explanation: "Current explanation", milestones: [] }} motionActive={false} />));
   const notice = container.querySelector("[data-generation-background-notice]")!;
-  expect(notice.textContent).toBe("20–30 мин, иногда дольше. Вкладку можно закрыть.");
+  expect(notice.textContent).toBe("Создание может занять до 90 минут. Вкладку можно закрыть — работа продолжится.");
   expect(notice.tagName).toBe("P");
   expect(notice.children).toHaveLength(0);
   expect(notice.closest('[aria-live], [role="status"]')).toBeNull();
@@ -166,7 +166,7 @@ it.each(["queued", "waiting"] as const)("keeps the reason for %s without claimin
   expect(card().querySelector('[role="status"]')!.textContent).toContain(explanation);
   expect(card().querySelector("[data-generation-background-notice]")!.textContent)
     .toBe("Вкладку можно закрыть — задача сохранена на сервере.");
-  expect(card().textContent).not.toMatch(/20–30|продолжится/);
+  expect(card().textContent).not.toMatch(/90 минут|продолжится/);
   expect(card().dataset.motion).toBe("paused");
 });
 

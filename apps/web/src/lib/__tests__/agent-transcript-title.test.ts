@@ -16,7 +16,7 @@ describe("agentTranscriptTitle", () => {
   it("keeps running and completed labels distinct", () => {
     expect(agentTranscriptTitle(true, "running")).toBe("Собираю приложение");
     expect(agentTranscriptTitle(false, "completed")).toBe("Проверка результата не подтверждена");
-    expect(agentTranscriptTitle(false, "completed", true, null, true)).toBe("Изменения готовы");
+    expect(agentTranscriptTitle(false, "completed", true, null, true)).toBe("Итог запроса");
     expect(agentTranscriptTitle(false)).toBe("Ход работы");
   });
 
@@ -43,7 +43,7 @@ describe("agentTranscriptTitle", () => {
     expect(agentTranscriptTitle(true, "cancel_requested", false, null, false, false, true)).toBe("Останавливаю работу");
     expect(agentTranscriptTitle(false, "cancelled", false, null, false, false, true)).toBe("Работа остановлена");
     expect(agentTranscriptTitle(false, "failed", false, null, false, false, true)).toBe("Подготовка на паузе");
-    expect(agentTranscriptTitle(false, "completed", false, null, true, false, true)).toBe("Изменения готовы");
+    expect(agentTranscriptTitle(false, "completed", false, null, true, false, true)).toBe("Итог запроса");
   });
 
   it("ends preparation on either its result or the next actual agent step", () => {

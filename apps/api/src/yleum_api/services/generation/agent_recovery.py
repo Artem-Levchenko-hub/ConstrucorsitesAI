@@ -348,14 +348,14 @@ async def recover_rejected_candidate(
             proof.dimension, proof.outcome, proof.redacted_detail, source_failure,
         ):
             before = await runtime.handle.snapshot_files()
-            window_open = False
+            repair_window = None
             try:
                 deadline = await runtime.coordinator.source_edit_deadline(repair=True)
                 remaining = (deadline - datetime.now(UTC)).total_seconds() if deadline else 0
                 if remaining < 60:
                     raise TimeoutError("generation deadline exceeded before source repair")
-                window_open = True
-                async with asyncio.timeout(remaining):
+                repair_window = asyncio.timeout(remaining)
+                async with repair_window:
                     repaired = await run_native_source_repair(
                         task=(
                             f"{plan.user}\n\nFINAL SOURCE CHECK FEEDBACK:\n"
@@ -400,9 +400,15 @@ async def recover_rejected_candidate(
                             _tc_error = ""
             except Exception as exc:
                 raise_if_terminal_cell_error(exc)
-                if not single_repair and not window_open:
+                if not single_repair and repair_window is None:
                     raise
-                repair_failure = exc
+                if isinstance(exc, TimeoutError) and repair_window and repair_window.expired():
+                    repair_failure = TimeoutError(
+                        "generation deadline exceeded during source repair"
+                    )
+                    repair_failure.__cause__ = exc
+                else:
+                    repair_failure = exc
                 # Retain every actual repair path even when the provider stops
                 # after a partial write. Restore via the ordinary guarded path.
                 try:

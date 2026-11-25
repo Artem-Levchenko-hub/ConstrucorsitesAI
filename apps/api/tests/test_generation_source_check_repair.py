@@ -302,6 +302,24 @@ async def test_partial_write_timeout_restores_under_the_existing_fence(source_ch
     assert workspace == kwargs["baseline"].files
 
 
+async def test_expired_repair_timer_restores_partial_write_and_reports_its_own_deadline(
+    source_check, monkeypatch,
+):
+    kwargs, workspace, _, _, _ = source_check
+    use_real_restore(monkeypatch, kwargs, workspace)
+    real_timeout = asyncio.timeout
+    monkeypatch.setattr(agent_recovery.asyncio, "timeout", lambda remaining: real_timeout(0))
+
+    async def partial_repair(**_):
+        workspace["src/lib/new-filter.ts"] = "new candidate helper"
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(agent_finalization, "run_native_source_repair", partial_repair)
+    with pytest.raises(TimeoutError, match=r"^generation deadline exceeded during source repair$"):
+        await agent_recovery.recover_rejected_candidate(**kwargs)
+    assert workspace == kwargs["baseline"].files
+
+
 @pytest.mark.parametrize(
     "error",
     [

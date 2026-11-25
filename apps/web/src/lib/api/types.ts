@@ -178,7 +178,13 @@ export type Message = {
   generation_finished_at?: IsoDateTime | null;
   /** Durable outcome; prevents a rolled-back run from being labelled "ready". */
   generation_status?: GenerationRunStatus | null;
-  generation_failure?: { code: string; message: string; retryable: boolean } | null;
+  generation_failure?: {
+    code: string;
+    message: string;
+    retryable: boolean;
+    remaining_work?: string[];
+    draft_saved?: boolean;
+  } | null;
   created_at: IsoDateTime;
 };
 
