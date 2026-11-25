@@ -19,16 +19,20 @@ import { cancelRestoration, getRestoration } from "@/lib/api/restorations";
 import { Button } from "@/components/ui/button";
 import { useMaxPreviewHistory } from "@/lib/use-max-preview-history";
 import { MAX_CUSTOMER_VERSIONING } from "@/lib/max-product-policy";
+import { useStudioActivity } from "@/lib/use-studio-activity";
 
 export function MaxWorkspaceShell({
   project,
   email,
   initialPreview = false,
+  release,
 }: {
   project: Project;
   email: string;
   initialPreview?: boolean;
+  release?: string;
 }) {
+  useStudioActivity(release, project.id);
   const adaptationRef = useRef<ChatPanelAdaptationHandle>(null);
   const adaptationPending = useRef(false);
   const adaptationWait = useRef<AbortController | null>(null);

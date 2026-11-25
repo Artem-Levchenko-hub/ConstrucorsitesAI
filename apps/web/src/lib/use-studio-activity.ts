@@ -3,9 +3,9 @@
 import { useEffect } from "react";
 import { apiFetch } from "@/lib/api/client";
 
-export function StudioActivity({ projectId, release }: { projectId?: string; release: string }) {
+export function useStudioActivity(release?: string, projectId?: string) {
   useEffect(() => {
-    if (process.env.NEXT_PUBLIC_USE_MOCKS !== "false") return;
+    if (!release || process.env.NEXT_PUBLIC_USE_MOCKS !== "false") return;
     let lastInteraction = 0;
     let lastActivity = 0;
     let lastError = 0;
@@ -50,5 +50,4 @@ export function StudioActivity({ projectId, release }: { projectId?: string; rel
       window.clearInterval(timer);
     };
   }, [projectId, release]);
-  return null;
 }

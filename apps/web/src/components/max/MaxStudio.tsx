@@ -29,14 +29,18 @@ import { MAX_STATUS_COPY } from "@/lib/max-status-copy";
 import { MaxStudioIdeas, type MaxStudioIdea } from "./MaxStudioIdeas";
 import { MaxProjectWizard } from "./MaxProjectWizard";
 import { MaxInitialCatalog } from "./MaxInitialCatalog";
+import { useStudioActivity } from "@/lib/use-studio-activity";
 import "./max-studio.css";
 
-export function MaxStudio({ email }: { email: string }) {
+type StudioProps = { email: string; release?: string };
+
+export function MaxStudio(props: StudioProps) {
   // A changed authenticated owner gets a distinct in-memory and durable draft.
-  return <OwnedMaxStudio key={email.trim().toLowerCase()} email={email} />;
+  return <OwnedMaxStudio key={props.email.trim().toLowerCase()} {...props} />;
 }
 
-function OwnedMaxStudio({ email }: { email: string }) {
+function OwnedMaxStudio({ email, release }: StudioProps) {
+  useStudioActivity(release);
   const router = useRouter();
   const quota = useOwnerChatQuota();
   const qc = useQueryClient();
