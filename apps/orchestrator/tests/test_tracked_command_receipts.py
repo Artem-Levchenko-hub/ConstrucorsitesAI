@@ -30,7 +30,7 @@ async def prepared(tmp_path, monkeypatch, _internal_settings):
     manifest = MachineManifest.model_validate(payload())
     monkeypatch.setattr(workspace, "_machine_manifest", lambda *a, **kw: manifest)
 
-    async def execute(manager, workspace_id, request):
+    async def execute(manager, workspace_id, request, transport):
         calls.append(request.operation_id)
         before = workspace._workspace_identity_digest(
             {},
@@ -48,7 +48,7 @@ async def prepared(tmp_path, monkeypatch, _internal_settings):
             environment_mutated=False,
         )
 
-    monkeypatch.setattr(workspace, "_execute_agent_command_locked", execute, raising=False)
+    monkeypatch.setattr(workspace, "_execute_agent_command_locked", execute)
     body = {
         "operation_id": str(oid),
         "generation_run_id": str(run),
@@ -355,21 +355,26 @@ async def test_post_dispatch_drift_leaves_only_pending_intent(prepared, monkeypa
     )
 
 
+@pytest.mark.parametrize("task_role", ["full_build", None])
 async def test_portable_production_route_dispatch_is_bracketed_by_durable_binding(
-    prepared, monkeypatch
+    prepared, monkeypatch, task_role,
 ):
     from unittest.mock import AsyncMock
 
     from tests.test_project_machine_manifest import payload
     from yleum_orchestrator.core.project_machine import MachineManifest
-    from yleum_orchestrator.services.command_receipts import CommandJournal
+    from yleum_orchestrator.services.command_receipts import CommandJournal, canonical_digest
     from yleum_orchestrator.services.docker_cell_resources import DockerCommandResult
     from yleum_orchestrator.services.machine_adapter import MachineAdapter
     from yleum_orchestrator.services.machine_startup import EnvironmentIdentity
 
-    wid, oid, manager, _docker, _run, state, body, _calls = prepared
+    wid, oid, manager, _docker, run, state, body, _calls = prepared
+    body["task_role"] = task_role
+    if task_role is None:
+        body["cmd"] = "exit 126"
     journal = CommandJournal(manager.state_store.root, wid)
     events = []
+    stored_responses = []
     environment = EnvironmentIdentity("e" * 64, "f" * 64)
 
     def environment_identity():
@@ -384,11 +389,14 @@ async def test_portable_production_route_dispatch_is_bracketed_by_durable_bindin
     async def execute(*args):
         assert journal.load(oid).receipt is None
         events.append("physical-command-with-intent")
-        return DockerCommandResult(exit_code=0, output="ok", timed_out=False)
+        if task_role is None:
+            return DockerCommandResult(exit_code=126, output="command blocked by safety denylist")
+        return DockerCommandResult(exit_code=0, output="ok")
 
     async def store(**kwargs):
         assert journal.load(oid).receipt is None
         events.append("transport-result")
+        stored_responses.append(kwargs["response"])
 
     machine = SimpleNamespace(
         ensure=ensure,
@@ -416,17 +424,37 @@ async def test_portable_production_route_dispatch_is_bracketed_by_durable_bindin
         AsyncMock(return_value=MachineManifest.model_validate(payload())),
     )
     async with _client() as client:
-        response = await client.post(
-            f"/internal/workspaces/{wid}/agent/exec", headers=HEADERS, json=body
+        url = f"/internal/workspaces/{wid}/agent/exec"
+        response = await client.post(url, headers=HEADERS, json=body)
+        assert response.status_code == 200, response.text
+        cold = await client.get(
+            f"/internal/workspaces/{wid}/agent/command-operations/{oid}", headers=HEADERS,
+            params={"generation_run_id": str(run), "fencing_epoch": body["fencing_epoch"]},
         )
-    assert response.status_code == 200, response.text
+        assert cold.status_code == 200, cold.text
+        replayed = await client.post(url, headers=HEADERS, json=body)
+        assert replayed.status_code == 200, replayed.text
+    snapshots = ["environment-snapshot-with-intent"] if task_role else []
     assert events == [
-        "ensure-with-intent", "environment-snapshot-with-intent",
-        "physical-command-with-intent", "environment-snapshot-with-intent", "transport-result",
+        "ensure-with-intent", *snapshots, "physical-command-with-intent",
+        *snapshots, "transport-result",
     ]
-    assert response.json()["before_identity"]["environment_digest"] == environment.digest
-    assert response.json()["after_identity"]["environment_digest"] == environment.digest
-    assert journal.load(oid).receipt is not None
+    wire_response = response.json()
+    receipt = wire_response.pop("command_receipt")
+    header = "X-Yleum-Shell-Dispatch"
+    assert response.headers.get(header) == ("exited" if task_role is None else None)
+    assert header not in cold.headers and header not in replayed.headers
+    assert wire_response["exit_code"] == (126 if task_role is None else 0)
+    assert wire_response["before_identity"]["environment_digest"] == environment.digest
+    assert wire_response["after_identity"]["environment_digest"] == environment.digest
+    assert stored_responses == [wire_response]
+    assert receipt["response_sha256"] == canonical_digest(wire_response)
+    assert journal.load(oid).receipt.model_dump(mode="json") == receipt
+    assert cold.json() == {
+        "operation_id": str(oid), "state": "terminal", "receipt": receipt,
+        "terminal_response": wire_response,
+    }
+    assert replayed.json() == response.json()
 
 
 async def test_canonical_binding_stores_no_command_and_never_drops_nullable_receipts(prepared):
