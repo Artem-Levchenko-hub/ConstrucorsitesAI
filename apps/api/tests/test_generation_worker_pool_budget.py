@@ -23,20 +23,28 @@ def test_configured_limit_cannot_consume_every_database_connection(monkeypatch):
     assert 2 * generation.current_dispatch_limit() <= db.DATABASE_POOL_CAPACITY - 4
 
 
-def test_budget_matches_the_pool_that_is_actually_created(monkeypatch):
+@pytest.mark.asyncio
+async def test_budget_matches_the_pool_that_is_actually_created(monkeypatch):
     options = {}
+    create_engine = db.create_async_engine
 
-    def create(_url, **kwargs):
+    def create(url, **kwargs):
         options.update(kwargs)
-        return object()
+        return create_engine(url, **kwargs)
 
     monkeypatch.setattr(db, "_engine", None)
     monkeypatch.setattr(db, "_session_factory", None)
     monkeypatch.setattr(db, "create_async_engine", create)
-    monkeypatch.setattr(db, "async_sessionmaker", lambda *_a, **_kw: object())
-    monkeypatch.setattr(db, "get_settings", lambda: SimpleNamespace(database_url="unused"))
+    monkeypatch.setattr(
+        db, "get_settings",
+        lambda: SimpleNamespace(database_url="postgresql+asyncpg://unused:unused@localhost/unused"),
+    )
     db.get_engine()
-    assert options["pool_size"] + options["max_overflow"] == db.DATABASE_POOL_CAPACITY == 20
+    try:
+        assert options["pool_size"] + options["max_overflow"] == db.DATABASE_POOL_CAPACITY == 20
+    finally:
+        # Engine construction and instrumentation are lazy and open no DB connection.
+        await db.dispose_engine()
 
 
 def test_heartbeat_distinguishes_capacity_waiting_from_running():
