@@ -2074,6 +2074,7 @@ class ExecutionDriver:
     async def _tool(
         self, key: str, action: Any, invoke: Callable[[], Awaitable[dict[str, Any]]]
     ) -> dict[str, Any]:
+        from yleum_api.services.agent_tool_diagnostics import bind_durable_tool_diagnostic
         from yleum_api.services.generation import recovery_tool_receipts as receipts
         from yleum_api.services.generation.recovery_reconciliation import (
             ToolEffectCursor,
@@ -2096,30 +2097,33 @@ class ExecutionDriver:
             key,
             reconcile_only=cold or consumed,
         )
-        if not consumed:
-            if cold:
-                if (
-                    self.context.get("active_tool") != active
-                    or self.state.execution.pending_effect_id != cursor.root_effect_id
-                ):
-                    raise RecoveryContractError("tool continuation changed its original action")
-            else:
-                if index != self.state.execution.next_tool_index:
-                    raise RecoveryContractError("tool continuation skipped an observation")
-                context = {**self.context, "active_tool": active}
-                self.state = await commit_execution_cursor(
-                    self.factory,
-                    previous=self.state,
-                    execution=self.state.execution.model_copy(
-                        update={
-                            "substep": "tool_wait",
-                            "pending_effect_id": cursor.root_effect_id,
-                        }
-                    ),
-                    context=context,
-                )
-                self.context = context
-                cursor.state_revision = self.state.state_revision
+        if cold and (
+            self.context.get("active_tool") != active
+            or self.state.execution.pending_effect_id != cursor.root_effect_id
+        ):
+            raise RecoveryContractError("tool continuation changed its original action")
+        if not cursor.reconcile_only and index != self.state.execution.next_tool_index:
+            raise RecoveryContractError("tool continuation skipped an observation")
+        # The optional journal await must precede tool_wait. Cancellation of a
+        # diagnostic write cannot leave a cold cursor without a physical receipt.
+        await bind_durable_tool_diagnostic(
+            action, cursor.root_effect_id, index, reconcile_only=cursor.reconcile_only,
+        )
+        if not cursor.reconcile_only:
+            context = {**self.context, "active_tool": active}
+            self.state = await commit_execution_cursor(
+                self.factory,
+                previous=self.state,
+                execution=self.state.execution.model_copy(
+                    update={
+                        "substep": "tool_wait",
+                        "pending_effect_id": cursor.root_effect_id,
+                    }
+                ),
+                context=context,
+            )
+            self.context = context
+            cursor.state_revision = self.state.state_revision
         kwargs: dict[str, Any] = dict(
             run_id=self.state.identity.run_id,
             project_id=self.state.identity.project_id,

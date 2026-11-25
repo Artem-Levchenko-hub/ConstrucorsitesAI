@@ -9,8 +9,12 @@ therefore applied both before persistence and again at the public schema edge.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 from uuid import UUID
+
+from yleum_api.services.agent_tool_diagnostics import safe_tool_diagnostic, safe_tool_name
 
 REDACTED = "[REDACTED]"
 PROVIDER_RESPONSE_DETAIL = "Ответ модели проверен перед применением действий."
@@ -171,7 +175,12 @@ def _provider_error_display(category: object, known_upstream_422: bool) -> tuple
     return action, PROVIDER_ERROR_DETAIL
 
 
-def _step_identity(step: dict[str, Any]) -> dict[str, Any]:
+STEP_METADATA = frozenset({
+    "eventId", "runId", "seq", "actionCount", "historyTruncated", "recordedAt",
+})
+
+
+def agent_step_identity(step: Mapping[str, Any]) -> dict[str, Any]:
     identity: dict[str, Any] = {}
     for key in ("eventId", "runId"):
         value = step.get(key)
@@ -191,15 +200,53 @@ def _step_identity(step: dict[str, Any]) -> dict[str, Any]:
         identity["actionCount"] = count
     if type(step.get("historyTruncated")) is bool:
         identity["historyTruncated"] = step["historyTruncated"]
+    timestamp = step.get("recordedAt")
+    if ("tool_diagnostic" in step and isinstance(timestamp, str) and len(timestamp) == 29
+            and timestamp.endswith("+00:00")):
+        try:
+            recorded = datetime.fromisoformat(timestamp)
+        except ValueError:
+            pass
+        else:
+            identity["recordedAt"] = recorded.isoformat(timespec="milliseconds")
     return identity
+
+
+TOOL_LIFECYCLE_EVENTS = frozenset({"agent.tool_started", "agent.tool_finished"})
+
+
+def tool_lifecycle_step(event_type: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    diagnostic = safe_tool_diagnostic(payload.get("tool_diagnostic"))
+    if not diagnostic or (event_type == "agent.tool_started") != (diagnostic["state"] == "started"):
+        return {}
+    tool = safe_tool_name(payload.get("action"))
+    step = payload.get("step")
+    return {
+        "kind": "heartbeat", "action": tool, "tool": tool, "path": "", "ok": None,
+        "step": step if type(step) is int and 0 <= step < 2**31 else None,
+        "tool_diagnostic": diagnostic,
+    }
 
 
 def sanitize_agent_step(step: dict[str, Any]) -> dict[str, Any]:
     """Copy one agent-step payload while redacting every textual surface."""
 
-    identity = _step_identity(step)
-    safe = {key: value for key, value in step.items()
-            if key not in {"eventId", "runId", "seq", "actionCount", "historyTruncated"}}
+    identity = agent_step_identity(step)
+    safe = {key: value for key, value in step.items() if key not in STEP_METADATA}
+    if "tool_diagnostic" in safe:
+        diagnostic = safe_tool_diagnostic(safe.pop("tool_diagnostic"))
+        if safe.get("kind") == "heartbeat":
+            started = diagnostic.get("state") == "started"
+            event_type = "agent.tool_started" if started else "agent.tool_finished"
+            return {**tool_lifecycle_step(event_type, step), **identity}
+        if safe.get("tool") == "bash":
+            # The structured command result replaces arbitrary process output in the journal.
+            safe = {key: safe[key] for key in (
+                "step", "kind", "tool", "ok", "skipped", "message_id", "recovery_trace",
+            ) if key in safe}
+            safe.update(action="Выполняю команду", path="", detail="")
+        if diagnostic:
+            safe["tool_diagnostic"] = diagnostic
     provider_error = safe.get("kind") == "provider_error"
     provider_trace = provider_error or safe.get("tool") == "provider_response"
     error_origin, known_upstream_422 = (

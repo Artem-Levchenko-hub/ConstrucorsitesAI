@@ -983,6 +983,18 @@ export type MultipassStage =
  * so `ChatMessage` re-renders the progress bar reactively without a Zustand
  * store. Cleared on `llm.done` / `llm.error`.
  */
+export type AgentToolDiagnostic = {
+  call_id: Uuid;
+  state: "started" | "succeeded" | "failed" | "skipped" | "cancelled" | "unknown";
+  reason_code?: string;
+  command_family?: string;
+  missing_executable?: string;
+  elapsed_ms?: number;
+  exit_code?: number;
+  timings_ms?: Partial<Record<"dispatch" | "workspace_sync" | "reader_wait" | "total", number>>;
+  reconciled?: boolean;
+};
+
 /**
  * One step in the agentic builder's live transcript (see the `agent.step` WS
  * event). Accumulated per assistant message in React Query cache under
@@ -1018,6 +1030,9 @@ export type AgentStep = {
   /** true/false = actual completion; null/absent = no confirmed execution. */
   ok?: boolean | null;
   skipped?: boolean;
+  tool_diagnostic?: AgentToolDiagnostic;
+  /** When the diagnostic event was committed to the generation journal. */
+  recordedAt?: IsoDateTime;
 };
 
 export type PassProgress = {
@@ -1204,6 +1219,8 @@ export type WsEvent =
         detail?: string;
         ok?: boolean | null;
         skipped?: boolean;
+        tool_diagnostic?: AgentToolDiagnostic;
+        recordedAt?: IsoDateTime;
       };
     };
 

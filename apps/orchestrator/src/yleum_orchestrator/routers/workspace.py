@@ -98,7 +98,10 @@ from yleum_orchestrator.services.cell_draft_support import (
     trusted_template_source,
 )
 from yleum_orchestrator.services.cell_state import CellWorkspaceState
-from yleum_orchestrator.services.docker_cell_resources import DockerCellResourceManager
+from yleum_orchestrator.services.docker_cell_resources import (
+    DockerCellResourceManager,
+    DockerCommandResult,
+)
 from yleum_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
 from yleum_orchestrator.services.generation_reader_inventory import command_reader_dispatch_wait
 from yleum_orchestrator.services.machine_environment import (
@@ -749,6 +752,7 @@ async def get_workspace_agent_write_operation(
 async def exec_workspace_agent_command(
     workspace_id: UUID,
     request: WorkspaceAgentExecRequest,
+    response: Response,
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> WorkspaceAgentExecResponse | WorkspaceAgentTrackedExecResponse:
     verify_internal_token(x_internal_token)
@@ -773,19 +777,36 @@ async def exec_workspace_agent_command(
                 deadline=started_at + request.timeout_seconds,
             ):
                 if request.track_receipt:
-                    return await _tracked_agent_command_locked(manager, workspace_id, request)
+                    return await _tracked_agent_command_locked(
+                        manager, workspace_id, request, response,
+                    )
                 journal = CommandJournal(manager.state_store.root, workspace_id)
                 if journal.load(request.operation_id):
                     raise CellIndeterminateOperation("tracked command cannot downgrade to legacy")
-                return await _execute_agent_command_locked(manager, workspace_id, request)
+                return await _execute_agent_command_locked(manager, workspace_id, request, response)
     except (CellResourceError, ValueError) as exc:
         raise OrchestratorError(
             code="conflict", message="command is unresolved or conflicts", status_code=409,
         ) from exc
 
 
+_SHELL_DISPATCH_HEADER = "X-Yleum-Shell-Dispatch"
+
+
+def _report_shell_dispatch(
+    transport: Response, task_role: str | None, result: DockerCommandResult,
+) -> None:
+    # Keep dispatch evidence outside the persisted response and its receipt digest.
+    if task_role is None:
+        if result.start_timed_out:
+            transport.headers[_SHELL_DISPATCH_HEADER] = "start_timeout"
+        elif not result.timed_out:
+            transport.headers[_SHELL_DISPATCH_HEADER] = "exited"
+
+
 async def _execute_agent_command_locked(
     manager: DockerCellResourceManager, workspace_id: UUID, request: WorkspaceAgentExecRequest,
+    transport: Response,
 ) -> WorkspaceAgentExecResponse:
     """Existing executor; caller owns the workspace lock and optional tracked intent."""
     low = request.cmd.strip()
@@ -935,28 +956,25 @@ async def _execute_agent_command_locked(
             fencing_epoch=request.fencing_epoch,
             response=response.model_dump(mode="json"),
         )
+        _report_shell_dispatch(transport, request.task_role, result)
         return response
     legacy_identity = _workspace_identity_digest(
         current_files,
         manifest=None,
         environment_digest=_digest_json({"legacy_image": _PROJECT_CELL_EXEC_IMAGE}),
     )
+    rejection = None
     if any(bad in low for bad in _EXEC_DENY):
+        rejection = "command blocked by safety denylist"
+    elif _command_exposes_environment(low):
+        rejection = "command blocked: environment and secret enumeration is not allowed"
+    if rejection is not None:
+        if request.task_role is None:
+            transport.headers[_SHELL_DISPATCH_HEADER] = "rejected"
         return WorkspaceAgentExecResponse(
             ok=False,
             exit_code=126,
-            detail="command blocked by safety denylist",
-            workspace_revision=current_revision,
-            operation_id=request.operation_id,
-            before_identity=legacy_identity,
-            after_identity=legacy_identity,
-            environment_mutated=False,
-        )
-    if _command_exposes_environment(low):
-        return WorkspaceAgentExecResponse(
-            ok=False,
-            exit_code=126,
-            detail="command blocked: environment and secret enumeration is not allowed",
+            detail=rejection,
             workspace_revision=current_revision,
             operation_id=request.operation_id,
             before_identity=legacy_identity,
@@ -1011,6 +1029,7 @@ async def _execute_agent_command_locked(
             + "Command effects were saved, but the draft runtime restart failed: "
             + restart_detail
         )
+    _report_shell_dispatch(transport, request.task_role, result)
     return WorkspaceAgentExecResponse(
         ok=ok,
         exit_code=result.exit_code,
@@ -1083,6 +1102,7 @@ async def _tracked_agent_command_locked(
     manager: DockerCellResourceManager,
     workspace_id: UUID,
     request: WorkspaceAgentExecRequest,
+    transport: Response,
 ) -> WorkspaceAgentTrackedExecResponse:
     from yleum_orchestrator.services.cell_state import (
         _read_plain_json_file,
@@ -1152,7 +1172,7 @@ async def _tracked_agent_command_locked(
     )
     journal.start(binding)  # Strict durable intent BEFORE preparation/ensure/command effects.
     with journal.executing(binding):
-        response = await _execute_agent_command_locked(manager, workspace_id, request)
+        response = await _execute_agent_command_locked(manager, workspace_id, request, transport)
         await _verify_command_binding(
             manager, binding, request.fencing_epoch, after_revision=response.workspace_revision
         )

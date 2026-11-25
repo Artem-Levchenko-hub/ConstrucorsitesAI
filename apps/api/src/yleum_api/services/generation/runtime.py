@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 from fastapi import status
@@ -11,6 +11,7 @@ from yleum_api.core.errors import ApiError
 from yleum_api.services import (
     project_cell_executor,
 )
+from yleum_api.services.agent_tool_diagnostics import record_shell_diagnostics
 
 if TYPE_CHECKING:
     from yleum_api.services.agent_builder import Action as AgentBuilderAction
@@ -249,7 +250,9 @@ async def _execute_max_agent_action(
                     "error": "Credential files and provider secrets must stay in Studio.",
                 }
         if action.name == "bash" and not max_shell_enabled:
-            return {"ok": False, "error": "Project Cell shell is disabled by the operator."}
+            return _reject_shell_before_dispatch(
+                "Project Cell shell is disabled by the operator.", "dispatch_rejected",
+            )
         if action.name in {"write_file", "edit_file", "bash", "build", "runtime_check", "probe"}:
             from yleum_api.services.max_substrate_compatibility import has_trusted_max_db
 
@@ -605,6 +608,13 @@ async def _rollback_project_cell_shell_files(
     return False
 
 
+def _reject_shell_before_dispatch(
+    error: str, reason: Literal["dispatch_rejected", "invalid_tool_arguments"],
+) -> dict[str, Any]:
+    record_shell_diagnostics({"shell_outcome": "not_started", "reason_code": reason})
+    return {"ok": False, "error": error}
+
+
 async def _run_max_shell_action(
     *,
     action: AgentBuilderAction,
@@ -617,18 +627,18 @@ async def _run_max_shell_action(
     max_model_write_rejection: Callable[[str, str], str | None],
 ) -> dict[str, Any]:
     if not max_shell_enabled:
-        return {
-            "ok": False,
-            "error": (
-                "MAX project shell is locked: the operator disabled it "
-                "or the isolated sandbox did not pass capability "
-                "attestation. Until it is ready use "
-                "read_file/edit_file/write_file/build."
-            ),
-        }
+        return _reject_shell_before_dispatch(
+            "MAX project shell is locked: the operator disabled it "
+            "or the isolated sandbox did not pass capability "
+            "attestation. Until it is ready use "
+            "read_file/edit_file/write_file/build.",
+            "dispatch_rejected",
+        )
     cmd = str(action.args.get("cmd") or "").strip()
     if not cmd:
-        return {"ok": False, "error": "bash needs a non-empty cmd string"}
+        return _reject_shell_before_dispatch(
+            "bash needs a non-empty cmd string", "invalid_tool_arguments",
+        )
 
     from yleum_api.services.max_generation_contract import (
         unsafe_max_backend_paths as _unsafe_max_backend_paths,

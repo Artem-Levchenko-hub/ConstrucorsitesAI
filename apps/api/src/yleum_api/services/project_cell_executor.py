@@ -6,14 +6,15 @@ import json
 import logging
 import posixpath
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import PurePosixPath
 from time import monotonic
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4, uuid5
 
 from sqlalchemy import select
@@ -31,6 +32,10 @@ from yleum_api.models.project_cell import (
 )
 from yleum_api.models.user import User
 from yleum_api.services.agent_builder import Action, Executor
+from yleum_api.services.agent_tool_diagnostics import (
+    missing_shell_executable,
+    record_shell_diagnostics,
+)
 from yleum_api.services.exact_edit import validate_exact_edit
 from yleum_api.services.generation.recovery_contract import (
     RecoveryState,
@@ -48,6 +53,7 @@ from yleum_api.services.max_data_evolution import max_migration_contract_errors
 from yleum_api.services.orchestrator_client import (
     HttpProjectCellOrchestratorClient,
     OrchestratorBadRequest,
+    OrchestratorReaderInventoryUnavailable,
     OrchestratorUnavailable,
     ProjectCellAgentExecResponse,
     ProjectCellAgentOperationStatus,
@@ -371,6 +377,91 @@ class ProjectCellCommandObservation:
     invalidated_dimensions: frozenset[ProofDimension]
     full_build_startup_transition: FullBuildStartupTransition | None = None
     failed_full_build_environment_transition: FailedFullBuildEnvironmentTransition | None = None
+
+
+@dataclass(slots=True)
+class _ShellDiagnostics:
+    started_at: float
+    timings: dict[str, float] = dataclass_field(default_factory=dict)
+    exit_code: int | None = None
+    timed_out: bool | None = None
+    not_started: bool = False
+    replayed_result: bool = False
+    reason_code: str | None = None
+    missing_executable: str | None = None
+
+    @contextmanager
+    def measure(self, phase: Literal["dispatch", "workspace_sync"]) -> Iterator[None]:
+        started_at = monotonic()
+        try:
+            yield
+        except Exception:
+            if phase == "workspace_sync" and not self.not_started:
+                self.reason_code = "workspace_sync_failed"
+            raise
+        finally:
+            self.timings[phase] = self.timings.get(phase, 0) + (monotonic() - started_at)
+
+    def observe_terminal(
+        self, result: ProjectCellAgentExecResponse, *, verified_tracked: bool = False,
+    ) -> None:
+        self.timed_out = result.timed_out
+        if result.shell_dispatch in {"rejected", "start_timeout"}:
+            self.not_started = True
+            self.reason_code = "timeout" if result.timed_out else "dispatch_rejected"
+            return
+        # Timeouts can carry synthetic statuses. The synthetic 126 belongs to
+        # the legacy guard, and tracked receipts require a portable workspace.
+        if result.timed_out:
+            return
+        if result.exit_code == 126 and not verified_tracked and result.shell_dispatch != "exited":
+            return
+        self.exit_code = result.exit_code
+        if result.exit_code == 127:
+            self.missing_executable = missing_shell_executable(result.detail)
+            if self.missing_executable is not None:
+                self.reason_code = "executable_not_found"
+
+    def record(self) -> None:
+        timings_ms = {phase: round(seconds * 1000) for phase, seconds in self.timings.items()}
+        timings_ms["total"] = round((monotonic() - self.started_at) * 1000)
+        data: dict[str, object] = {"timings_ms": timings_ms}
+        data["shell_outcome"] = "not_started" if self.not_started else (
+            "unknown" if self.timed_out is None else "terminal"
+        )
+        if self.exit_code is not None:
+            data["exit_code"] = self.exit_code
+        if self.timed_out is not None:
+            data["timed_out"] = self.timed_out
+        if self.reason_code is not None:
+            data["reason_code"] = self.reason_code
+        if self.missing_executable is not None:
+            data["missing_executable"] = self.missing_executable
+        if self.replayed_result:
+            data["replayed_result"] = True
+        record_shell_diagnostics(data)
+
+
+def _shell_preflight_rejected(
+    error: OrchestratorBadRequest, *, expected_revision: str, tracked: bool,
+) -> bool:
+    details = error.details
+    if (
+        error.status_code != 409 or error.upstream_code != "conflict"
+        or details is None or details.get("effect_applied") is not False
+    ):
+        return False
+    if details.keys() == {"effect_applied", "expected_revision", "current_revision"}:
+        current_revision = details["current_revision"]
+        return (
+            details["expected_revision"] == expected_revision
+            and isinstance(current_revision, str) and current_revision != expected_revision
+            and re.fullmatch(r"[0-9a-f]{64}", current_revision) is not None
+        )
+    # Tracked commands can fail this same lease check after effects or during replay.
+    return not tracked and details.keys() == {
+        "effect_applied", "generation_run_id", "fencing_epoch",
+    }
 
 
 def invalidated_dimensions(
@@ -2221,6 +2312,7 @@ async def maybe_create_project_cell_executor(
         cmd: str, *, timeout_seconds: int, task_role: str | None = None,
         operation_id: UUID | None = None,
         activity_operation_id: UUID | None = None,
+        shell: _ShellDiagnostics | None = None,
     ) -> tuple[ProjectCellAgentExecResponse, dict[str, str]]:
         from yleum_api.services import orchestrator_client
         from yleum_api.services.generation.recovery_reconciliation import _TOOL_EFFECT
@@ -2250,18 +2342,35 @@ async def maybe_create_project_cell_executor(
                 raise ProjectCellExecutorUnavailable("command outcome remains unknown")
             result, receipt = status.terminal_response, status.receipt
         else:
-            result = await project_cell_agent_exec(
-                agent_workspace_id, cmd, generation_run_id=leased_run_id,
-                fencing_epoch=fencing_epoch, expected_revision=workspace_revision,
-                timeout_seconds=timeout_seconds, task_role=task_role, operation_id=tracked_id,
-                **({"track_receipt": True} if operation is not None else {}),
-            )
+            expected_revision = workspace_revision
+            with shell.measure("dispatch") if shell is not None else nullcontext():
+                try:
+                    result = await project_cell_agent_exec(
+                        agent_workspace_id, cmd, generation_run_id=leased_run_id,
+                        fencing_epoch=fencing_epoch, expected_revision=expected_revision,
+                        timeout_seconds=timeout_seconds, task_role=task_role,
+                        operation_id=tracked_id,
+                        **({"track_receipt": True} if operation is not None else {}),
+                    )
+                except OrchestratorBadRequest as exc:
+                    if shell is not None and _shell_preflight_rejected(
+                        exc, expected_revision=expected_revision, tracked=operation is not None,
+                    ):
+                        shell.not_started = True
+                        shell.reason_code = "context_mismatch"
+                    raise
             receipt = result.command_receipt
         if operation is None:
+            if shell is not None:
+                shell.observe_terminal(result)
             return result, {}
 
         async def current_source() -> tuple[str, dict[str, str]]:
-            await _refresh_workspace_from_cell()
+            # Reconciliation reaches this callback after validating the bound receipt.
+            if shell is not None:
+                shell.observe_terminal(result, verified_tracked=True)
+            with shell.measure("workspace_sync") if shell is not None else nullcontext():
+                await _refresh_workspace_from_cell()
             physical = await project_cell_agent_identity(
                 agent_workspace_id, generation_run_id=leased_run_id, fencing_epoch=fencing_epoch,
             )
@@ -2283,6 +2392,8 @@ async def maybe_create_project_cell_executor(
         changed = await tool_receipts.accept_command(
             session_factory, operation, receipt, result, current_source,
         )
+        if shell is not None and operation.existing:
+            shell.replayed_result = True
         return replace(result, command_receipt=receipt), changed
 
     async def _persist_files(
@@ -2540,6 +2651,7 @@ async def maybe_create_project_cell_executor(
 
     async def _execute_action(action: Action) -> dict[str, Any]:
         nonlocal dirty, workspace_revision
+        shell = _ShellDiagnostics(monotonic()) if action.name == "bash" else None
         try:
             if action.name == "list_dir":
                 return {
@@ -2644,17 +2756,22 @@ async def maybe_create_project_cell_executor(
                     "ok": result.ok,
                     "detail": detail or ("ok" if result.ok else "non-zero exit"),
                 }
-            if action.name == "bash":
+            if shell is not None:
                 cmd = str(action.args.get("cmd") or "").strip()
                 if not cmd:
+                    shell.not_started = True
+                    shell.reason_code = "invalid_tool_arguments"
                     return {"ok": False, "error": "bash needs a non-empty cmd string"}
                 result, recovered_changes = await _execute_command(
                     cmd,
                     timeout_seconds=_PROJECT_CELL_SHELL_TIMEOUT_SECONDS,
                     operation_id=uuid4() if _is_portable() else None,
+                    shell=shell,
                 )
                 workspace_revision = result.workspace_revision
-                changed_files = {**await _refresh_workspace_from_cell(), **recovered_changes}
+                with shell.measure("workspace_sync"):
+                    changed_files = await _refresh_workspace_from_cell()
+                changed_files.update(recovered_changes)
                 detail = result.detail or "(no output)"
                 if result.timed_out:
                     detail += "\n\nCommand timed out; partial workspace changes were synced back."
@@ -2704,6 +2821,9 @@ async def maybe_create_project_cell_executor(
                 "verify_isolation",
             }:
                 if _is_portable() and get_settings().use_max_finalization_coordinator and dirty:
+                    record_shell_diagnostics({
+                        "shell_outcome": "not_started", "reason_code": "verification_deferred",
+                    })
                     return {
                         "ok": False,
                         "error": "runtime proof is reserved until the green full build",
@@ -2788,7 +2908,13 @@ async def maybe_create_project_cell_executor(
                 return await docs_media_execute(action)
             return {"ok": False, "error": f"unknown cell action {action.name}"}
         except Exception as exc:
+            if (shell is not None and not shell.not_started
+                    and isinstance(exc, OrchestratorReaderInventoryUnavailable)):
+                shell.reason_code = "reader_unavailable"
             return _action_failure(exc)
+        finally:
+            if shell is not None:
+                shell.record()
 
     def _action_failure(exc: Exception) -> dict[str, Any]:
         raise_if_terminal_cell_error(exc)

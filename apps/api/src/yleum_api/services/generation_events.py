@@ -12,7 +12,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from yleum_api.core.redis import publish_event
 from yleum_api.models.generation_event import GenerationEvent
 from yleum_api.models.generation_run import GenerationRun
-from yleum_api.services.agent_progress import REDACTED, bounded_redacted_text, sanitize_agent_step
+from yleum_api.services.agent_progress import (
+    REDACTED,
+    TOOL_LIFECYCLE_EVENTS,
+    agent_step_identity,
+    bounded_redacted_text,
+    sanitize_agent_step,
+    tool_lifecycle_step,
+)
+from yleum_api.services.agent_tool_diagnostics import safe_tool_diagnostic
 from yleum_api.services.generation.recovery_trace import bind_recovery_payload, safe_recovery_trace
 
 _MAX_STRING_BYTES = 4096
@@ -58,7 +66,9 @@ def _normalize_json(value: Any, *, depth: int = 0) -> Any:
         for key, item in list(value.items())[:_MAX_COLLECTION_ITEMS]:
             if isinstance(key, str):
                 safe_key = _trim_text(key, max_bytes=256)
-                if safe_key == "recovery_trace":
+                if safe_key == "tool_diagnostic":
+                    item = safe_tool_diagnostic(item)
+                elif safe_key == "recovery_trace":
                     item = safe_recovery_trace(item) if isinstance(item, Mapping) else {}
                 if _SENSITIVE_KEY_RE.search(safe_key):
                     # Validated token counts and sent/omitted budget metadata
@@ -83,9 +93,29 @@ def redact_event_payload(payload: Mapping[str, object]) -> dict[str, object]:
     return bounded
 
 
+def _bound_payload(
+    event_type: str, payload: Mapping[str, object], run_id: UUID, message_id: UUID | None,
+) -> dict[str, object]:
+    if event_type in TOOL_LIFECYCLE_EVENTS:
+        step = tool_lifecycle_step(event_type, payload)
+        if not step:
+            return {}
+        # Only server-assigned transcript identity can accompany a lifecycle event.
+        step.update(agent_step_identity({**payload, "runId": str(run_id)}))
+        if message_id is not None:
+            step["message_id"] = str(message_id)
+        return step
+    bound = bind_recovery_payload(payload, run_id=str(run_id), event_type=event_type)
+    if ((event_type == "agent.step" and "tool_diagnostic" in bound)
+            or {"step", "kind", "action"}.issubset(bound)
+            or bound.get("kind") == "provider_error" or bound.get("tool") == "provider_response"):
+        return sanitize_agent_step(bound)
+    return bound
+
+
 def _event_envelope(event: GenerationEvent) -> GenerationEventEnvelope:
-    payload = bind_recovery_payload(
-        event.payload, run_id=str(event.generation_run_id), event_type=event.event_type,
+    payload = _bound_payload(
+        event.event_type, event.payload, event.generation_run_id, event.message_id,
     )
     if event.event_type in {"generation.trace", "recovery.trace"}:
         payload = redact_event_payload(payload)
@@ -96,21 +126,12 @@ def _event_envelope(event: GenerationEvent) -> GenerationEventEnvelope:
             key: value for key, value in payload.items()
             if key not in {PROVISIONAL_TOOL_FAILURE, "state", "detail", "ok"}
         }
-    safe_payload = (
-        sanitize_agent_step(cast(dict[str, Any], payload))
-        if isinstance(payload, dict) and (
-            {"step", "kind", "action"}.issubset(payload)
-            or payload.get("kind") == "provider_error"
-            or payload.get("tool") == "provider_response"
-        )
-        else payload
-    )
     return {
         "event_id": str(event.id),
         "run_id": str(event.generation_run_id),
         "seq": event.seq,
         "type": event.event_type,
-        "data": cast(dict[str, object], safe_payload),
+        "data": payload,
     }
 
 
@@ -145,7 +166,7 @@ async def append_generation_event(
         seq=int(next_seq or 1),
         event_type=safe_event_type,
         payload=redact_event_payload(
-            bind_recovery_payload(payload, run_id=str(run.id), event_type=safe_event_type)
+            _bound_payload(safe_event_type, payload, run.id, message_id)
         ),
     )
     session.add(event)

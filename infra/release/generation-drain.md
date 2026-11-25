@@ -66,6 +66,27 @@ asyncio.run(main())
 PY
 ```
 
+В редакторе MAX откройте «Подробности работы» и разверните нужное действие.
+Для серверного разбора используйте тот же проверенный запуск владельца и read-only
+сессию из примера выше. Запрос возвращает диагностические поля отдельной попытки.
+
+```sql
+SELECT seq, created_at, event_type, payload->'tool_diagnostic' AS attempt
+FROM generation_events
+WHERE generation_run_id = :run_id AND payload ? 'tool_diagnostic'
+ORDER BY seq;
+```
+
+`call_id` связывает начало попытки с результатом. Старт означает намерение вызвать
+инструмент. Если виден только старт, исход ещё не подтверждён. Пропуск защитой
+отмечается без запуска команды. `elapsed_ms` измеряет время попытки, а
+`timings_ms.dispatch` — время обращения к контроллеру вместе с ожиданием ответа.
+`workspace_sync` измеряет отдельную синхронизацию исходников. Отсутствующее время
+означает, что измерения нет. При ошибке поиска команды поле `missing_executable`
+содержит имя известной программы, если оболочка указала его однозначно.
+`reconciled` отмечает результат, подтверждённый при восстановлении запуска.
+В старых запусках этих полей может не быть.
+
 ## Durable waiters and complete reader inventory
 
 A saved recovery wait is excluded from the generation count only after its

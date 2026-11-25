@@ -211,6 +211,7 @@ class DockerCommandResult:
     exit_code: int
     output: str
     timed_out: bool = False
+    start_timed_out: bool = False
 
 
 @dataclass(frozen=True, slots=True)

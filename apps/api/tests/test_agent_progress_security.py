@@ -14,6 +14,21 @@ from yleum_api.services.agent_progress import (
 )
 
 
+def test_diagnosed_shell_never_exposes_unstructured_output_in_public_history():
+    call = "94479669-66ba-4bf8-9b6c-8753063d0ca7"
+    step = {
+        "kind": "step", "tool": "bash", "action": "private-command", "ok": False,
+        "path": "private-path", "detail": "private-output", "stdout": "private-output",
+        "args": ["private-command"], "human": "private-comment",
+        "tool_diagnostic": {"call_id": call, "state": "failed", "exit_code": 127,
+                            "reason_code": "executable_not_found", "args": ["private-argument"]},
+    }
+    first = sanitize_agent_step(step)
+    assert first == sanitize_agent_step(first)
+    assert first["tool_diagnostic"]["exit_code"] == 127
+    assert "private-" not in str(first)
+
+
 @pytest.mark.parametrize("placement", ["flat", "trace", "both"])
 def test_progress_preserves_known_upstream_422_instead_of_generic_gateway_failure(placement):
     facts = {

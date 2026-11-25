@@ -24,6 +24,26 @@ from yleum_api.services.generation_events import (
 pytestmark = pytest.mark.asyncio
 
 
+async def test_tool_lifecycle_replay_only_exposes_typed_diagnostics():
+    ids = [uuid.uuid4() for _ in range(4)]
+    event = GenerationEvent(
+        id=ids[0], project_id=ids[1], generation_run_id=ids[2], message_id=ids[3],
+        seq=9, event_type="agent.tool_started",
+        payload={"action": "private-command", "path": "private-path", "argv": "private-arguments",
+                 "message_id": "private-message", "runId": "private-run",
+                 "tool_diagnostic": {
+                     "call_id": str(uuid.uuid4()), "state": "started",
+                     "command_family": "private-binary", "stderr": "private-output",
+                 }},
+    )
+    public = generation_event_envelope(event)
+    assert public["seq"] == 9 and public["run_id"] == str(ids[2])
+    assert public["data"]["message_id"] == str(ids[3])
+    assert public["data"]["action"] == "tool"
+    assert public["data"]["tool_diagnostic"]["state"] == "started"
+    assert "private-" not in json.dumps(public)
+
+
 @pytest.mark.parametrize("managed", [False, True])
 async def test_internal_failed_check_stays_neutral_on_live_and_replay(monkeypatch, managed):
     run_id, project_id, message_id, operation_id = (uuid.uuid4() for _ in range(4))

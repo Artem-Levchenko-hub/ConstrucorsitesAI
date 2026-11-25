@@ -1,4 +1,5 @@
 import { CAPACITY_WAITING_COPY } from "@/lib/agent-transcript";
+import { agentToolCallKey, isAgentToolObservation, isTranscriptUuid } from "@/lib/agent-tool-diagnostic";
 import type { AgentStep } from "@/lib/api/types";
 
 /** Live replay and message history must agree which records are actions. */
@@ -23,11 +24,8 @@ export function agentStepKind(kind: unknown): AgentStep["kind"] {
   }
 }
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
 function hasCounter(step: AgentStep): boolean {
-  return typeof step.eventId === "string" && UUID_PATTERN.test(step.eventId)
-    && typeof step.runId === "string" && UUID_PATTERN.test(step.runId)
+  return isTranscriptUuid(step.eventId) && isTranscriptUuid(step.runId)
     && Number.isInteger(step.actionCount) && step.actionCount! >= 0 && step.actionCount! <= 2 ** 31 - 1;
 }
 
@@ -95,6 +93,7 @@ function semanticIdentity(step: AgentStep): string {
     step.detail,
     step.ok,
     step.operationId,
+    agentToolCallKey(step),
   ]);
 }
 
@@ -176,12 +175,37 @@ export type CollapsedAgentStep = {
   repeats: number;
   /** Устойчивый ключ строки для React: пережимает добавление новых повторов. */
   key: string;
-  /** Индекс последнего исходного шага — по нему открывается его содержимое. */
-  index: number;
 };
 
 function visibleIdentity(step: AgentStep): string {
-  return JSON.stringify([step.kind, step.action, step.path ?? "", step.tool ?? "", step.operationId]);
+  return JSON.stringify([
+    step.kind, step.action, step.path ?? "", step.tool ?? "", step.operationId, agentToolCallKey(step),
+  ]);
+}
+
+function toolObservationPriority(step: AgentStep): number {
+  const state = step.tool_diagnostic?.state;
+  if (state === "started") return 0;
+  const confirmed = state === "succeeded" || state === "failed" || state === "skipped";
+  if (!isAgentToolObservation(step)) return confirmed ? 4 : 2;
+  return confirmed && step.tool_diagnostic?.reconciled === true ? 3 : 1;
+}
+
+/** A reconciled outcome can replace an unconfirmed regular row. */
+function toolRows(steps: AgentStep[]): Map<string, number> {
+  const calls = new Map<string, number>();
+  steps.forEach((step, index) => {
+    const key = agentToolCallKey(step);
+    if (!key) return;
+    const previousIndex = calls.get(key);
+    const previous = previousIndex === undefined ? undefined : steps[previousIndex];
+    const priority = toolObservationPriority(step);
+    const previousPriority = previous ? toolObservationPriority(previous) : -1;
+    if (priority > previousPriority || (priority === previousPriority && (step.seq ?? 0) >= (previous?.seq ?? 0))) {
+      calls.set(key, index);
+    }
+  });
+  return calls;
 }
 
 /**
@@ -200,20 +224,21 @@ function visibleIdentity(step: AgentStep): string {
  */
 export function collapseAgentSteps(steps: AgentStep[] = []): CollapsedAgentStep[] {
   const rows: CollapsedAgentStep[] = [];
+  const calls = toolRows(steps);
   steps.forEach((step, index) => {
+    const callKey = agentToolCallKey(step);
+    if (callKey && calls.get(callKey) !== index) return;
     const previous = rows.at(-1);
-    if (previous && visibleIdentity(previous.step) === visibleIdentity(step)) {
+    if (!callKey && previous && visibleIdentity(previous.step) === visibleIdentity(step)) {
       // Часть повторов могла схлопнуться ещё при сборке ленты — считаем и их.
       previous.repeats += step.repeatedCount ?? 1;
       previous.step = step;
-      previous.index = index;
       return;
     }
     rows.push({
       step,
       repeats: step.repeatedCount ?? 1,
-      key: step.eventId ?? `${step.runId ?? "local"}:${step.seq ?? index}`,
-      index,
+      key: callKey ?? step.eventId ?? `${step.runId ?? "local"}:${step.seq ?? index}`,
     });
   });
   return rows;

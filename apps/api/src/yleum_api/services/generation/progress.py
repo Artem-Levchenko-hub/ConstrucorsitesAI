@@ -4,19 +4,25 @@ import asyncio
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC
 from typing import Any
 from uuid import UUID, uuid4
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.core.redis import publish_event
+from yleum_api.models.generation_event import GenerationEvent
 from yleum_api.models.message import Message
 from yleum_api.services.agent_progress import (
     PROVIDER_ERROR_DETAIL,
     PROVIDER_ERROR_DETAILS,
     PROVIDER_RESPONSE_DETAIL,
+    STEP_METADATA,
+    TOOL_LIFECYCLE_EVENTS,
     provider_error_origin,
     sanitize_agent_step,
+    tool_lifecycle_step,
 )
 from yleum_api.services.generation.agent_messages import _humanize_step
 from yleum_api.services.generation.recovery_trace import bind_recovery_payload, safe_recovery_trace
@@ -31,13 +37,29 @@ from yleum_api.services.generation_events import (
 
 
 _log = logging.getLogger("yleum_api.routers.messages")
-_STEP_METADATA = {"eventId", "runId", "seq", "actionCount", "historyTruncated"}
+_CONFIRMED_TOOL_STATES = ("succeeded", "failed", "skipped")
 
 
 def _is_action(step: Mapping[str, Any]) -> bool:
     return ((step.get("kind") is None or step.get("kind") == "step")
             and step.get("tool") != "capacity_wait"
             and step.get("action") != "Ожидаю ресурсы сервера")
+
+
+def _bounded_transcript(
+    previous: list[dict[str, Any]], latest: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if len(previous) < 200:
+        return [*previous, latest]
+    # A pending outer call can emit progress of its own. Give its temporary
+    # history slot to the earliest completed step before dropping that step.
+    discard = 199
+    if previous[199].get("tool_diagnostic", {}).get("state") != "started":
+        discard = next((
+            i for i in range(198, -1, -1)
+            if previous[i].get("tool_diagnostic", {}).get("state") == "started"
+        ), discard)
+    return [*previous[:discard], *previous[discard + 1:200], latest]
 
 
 def _committed_steps(value: object, run_id: UUID) -> tuple[list[dict[str, Any]], int, bool]:
@@ -58,6 +80,28 @@ def _committed_steps(value: object, run_id: UUID) -> tuple[list[dict[str, Any]],
     return rows, tail, truncated
 
 
+async def _prior_tool_result(
+    session: AsyncSession, event: GenerationEvent, call_id: str,
+) -> tuple[dict[str, Any] | None, bool]:
+    # append holds the run lock. Look beyond the bounded transcript on recovery.
+    facts = GenerationEvent.payload["tool_diagnostic"]
+    prior = select(
+        facts.label("diagnostic"), GenerationEvent.payload["kind"].astext.label("kind"),
+        GenerationEvent.seq,
+    ).where(
+        GenerationEvent.generation_run_id == event.generation_run_id,
+        GenerationEvent.message_id == event.message_id,
+        GenerationEvent.seq < event.seq,
+        facts["call_id"].astext == call_id,
+    ).cte()
+    confirmed = select(prior.c.diagnostic).where(
+        prior.c.diagnostic["state"].astext.in_(_CONFIRMED_TOOL_STATES),
+    ).order_by(prior.c.seq).limit(1).scalar_subquery()
+    counted = select(func.bool_or(prior.c.kind == "step")).scalar_subquery()
+    evidence, was_counted = (await session.execute(select(confirmed, counted))).one()
+    return evidence, bool(was_counted)
+
+
 @dataclass
 class GenerationProgress:
     factory: async_sessionmaker[AsyncSession]
@@ -70,7 +114,7 @@ class GenerationProgress:
 
     async def record_agent_step(self, step_row: dict[str, Any]) -> None:
         safe = sanitize_agent_step(bind_recovery_payload(
-            {key: value for key, value in step_row.items() if key not in _STEP_METADATA},
+            {key: value for key, value in step_row.items() if key not in STEP_METADATA},
             run_id=str(self.run_id), event_type="agent.step",
         ))
         await self._record("agent.step", safe, transcript_step=safe)
@@ -113,6 +157,7 @@ class GenerationProgress:
                 payload=wire_payload,
             )
             if transcript_step is not None:
+                diagnostic = transcript_step.get("tool_diagnostic")
                 # Durable append already holds Run. Lock/reload Message next;
                 # a restarted recorder must continue the committed counter.
                 progress_message = await progress_session.get(
@@ -124,7 +169,56 @@ class GenerationProgress:
                 previous, count, truncated = _committed_steps(
                     progress_message.agent_steps, self.run_id,
                 )
-                count += int(_is_action(transcript_step))
+                already_counted = False
+                if isinstance(diagnostic, dict):
+                    call_id = diagnostic["call_id"]
+                    matching = [
+                        row for row in previous
+                        if row.get("tool_diagnostic", {}).get("call_id") == call_id
+                    ]
+                    confirmed = next((
+                        row["tool_diagnostic"] for row in matching
+                        if row["tool_diagnostic"]["state"] in _CONFIRMED_TOOL_STATES
+                    ), None)
+                    already_counted = any(_is_action(row) for row in matching)
+                    unresolved = any(
+                        row["tool_diagnostic"]["state"] in {"unknown", "cancelled"}
+                        for row in matching
+                    )
+                    # On recovery a previous terminal or counted step may survive
+                    # only in the ledger. The usual start/result pair needs no query.
+                    if event is not None and (
+                        diagnostic.get("reconciled") or unresolved or (truncated and not matching)
+                    ):
+                        confirmed, already_counted = await _prior_tool_result(
+                            progress_session, event, call_id,
+                        )
+                    if confirmed is not None:
+                        if (already_counted or not _is_action(transcript_step)
+                                or diagnostic["state"] not in _CONFIRMED_TOOL_STATES):
+                            await progress_session.rollback()
+                            self.steps = previous
+                            return
+                        # Recovery supplied the canonical step after only a terminal
+                        # heartbeat was saved. Keep the original measured result.
+                        if confirmed["state"] == diagnostic["state"]:
+                            diagnostic = {**diagnostic, **confirmed}
+                            transcript_step = {**transcript_step, "tool_diagnostic": diagnostic}
+                            wire_payload["tool_diagnostic"] = diagnostic
+                            if event is not None:
+                                event.payload = {**event.payload, "tool_diagnostic": diagnostic}
+                    elif matching and diagnostic["state"] == "started":
+                        await progress_session.rollback()
+                        self.steps = previous
+                        return
+                    if matching:
+                        # Each invocation occupies one history slot, even after
+                        # repeated interruptions. The ledger retains its observations.
+                        previous = [
+                            row for row in previous
+                            if row.get("tool_diagnostic", {}).get("call_id") != call_id
+                        ]
+                count += int(_is_action(transcript_step) and not already_counted)
                 if count > 2**31 - 1:
                     raise ValueError("transcript action count exceeds limit")
                 # Exact identity survives different detail limits on the event
@@ -137,9 +231,13 @@ class GenerationProgress:
                 }
                 if event is not None:
                     identity["seq"] = event.seq
+                    if diagnostic and event.created_at is not None:
+                        identity["recordedAt"] = event.created_at.astimezone(UTC).isoformat(
+                            timespec="milliseconds"
+                        )
                 step = {**transcript_step, **identity}
                 wire_payload.update(identity)
-                next_steps = [*previous[:199], step] if len(previous) >= 200 else [*previous, step]
+                next_steps = _bounded_transcript(previous, step)
                 progress_message.agent_steps = next_steps
                 if event is not None:
                     # Replace JSON, not an in-place mutation. Trusted metadata
@@ -147,7 +245,7 @@ class GenerationProgress:
                     event.payload = redact_event_payload({
                         **identity,
                         **{key: value for key, value in event.payload.items()
-                           if key not in _STEP_METADATA},
+                           if key not in STEP_METADATA},
                     })
             await progress_session.commit()
             if next_steps is not None:
@@ -156,9 +254,10 @@ class GenerationProgress:
                 await progress_session.refresh(event)
                 progress_session.expunge(event)
         try:
+            legacy_event = "agent.step" if event_type in TOOL_LIFECYCLE_EVENTS else event_type
             await publish_event(
                 self.project_id,
-                "generation.event" if event is not None else event_type,
+                "generation.event" if event is not None else legacy_event,
                 dict(generation_event_envelope(event)) if event is not None else wire_payload,
             )
         except Exception:
@@ -169,6 +268,11 @@ class GenerationProgress:
             )
 
     async def emit_agent_event(self, event: str, data: dict[str, Any]) -> None:
+        if event in TOOL_LIFECYCLE_EVENTS:
+            observation = tool_lifecycle_step(event, data)
+            if observation:
+                await self._record(event, observation, transcript_step=observation)
+            return
         # Surface each agent step as a STRUCTURED transcript event so the
         # frontend renders a live Claude-Code-style step list instead of
         # gray "[агент] …" text. One WS event type `agent.step` carries
@@ -212,6 +316,8 @@ class GenerationProgress:
             "detail": str(data.get("detail", "") or ""),
             "ok": data.get("ok") if type(data.get("ok")) is bool else None,
         }
+        if "tool_diagnostic" in data:
+            step_row["tool_diagnostic"] = data["tool_diagnostic"]
         if data.get("skipped") is True:
             step_row["ok"] = None
             step_row["skipped"] = True

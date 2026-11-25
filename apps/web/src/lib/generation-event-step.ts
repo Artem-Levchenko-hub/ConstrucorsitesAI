@@ -1,5 +1,6 @@
 import type { AgentStep, GenerationEventEnvelope } from "@/lib/api/types";
 import { agentStepKind } from "@/lib/agent-steps";
+import { readAgentToolDiagnostic } from "@/lib/agent-tool-diagnostic";
 
 const PHASE_TITLE: Record<string, string> = {
   prepare: "Подготавливаю среду",
@@ -21,13 +22,20 @@ const PHASE_TITLE: Record<string, string> = {
 export function generationEventStep(envelope: GenerationEventEnvelope): AgentStep | null {
   const { data } = envelope;
   const base = { runId: envelope.run_id, seq: envelope.seq, path: "", step: null };
-  if (envelope.type === "agent.step") {
-    return {
+  const toolObservation = envelope.type === "agent.tool_started" || envelope.type === "agent.tool_finished";
+  if (envelope.type === "agent.step" || toolObservation) {
+    const step = {
       ...base, eventId: envelope.event_id,
       actionCount: typeof data.actionCount === "number" ? data.actionCount : undefined,
       historyTruncated: data.historyTruncated === true,
-      step: typeof data.step === "number" ? data.step : null, kind: agentStepKind(data.kind),
+      step: typeof data.step === "number" ? data.step : null,
       action: typeof data.action === "string" ? data.action : "",
+      tool_diagnostic: readAgentToolDiagnostic(data.tool_diagnostic),
+      recordedAt: typeof data.recordedAt === "string" ? data.recordedAt : undefined,
+    };
+    if (toolObservation) return step.tool_diagnostic ? { ...step, kind: "heartbeat" } : null;
+    return {
+      ...step, kind: agentStepKind(data.kind),
       path: typeof data.path === "string" ? data.path : "",
       tool: typeof data.tool === "string" ? data.tool : undefined,
       detail: typeof data.detail === "string" ? data.detail : undefined,

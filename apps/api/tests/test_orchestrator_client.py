@@ -656,7 +656,10 @@ async def test_project_cell_agent_exec_validates_and_calls_exact_path(
     workspace_id = UUID("00000000-0000-0000-0000-000000000008")
     run_id = UUID("00000000-0000-0000-0000-000000000009")
 
-    async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
+    async def fake_request(
+        method: str, path: str, *, shell_dispatch: object, **kwargs: object,
+    ) -> dict[str, object]:
+        assert shell_dispatch is not None
         observed.update(method=method, path=path, **kwargs)
         return {
             "ok": True,
@@ -705,6 +708,48 @@ async def test_project_cell_agent_exec_validates_and_calls_exact_path(
             fencing_epoch=6,
             expected_revision="b" * 64,
         )
+
+
+@pytest.mark.parametrize("header,exit_code,timed_out,expected", [
+    ("rejected", 126, False, "rejected"),
+    ("start_timeout", 124, True, "start_timeout"),
+    ("exited", 126, False, "exited"),
+    (None, 126, False, None),
+    ("rejected", 127, False, None),
+    ("start_timeout", 124, False, None),
+    ("exited", 124, True, None),
+    ("unrecognized", 126, False, None),
+])
+async def test_shell_dispatch_header_never_changes_the_command_wire_response(
+    monkeypatch, header, exit_code, timed_out, expected,
+) -> None:
+    body = dict(ok=False, exit_code=exit_code, timed_out=timed_out,
+                detail="command blocked by safety denylist", workspace_revision="a" * 64)
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST" and request.url.path.endswith("/agent/exec")
+        headers = {"X-Yleum-Shell-Dispatch": header} if header is not None else {}
+        return httpx.Response(200, json=body, headers=headers)
+
+    async def base_url(*_args: object) -> str:
+        return "http://orchestrator.test"
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(orchestrator_client, "_base_url", base_url)
+    monkeypatch.setattr(orchestrator_client.httpx, "AsyncClient", lambda **kwargs: real_client(
+        transport=httpx.MockTransport(respond), **kwargs,
+    ))
+    monkeypatch.setattr(orchestrator_client, "get_settings", lambda: SimpleNamespace(
+        orchestrator_internal_token=SimpleNamespace(get_secret_value=lambda: "test-internal-token"),
+    ))
+    result = await orchestrator_client.project_cell_agent_exec(
+        uuid4(), "synthetic script", generation_run_id=uuid4(), fencing_epoch=7,
+        expected_revision="a" * 64,
+    )
+    assert result.shell_dispatch == expected
+    assert result.command_wire_json() == ProjectCellAgentExecResponse.from_json(
+        body,
+    ).command_wire_json()
 
 
 async def test_project_cell_agent_exec_parses_identity_transport_and_new_roles(

@@ -19,6 +19,7 @@ from yleum_api.core.errors import ApiError
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.project_version import ProjectVersion
 from yleum_api.services.agent_builder import Action
+from yleum_api.services.agent_tool_diagnostics import capture_shell_diagnostics
 from yleum_api.services.generation_runs import promote_generation_after_admission
 
 
@@ -846,6 +847,31 @@ async def test_abort_unsafe_max_backend_restores_cell_and_preview(
     }
     assert stage_calls == [({"src/app/page.tsx": "safe page\n"}, ("src/app/api/max/route.ts",))]
     assert preview_calls == ["sync"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("portable,enabled,reason", [
+    (True, False, "dispatch_rejected"),
+    (False, False, "dispatch_rejected"),
+    (False, True, "invalid_tool_arguments"),
+])
+async def test_shell_rejections_report_no_dispatch(portable, enabled, reason) -> None:
+    forbidden = AsyncMock(side_effect=AssertionError("shell attempted dispatch"))
+    with capture_shell_diagnostics() as diagnostic:
+        result = await runtime._execute_max_agent_action(
+            Action(name="bash", args={"cmd": " " if enabled else "synthetic command"}),
+            project_id=uuid4(), project_slug="test", base_agent_executor=forbidden,
+            max_shell_enabled=enabled,
+            project_cell_handle=SimpleNamespace(
+                is_portable=lambda: portable, execute=forbidden, snapshot_files=forbidden,
+            ),
+            active_max_locked_files=frozenset(),
+            max_model_write_rejection=lambda _path, _content: None,
+        )
+    assert result["ok"] is False
+    assert diagnostic == {"shell_outcome": "not_started", "reason_code": reason}
+    assert diagnostic.keys().isdisjoint(result)
+    forbidden.assert_not_awaited()
 
 
 @pytest.mark.asyncio

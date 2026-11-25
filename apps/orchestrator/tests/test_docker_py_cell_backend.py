@@ -2131,6 +2131,7 @@ async def test_workspace_shell_only_uses_time_left_after_admission(monkeypatch, 
         )
 
     starts = [event for event in client.events if event.startswith("start:")]
+    assert result.start_timed_out is (elapsed == 300)
     if elapsed == 250:
         assert result.exit_code == 0 and not result.timed_out
         assert starts == ["start:workspace-vol-agent-exec"]

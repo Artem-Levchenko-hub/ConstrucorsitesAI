@@ -1,4 +1,5 @@
 import type { AgentStep } from "@/lib/api/types";
+import { agentToolReasonLabel, agentToolStateLabel, isAgentCommand, isAgentToolObservation } from "@/lib/agent-tool-diagnostic";
 
 /**
  * Лента работы агента глазами владельца, а не разработчика.
@@ -204,6 +205,23 @@ function capitalize(value: string): string {
  * сохранённых лент, где в `action` лежит сырое имя инструмента.
  */
 export function stepCopy(step: AgentStep, generationCompleted = false): StepCopy {
+  const observation = isAgentToolObservation(step);
+  // Intermediate managed checks have a neutral public label assigned by the server.
+  const deferredCheck = (step.tool === "build" || step.tool === "done")
+    && step.action === "Проверяю приложение" && step.ok == null && !step.skipped;
+  const diagnostic = observation || (step.kind === "step" && !deferredCheck) ? step.tool_diagnostic : undefined;
+  const state = diagnostic?.state;
+  if (observation || state === "started" || state === "unknown" || state === "cancelled") {
+    const command = isAgentCommand(step.tool ?? step.action);
+    return {
+      title: state === "started" ? (command ? "Вызов команды начат" : "Вызов инструмента начат")
+        : agentToolStateLabel(state),
+      hint: "Результат вызова ещё не подтверждён.",
+      tone: state === "failed" ? "fail" : state === "succeeded" ? "done" : "wait",
+      icon: state === "succeeded" ? "done" : state === "failed" ? "retry"
+        : state === "started" && command ? "terminal" : "wait",
+    };
+  }
   if (step.kind === "heartbeat" && step.tool === "prompt_preparation" && !step.skipped) {
     if (step.ok === true) return {
       title: "Промпт подготовлен",
@@ -221,15 +239,17 @@ export function stepCopy(step: AgentStep, generationCompleted = false): StepCopy
       tone: "think", icon: "docs",
     };
   }
-  if (step.skipped) {
+  if (state === "skipped" || (!state && step.skipped)) {
+    const reason = diagnostic?.reason_code;
+    const reused = reason === "cached_result" || reason === "replayed_result";
     return {
-      title: "Шаг пропущен",
+      title: reused ? agentToolReasonLabel(reason) : "Шаг пропущен",
       hint: "Агент получил замечание проверки и выбирает следующий шаг.",
       tone: "wait",
       icon: "wait",
     };
   }
-  if (step.ok === false) {
+  if (state === "failed" || (!state && step.ok === false)) {
     // Одна и та же фраза красным и серым различается плохо: у неудачи должно
     // быть видно словами, что шаг не получился, а не только цветом.
     return {
@@ -275,7 +295,7 @@ export function stepCopy(step: AgentStep, generationCompleted = false): StepCopy
   return {
     title: fromBackend || base?.title || capitalize(step.action) || "Работаю",
     hint: base?.hint ?? "Агент продолжает собирать приложение.",
-    tone: base?.tone ?? "work",
-    icon: base?.icon ?? "write",
+    tone: state === "succeeded" ? "done" : base?.tone ?? "work",
+    icon: state === "succeeded" ? "done" : base?.icon ?? "write",
   };
 }

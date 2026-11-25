@@ -23,9 +23,9 @@ class TestSocket {
   onmessage: ((event: { data: string }) => void) | null = null;
   onclose: (() => void) | null = null;
   onopen: (() => void) | null = null;
-  constructor() { TestSocket.instances.push(this); }
+  constructor(readonly url: string) { TestSocket.instances.push(this); }
   send = vi.fn();
-  close() { this.readyState = 3; }
+  close() { this.readyState = 3; this.onclose?.(); }
   emit(event: WsEvent) { this.onmessage?.({ data: JSON.stringify(event) }); }
 }
 
@@ -43,7 +43,7 @@ function Harness({ completed = false }: { completed?: boolean }) {
 async function emit(type: string, data: Record<string, unknown>) {
   seq += 1;
   await act(async () => {
-    TestSocket.instances[0].emit({
+    TestSocket.instances.at(-1)!.emit({
       type: "generation.event",
       data: { event_id: `event-${seq}`, run_id: "run-1", seq, type,
         data: { message_id: "message-1", ...data } },
@@ -87,6 +87,144 @@ afterEach(async () => {
 });
 
 describe("tool liveness in the actual stream and transcript", () => {
+  it("replaces a started command with its result after reconnect and discloses safe timings on click", async () => {
+    const call_id = "53cbbb7d-1ebe-46ea-83ed-296a240a1373";
+    await emit("agent.tool_started", { step: 1, action: "bash",
+      tool_diagnostic: { call_id, state: "started" } });
+    expect(container.querySelectorAll("ol > li")).toHaveLength(1);
+    expect(container.textContent).toContain("Вызов команды начат");
+    expect(container.textContent).not.toContain("1 шаг.");
+
+    await act(async () => TestSocket.instances[0].close());
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(TestSocket.instances.at(-1)?.url).toContain("after_seq=1");
+    await act(async () => TestSocket.instances.at(-1)!.emit({ type: "generation.event", data: {
+      event_id: "event-1", run_id: "run-1", seq: 1, type: "agent.tool_started",
+      data: { message_id: "message-1", step: 1, action: "bash",
+        tool_diagnostic: { call_id, state: "started" } },
+    } }));
+    const recordedAt = "2026-10-12T12:48:00.541388+00:00";
+    await emit("agent.step", { step: 1, kind: "step", action: "Проверяю каталог", tool: "bash", ok: false,
+      recordedAt, path: "hidden-path", detail: "hidden-stdout",
+      tool_diagnostic: { call_id, state: "failed", reason_code: "nonzero_exit", command_family: "pnpm",
+        elapsed_ms: 1530, exit_code: 2, timings_ms: { dispatch: 2, workspace_sync: 78, reader_wait: 0, total: 1530 },
+        command: "pnpm --token hidden-value", stdout: "hidden-output" } });
+    expect(container.querySelectorAll("ol > li")).toHaveLength(1);
+    expect(container.textContent).toContain("Не получилось: проверяю каталог");
+    expect(container.textContent).toContain("1 шаг.");
+    expect(container.textContent).not.toContain("Код возврата");
+
+    await act(async () => {
+      container.querySelector("details")!.open = true;
+      container.querySelector("details")!.dispatchEvent(new Event("toggle"));
+      container.querySelector<HTMLButtonElement>("ol > li button")!.click();
+    });
+    expect(container.textContent).toContain("Команда вернула ненулевой код");
+    expect(container.textContent).toContain("Семейство командыpnpm");
+    expect(container.textContent).toContain("Код возврата2");
+    expect(container.textContent).toContain("Ожидание готовности reader0 мс");
+    expect(container.textContent).toContain("Синхронизация файлов78 мс");
+    expect(container.textContent).toContain("Длительность1530 мс");
+    expect(container.textContent).toContain("Время события" + new Intl.DateTimeFormat("ru-RU", {
+      dateStyle: "short", timeStyle: "medium",
+    }).format(Date.parse(recordedAt)));
+    expect(container.textContent).not.toMatch(/hidden-|nonzero_exit|53cbbb7d/);
+  });
+
+  it("restores distinct calls for the same step and a technical terminal result from saved history", async () => {
+    const base = { step: 2, action: "Проверяю каталог", tool: "bash", path: "", kind: "step" as const,
+      runId: "history-run", ok: true };
+    const history: AgentStep[] = [
+      { ...base, eventId: "history-3", seq: 3, tool_diagnostic: {
+        call_id: "53cbbb7d-1ebe-46ea-83ed-296a240a1373", state: "succeeded", elapsed_ms: 0,
+      } },
+      { ...base, eventId: "history-4", seq: 4, tool_diagnostic: {
+        call_id: "ec96f845-ac9a-4193-a2b4-c4d2547471e2", state: "succeeded", elapsed_ms: 7,
+      } },
+      { ...base, eventId: "history-5", seq: 5, kind: "heartbeat", action: "unexpected-raw-action",
+        recordedAt: "unexpected-raw-time",
+        tool_diagnostic: { call_id: "9d2b4136-7bbc-449b-b26a-48cd4bb43e47", state: "unknown",
+          reason_code: "unexpected-raw-reason", command_family: "pnpm --token secret" } },
+    ];
+    const historicalMessageId = "history-message";
+    await act(async () => root.render(<QueryClientProvider client={client}>
+      <AgentTranscript projectId="project-1" messageId={historicalMessageId} generationStatus="failed"
+        initialSteps={history} />
+    </QueryClientProvider>));
+
+    expect(container.querySelectorAll("ol > li")).toHaveLength(3);
+    expect(container.textContent).toContain("2 шаг.");
+    expect(container.textContent).toContain("Результат вызова не подтверждён");
+    await act(async () => container.querySelectorAll<HTMLButtonElement>("ol > li button")[2].click());
+    expect(container.textContent).toContain("Причина не подтверждена");
+    expect(container.textContent).not.toContain("Время события");
+    expect(container.textContent).not.toMatch(/unexpected-raw-|--token/);
+  });
+
+  it.each([
+    ["rg", "Оболочка не нашла команду rg"],
+    ["private-program", "Оболочка сообщила, что команда не найдена"],
+  ])("shows a confirmed missing command from a shell invocation: %s", async (missing, label) => {
+    await emit("agent.step", {
+      kind: "step", step: 1, action: "bash", tool: "bash", ok: false,
+      tool_diagnostic: {
+        call_id: "53cbbb7d-1ebe-46ea-83ed-296a240a1373", state: "failed",
+        reason_code: "executable_not_found", command_family: "sh", missing_executable: missing,
+      },
+    });
+    await act(async () => container.querySelector<HTMLButtonElement>("ol > li button")!.click());
+    expect(container.textContent).toContain(label);
+    expect(container.textContent).not.toContain("private-program");
+  });
+
+  it("keeps a rejected reply as a stalled observation rather than a tool action", async () => {
+    await emit("agent.step", {
+      step: 2, action: "думаю, как лучше — меняю подход", kind: "stalled", tool: "",
+      tool_diagnostic: { call_id: "53cbbb7d-1ebe-46ea-83ed-296a240a1373", state: "skipped",
+        reason_code: "missing_action" },
+    });
+    expect(container.textContent).toContain("Меняю подход");
+    expect(container.textContent).not.toContain("1 шаг.");
+    await act(async () => container.querySelector<HTMLButtonElement>("ol > li button")!.click());
+    expect(container.textContent).toContain("В ответе модели не указано действие");
+  });
+
+  it("shows native tool outcomes from their diagnostics and keeps deferred checks neutral", async () => {
+    await emit("agent.step", { step: 1, action: "Выполняю команду", tool: "bash", ok: false,
+      tool_diagnostic: { call_id: "53cbbb7d-1ebe-46ea-83ed-296a240a1373", state: "skipped",
+        reason_code: "dispatch_rejected" } });
+    await emit("agent.step", { step: 2, action: "Выполняю команду", tool: "bash", ok: false,
+      tool_diagnostic: { call_id: "ec96f845-ac9a-4193-a2b4-c4d2547471e2", state: "unknown" } });
+    await emit("agent.step", { step: 3, action: "Читаю код", tool: "read_file", ok: true,
+      tool_diagnostic: { call_id: "9d2b4136-7bbc-449b-b26a-48cd4bb43e47", state: "skipped",
+        reason_code: "cached_result" } });
+    await emit("agent.step", { step: 4, action: "Проверяю приложение", tool: "build", ok: null,
+      tool_diagnostic: { call_id: "c4a0975b-2efa-459f-b8e0-7793b050ada4", state: "skipped",
+        reason_code: "verification_deferred" } });
+    expect([...container.querySelectorAll("ol > li")].map(row => row.getAttribute("title"))).toEqual([
+      "Шаг пропущен", "Результат вызова не подтверждён", "Использован результат из кэша", "Проверяю приложение",
+    ]);
+  });
+
+  it("replaces an unconfirmed row with recovered evidence and labels an unresolved reconciliation", async () => {
+    const call_id = "53cbbb7d-1ebe-56ea-83ed-296a240a1373";
+    await emit("agent.step", { step: 1, action: "Выполняю команду", tool: "bash", ok: false,
+      tool_diagnostic: { call_id, state: "unknown" } });
+    await act(async () => container.querySelector<HTMLButtonElement>("ol > li button")!.click());
+    await emit("agent.tool_finished", { step: 1, action: "bash",
+      tool_diagnostic: { call_id, state: "succeeded", reconciled: true } });
+    await emit("agent.tool_finished", { step: 2, action: "bash",
+      tool_diagnostic: { call_id: "ec96f845-ac9a-5193-a2b4-c4d2547471e2", state: "unknown", reconciled: true } });
+    const rows = container.querySelectorAll("ol > li");
+    expect(rows).toHaveLength(2);
+    expect(container.textContent).toContain("1 шаг.");
+    await act(async () => rows[1].querySelector<HTMLButtonElement>("button")!.click());
+    expect(rows[0].textContent).toContain("Результат восстановлен из журнала");
+    expect(rows[0].textContent).toContain("Результат получен");
+    expect(rows[1].textContent).toContain("Сверка после восстановления");
+    expect(rows[1].textContent).not.toContain("Результат восстановлен из журнала");
+  });
+
   it("carries the full legacy counter through stream, history restore and replay", async () => {
     const runId = "11111111-1111-1111-1111-111111111111";
     await act(async () => {

@@ -17,7 +17,7 @@ from asyncio import sleep
 from asyncio import timeout as asyncio_timeout
 from collections.abc import Sequence
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from time import monotonic
 from typing import Any, Literal, Protocol, cast
@@ -1154,6 +1154,15 @@ class ProjectCellCommandReceipt:
             raise OrchestratorUnavailable("Orchestrator command receipt response mismatch")
 
 
+_ShellDispatch = Literal["exited", "rejected", "start_timeout"]
+_SHELL_DISPATCH_HEADER = "X-Yleum-Shell-Dispatch"
+
+
+@dataclass(slots=True)
+class _ShellDispatchEvidence:
+    value: _ShellDispatch | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectCellAgentExecResponse:
     ok: bool
@@ -1168,10 +1177,12 @@ class ProjectCellAgentExecResponse:
     project_migration_receipt: dict[str, object] | None = None
     compiled_asset_receipt: dict[str, object] | None = None
     command_receipt: ProjectCellCommandReceipt | None = None
+    shell_dispatch: _ShellDispatch | None = field(default=None, compare=False, repr=False)
 
     def command_wire_json(self) -> dict[str, Any]:
         values = asdict(self)
         values.pop("command_receipt")
+        values.pop("shell_dispatch")
         values["operation_id"] = str(self.operation_id) if self.operation_id else None
         return values
 
@@ -1980,6 +1991,7 @@ async def _request_raw(
     params: dict[str, Any] | None = None,
     timeout: float = 30.0,  # noqa: ASYNC109 - outbound request deadline
     host: str | None = None,
+    shell_dispatch: _ShellDispatchEvidence | None = None,
 ) -> Any:
     """Internal call to orchestrator. Returns parsed JSON body or raises ApiError.
 
@@ -2051,6 +2063,10 @@ async def _request_raw(
             upstream_code=upstream_code,
         )
 
+    if shell_dispatch is not None:
+        value = resp.headers.get(_SHELL_DISPATCH_HEADER)
+        if value in {"exited", "rejected", "start_timeout"}:
+            shell_dispatch.value = cast(_ShellDispatch, value)
     try:
         return resp.json()
     except Exception as exc:
@@ -2067,8 +2083,12 @@ async def _request(
     params: dict[str, Any] | None = None,
     timeout: float = 30.0,  # noqa: ASYNC109 - outbound request deadline
     host: str | None = None,
+    shell_dispatch: _ShellDispatchEvidence | None = None,
 ) -> dict[str, Any]:
-    payload = await _request_raw(method, path, json=json, params=params, timeout=timeout, host=host)
+    payload = await _request_raw(
+        method, path, json=json, params=params, timeout=timeout, host=host,
+        shell_dispatch=shell_dispatch,
+    )
     if not isinstance(payload, dict):
         raise OrchestratorUnavailable("Orchestrator returned an invalid object")
     return payload
@@ -2575,11 +2595,13 @@ async def project_cell_agent_exec(
         **({"operation_id": str(operation_id)} if operation_id is not None else {}),
         **({"track_receipt": True} if track_receipt else {}),
     }
+    dispatch = _ShellDispatchEvidence() if task_role is None else None
     payload = await _request(
         "POST",
         f"/internal/workspaces/{workspace_id}/agent/exec",
         json=request,
         timeout=float(timeout_seconds + 30),
+        shell_dispatch=dispatch,
     )
     result = ProjectCellAgentExecResponse.from_json(payload)
     if track_receipt:
@@ -2597,6 +2619,14 @@ async def project_cell_agent_exec(
             raise OrchestratorUnavailable("Orchestrator command request binding mismatch")
     elif result.command_receipt is not None:
         raise OrchestratorUnavailable("Orchestrator returned an unsolicited command receipt")
+    if dispatch is not None and (
+        (dispatch.value == "exited" and not result.timed_out)
+        or (dispatch.value == "rejected" and not result.ok
+            and result.exit_code == 126 and not result.timed_out)
+        or (dispatch.value == "start_timeout" and not result.ok
+            and result.exit_code == 124 and result.timed_out)
+    ):
+        return replace(result, shell_dispatch=dispatch.value)
     return result
 
 

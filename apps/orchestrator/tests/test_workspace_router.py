@@ -2285,9 +2285,15 @@ def test_bounded_redacted_text_redacts_signature_and_token_query_values() -> Non
     assert "mode=live" in redacted
 
 
-async def test_exec_workspace_agent_command_blocks_env_enumeration(
+@pytest.mark.parametrize("command,detail", [
+    ("echo reboot", "command blocked by safety denylist"),
+    ("printenv | sort", "command blocked: environment and secret enumeration is not allowed"),
+])
+async def test_exec_workspace_agent_command_marks_guard_rejection_outside_body(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
+    command,
+    detail,
 ) -> None:
     workspace_id = uuid4()
     generation_run_id = uuid4()
@@ -2306,12 +2312,13 @@ async def test_exec_workspace_agent_command_blocks_env_enumeration(
                 "generation_run_id": str(generation_run_id),
                 "fencing_epoch": 4,
                 "expected_revision": workspace._workspace_revision({}),
-                "cmd": "printenv | sort",
+                "cmd": command,
                 "timeout_seconds": 180,
             },
         )
 
     assert response.status_code == 200
+    assert response.headers.get("X-Yleum-Shell-Dispatch") == "rejected"
     payload = response.json()
     assert {
         key: payload[key]
@@ -2319,13 +2326,45 @@ async def test_exec_workspace_agent_command_blocks_env_enumeration(
     } == {
         "ok": False,
         "exit_code": 126,
-        "detail": "command blocked: environment and secret enumeration is not allowed",
+        "detail": detail,
         "timed_out": False,
         "workspace_revision": workspace._workspace_revision({}),
     }
     assert payload["before_identity"] == payload["after_identity"]
     assert payload["environment_mutated"] is False
     assert docker.workspace_command_calls == []
+
+
+@pytest.mark.parametrize("exit_code,timed_out,start_timed_out,dispatch", [
+    (124, False, False, "exited"),
+    (126, False, False, "exited"),
+    (127, False, False, "exited"),
+    (124, True, True, "start_timeout"),
+    (124, True, False, None),
+])
+async def test_shell_dispatch_header_reports_only_controller_evidence(
+    monkeypatch, tmp_path, exit_code, timed_out, start_timed_out, dispatch,
+) -> None:
+    workspace_id, run_id = uuid4(), uuid4()
+    provider, _, docker, _ = await _ready_provider(tmp_path, workspace_id, generation_run_id=run_id)
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: provider)
+    detail = "command blocked by safety denylist"
+    docker.workspace_command_result = DockerCommandResult(
+        exit_code=exit_code, output=detail, timed_out=timed_out, start_timed_out=start_timed_out,
+    )
+    async with _client() as client:
+        response = await client.post(
+            f"/internal/workspaces/{workspace_id}/agent/exec",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json={"generation_run_id": str(run_id), "fencing_epoch": 4,
+                  "expected_revision": workspace._workspace_revision({}), "cmd": "true"},
+        )
+    assert response.status_code == 200
+    assert response.headers.get("X-Yleum-Shell-Dispatch") == dispatch
+    payload = response.json()
+    assert payload["detail"] == detail and payload["exit_code"] == exit_code
+    assert payload["timed_out"] is timed_out
+    assert "start_timed_out" not in payload and "shell_dispatch" not in payload
 
 
 async def test_exec_workspace_agent_command_rejects_stale_revision_before_runner(

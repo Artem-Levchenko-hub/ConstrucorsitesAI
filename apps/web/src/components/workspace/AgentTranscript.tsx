@@ -28,6 +28,9 @@ import { isGenerationActive } from "@/lib/generation-lifecycle";
 import type { AgentStep, GenerationRunStatus } from "@/lib/api/types";
 import { agentElapsedSeconds } from "@/lib/agent-elapsed";
 import { collapseAgentSteps, countAgentActions } from "@/lib/agent-steps";
+import {
+  agentToolDetails, isAgentCommand, isAgentToolObservation, readAgentToolDiagnostic,
+} from "@/lib/agent-tool-diagnostic";
 import { humanPath, stepCopy, type StepIconName, type StepTone } from "@/lib/agent-step-copy";
 import { CAPACITY_WAITING_COPY } from "@/lib/agent-transcript";
 import { projectGenerationPhase } from "@/lib/generation-phase";
@@ -153,8 +156,7 @@ export function AgentTranscript({
   const showElapsed = !hasRecovery;
   const [detailsOpen, setDetailsOpen] = useState(false);
   const capacityWaiting = generationStatus === "queued_for_capacity";
-  // Which step rows are drilled-open (by index) — click a step to see inside it.
-  const [openSteps, setOpenSteps] = useState<Record<number, boolean>>({});
+  const [openSteps, setOpenSteps] = useState<Record<string, boolean>>({});
   // The durable GenerationRun timestamps survive F5. A newly-submitted optimistic
   // row temporarily falls back to its client creation time, then the persisted
   // started_at takes over when history is refreshed.
@@ -184,11 +186,13 @@ export function AgentTranscript({
   // Одинаковое действие подряд — одна строка со счётчиком повторов: десять
   // строк «Ожидаю ресурсы сервера» читаются как поломка, а не как ожидание.
   const rows = collapseAgentSteps(visibleSteps);
+  const stageCount = rows.filter(row => !isAgentToolObservation(row.step)).length;
   const actionCount = countAgentActions(visibleSteps, boundRun?.id);
   const historyTruncated = visibleSteps.some(step => step.historyTruncated === true
     && (!boundRun || !step.runId || step.runId === boundRun.id));
   const phase = projectGenerationPhase({
-    steps: visibleSteps, runId: boundRun?.id, status: generationStatus, streaming,
+    steps: visibleSteps.filter(step => !isAgentToolObservation(step)),
+    runId: boundRun?.id, status: generationStatus, streaming,
     recovery: boundRun?.recovery, recoveryUnconfirmed, currentRequestComplete,
     historical: historicalRequest,
   });
@@ -236,7 +240,7 @@ export function AgentTranscript({
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 pt-3 pb-1 text-[11px] tabular-nums text-fg-tertiary">
             {showElapsed && (streaming || elapsed > 0) && <span>{streaming ? "Время работы: " : "за "}{formatElapsed(elapsed)}</span>}
             <span>{actionCount === null ? "Число шагов недоступно"
-              : actionCount > 0 ? `${actionCount} шаг.` : rows.length > 0 ? `${rows.length} этап.` : "Пока нет выполненных шагов"}</span>
+              : actionCount > 0 ? `${actionCount} шаг.` : stageCount > 0 ? `${stageCount} этап.` : "Пока нет выполненных шагов"}</span>
           </div>
           {capacityWaiting && visibleSteps.length === 0 && <p className="px-3 py-2 text-xs text-fg-secondary">{CAPACITY_WAITING_COPY.detail}</p>}
           {historyTruncated && <p className="px-3 py-2 text-xs text-fg-secondary">
@@ -254,31 +258,31 @@ export function AgentTranscript({
                 const s = row.step;
                 const copy = stepCopy(s, currentRequestComplete);
                 const Icon = STEP_ICON[copy.icon] ?? stepIcon(s);
-                const last = i === rows.length - 1;
-                const live =
-                  phase.active && !recoveryIdle &&
-                  (last || s.toolLifecycle === "started" || s.toolLifecycle === "heartbeat") &&
-                  (s.kind === "step" || s.kind === "heartbeat") &&
-                  s.toolLifecycle !== "finished" &&
-                  s.ok !== false &&
-                  s.action !== "done";
-                const detail = (s.detail ?? "").trim();
-                const canDrill = detail.length > 0;
-                const isOpen = !!openSteps[row.index];
-                const place = humanPath(s.path);
+                const diagnostic = readAgentToolDiagnostic(s.tool_diagnostic);
+                const live = phase.active && !recoveryIdle && (diagnostic
+                  ? diagnostic.state === "started"
+                  : (i === rows.length - 1 || s.toolLifecycle === "started" || s.toolLifecycle === "heartbeat") &&
+                    (s.kind === "step" || s.kind === "heartbeat") && s.toolLifecycle !== "finished" &&
+                    s.ok !== false && s.action !== "done");
+                const safeDetail = !isAgentToolObservation(s) && !(s.tool_diagnostic && isAgentCommand(s.tool));
+                const detail = safeDetail ? (s.detail ?? "").trim() : "";
+                const path = safeDetail ? s.path : "";
+                const canDrill = Boolean(detail || diagnostic);
+                const isOpen = !!openSteps[row.key];
+                const place = humanPath(path);
                 return (
                   <li
                     key={row.key}
                     // Полный путь к файлу — в подсказке: в строке он только
                     // мешает, а при разборе проблемы нужен целиком.
-                    title={copy.title + (s.path ? " · " + s.path : "")}
+                    title={copy.title + (path ? " · " + path : "")}
                   >
                     <button
                       type="button"
                       disabled={!canDrill}
                       aria-expanded={canDrill ? isOpen : undefined}
                       onClick={() =>
-                        setOpenSteps((m) => ({ ...m, [row.index]: !m[row.index] }))
+                        setOpenSteps((m) => ({ ...m, [row.key]: !m[row.key] }))
                       }
                       className={cn(
                         "flex w-full items-start gap-2 rounded-md px-2 py-1 text-left transition-colors focus-visible:outline-2 focus-visible:outline-accent",
@@ -332,19 +336,29 @@ export function AgentTranscript({
                         <div
                           className="overflow-hidden"
                         >
-                          {s.path && (
+                          {path && (
                             <p className="mx-2 mt-1 truncate font-mono text-[10px] text-fg-tertiary">
-                              {s.path}
+                              {path}
                             </p>
                           )}
-                          <pre
+                          {diagnostic && (
+                            <dl className="mx-2 my-1 space-y-1 break-words rounded-md border border-border-subtle bg-surface-base/70 p-2 text-[11px] leading-4 text-fg-secondary">
+                              {agentToolDetails(diagnostic, s.recordedAt).map(([label, value]) => (
+                                <div key={label} className="grid grid-cols-2 gap-x-2">
+                                  <dt className="text-fg-tertiary">{label}</dt>
+                                  <dd className="tabular-nums">{value}</dd>
+                                </div>
+                              ))}
+                            </dl>
+                          )}
+                          {detail && <pre
                             className={cn(
                               "scrollbar-elegant mx-2 my-1 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border-subtle bg-surface-base/70 p-2 font-mono text-[11px] leading-relaxed",
                               "text-fg-tertiary",
                             )}
                           >
                             {detail}
-                          </pre>
+                          </pre>}
                         </div>
                       )}
                   </li>

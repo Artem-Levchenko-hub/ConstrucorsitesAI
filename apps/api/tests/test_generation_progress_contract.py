@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
+from datetime import UTC
 from unittest.mock import AsyncMock
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 import pytest
 from sqlalchemy import select
@@ -66,6 +69,163 @@ async def _read_progress(recorder: progress.GenerationProgress):
 def _identified_step(step, event):
     return {**step, **{key: event.payload[key] for key in
                       ("eventId", "runId", "seq", "actionCount", "historyTruncated")}}
+
+
+@pytest.mark.parametrize("terminal_kind", ["agent.step", "agent.tool_finished"])
+async def test_tool_attempt_replays_and_survives_reopening_without_counting_start(
+    test_engine, monkeypatch, terminal_kind,
+):
+    from yleum_api.services.generation_events import generation_event_envelope
+
+    recorder = await _new_progress(async_sessionmaker(test_engine, expire_on_commit=False))
+    publish = AsyncMock()
+    monkeypatch.setattr(progress, "publish_event", publish)
+    call = str(uuid4())
+    start = {"call_id": call, "state": "started", "command_family": "rg"}
+    await recorder.emit_agent_event("agent.tool_started", {
+        "step": 4, "action": "bash", "tool_diagnostic": {**start, "argv": "private-argument"},
+        "detail": "private-command",
+    })
+    events, pending = await _read_progress(recorder)
+    assert [e.event_type for e in events] == ["agent.tool_started"]
+    assert pending[0]["tool_diagnostic"] == start
+    assert pending[0]["actionCount"] == 0
+    assert pending[0]["kind"] == "heartbeat"
+    assert pending[0]["recordedAt"] == events[0].created_at.astimezone(UTC).isoformat(
+        timespec="milliseconds"
+    )
+    assert "private-" not in str([pending, events[0].payload, publish.await_args])
+
+    # The worker may resume with an empty in-memory transcript.
+    resumed = progress.GenerationProgress(
+        recorder.factory, recorder.run_id, recorder.project_id, recorder.assistant_message_id,
+    )
+    await resumed.emit_agent_event("agent.step", {"step": 5, "action": "read_file", "ok": True})
+    finish = {"call_id": call, "state": "failed", "reason_code": "executable_not_found",
+              "command_family": "rg", "exit_code": 127, "elapsed_ms": 32}
+    await resumed.emit_agent_event(terminal_kind, {
+        "step": 4, "action": "bash", "ok": False,
+        "tool_diagnostic": {**finish, "stderr": "private-output"},
+    })
+    events, rows = await _read_progress(resumed)
+    assert [e.event_type for e in events] == ["agent.tool_started", "agent.step", terminal_kind]
+    assert [row["seq"] for row in rows] == [2, 3]
+    assert rows[-1]["actionCount"] == (2 if terminal_kind == "agent.step" else 1)
+    assert rows[-1]["tool_diagnostic"] == finish
+    assert rows[-1]["recordedAt"] == generation_event_envelope(events[-1])["data"]["recordedAt"]
+    assert "private-" not in str([rows, [e.payload for e in events], publish.await_args_list])
+    assert [call.args[2] for call in publish.await_args_list] == [
+        generation_event_envelope(event) for event in events
+    ]
+
+
+async def test_agent_command_failure_and_next_action_reach_the_same_run(test_engine, monkeypatch):
+    from yleum_api.services.agent_builder import run_agent_build
+    from yleum_api.services.agent_tool_diagnostics import record_shell_diagnostics
+
+    recorder = await _new_progress(async_sessionmaker(test_engine, expire_on_commit=False))
+    monkeypatch.setattr(progress, "publish_event", AsyncMock())
+    turns = iter([
+        '<action name="bash">{"cmd":"python -c private-argument"}</action>',
+        '<action name="read_file">{"path":"page.tsx"}</action>',
+    ])
+
+    async def model(*_args, **_kwargs):
+        return next(turns)
+
+    async def execute(action):
+        if action.name != "bash":
+            return {"ok": True, "content": "source"}
+        command = await asyncio.to_thread(
+            subprocess.run,
+            [sys.executable, "-c", "import sys; print('private-output'); sys.exit(7)"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        record_shell_diagnostics({
+            "exit_code": command.returncode, "timed_out": False, "shell_outcome": "terminal",
+        })
+        return {"ok": command.returncode == 0, "detail": command.stdout}
+
+    await run_agent_build(
+        system_prompt="test", user_prompt="test", model="test", complete=model, execute=execute,
+        emit=recorder.emit_agent_event, max_steps=2, ship_green_on_abort=False,
+    )
+    events, rows = await _read_progress(recorder)
+    assert all(event.generation_run_id == recorder.run_id for event in events)
+    attempts = [row for row in rows if row.get("tool_diagnostic")]
+    assert [row["tool"] for row in attempts] == ["bash", "read_file"]
+    failure, success = (row["tool_diagnostic"] for row in attempts)
+    assert (failure["state"], failure["reason_code"], failure["exit_code"]) == (
+        "failed", "nonzero_exit", 7,
+    )
+    assert success["state"] == "succeeded"
+    assert "private-" not in str([row.payload for row in events])
+
+
+@pytest.mark.parametrize("previous_unknown", [False, True])
+async def test_recovery_confirms_original_tool_once_across_workers(
+    test_engine, monkeypatch, previous_unknown,
+):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    first = await _new_progress(factory)
+    monkeypatch.setattr(progress, "publish_event", AsyncMock())
+    call_id = str(uuid5(first.run_id, "durable-tool"))
+
+    async def emit(recorder, event, state, **facts):
+        await recorder.emit_agent_event(event, {
+            "step": 2, "action": "bash",
+            "tool_diagnostic": {"call_id": call_id, "state": state, **facts},
+        })
+
+    await emit(first, "agent.tool_started", "started")
+    if previous_unknown:
+        await emit(first, "agent.step", "unknown", reason_code="outcome_unknown")
+        await emit(first, "agent.tool_finished", "unknown", reason_code="outcome_unknown")
+        await emit(first, "agent.tool_finished", "cancelled", reason_code="cancelled")
+        prior_events, prior_rows = await _read_progress(first)
+        assert len(prior_events) == 4 and len(prior_rows) == 1
+        assert prior_rows[0]["actionCount"] == 1
+    workers = [
+        progress.GenerationProgress(
+            factory, first.run_id, first.project_id, first.assistant_message_id,
+        )
+        for _ in range(2)
+    ]
+    await asyncio.gather(*[
+        emit(worker, "agent.step", "succeeded", reconciled=True, exit_code=0)
+        for worker in workers
+    ])
+    await emit(first, "agent.tool_finished", "unknown", reason_code="outcome_unknown")
+    events, rows = await _read_progress(first)
+    assert len(events) == 2 + 3 * int(previous_unknown)
+    assert len(rows) == 1 and rows[0]["actionCount"] == 1
+    assert rows[0]["tool_diagnostic"] == {
+        "call_id": call_id, "state": "succeeded", "reconciled": True, "exit_code": 0,
+    }
+
+
+async def test_authoritative_step_counts_a_confirmed_heartbeat_once_and_keeps_its_measurements(
+    test_engine, monkeypatch,
+):
+    recorder = await _new_progress(async_sessionmaker(test_engine, expire_on_commit=False))
+    monkeypatch.setattr(progress, "publish_event", AsyncMock())
+    call_id = str(uuid5(recorder.run_id, "operation"))
+    tool = {"step": 2, "action": "bash"}
+    original = {
+        "call_id": call_id, "state": "failed", "exit_code": 7,
+        "reason_code": "nonzero_exit", "elapsed_ms": 28,
+    }
+    await recorder.emit_agent_event("agent.tool_finished", {**tool, "tool_diagnostic": original})
+    for _ in range(2):
+        await recorder.emit_agent_event("agent.step", {
+            **tool,
+            "tool_diagnostic": {"call_id": call_id, "state": "failed", "reconciled": True},
+        })
+    events, rows = await _read_progress(recorder)
+    assert len(events) == 2 and len(rows) == 1
+    assert rows[0]["kind"] == "step" and rows[0]["actionCount"] == 1
+    assert events[-1].payload["tool_diagnostic"] == rows[0]["tool_diagnostic"]
+    assert rows[0]["tool_diagnostic"] == {**original, "reconciled": True}
 
 
 async def test_provider_response_keeps_bounded_structured_failure_reason(monkeypatch):
@@ -413,3 +573,30 @@ async def test_restarted_recorder_continues_committed_truncated_counter(test_eng
     assert transcript[:199] == rows[:199]
     assert transcript[-1]["actionCount"] == events[-1].payload["actionCount"] == 451
     assert transcript[-1]["historyTruncated"] is True
+
+
+async def test_long_history_keeps_earliest_media_substep_when_outer_call_finishes(
+    test_engine, monkeypatch,
+):
+    recorder = await _new_progress(async_sessionmaker(test_engine, expire_on_commit=False))
+    baseline = [{"step": n, "kind": "step", "action": "Read"} for n in range(1, 199)]
+    async with recorder.factory() as session:
+        message = await session.get(Message, recorder.assistant_message_id)
+        message.agent_steps = baseline
+        await session.commit()
+    monkeypatch.setattr(progress, "publish_event", AsyncMock())
+    call_id = str(uuid4())
+    tool = {"step": 199, "action": "generate_media"}
+    await recorder.emit_agent_event("agent.tool_started", {
+        **tool, "tool_diagnostic": {"call_id": call_id, "state": "started"},
+    })
+    for phase in ("Первый кадр", "Второй кадр"):
+        await recorder.emit_agent_event("agent.step", {**tool, "human": phase})
+    await recorder.emit_agent_event("agent.step", {
+        **tool, "tool_diagnostic": {"call_id": call_id, "state": "succeeded"},
+    })
+    events, transcript = await _read_progress(recorder)
+    assert len(events) == 4 and len(transcript) == 200
+    assert transcript[198]["action"] == "Первый кадр"
+    assert transcript[-1]["tool_diagnostic"] == {"call_id": call_id, "state": "succeeded"}
+    assert transcript[-1]["actionCount"] == 201

@@ -1205,7 +1205,9 @@ printf '%s\n' 'empty'
             try:
                 await asyncio.to_thread(dispatch_command_start, container.start)
             except ShellStartDeadlineExceeded as exc:
-                return DockerCommandResult(exit_code=124, output=str(exc), timed_out=True)
+                return DockerCommandResult(
+                    exit_code=124, output=str(exc), timed_out=True, start_timed_out=True,
+                )
             if hasattr(container, "reload"):
                 await asyncio.to_thread(container.reload)
             try:

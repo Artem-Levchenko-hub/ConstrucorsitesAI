@@ -31,6 +31,7 @@ from yleum_api.models.user import User
 from yleum_api.routers import messages
 from yleum_api.services import project_cell_capacity, project_cell_executor
 from yleum_api.services.agent_builder import Action, run_agent_build
+from yleum_api.services.agent_tool_diagnostics import capture_shell_diagnostics
 from yleum_api.services.generation import supervisor
 from yleum_api.services.generation_runs import (
     finalize_generation_run,
@@ -39,6 +40,7 @@ from yleum_api.services.generation_runs import (
 )
 from yleum_api.services.orchestrator_client import (
     OrchestratorBadRequest,
+    OrchestratorReaderInventoryUnavailable,
     OrchestratorUnavailable,
     ProjectCellAgentExecResponse,
     ProjectCellAgentWorkspaceSnapshot,
@@ -52,6 +54,7 @@ from yleum_api.services.orchestrator_client import (
     ProjectCellWorkspaceIdentity,
 )
 from yleum_api.services.project_cell_control import ProjectCellControlReadiness
+from yleum_api.services.project_cell_errors import ProjectCellInfrastructureError
 from yleum_api.services.project_cell_proofs import ProofDimension, ProofIdentity
 from yleum_api.services.project_cells import (
     claim_cell_operation_committed,
@@ -860,6 +863,7 @@ async def _prepare_executor(
             before_identity=before_identity if operation_id is not None else None,
             after_identity=after_identity if operation_id is not None else None,
             environment_mutated=before_identity != after_identity,
+            shell_dispatch=payload.get("shell_dispatch"),
         )
 
     async def fake_hot_reload(
@@ -2049,12 +2053,15 @@ async def test_restore_runtime_requires_bound_compilation_and_existing_database_
         assert ProofDimension.RUNTIME in result.invalidated_dimensions
 
 
-@pytest.mark.parametrize("ok,timed_out", [(True, False), (False, False), (False, True)])
+@pytest.mark.parametrize(
+    "ok,exit_code,timed_out", [(True, 0, False), (False, 1, False), (False, 124, True)],
+)
 async def test_clean_portable_shell_retains_preview_and_proof_identity(
     monkeypatch,
     db_session,
     test_engine,
     ok,
+    exit_code,
     timed_out,
 ):
     # Exercise draft-preview sync; coordinator mode intentionally skips draft apply.
@@ -2069,19 +2076,200 @@ async def test_clean_portable_shell_retains_preview_and_proof_identity(
         capabilities={"portable_machine": True},
         cell_exec_result={
             "ok": ok,
-            "exit_code": 0 if ok else 124,
+            "exit_code": exit_code,
             "timed_out": timed_out,
             "detail": "partial mutation",
         },
     )
     await harness.handle.sync_preview()
     assert len(harness.hot_reload_calls) == 1
-    result = await harness.handle.execute(Action(name="bash", args={"cmd": "kill product"}))
+
+    now = 0.0
+    original_exec = project_cell_executor.project_cell_agent_exec
+    original_snapshot = project_cell_executor.project_cell_agent_snapshot
+
+    async def execute(*args, **kwargs):
+        nonlocal now
+        now += 0.125
+        return await original_exec(*args, **kwargs)
+
+    async def snapshot(*args, **kwargs):
+        nonlocal now
+        now += 0.075
+        return await original_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(project_cell_executor, "monotonic", lambda: now)
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_exec", execute)
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_snapshot", snapshot)
+    with capture_shell_diagnostics() as diagnostic:
+        result = await harness.handle.execute(Action(name="bash", args={"cmd": "kill product"}))
+    assert diagnostic == {
+        **({"exit_code": exit_code} if not timed_out else {}),
+        "timed_out": timed_out,
+        "shell_outcome": "terminal",
+        "timings_ms": {"dispatch": 125, "workspace_sync": 75, "total": 200},
+    }
+    assert diagnostic.keys().isdisjoint(result)
     assert result["environment_mutated"] is False
     assert result["invalidated_dimensions"] == []
     assert not result.get("files")
     await harness.handle.sync_preview()
     assert len(harness.hot_reload_calls) == 1
+
+
+@pytest.mark.parametrize(
+    "failure,outcome,reason",
+    [
+        ("empty", "not_started", "invalid_tool_arguments"),
+        ("revision_conflict", "not_started", "context_mismatch"),
+        ("unspecific_conflict", "unknown", None),
+        ("lost_ack", "unknown", None),
+        ("reader", "unknown", "reader_unavailable"),
+        ("sync", "terminal", "workspace_sync_failed"),
+    ],
+)
+async def test_shell_failure_diagnostics_preserve_known_controller_evidence(
+    monkeypatch, db_session, test_engine, failure, outcome, reason,
+):
+    harness = await _prepare_executor(monkeypatch, db_session, test_engine)
+    original_exec = project_cell_executor.project_cell_agent_exec
+    now = 0.0
+    calls = []
+
+    async def execute(*args, **kwargs):
+        nonlocal now
+        calls.append("exec")
+        now += 0.125
+        if failure in {"revision_conflict", "unspecific_conflict"}:
+            details = {"effect_applied": False}
+            if failure == "revision_conflict":
+                details.update(
+                    expected_revision=kwargs["expected_revision"], current_revision="5" * 64,
+                )
+            raise OrchestratorBadRequest(
+                "PRIVATE_ERROR_DETAIL", status_code=409, upstream_code="conflict", details=details,
+            )
+        if failure == "reader":
+            raise OrchestratorReaderInventoryUnavailable("PRIVATE_READER_DETAIL")
+        if failure == "lost_ack":
+            raise OrchestratorUnavailable("PRIVATE_TRANSPORT_DETAIL")
+        return await original_exec(*args, **kwargs)
+
+    async def snapshot(*args, **kwargs):
+        nonlocal now
+        calls.append("snapshot")
+        now += 0.075
+        raise OrchestratorUnavailable("PRIVATE_SNAPSHOT_DETAIL")
+
+    monkeypatch.setattr(project_cell_executor, "monotonic", lambda: now)
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_exec", execute)
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_snapshot", snapshot)
+    action = Action(name="bash", args={"cmd": " " if failure == "empty" else "PRIVATE_COMMAND"})
+    with capture_shell_diagnostics() as diagnostic:
+        if failure == "reader":
+            with pytest.raises(
+                ProjectCellInfrastructureError, match="reader_inventory_unavailable",
+            ):
+                await harness.handle.execute(action)
+        else:
+            result = await harness.handle.execute(action)
+            assert result["ok"] is False and diagnostic.keys().isdisjoint(result)
+
+    expected = {"shell_outcome": outcome, "timings_ms": {"total": 0}}
+    if reason is not None:
+        expected["reason_code"] = reason
+    if failure == "sync":
+        assert calls == ["exec", "snapshot"]
+        expected.update(
+            exit_code=0, timed_out=False,
+            timings_ms={"dispatch": 125, "workspace_sync": 75, "total": 200},
+        )
+    elif failure != "empty":
+        assert calls == ["exec"]
+        expected["timings_ms"] = {"dispatch": 125, "total": 125}
+    else:
+        assert not calls
+    assert diagnostic == expected
+
+
+async def test_shell_reports_missing_executable_only_with_a_matching_shell_diagnostic(
+    monkeypatch, db_session, test_engine,
+):
+    reply = {"ok": False, "exit_code": 127, "timed_out": False, "detail": ""}
+    harness = await _prepare_executor(
+        monkeypatch, db_session, test_engine, cell_exec_result=reply,
+    )
+    for cmd, detail, exit_code, timed_out, missing in (
+        ("sh -c 'rg --version'", "[shell] sh: 1: rg: not found", 127, False, "rg"),
+        ("curl", "bash: curl: command not found", 127, False, "curl"),
+        ("git", "/bin/bash: line 1: git: command not found", 127, False, "git"),
+        ("rg", "application returned 127", 127, False, None),
+        ("private-tool", "sh: 1: private-tool: not found", 127, False, None),
+        ("rg", "wrapper printed: sh: 1: rg: not found", 127, False, None),
+        ("rg", "sh: 1: rg: not found", 126, False, None),
+        ("rg", "sh: 1: rg: not found", 127, True, None),
+    ):
+        reply.update(
+            detail=detail, exit_code=exit_code, timed_out=timed_out,
+            shell_dispatch=None if timed_out else "exited",
+        )
+        with capture_shell_diagnostics() as diagnostic:
+            result = await harness.handle.execute(Action(name="bash", args={"cmd": cmd}))
+        assert result["ok"] is False and diagnostic.keys().isdisjoint(result)
+        assert diagnostic.get("exit_code") == (None if timed_out else exit_code)
+        assert diagnostic["timed_out"] is timed_out
+        assert diagnostic.get("missing_executable") == missing
+        assert diagnostic.get("reason_code") == ("executable_not_found" if missing else None)
+
+
+async def test_shell_synthetic_statuses_stay_out_of_process_exit_diagnostics(
+    monkeypatch, db_session, test_engine,
+):
+    reply = {"ok": False, "exit_code": 126, "timed_out": False, "detail": ""}
+    harness = await _prepare_executor(
+        monkeypatch, db_session, test_engine, cell_exec_result=reply,
+    )
+    for dispatch, code, timed_out, shown_exit, outcome, reason in (
+        ("rejected", 126, False, None, "not_started", "dispatch_rejected"),
+        (None, 126, False, None, "terminal", None),
+        ("exited", 126, False, 126, "terminal", None),
+        ("start_timeout", 124, True, None, "not_started", "timeout"),
+        (None, 124, True, None, "terminal", None),
+        ("exited", 124, False, 124, "terminal", None),
+    ):
+        reply.update(
+            detail="command blocked by safety denylist", shell_dispatch=dispatch,
+            exit_code=code, timed_out=timed_out,
+        )
+        with capture_shell_diagnostics() as diagnostic:
+            result = await harness.handle.execute(Action(name="bash", args={"cmd": "true"}))
+        assert result["ok"] is False and diagnostic.keys().isdisjoint(result)
+        assert diagnostic.get("exit_code") == shown_exit
+        assert diagnostic["shell_outcome"] == outcome
+        assert diagnostic.get("reason_code") == reason
+
+
+async def test_dirty_portable_workspace_reports_deferred_verification_without_dispatch(
+    monkeypatch, db_session, test_engine,
+):
+    monkeypatch.setattr(project_cell_executor, "get_settings", lambda: get_settings().model_copy(
+        update={"use_max_finalization_coordinator": True},
+    ))
+    harness = await _prepare_executor(
+        monkeypatch, db_session, test_engine,
+        snapshot_files={".omnia/cell.json": '{"version":1}', "src/app/page.tsx": "old"},
+        capabilities={"portable_machine": True},
+    )
+    assert (await harness.handle.execute(Action(
+        name="write_file", args={"path": "src/app/page.tsx", "content": "changed"},
+    )))["ok"] is True
+    with capture_shell_diagnostics() as diagnostic:
+        result = await harness.handle.execute(Action(name="runtime_check", args={}))
+    assert result["deferred_to"] == "max_finalization"
+    assert diagnostic == {
+        "shell_outcome": "not_started", "reason_code": "verification_deferred",
+    }
+    assert not harness.exec_calls and not harness.hot_reload_calls
 
 
 async def test_ready_owner_executor_bootstraps_workspace_and_syncs_preview(
@@ -3672,7 +3860,7 @@ async def test_v2_write_ack_loss_reconciles_receipt_before_checkpoint_without_re
 
 
 @pytest.mark.parametrize("damage", [
-    None, "pending", "foreign", "request", "incarnation", "cancel",
+    None, "exit_126", "pending", "foreign", "request", "incarnation", "cancel",
     "driver", "role", "coordinator", "coordinator_tool", "starter_undispatched",
     "starter_conflicting_intent",
     "role_foreign", "role_proof", "role_cancel", "role_expired", "role_cold_proof"])
@@ -3711,12 +3899,18 @@ async def test_v2_command_ack_loss_reads_terminal_receipt_without_dispatch(
     monkeypatch.setattr(source_checkpoint, "store_checkpoint_object", store)
     monkeypatch.setattr(source_checkpoint, "load_checkpoint_object", load)
     command_changes = {"src/a.ts": "completed command"}
+    expected_code = 126 if damage == "exit_126" else 0
+    expected_detail = "command blocked by safety denylist" if expected_code else "cell exec ok"
     harness = await _prepare_executor(
         monkeypatch,
         db_session,
         test_engine,
         snapshot_files={".omnia/cell.json": '{"version":1}', "src/a.ts": "old"},
         cell_exec_files=command_changes,
+        cell_exec_result={
+            "ok": expected_code == 0, "exit_code": expected_code,
+            "timed_out": False, "detail": expected_detail,
+        },
         capabilities={"portable_machine": True},
     )
     run = await db_session.get(GenerationRun, harness.run_id)
@@ -4099,18 +4293,23 @@ async def test_v2_command_ack_loss_reads_terminal_receipt_without_dispatch(
                     await execute()
                 assert len(sent) == 1 and reads == []
                 return
-            with tool_effect_scope(cold):
+            with tool_effect_scope(cold), capture_shell_diagnostics() as diagnostic:
                 result = await execute()
             assert result["ok"] is (damage in {None, "role"}), result
             assert len(harness.exec_calls) == len(sent) == 1
             if is_role:
                 assert sent[0]["operation_id"] == role_operation
                 assert saved["receipt"].operation_id == role_operation
-            if damage is None:
+            if damage in {None, "exit_126"}:
                 assert saved["tracked"] is True and len(reads) >= 2
-                assert result["detail"] == "cell exec ok"
+                assert result["detail"] == expected_detail
                 assert result["files"]["src/a.ts"] == "completed command"
                 assert (await harness.handle.snapshot_files())["src/a.ts"] == "completed command"
+                assert diagnostic["replayed_result"] is True
+                assert diagnostic["shell_outcome"] == "terminal"
+                assert diagnostic["exit_code"] == expected_code and diagnostic["timed_out"] is False
+                assert set(diagnostic["timings_ms"]) == {"workspace_sync", "total"}
+                assert diagnostic.keys().isdisjoint(result)
         finally:
             ex._SESSION_OWNER.reset(token)
             await owner.execute(text("SELECT pg_advisory_unlock_all()"))

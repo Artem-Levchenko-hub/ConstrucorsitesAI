@@ -21,6 +21,7 @@ import type {
   WsEvent,
 } from "@/lib/api/types";
 import { mergeAgentStepsBySequence } from "@/lib/agent-steps";
+import { readAgentToolDiagnostic } from "@/lib/agent-tool-diagnostic";
 import { generationEventStep } from "@/lib/generation-event-step";
 import { generationEventBelongsToRun } from "@/lib/generation-recovery";
 import {
@@ -481,12 +482,15 @@ export function usePromptStream(projectId: string, projectSlug: string, ownerId?
               detail: event.data.detail ?? undefined,
               ok: event.data.ok ?? null,
               skipped: event.data.skipped === true,
+              tool_diagnostic: readAgentToolDiagnostic(event.data.tool_diagnostic),
+              recordedAt: event.data.recordedAt,
             };
             if (next.eventId) return mergeAgentStepsBySequence(list, [next]);
             const last = list[list.length - 1];
             if (
               last &&
               last.kind === next.kind &&
+              last.tool_diagnostic?.call_id === next.tool_diagnostic?.call_id &&
               last.action === next.action &&
               last.path === next.path &&
               last.detail === next.detail

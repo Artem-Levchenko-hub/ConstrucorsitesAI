@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { AgentStep } from "@/lib/api/types";
-import { mergeAgentStepsBySequence } from "@/lib/agent-steps";
+import { countAgentActions, mergeAgentStepsBySequence } from "@/lib/agent-steps";
+import { generationEventStep } from "@/lib/generation-event-step";
 
 function event(seq: number, overrides: Partial<AgentStep> = {}): AgentStep {
   return {
@@ -53,5 +54,24 @@ describe("generation event replay", () => {
     const replayed = event(42, legacy);
 
     expect(mergeAgentStepsBySequence([legacy], [replayed])).toEqual([replayed]);
+  });
+
+  it("preserves the committed action count when replaying a technical result over truncated history", () => {
+    const persisted = event(432, {
+      eventId: "11111111-1111-4111-a111-111111111111",
+      kind: "heartbeat",
+      action: "bash",
+      actionCount: 218,
+      historyTruncated: true,
+      tool_diagnostic: { call_id: "53cbbb7d-1ebe-46ea-83ed-296a240a1373", state: "unknown" },
+    });
+    const replayed = generationEventStep({
+      event_id: persisted.eventId!, run_id: persisted.runId!, seq: persisted.seq!,
+      type: "agent.tool_finished", data: { ...persisted },
+    });
+    const restored = mergeAgentStepsBySequence([persisted], [replayed!]);
+    expect(restored).toHaveLength(1);
+    expect(restored[0]).toMatchObject({ kind: "heartbeat", historyTruncated: true });
+    expect(countAgentActions(restored, persisted.runId)).toBe(218);
   });
 });

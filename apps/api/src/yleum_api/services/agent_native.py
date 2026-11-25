@@ -49,6 +49,7 @@ from yleum_api.services.agent_output_budget import (
     is_sol_model,
     is_sonnet55_model,
 )
+from yleum_api.services.agent_tool_diagnostics import ToolInvocation, trace_tool
 from yleum_api.services.generation.continuation import (
     RecoveryBindingReader,
     RecoveryObserver,
@@ -1200,6 +1201,8 @@ def _step_detail(name: str, action: Action, obs: dict[str, Any]) -> str:
         t = str(s or "")
         return t if len(t) <= _STEP_DETAIL_CAP else t[:_STEP_DETAIL_CAP] + "\n… (обрезано)"
 
+    if name == "bash":
+        return ""
     if not obs.get("ok", True):
         return _cap(obs.get("error") or obs.get("detail") or "ошибка")
     if name == "write_file":
@@ -1211,7 +1214,7 @@ def _step_detail(name: str, action: Action, obs: dict[str, Any]) -> str:
         return _cap(obs.get("content") or "")
     if name == "build":
         return _cap(obs.get("detail") or obs.get("content") or "сборка чистая")
-    if name in ("grep", "list_dir", "bash", "read_logs", "docs", "provider_docs"):
+    if name in ("grep", "list_dir", "read_logs", "docs", "provider_docs"):
         return _cap(obs.get("detail") or obs.get("content") or "")
     if name in ("runtime_check", "probe", "verify_isolation"):
         return _cap(obs.get("detail") or obs.get("content") or "проверка пройдена")
@@ -2163,6 +2166,21 @@ async def _run_native_segment(
             evidence=_evidence(),
         )
 
+    async def _tool_step(
+        invocation: ToolInvocation, obs: dict[str, Any], *, ok: bool | None,
+        reason: str | None = None,
+    ) -> None:
+        if emit:
+            action = invocation.action
+            known = action.name in _KNOWN_ACTIONS
+            await emit("agent.step", {
+                "step": invocation.step, "action": action.name if known else "tool",
+                "path": action.path if known and action.name != "bash" else "",
+                "detail": _step_detail(action.name, action, obs), "ok": ok,
+                **({"reason": reason} if reason is not None else {}),
+                **invocation.step_fields(),
+            })
+
     async def _finish_without_provider(*, steps: int, reason: str, detail: str) -> AgentResult:
         """Stop provider traffic; flagged MAX transfers proof to finalization."""
         if product_handoff.outstanding is not None:
@@ -2183,25 +2201,22 @@ async def _run_native_segment(
             # can still be checked locally within the finalization reserve.
             reason = "output_limit"
             if written:
-                try:
-                    checked = await execute(Action("build", {}, ""))
-                except Exception as exc:
-                    raise_if_terminal_cell_error(exc)
-                    # Deadline/check failures must not promote a candidate or
-                    # expose exception/provider internals in the user summary.
-                    checked = {"ok": False}
-                if checked.get("environment_mutated"):
-                    _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
-                fast_check_green = bool(checked.get("ok"))
-                if fast_check_green:
-                    successful_tools["build"] = successful_tools.get("build", 0) + 1
-                    proof_after_write.add("build")
-                if emit:
-                    await emit("agent.step", {
-                        "step": steps, "action": "build", "path": "",
-                        "detail": _step_detail("build", Action("build", {}, ""), checked),
-                        "ok": fast_check_green, "reason": "output_limit",
-                    })
+                async with trace_tool(emit, steps, Action("build", {})) as invocation:
+                    try:
+                        checked = await invocation.execute(execute)
+                    except Exception as exc:
+                        raise_if_terminal_cell_error(exc)
+                        # A failed check cannot promote a candidate.
+                        checked = {"ok": False}
+                    if checked.get("environment_mutated"):
+                        _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
+                    fast_check_green = bool(checked.get("ok"))
+                    if fast_check_green:
+                        successful_tools["build"] = successful_tools.get("build", 0) + 1
+                        proof_after_write.add("build")
+                    await _tool_step(
+                        invocation, checked, ok=fast_check_green, reason="output_limit",
+                    )
         if (response_recovery.budget.since_progress
                 and last_build_ok is not True and not fast_check_green):
             return AgentResult(
@@ -2253,24 +2268,15 @@ async def _run_native_segment(
                 ),
             )
         _invalidate_proofs("build")
-        try:
-            final_build = await execute(Action(name="build", args={}, raw=""))
-        except Exception as exc:
-            raise_if_terminal_cell_error(exc)
-            final_build = {"ok": False, "error": f"final build probe crashed: {exc}"}
-        if final_build.get("environment_mutated"):
-            _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
-        if emit:
-            await emit(
-                "agent.step",
-                {
-                    "step": steps,
-                    "action": "build",
-                    "path": "",
-                    "detail": _step_detail("build", Action("build", {}, ""), final_build),
-                    "ok": bool(final_build.get("ok")),
-                },
-            )
+        async with trace_tool(emit, steps, Action("build", {})) as invocation:
+            try:
+                final_build = await invocation.execute(execute)
+            except Exception as exc:
+                raise_if_terminal_cell_error(exc)
+                final_build = {"ok": False, "error": "Final build probe failed."}
+            if final_build.get("environment_mutated"):
+                _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
+            await _tool_step(invocation, final_build, ok=bool(final_build.get("ok")))
         if final_build.get("ok"):
             successful_tools["build"] = successful_tools.get("build", 0) + 1
             proof_after_write.add("build")
@@ -2295,23 +2301,14 @@ async def _run_native_segment(
                     )
                 if action is None:
                     break
-                try:
-                    proof = await execute(action)
-                except Exception as exc:
-                    raise_if_terminal_cell_error(exc)
-                    proof = {"ok": False, "error": f"local proof crashed: {exc}"}
-                local_proofs += 1
-                if emit:
-                    await emit(
-                        "agent.step",
-                        {
-                            "step": steps,
-                            "action": action.name,
-                            "path": action.path,
-                            "detail": _step_detail(action.name, action, proof),
-                            "ok": bool(proof.get("ok")),
-                        },
-                    )
+                async with trace_tool(emit, steps, action) as invocation:
+                    try:
+                        proof = await invocation.execute(execute)
+                    except Exception as exc:
+                        raise_if_terminal_cell_error(exc)
+                        proof = {"ok": False, "error": "Local proof failed."}
+                    local_proofs += 1
+                    await _tool_step(invocation, proof, ok=bool(proof.get("ok")))
                 if not proof.get("ok"):
                     break
                 successful_tools[action.name] = successful_tools.get(action.name, 0) + 1
@@ -2377,26 +2374,24 @@ async def _run_native_segment(
             ) and (
                 checkpoint_at is None or now - checkpoint_at >= 180
             ):
-                checked = await execute(Action("build", {}, ""))
-                checkpoint_at = asyncio.get_running_loop().time()
-                _remember_build_check(checked)
-                _invalidate_proofs("build")
-                if last_build_ok:
-                    proof_after_write.add("build")
-                    successful_tools["build"] = successful_tools.get("build", 0) + 1
-                detail = _step_detail("build", Action("build", {}, ""), checked)
-                model_detail = render_model_observation(
-                    checked, max_body_chars=_MAX_TOOL_RESULT_CHARS, prefer_content=True,
-                )
-                managed_gap = _current_managed_gap()
-                if managed_gap is not None:
-                    model_detail += "\n" + managed_gap
-                convo.append({"role": "user", "content": "EARLY SOURCE CHECK:\n" + model_detail})
-                if emit:
-                    await emit("agent.step", {
-                        "step": step, "action": "build", "path": "",
-                        "detail": detail, "ok": last_build_ok,
+                async with trace_tool(emit, step, Action("build", {})) as invocation:
+                    checked = await invocation.execute(execute)
+                    checkpoint_at = asyncio.get_running_loop().time()
+                    _remember_build_check(checked)
+                    _invalidate_proofs("build")
+                    if last_build_ok:
+                        proof_after_write.add("build")
+                        successful_tools["build"] = successful_tools.get("build", 0) + 1
+                    model_detail = render_model_observation(
+                        checked, max_body_chars=_MAX_TOOL_RESULT_CHARS, prefer_content=True,
+                    )
+                    managed_gap = _current_managed_gap()
+                    if managed_gap is not None:
+                        model_detail += "\n" + managed_gap
+                    convo.append({
+                        "role": "user", "content": "EARLY SOURCE CHECK:\n" + model_detail,
                     })
+                    await _tool_step(invocation, checked, ok=last_build_ok)
                 if not source_repair and product_handoff.outstanding is None:
                     repair_gap = _managed_repair_after_feedback(managed_gap)
                     if repair_gap is not None:
@@ -2405,7 +2400,8 @@ async def _run_native_segment(
                     remaining = (edit_deadline - datetime.now(UTC)).total_seconds()
                     if remaining <= 0:
                         return await _finish_without_provider(
-                            steps=step, reason="finalization_reserve", detail=detail,
+                            steps=step, reason="finalization_reserve",
+                            detail=_step_detail("build", invocation.action, checked),
                         )
             if not restoring and remaining is not None and remaining <= 180:
                 convo.append({"role": "user", "content": (
@@ -3126,118 +3122,134 @@ async def _run_native_segment(
                     and _max_entry_missing
                     and (_max_prewrite_locked or non_entry_writes_before_entry > 0)
                 )
-                obs: dict[str, Any]
-                action_executed = False
-                if name not in _KNOWN_ACTIONS:
-                    obs = {"ok": False, "error": f"unknown action {name}"}
-                elif edit_source_changed is not None and not edit_source_changed() and (
-                    name in {"build", "runtime_check", "probe", "verify_isolation"}
-                    or (edit_write_required and name not in {"write_file", "edit_file"})
-                ):
-                    obs = {"ok": False, "error": _EDIT_SOURCE_NUDGE}
-                elif repair_write_required and not _repair_source_changed() and not (
-                    (name in {"write_file", "edit_file"} and _is_source_repair_path(action.path))
-                    or (
-                        name == "read_file"
-                        and _source_repair_read_path(action.path) in _remaining_repair_reads()
-                    )
-                ):
-                    obs = {"ok": False, "error": _SOURCE_REPAIR_NUDGE}
-                elif excess_recovery_writes:
-                    obs = {"ok": False, "error": "Apply one complete file change at a time."}
-                elif narrow_turn and name not in recovery_tools:
-                    obs = {"ok": False, "error": "Select one of the offered recovery operations."}
-                elif coordinated_max and name == "runtime_check":
-                    obs = {"ok": False, "error": MAX_COORDINATOR_HANDOFF}
-                elif _max_entry_required and not (
-                    name in {"write_file", "edit_file"}
-                    and _normalize_agent_path(action.path) == _MAX_PRODUCT_ENTRY_PATH
-                ):
-                    obs = {
-                        "ok": False,
-                        "error": (
-                            _MAX_PREWRITE_LOCK_RESULT
-                            if _max_prewrite_locked and non_entry_writes_before_entry == 0
-                            else _MAX_PRODUCT_ENTRY_REQUIRED_RESULT
-                        ),
-                    }
-                else:
-                    if source_repair and name == "read_file":
-                        # Discovery still uses the executor's broader relative-path
-                        # grammar. Count equivalent spellings of a read once, without
-                        # admitting those spellings through the strict locked schema.
-                        read_path = _source_repair_read_path(
-                            posixpath.normpath(action.path.replace("\\", "/")),
+                async with trace_tool(emit, step, action) as invocation:
+                    obs: dict[str, Any]
+                    action_executed = False
+                    if name not in _KNOWN_ACTIONS:
+                        invocation.skip("invalid_tool")
+                        obs = {"ok": False, "error": "Unknown tool requested."}
+                    elif edit_source_changed is not None and not edit_source_changed() and (
+                        name in {"build", "runtime_check", "probe", "verify_isolation"}
+                        or (edit_write_required and name not in {"write_file", "edit_file"})
+                    ):
+                        invocation.skip("source_change_required")
+                        obs = {"ok": False, "error": _EDIT_SOURCE_NUDGE}
+                    elif repair_write_required and not _repair_source_changed() and not (
+                        (
+                            name in {"write_file", "edit_file"}
+                            and _is_source_repair_path(action.path)
                         )
-                        if read_path is not None:
-                            repair_read_attempts.add(read_path)
-                        if repair_write_required and not _repair_source_changed():
-                            # Consume before execution, including failures and additional
-                            # tools in this batch; never reset no-write/proof budgets.
-                            repair_targeted_read_used = True
-                    if name in {"build", "runtime_check", "probe", "verify_isolation"}:
-                        _invalidate_proofs(name)
-                    try:
-                        action_executed = True
-                        async def execute_batch(
-                            current: Action = action, checks: PureCheckBatch = batch,
-                            verify_source: bool = directed,
-                            expected_source: str | None = directed_current,
-                        ) -> dict[str, Any]:
-                            if verify_source and snapshot_files is not None:
-                                before = await snapshot_files()
-                                if before.get(current.path) != expected_source:
-                                    if not (
+                        or (
+                            name == "read_file"
+                            and _source_repair_read_path(action.path) in _remaining_repair_reads()
+                        )
+                    ):
+                        invocation.skip("source_repair_required")
+                        obs = {"ok": False, "error": _SOURCE_REPAIR_NUDGE}
+                    elif excess_recovery_writes:
+                        invocation.skip("recovery_contract")
+                        obs = {"ok": False, "error": "Apply one complete file change at a time."}
+                    elif narrow_turn and name not in recovery_tools:
+                        invocation.skip("recovery_contract")
+                        obs = {
+                            "ok": False, "error": "Select one of the offered recovery operations.",
+                        }
+                    elif coordinated_max and name == "runtime_check":
+                        invocation.skip("verification_deferred")
+                        obs = {"ok": False, "error": MAX_COORDINATOR_HANDOFF}
+                    elif _max_entry_required and not (
+                        name in {"write_file", "edit_file"}
+                        and _normalize_agent_path(action.path) == _MAX_PRODUCT_ENTRY_PATH
+                    ):
+                        discovery_paused = (
+                            _max_prewrite_locked and non_entry_writes_before_entry == 0
+                        )
+                        invocation.skip(
+                            "discovery_pause" if discovery_paused else "source_change_required",
+                        )
+                        obs = {
+                            "ok": False,
+                            "error": (
+                                _MAX_PREWRITE_LOCK_RESULT if discovery_paused
+                                else _MAX_PRODUCT_ENTRY_REQUIRED_RESULT
+                            ),
+                        }
+                    else:
+                        if source_repair and name == "read_file":
+                            # Count equivalent spellings without weakening the locked schema.
+                            read_path = _source_repair_read_path(
+                                posixpath.normpath(action.path.replace("\\", "/")),
+                            )
+                            if read_path is not None:
+                                repair_read_attempts.add(read_path)
+                            if repair_write_required and not _repair_source_changed():
+                                repair_targeted_read_used = True
+                        if name in {"build", "runtime_check", "probe", "verify_isolation"}:
+                            _invalidate_proofs(name)
+                        try:
+                            action_executed = True
+
+                            async def execute_batch(
+                                current: Action = action, checks: PureCheckBatch = batch,
+                                verify_source: bool = directed,
+                                expected_source: str | None = directed_current,
+                                attempt: ToolInvocation = invocation,
+                            ) -> dict[str, Any]:
+                                if verify_source and snapshot_files is not None:
+                                    before = await snapshot_files()
+                                    if before.get(current.path) != expected_source and not (
                                         continuation is not None
                                         and await is_reconciling_source_write(
                                             continuation, name=current.name, args=current.args,
                                         )
                                     ):
+                                        attempt.skip("context_mismatch")
                                         return {"ok": False, "error": "Selected source changed."}
-                            result, _ = await checks.execute(current, execute)
-                            if verify_source and snapshot_files is not None and result.get("ok"):
-                                actual = (await snapshot_files()).get(current.path)
-                                expected = current.args.get("content")
-                                if expected_source is not None:
-                                    expected = expected_source.replace(
-                                        current.args["search"], current.args["replace"], 1,
-                                    )
-                                if actual != expected:
-                                    return {"ok": False, "error": "Selected write was not applied."}
-                            return result
+                                result, cached = await checks.execute(
+                                    current, lambda _: attempt.execute(execute),
+                                )
+                                if cached:
+                                    attempt.skip("cached_result")
+                                if (
+                                    verify_source and snapshot_files is not None
+                                    and result.get("ok")
+                                ):
+                                    actual = (await snapshot_files()).get(current.path)
+                                    expected = current.args.get("content")
+                                    if expected_source is not None:
+                                        expected = expected_source.replace(
+                                            current.args["search"], current.args["replace"], 1,
+                                        )
+                                    if actual != expected:
+                                        attempt.fail_context()
+                                        return {
+                                            "ok": False, "error": "Selected write was not applied.",
+                                        }
+                                return result
 
-                        tool = getattr(continuation, "tool", None)
-                        obs = (await tool(tu_id, action, execute_batch)
-                               if tool is not None else await execute_batch())
-                    except Exception as exc:  # a tool crash must not kill the build
-                        raise_if_terminal_cell_error(exc)
-                        obs = {"ok": False, "error": f"tool {name} crashed: {exc}"}
-                if not action_executed:
-                    batch.clear()
-                if action_executed and (
-                    name in {"write_file", "edit_file", "delete_file"} or obs.get("files")
-                    or obs.get("environment_mutated") is True
-                    or (name == "bash" and obs.get("environment_mutated") is not False)
-                ):
-                    product_handoff.advice = None
-                if obs.get("environment_mutated"):
-                    _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
-                    wrote_since_build = True
-                    last_build_ok = None
-                # Emit AFTER execute so the step carries a `detail` — what the tool
-                # actually did (written content preview, build output, read result)
-                # — so the UI can let the user drill INTO a step and see inside it.
-                if emit:
-                    await emit(
-                        "agent.step",
-                        {
-                            "step": step,
-                            "action": name,
-                            "path": action.path,
-                            "detail": _step_detail(name, action, obs),
-                            "ok": bool(obs.get("ok", True)),
-                        },
-                    )
+                            tool = getattr(continuation, "tool", None)
+                            if tool is None:
+                                obs = await execute_batch()
+                            else:
+                                obs = await tool(tu_id, action, execute_batch)
+                                invocation.finish_continuation(obs)
+                        except Exception as exc:  # keep nonterminal tool failures in the batch
+                            invocation.record_error(exc)
+                            raise_if_terminal_cell_error(exc)
+                            obs = {"ok": False, "error": "Tool execution failed."}
+                    if not action_executed:
+                        batch.clear()
+                    if action_executed and (
+                        name in {"write_file", "edit_file", "delete_file"} or obs.get("files")
+                        or obs.get("environment_mutated") is True
+                        or (name == "bash" and obs.get("environment_mutated") is not False)
+                    ):
+                        product_handoff.advice = None
+                    if obs.get("environment_mutated"):
+                        _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
+                        wrote_since_build = True
+                        last_build_ok = None
+                    await _tool_step(invocation, obs, ok=bool(obs.get("ok", True)))
 
                 ops_this_turn += 1
                 if obs.get("infra_dead"):
@@ -3417,6 +3429,8 @@ async def _run_native_segment(
                 for args, done_result in pending_done:
                     if done_gap:
                         done_result.update(is_error=True, content="Not done yet: " + done_gap)
+                        async with trace_tool(emit, step, Action("done", {})) as invocation:
+                            invocation.skip("done_blocked")
                     else:
                         done_summary = str(args.get("summary", ""))
                 if done_summary is not None:

@@ -52,6 +52,7 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from itertools import count as segment_numbers
 from pathlib import Path, PurePosixPath
+from time import monotonic
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, PositiveInt
@@ -77,6 +78,12 @@ from yleum_api.services.agent_product_work import (
     reported_omission,
 )
 from yleum_api.services.agent_progress import bounded_redacted_diagnostic
+from yleum_api.services.agent_tool_diagnostics import (
+    AGENT_ACTIONS,
+    ToolInvocation,
+    skipped_tool_diagnostic,
+    trace_tool,
+)
 from yleum_api.services.generation.continuation import (
     RecoveryBindingReader,
     RecoveryObserver,
@@ -183,11 +190,7 @@ _ACTION_RE = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 
-_KNOWN_ACTIONS = frozenset(
-    {"list_dir", "read_file", "grep", "docs", "provider_docs", "write_file", "edit_file", "build",
-     "bash", "read_logs", "runtime_check", "generate_media", "probe",
-     "verify_isolation", "done"}
-)
+_KNOWN_ACTIONS = AGENT_ACTIONS
 
 # Idempotent "observe the world after acting" actions. Re-running them across a
 # build→fix loop is legitimate progress, NOT a cycle: a clean way to verify the
@@ -1001,29 +1004,46 @@ async def _run_agent_segment(
         obs: dict[str, Any] | None = None,
         *,
         skipped: str | None = None,
+        reason_code: str | None = None,
+        invocation: ToolInvocation | None = None,
     ) -> None:
         if emit:
             result = obs or {}
+            diagnostic = invocation.step_fields() if invocation is not None else (
+                {"tool_diagnostic": skipped_tool_diagnostic(reason_code)} if reason_code else {}
+            )
             await emit(
                 "agent.step",
                 {
                     "step": step,
                     "action": action.name,
-                    "path": action.path,
+                    "path": "" if action.name == "bash" else action.path,
                     "ok": result.get("ok") if type(result.get("ok")) is bool else None,
                     "detail": skipped
                     or bounded_redacted_diagnostic(
+                        "" if action.name == "bash" else
                         str(result.get("detail") or result.get("error") or ""),
                         max_bytes=_MAX_OBS_CHARS,
                     ),
                     **({"skipped": True} if skipped is not None else {}),
+                    **diagnostic,
                 },
             )
 
-    async def _skip_action(action: Action, step: int, reason: str) -> None:
+    async def _legacy_tool(key: str, invocation: ToolInvocation) -> dict[str, Any]:
+        tool = getattr(continuation, "tool", None)
+        if tool is None:
+            return await invocation.execute(execute)
+        observation: dict[str, Any] = await tool(
+            key, invocation.action, partial(invocation.execute, execute),
+        )
+        invocation.finish_continuation(observation)
+        return observation
+
+    async def _skip_action(action: Action, step: int, reason: str, code: str) -> None:
         nonlocal no_write_streak
         no_write_streak += 1
-        await _step_result(action, step, skipped=reason)
+        await _step_result(action, step, skipped=reason, reason_code=code)
         previous = cached_information(
             action, [*(discovery_history or []), *convo], parse_action,
             source_files=completion_inventory,
@@ -1232,17 +1252,23 @@ async def _run_agent_segment(
         if fast_check_fresh:
             return _ship_green_or(stopped, step_no, "deadline")
         action = Action(name="build", args={})
-        try:
-            async with asyncio.timeout(min(_DURABLE_DEADLINE_CHECK_SECONDS, remaining)):
-                before = dict(await snapshot_files())
-                obs = await continuation.tool("legacy-deadline-build", action, lambda: execute(action))
-                after = dict(await snapshot_files())
-        except TimeoutError:
-            fast_check_fresh = False
-            return stopped
-        completion_inventory = after
-        pending_source_build = False
-        await _step_result(action, step_no, obs)
+        budget = min(_DURABLE_DEADLINE_CHECK_SECONDS, remaining)
+        async with trace_tool(emit, step_no, action, dispatch_deadline=monotonic() + budget) as invocation:
+            try:
+                async with asyncio.timeout(budget):
+                    before = dict(await snapshot_files())
+                    obs = await continuation.tool(
+                        "legacy-deadline-build", action, partial(invocation.execute, execute),
+                    )
+                    invocation.finish_continuation(obs)
+                    after = dict(await snapshot_files())
+            except TimeoutError:
+                invocation.note_deadline()
+                fast_check_fresh = False
+                return stopped
+            completion_inventory = after
+            pending_source_build = False
+            await _step_result(action, step_no, obs, invocation=invocation)
         stopped.steps = step_no + 1
         if before != after or obs.get("files") or obs.get("environment_mutated") is True:
             if handoff is not None:
@@ -1640,29 +1666,21 @@ async def _run_agent_segment(
         action = completion_action(reply)
 
         if action is None:
-            # DIAGNOSTIC: the "stalled, 0 files" failure is opus emitting replies
-            # parse_action rejects. Probes proved opus writes fine in isolation, so
-            # the cause lives in the full prod context — log the VERBATIM reply +
-            # why it failed to parse (these replies are short) to root-cause it.
-            _tags = list(_ACTION_RE.finditer(reply or ""))
+            tags = list(_ACTION_RE.finditer(reply or ""))
             if not (reply or "").strip():
-                _why = "EMPTY reply from gateway"
-            elif not _tags:
-                _why = "no <omnia:action> tag"
+                reason = "empty_response"
+            elif not tags:
+                reason = "missing_action"
+            elif tags[-1].group(1).strip().lower() not in _KNOWN_ACTIONS:
+                reason = "invalid_tool"
             else:
-                _nm = _tags[-1].group(1).strip().lower()
-                _why = (
-                    f"unknown name={_nm!r}" if _nm not in _KNOWN_ACTIONS
-                    else f"name={_nm} body-not-valid-json"
-                )
-            print(
-                f"[AGENT] step={step} NO-ACTION model={active_model} why=({_why}) "
-                f"reply={_truncate(reply or '', 1400)!r}",
-                flush=True,
-            )
+                reason = "invalid_tool_arguments"
+            print(f"[AGENT] step={step} NO-ACTION reason={reason}", flush=True)
             stalls += 1
             if emit:
-                await emit("agent.stalled", {"step": step})
+                await emit("agent.stalled", {
+                    "step": step, "tool_diagnostic": skipped_tool_diagnostic(reason),
+                })
             if stalls >= _NO_ACTION_ABORT_AT:
                 return AgentResult(
                     done=False, summary="model emitted no valid action repeatedly",
@@ -1692,7 +1710,9 @@ async def _run_agent_segment(
                 requested=product_work is not None and SOL_COMPLETION_REPORT in call_msgs[0]["content"],
             )
             if feedback:
-                await _step_result(action, step, {"ok": False, "detail": feedback})
+                await _step_result(
+                    action, step, {"ok": False, "detail": feedback}, reason_code="done_blocked",
+                )
                 convo.append({"role": "user", "content": feedback})
                 no_write_streak += 1
                 repeat_count = repeat_count + 1 if last_sig == PRODUCT_WORK_REMAINING else 0
@@ -1705,7 +1725,10 @@ async def _run_agent_segment(
                 continue
 
         if action.name in _SOURCE_PROOF_ACTIONS and _source_change_pending():
-            await _skip_action(action, step, _SOURCE_CHANGE_REQUIRED)
+            await _skip_action(
+                action, step, _SOURCE_CHANGE_REQUIRED,
+                "done_blocked" if action.name == "done" else "source_change_required",
+            )
             if no_write_streak >= _NO_WRITE_ABORT_AT:
                 return AgentResult(
                     done=False, summary=_SOURCE_CHANGE_REQUIRED, files=written,
@@ -1716,7 +1739,10 @@ async def _run_agent_segment(
 
         if action.name == "done":
             if pending_truncation:
-                await _step_result(action, step, skipped="Truncated response requires a fresh build")
+                await _step_result(
+                    action, step, skipped="Truncated response requires a fresh build",
+                    reason_code="done_blocked",
+                )
                 convo.append({"role": "user", "content": (
                     "NOT DONE: the truncated action was not applied. Finish a smaller complete "
                     "step and run build successfully before done."
@@ -1751,9 +1777,11 @@ async def _run_agent_segment(
             if gap is not None:
                 if source_feedback:
                     no_write_streak += 1
-                    await _step_result(action, step, {"ok": False, "detail": gap})
+                    await _step_result(
+                        action, step, {"ok": False, "detail": gap}, reason_code="done_blocked",
+                    )
                 else:
-                    await _step_result(action, step, skipped=gap)
+                    await _step_result(action, step, skipped=gap, reason_code="done_blocked")
                 if emit:
                     await emit("agent.stalled", {"step": step})
                 convo.append({"role": "user", "content": (
@@ -1797,7 +1825,8 @@ async def _run_agent_segment(
             action.name == "build" and pending_source_build
         ):
             await _step_result(
-                action, step, skipped="No source progress; exploration budget exhausted"
+                action, step, skipped="No source progress; exploration budget exhausted",
+                reason_code="discovery_pause",
             )
             return _ship_green_or(
                 _exploration_failure(step), step, "explore",
@@ -1809,7 +1838,9 @@ async def _run_agent_segment(
         read_path = _safe_file_path(action.path) if action.name == "read_file" else None
         repair_read = _can_read_repair_source(action)
         if source_repair.gap is not None and action.name == "read_file" and not repair_read:
-            await _skip_action(action, step, "Source repair read unavailable; edit the source")
+            await _skip_action(
+                action, step, "Source repair read unavailable; edit the source", "source_repair_required",
+            )
             await _nudge_exploration(step)
             continue
         sig_args = {**action.args, "path": read_path} if read_path else action.args
@@ -1833,7 +1864,10 @@ async def _run_agent_segment(
         if sig != last_sig and action.name not in _VERIFY_ACTIONS and not repair_read:
             cycle_count = sig_seen.get(sig, 0) + blocked_cycles.get(sig, 0) + 1
             if cycle_count >= _REPEAT_ABORT_AT:
-                await _step_result(action, step, skipped="Repeated unchanged action; cycle limit")
+                await _step_result(
+                    action, step, skipped="Repeated unchanged action; cycle limit",
+                    reason_code="repeat_guard",
+                )
                 return _ship_green_or(
                     AgentResult(
                         done=False,
@@ -1845,7 +1879,7 @@ async def _run_agent_segment(
                 )
             if cycle_count >= _REPEAT_NUDGE_AT:
                 blocked_cycles[sig] = blocked_cycles.get(sig, 0) + 1
-                await _skip_action(action, step, "Repeated unchanged action; cycle guard")
+                await _skip_action(action, step, "Repeated unchanged action; cycle guard", "repeat_guard")
                 await _escalate(step, "cycle")
                 print(
                     f"[AGENT] step={step} CYCLE x{cycle_count} {action.name} {action.path}",
@@ -1859,7 +1893,9 @@ async def _run_agent_segment(
                 continue
         next_repeat_count = repeat_count + 1 if sig == last_sig else 0
         if next_repeat_count >= 5 and not repair_read:
-            await _step_result(action, step, skipped="Repeated identical action; repeat limit")
+            await _step_result(
+                action, step, skipped="Repeated identical action; repeat limit", reason_code="repeat_guard",
+            )
             return _ship_green_or(
                 AgentResult(
                     done=False,
@@ -1871,7 +1907,7 @@ async def _run_agent_segment(
             )
         if next_repeat_count >= 2 and not repair_read:
             repeat_count = next_repeat_count
-            await _skip_action(action, step, "Repeated identical action; repeat guard")
+            await _skip_action(action, step, "Repeated identical action; repeat guard", "repeat_guard")
             await _escalate(step, "repeat")
             print(
                 f"[AGENT] step={step} REPEAT x{repeat_count} {action.name} {action.path}",
@@ -1915,7 +1951,9 @@ async def _run_agent_segment(
             #     legitimate without a build in between → force a build, then abort;
             #   * a high count of writes with NO build at all → one gentle reminder.
             if rewrites_since_build + blocked_rewrites >= _REWRITE_LOOP_ABORT_AT:
-                await _step_result(action, step, skipped="Rewrite churn without build; limit")
+                await _step_result(
+                    action, step, skipped="Rewrite churn without build; limit", reason_code="build_required",
+                )
                 return _ship_green_or(
                     AgentResult(
                         done=False,
@@ -1927,7 +1965,7 @@ async def _run_agent_segment(
                 )
             if rewrites_since_build >= _REWRITE_BEFORE_BUILD_NUDGE:
                 blocked_rewrites += 1
-                await _skip_action(action, step, "Rewrite paused until build")
+                await _skip_action(action, step, "Rewrite paused until build", "build_required")
                 await _escalate(step, "rewrite_loop")
                 print(
                     f"[AGENT] step={step} REWRITE-LOOP x{rewrites_since_build} "
@@ -1943,7 +1981,7 @@ async def _run_agent_segment(
                 and writes_since_build >= _WRITES_BEFORE_BUILD_NUDGE
             ):
                 build_pressure_nudged = True  # one gentle reminder per no-build window
-                await _skip_action(action, step, "Writes paused until build")
+                await _skip_action(action, step, "Writes paused until build", "build_required")
                 await _escalate(step, "no_build")
                 print(
                     f"[AGENT] step={step} BUILD-PRESSURE x{writes_since_build} "
@@ -1958,7 +1996,7 @@ async def _run_agent_segment(
         )):
             # The threshold-producing action ran on the previous turn. Its real
             # observation is already visible; only further discovery is paused.
-            await _skip_action(action, step, "No source progress; discovery paused")
+            await _skip_action(action, step, "No source progress; discovery paused", "discovery_pause")
             await _nudge_exploration(step)
             continue
 
@@ -1970,11 +2008,8 @@ async def _run_agent_segment(
         before_content = None
         if snapshot_files is None and write_path in read_sigs and not content_receipts_seen:
             before_action = Action(name="read_file", args={"path": write_path})
-            tool = getattr(continuation, "tool", None)
-            before = (
-                await tool("legacy-before", before_action, lambda current=before_action: execute(current))
-                if tool is not None else await execute(before_action)
-            )
+            async with trace_tool(emit, step, before_action) as invocation:
+                before = await _legacy_tool("legacy-before", invocation)
             content = before.get("content")
             if before.get("ok") is True and isinstance(content, str) and len(content) <= _MAX_READ_CHARS:
                 before_content = content
@@ -1990,14 +2025,11 @@ async def _run_agent_segment(
             # Repeat counters above still accrue; only this phase's first read is exempt.
             source_repair.read_used = True
         source_before = dict(await snapshot_files()) if snapshot_files is not None else None
-        tool = getattr(continuation, "tool", None)
-        obs = (
-            await tool("legacy-action", action, lambda current=action: execute(current))
-            if tool is not None else await execute(action)
-        )
-        source_after = dict(await snapshot_files()) if snapshot_files is not None else None
-        completion_inventory = source_after
-        await _step_result(action, step, obs)
+        async with trace_tool(emit, step, action) as invocation:
+            obs = await _legacy_tool("legacy-action", invocation)
+            source_after = dict(await snapshot_files()) if snapshot_files is not None else None
+            completion_inventory = source_after
+            await _step_result(action, step, obs, invocation=invocation)
         after_content = obs.get("content")
         receipt = obs.get("content_change")
         receipt_valid = (

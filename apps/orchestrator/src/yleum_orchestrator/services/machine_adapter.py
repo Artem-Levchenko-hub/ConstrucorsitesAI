@@ -829,6 +829,7 @@ class MachineAdapter:
             exit_code: int,
             output: str,
             timed_out: bool = False,
+            start_timed_out: bool = False,
         ) -> DockerCommandResult:
             terminal = MachineOperationResult(
                 operation_id=str(request.operation_id),
@@ -842,6 +843,7 @@ class MachineAdapter:
                 exit_code=stored.exit_code or 0,
                 output=stored.output,
                 timed_out=stored.timed_out,
+                start_timed_out=start_timed_out,
             )
 
         output: list[str] = []
@@ -897,13 +899,16 @@ class MachineAdapter:
                     exit_code=124,
                     output="request budget exhausted before next command",
                     timed_out=True,
+                    start_timed_out=role is None,
                 )
             deadline = min(request_deadline, time.monotonic() + timeout)
             try:
                 with limit_reader_dispatch_wait(deadline):
                     operation = await machine.exec_start(argv, cwd, operation_mutation)
             except ShellStartDeadlineExceeded as exc:
-                return await finish(exit_code=124, output=str(exc), timed_out=True)
+                return await finish(
+                    exit_code=124, output=str(exc), timed_out=True, start_timed_out=role is None,
+                )
             while True:
                 result = await machine.exec_status(operation, operation_mutation)
                 await machine.request_heartbeat(

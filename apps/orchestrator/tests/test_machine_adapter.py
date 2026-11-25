@@ -953,6 +953,7 @@ async def test_plain_shell_keeps_original_deadline_after_admission(monkeypatch, 
     assert (journal_deadline - after).total_seconds() <= remaining
     assert (journal_deadline - before).total_seconds() >= remaining
     assert result.timed_out and result.exit_code == 124
+    assert result.start_timed_out is (not remaining)
     assert starts == ([(250, ["sh", "-lc", request.cmd])] if remaining else [])
     assert machine.exec_terminate.await_count == (1 if remaining else 0)
 
