@@ -80,7 +80,8 @@ _STAGE_REQUEST_CODES = {
 # The regression suite checks these fixed vocabularies against their producers.
 _GENERATION_FAILURE_CODES = frozenset({
     "wallet_empty", "provider_unavailable", "provider_access", "runtime_unavailable",
-    "deadline", "no_changes", "data_contract", "verification",
+    "deadline", "step_limit", "request_too_large", "product_work_remaining",
+    "no_changes", "data_contract", "verification",
 })
 _GATEWAY_ERROR_CODES = frozenset({
     "model_unavailable", "model_not_found", "validation_failed", "wallet_empty",
