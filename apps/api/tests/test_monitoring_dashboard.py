@@ -10,7 +10,11 @@ from yleum_api.models.studio_activity import StudioActivity
 from yleum_api.models.user import User
 from yleum_api.services.monitoring.catalog import METRICS
 from yleum_api.services.monitoring.database import DATABASE_METRICS
-from yleum_api.services.monitoring.prometheus import PROMETHEUS_METRICS, metric_query
+from yleum_api.services.monitoring.prometheus import (
+    PLATFORM_VPS,
+    PROMETHEUS_METRICS,
+    metric_query,
+)
 
 BASE = "/api/admin/monitoring"
 
@@ -21,7 +25,23 @@ def test_numbering_has_all_original_metrics_and_query_templates():
     vps = uuid4()
     for metric in PROMETHEUS_METRICS.values():
         compiled = metric_query(metric, period_hours=24, client=None, vps=vps)
-        assert all(token not in compiled for token in ("<scope>", "<labels>", "<period>"))
+        placeholders = ("<scope>", "<labels>", "<probe_labels>", "<period>")
+        assert all(token not in compiled for token in placeholders)
+
+
+def test_platform_host_filter_uses_existing_exporter_and_probe_labels():
+    host = next(id_ for id_, name in PLATFORM_VPS.items() if name == "core")
+    cpu = metric_query(PROMETHEUS_METRICS[9], period_hours=24, client=None, vps=host)
+    assert 'vps="core"' in cpu
+    assert "deploy_target_id" not in cpu
+    probe = metric_query(PROMETHEUS_METRICS[2], period_hours=24, client=None, vps=host)
+    assert 'target_vps="core"' in probe
+    client_vps = uuid4()
+    vps_probe = metric_query(
+        PROMETHEUS_METRICS[2], period_hours=24, client=None, vps=client_vps
+    )
+    assert f'deploy_target_id="{client_vps}"' in vps_probe
+    assert 'target_vps="core"' not in vps_probe
 
 
 async def test_admin_queries_execute_on_postgres_and_degrade_explicitly(client, db_session):
@@ -44,6 +64,9 @@ async def test_admin_queries_execute_on_postgres_and_degrade_explicitly(client, 
         assert result.json()["state"] in {"measured", "no_data"}, (number, result.text)
     result = await client.get(BASE + "/metrics/1")
     assert result.json()["points"][0]["value"] == 0
+    coverage = (await client.get(BASE + "/metrics/100")).json()
+    assert coverage["state"] == "not_applicable"
+    assert coverage["points"] == []
     assert (await client.get(BASE + "/metrics/3")).status_code == 404
     assert (await client.get(BASE + "/metrics/1?period=168h")).status_code == 422
 

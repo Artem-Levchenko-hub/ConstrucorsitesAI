@@ -160,6 +160,14 @@ JOIN generation_provider_attempts a ON a.provider_call_id = c.id
 JOIN generation_provider_attempts p ON p.attempt_id = a.parent_attempt_id AND p.run_id = a.run_id
 LEFT JOIN provider_calls old_call ON old_call.id = p.provider_call_id
 """
+_RUN_ATTEMPTS = f"""
+SELECT r.id, r.status, r.finished_at, r.task_type,
+       count(*) FILTER (WHERE a.parent_attempt_id IS NOT NULL) AS retries
+FROM ({_RUNS}) r
+JOIN generation_provider_attempts a ON a.run_id = r.id
+WHERE r.finished_at {_WINDOW} AND r.{_FINISHED}
+GROUP BY r.id, r.status, r.finished_at, r.task_type
+"""
 _INTEGRATION_FAILURES = """
 SELECT o.provider, o.kind, o.status, o.finished_at
 FROM integration_operations o
@@ -250,6 +258,7 @@ _INPUTS = {
     "Проверки версий MAX": _VERSION_CHECKS,
     "Попытки провайдеров": _PROVIDER_RETRIES,
     "Журнал интеграций": _INTEGRATION_FAILURES,
+    "Повторы провайдеров по задачам": _RUN_ATTEMPTS,
     "Первый вход и генерация": _STUDIO_FIRST_SUCCESS,
     "Ошибки сеансов": _STUDIO_ERRORS,
     "Конверсия редактора": _STUDIO_DAYS,
@@ -398,6 +407,19 @@ DATABASE_METRICS = {
         condition=f"{_COMPLETION} AND status='failed'"
         " AND error LIKE 'generation deadline exceeded;%'",
         note="Учтены зарегистрированные превышения общего окна генерации.",
+    ),
+    40: _measure(
+        "Повторы провайдеров по задачам",
+        "avg(retries)",
+        label=_UNITS,
+        note="Связанные автоматические повторные вызовы провайдеров по терминальным задачам.",
+    ),
+    41: _measure(
+        "Повторы провайдеров по задачам",
+        "100.0 * count(*) FILTER (WHERE status = 'completed') / count(*)",
+        condition="retries > 0",
+        label=_UNITS,
+        note="Доля успеха среди терминальных задач со связанным повтором провайдера.",
     ),
     43: _measure(
         _RUN_SOURCE,

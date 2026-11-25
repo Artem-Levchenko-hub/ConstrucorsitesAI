@@ -47,7 +47,7 @@ case "$MODE" in
     fi
     # node-exporter слушает только на WG-адресе (Prometheus на core ходит по mesh)
     cat > /etc/default/prometheus-node-exporter <<EOF
-ARGS="--web.listen-address=$WG_IP:9100 --collector.systemd --collector.processes"
+ARGS="--web.listen-address=$WG_IP:9100 --collector.systemd --collector.processes --collector.textfile.directory=/var/lib/prometheus/node-exporter"
 EOF
     systemctl enable --now prometheus-node-exporter >/dev/null
     systemctl restart prometheus-node-exporter

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from math import isfinite
-from uuid import UUID
+from uuid import NAMESPACE_DNS, UUID, uuid5
 
 import httpx
 from pydantic import BaseModel, Field
@@ -15,24 +15,57 @@ class PrometheusMetric:
     instant: bool = False
 
 
+# Use stable filter IDs without creating synthetic entries in the client VPS registry.
+PLATFORM_VPS = {
+    uuid5(NAMESPACE_DNS, f"monitoring.{host}.yleum.ru"): host
+    for host in ("core", "runtime", "commerce")
+}
+
+
 _CPU = (
     "100 * (1 - avg by (vps) (sum without (mode) "
     '(rate(node_cpu_seconds_total{mode=~"idle|steal"<scope>}[5m]))))'
 )
-_DISK = 'node_filesystem_avail_bytes{fstype=~"ext[234]|xfs|btrfs|zfs"<scope>}'
+_DISK = (
+    'node_filesystem_avail_bytes{fstype=~"ext[234]|xfs|btrfs|zfs",'
+    'mountpoint!~"/(var/lib/kubelet|var/lib/rancher|run)(/.*)?"<scope>}'
+)
 _DISK_SIZE = _DISK.replace("_avail_", "_size_")
 _MEMORY = "node_memory_MemTotal_bytes{<labels>} - node_memory_MemAvailable_bytes{<labels>}"
-_VOLUME = 'node_filesystem_size_bytes{fstype=~"ext[234]|xfs|btrfs|zfs"<scope>}'
-_USED = f"({_VOLUME} - {_DISK})"
+_USED = f"({_DISK_SIZE} - {_DISK})"
+_PREVIOUS_USED = f"({_DISK_SIZE} offset 1d - {_DISK} offset 1d)"
 _NETWORK = 'node_network_<direction>_bytes_total{device!~"lo|veth.*|docker.*|cni.*"<scope>}'
 _INTERFACE = "yleum_external_interface{<labels>}"
 _API_REQUESTS = "yleum_http_request_duration_seconds_count"
 _API_BUCKETS = "yleum_http_request_duration_seconds_bucket"
 _SQL_BUCKETS = "yleum_db_query_duration_seconds_bucket"
+_PROBE = (
+    'label_replace(100 * avg_over_time(yleum_generation_external_probe_success'
+    '{<probe_labels>}[<period>]), "vps", "$1", "target_vps", "(.+)")'
+)
+_API_FRESH = (
+    ' and on (job, instance) (time() - node_textfile_mtime_seconds'
+    '{file=~".*/yleum_platform_api[.]prom"} < 90)'
+)
+
+_REQUIRED_VPS_SERIES = (
+    "node_cpu_seconds_total", "node_memory_MemTotal_bytes", "node_vmstat_oom_kill",
+    "node_filesystem_avail_bytes", "node_network_receive_bytes_total",
+    "node_network_transmit_bytes_total", "yleum_external_interface", "probe_success",
+    "yleum_unplanned_boots_total", "yleum_crash_restarts_total",
+    "yleum_block_io_duration_seconds_bucket", "yleum_backup_results_total",
+    "yleum_backup_last_verified_timestamp_seconds", "yleum_restore_tests_total",
+)
+_COVERAGE = " and on (deploy_target_id) ".join(
+    f'max by (deploy_target_id) (present_over_time({name}'
+    '{deploy_target_id!=""<scope>}[1d]))'
+    for name in _REQUIRED_VPS_SERIES
+)
 
 PROMETHEUS_METRICS = {
     2: PrometheusMetric(
-        '100 * avg_over_time(probe_success{job="yleum-generation-external"<scope>}[<period>])',
+        _PROBE + ' or 100 * avg_over_time(probe_success'
+        '{job="yleum-generation-external"<scope>}[<period>])',
         ("vps",),
     ),
     5: PrometheusMetric("yleum_incident_first_delivery_seconds{<labels>} / 60", ("vps",)),
@@ -68,7 +101,7 @@ PROMETHEUS_METRICS = {
         f'label_replace(100 * {_DISK} / {_DISK_SIZE}, "stat", "%", "vps", ".*")',
         ("vps", "mountpoint", "stat"),
     ),
-    14: PrometheusMetric(f"delta(({_USED})[1d:5m]) / 1e9", ("vps", "mountpoint")),
+    14: PrometheusMetric(f"({_USED} - {_PREVIOUS_USED}) / 1e9", ("vps", "mountpoint")),
     15: PrometheusMetric(
         "1000 * histogram_quantile(0.95, sum by (le, vps, device, direction) "
         "(rate(yleum_block_io_duration_seconds_bucket{<labels>}[<period>])))",
@@ -105,6 +138,7 @@ PROMETHEUS_METRICS = {
         ("vps", "device", "direction"),
     ),
     19: PrometheusMetric(
+        'yleum_backup_window_results{window="<period>"<scope>} or '
         'increase(yleum_backup_results_total{result=~"failed|missed"<scope>}[<period>])',
         ("vps", "result"),
     ),
@@ -119,30 +153,31 @@ PROMETHEUS_METRICS = {
         ("vps",),
     ),
     91: PrometheusMetric(
-        f"sum by (route, method, status) (increase({_API_REQUESTS}[<period>]))",
+        f"sum by (route, method, status) (increase({_API_REQUESTS}[<period>]){_API_FRESH})",
         ("method", "route", "status"),
         False,
     ),
     92: PrometheusMetric(
-        f'100 * (sum by (route, method) (increase({_API_REQUESTS}{{status=~"5.."}}[<period>]))'
-        f" or 0 * sum by (route, method) (increase({_API_REQUESTS}[<period>])))"
-        f" / sum by (route, method) (increase({_API_REQUESTS}[<period>]))",
+        f'100 * (sum by (route, method) (increase({_API_REQUESTS}{{status=~"5.."}}[<period>])'
+        f"{_API_FRESH}) or 0 * sum by (route, method) (increase({_API_REQUESTS}[<period>])"
+        f"{_API_FRESH})) / sum by (route, method) (increase({_API_REQUESTS}[<period>])"
+        f"{_API_FRESH})",
         ("method", "route"),
         False,
     ),
     93: PrometheusMetric(
         f"label_replace(1000 * histogram_quantile(0.5, sum by (le, route, method) "
-        f'(rate({_API_BUCKETS}[<period>]))), "stat", "Медиана", "route", ".*") or '
+        f'(rate({_API_BUCKETS}[<period>]){_API_FRESH})), "stat", "Медиана", "route", ".*") or '
         f"label_replace(1000 * histogram_quantile(0.95, sum by (le, route, method) "
-        f'(rate({_API_BUCKETS}[<period>]))), "stat", "p95", "route", ".*")',
+        f'(rate({_API_BUCKETS}[<period>]){_API_FRESH})), "stat", "p95", "route", ".*")',
         ("method", "route", "stat"),
         False,
     ),
     95: PrometheusMetric(
         f"label_replace(1000 * histogram_quantile(0.5, sum by (le) "
-        f'(rate({_SQL_BUCKETS}[<period>]))), "stat", "Медиана", "__name__", ".*") or '
+        f'(rate({_SQL_BUCKETS}[<period>]){_API_FRESH})), "stat", "Медиана", "__name__", ".*") or '
         f"label_replace(1000 * histogram_quantile(0.95, sum by (le) "
-        f'(rate({_SQL_BUCKETS}[<period>]))), "stat", "p95", "__name__", ".*")',
+        f'(rate({_SQL_BUCKETS}[<period>]){_API_FRESH})), "stat", "p95", "__name__", ".*")',
         ("stat",),
         False,
     ),
@@ -151,6 +186,7 @@ PROMETHEUS_METRICS = {
         ("vps",),
         instant=True,
     ),
+    100: PrometheusMetric(_COVERAGE, ("deploy_target_id",), instant=True),
 }
 
 
@@ -189,11 +225,15 @@ def metric_query(
     if client is not None:
         labels.append(f'client_id="{client}"')
     if vps is not None:
-        labels.append(f'deploy_target_id="{vps}"')
+        if vps in PLATFORM_VPS:
+            labels.append(f'vps="{PLATFORM_VPS[vps]}"')
+        else:
+            labels.append(f'deploy_target_id="{vps}"')
     selector = ",".join(labels)
     return (
         metric.query.replace("<scope>", f",{selector}" if selector else "")
         .replace("<labels>", selector)
+        .replace("<probe_labels>", selector.replace('vps="', 'target_vps="'))
         .replace("<period>", f"{period_hours}h")
     )
 

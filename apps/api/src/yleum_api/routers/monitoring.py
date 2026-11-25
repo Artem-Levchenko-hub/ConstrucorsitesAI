@@ -7,7 +7,7 @@ import httpx
 import structlog
 from fastapi import APIRouter, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import DateTime, Uuid, bindparam, select, text
+from sqlalchemy import DateTime, Select, Uuid, bindparam, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +20,7 @@ from yleum_api.models.user import User
 from yleum_api.services.monitoring.catalog import METRICS
 from yleum_api.services.monitoring.database import DATABASE_METRICS
 from yleum_api.services.monitoring.prometheus import (
+    PLATFORM_VPS,
     PROMETHEUS_METRICS,
     Sample,
     prometheus_samples,
@@ -77,6 +78,68 @@ def _definition(metric_id: int) -> Definition:
     )
 
 
+def _active_targets() -> Select[tuple[DeployTarget]]:
+    return select(DeployTarget).where(
+        DeployTarget.verify_status == "ok",
+        select(Project.id).where(
+            Project.deploy_target_id == DeployTarget.id,
+            Project.owner_id == DeployTarget.owner_id,
+        ).exists(),
+    )
+
+
+async def _vps_coverage(
+    session: AsyncSession,
+    *,
+    start: datetime,
+    end: datetime,
+    client: UUID | None,
+    project: UUID | None,
+    vps: UUID | None,
+) -> Result:
+    active = _active_targets().with_only_columns(DeployTarget.id)
+    if client is not None:
+        active = active.where(DeployTarget.owner_id == client)
+    if vps is not None:
+        active = active.where(DeployTarget.id == vps)
+    if project is not None:
+        active = active.where(
+            select(Project.id).where(
+                Project.id == project,
+                Project.deploy_target_id == DeployTarget.id,
+                Project.owner_id == DeployTarget.owner_id,
+            ).exists()
+        )
+    expected = {str(target) for target in (await session.scalars(active)).all()}
+    if not expected:
+        return Result(
+            state="not_applicable",
+            measured_at=end,
+            message="В выбранном срезе нет активных клиентских VPS.",
+        )
+    url = get_settings().monitoring_prometheus_url
+    if not url:
+        return Result(
+            state="source_unavailable",
+            measured_at=end,
+            message="Prometheus пока не подключён к дашборду.",
+        )
+    observed = await prometheus_samples(
+        url, PROMETHEUS_METRICS[100], start=start, end=end, client=client, vps=vps,
+    )
+    covered = expected.intersection(point.series for point in observed)
+    return Result(
+        state="measured", measured_at=end,
+        points=[
+            Sample(
+                series="Клиентские VPS",
+                value=100 * len(covered) / len(expected),
+                samples=len(expected),
+            )
+        ],
+    )
+
+
 @router.get("/catalog")
 async def catalog(_admin: AdminUserDep, response: Response) -> list[Definition]:
     response.headers["Cache-Control"] = "no-store"
@@ -107,10 +170,8 @@ async def filters(
     ).all()
     servers = (
         await session.execute(
-            select(DeployTarget.id, DeployTarget.label, DeployTarget.owner_id)
-            .where(
-                DeployTarget.verify_status == "ok",
-                select(Project.id).where(Project.deploy_target_id == DeployTarget.id).exists(),
+            _active_targets().with_only_columns(
+                DeployTarget.id, DeployTarget.label, DeployTarget.owner_id
             )
             .order_by(DeployTarget.label, DeployTarget.id)
             .limit(750)
@@ -119,7 +180,14 @@ async def filters(
     return Filters(
         clients=[Choice(id=id_, label=email or str(id_)) for id_, email in clients],
         projects=[Choice(id=id_, label=name, client_id=owner) for id_, name, owner in projects],
-        servers=[Choice(id=id_, label=label, client_id=owner) for id_, label, owner in servers],
+        servers=[
+            *(Choice(id=id_, label=label, client_id=owner) for id_, label, owner in servers),
+            *(
+                Choice(id=id_, label=f"Платформа · {host}")
+                for id_, host in PLATFORM_VPS.items()
+                if get_settings().monitoring_prometheus_url
+            ),
+        ],
     )
 
 
@@ -179,8 +247,18 @@ async def _metric_result(
     project: UUID | None,
     vps: UUID | None,
 ) -> Result:
+    if vps in PLATFORM_VPS and (client is not None or project is not None):
+        return Result(
+            state="not_applicable",
+            measured_at=end,
+            message="Сервер платформы не закреплён за отдельным клиентом или проектом.",
+        )
+    if metric_id == 100:
+        return await _vps_coverage(
+            session, start=start, end=end, client=client, project=project, vps=vps,
+        )
     if metric_id in DATABASE_METRICS:
-        if vps is not None and metric_id != 1:
+        if vps in PLATFORM_VPS or (vps is not None and metric_id != 1):
             return Result(
                 state="not_applicable",
                 measured_at=end,
