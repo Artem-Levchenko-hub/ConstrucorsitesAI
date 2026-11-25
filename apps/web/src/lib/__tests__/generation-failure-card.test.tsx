@@ -18,12 +18,12 @@ it("renders durable failure and prevents duplicate retry submits", async () => {
   expect(host.querySelector('[role="alert"]')).toBeNull();
   const card = host.querySelector('[role="status"]')!;
   expect(card.className).not.toMatch(/danger|red-/);
-  expect(card.textContent).toContain("Повторим запрос");
+  expect(card.textContent).toContain("Что остановило работу");
   expect(card.querySelector("button")?.textContent).toContain("Повторить запрос");
   expect(card.textContent).not.toContain("Генерация не завершена");
-  const details = card.querySelector("details")!;
-  expect(details.open).toBe(false);
-  expect(details.textContent).toContain("Не хватило времени на проверку");
+  const reason = Array.from(card.querySelectorAll("p")).find(p => p.textContent === "Не хватило времени на проверку")!;
+  expect(reason.closest("details")).toBeNull();
+  expect(reason.compareDocumentPosition(card.querySelector("button")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(retry).not.toHaveBeenCalled();
   const button = host.querySelector("button")!;
   await act(async () => { button.click(); button.click(); });
