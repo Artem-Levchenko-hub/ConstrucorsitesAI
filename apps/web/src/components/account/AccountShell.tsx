@@ -41,10 +41,12 @@ const copy: Record<AccountView, { eyebrow: string; title: string; lead: string }
 export async function AccountShell({
   email,
   active,
+  hideHeading = false,
   children,
 }: {
   email: string;
   active: AccountView;
+  hideHeading?: boolean;
   children: React.ReactNode;
 }) {
   const page = copy[active];
@@ -75,10 +77,12 @@ export async function AccountShell({
             <ScanSearch className="size-4" />Админ-центр</Link>}</aside>
         <main className="account-main">
           <AccountPageTransition transitionKey={active}>
-            <header className="account-heading">
-              <h1>{page.title}</h1>
-              <p>{page.lead}</p>
-            </header>
+            {!hideHeading && (
+              <header className="account-heading">
+                <h1>{page.title}</h1>
+                <p>{page.lead}</p>
+              </header>
+            )}
             {children}
           </AccountPageTransition>
         </main>

@@ -157,6 +157,13 @@ async def rate_limit_email(request: Request) -> None:
         )
 
 
+async def rate_limit_studio_activity(request: Request) -> None:
+    if get_settings().rate_limit_enabled and not _limiter.hit(
+        parse("240/hour"), f"studio-activity:{_rate_key(request)}"
+    ):
+        raise _auth_rate_error()
+
+
 async def rate_limit_task_board(request: Request) -> None:
     """Keep the intentionally public team board usable under abusive traffic."""
     settings = get_settings()

@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 
 import { MaxWorkspaceShell } from "@/components/max/MaxWorkspaceShell";
+import { StudioActivity } from "@/components/max/StudioActivity";
+import { normalizeReleaseSha } from "@/lib/release";
 import { getSession } from "@/lib/auth-mock";
 import { mockApi, USE_MOCKS } from "@/lib/api/mocks";
 import { serverApiFetchResult, type ServerFetchResult } from "@/lib/api/server";
@@ -48,5 +50,8 @@ export default async function MaxWorkspacePage({
   const destination = legacyMaxEditorDestination(project.id, query);
   if (destination) redirect(destination);
 
-  return <MaxWorkspaceShell initialPreview={query.preview === "1"} project={project} email={session.email} />;
+  return <>
+    <StudioActivity projectId={project.id} release={normalizeReleaseSha(process.env.OMNIA_RELEASE_SHA)} />
+    <MaxWorkspaceShell initialPreview={query.preview === "1"} project={project} email={session.email} />
+  </>;
 }

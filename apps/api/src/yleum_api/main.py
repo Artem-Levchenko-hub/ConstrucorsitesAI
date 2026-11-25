@@ -20,6 +20,7 @@ from yleum_api.core.errors import (
     validation_error_handler,
 )
 from yleum_api.core.minio import reconcile_public_bucket_policies
+from yleum_api.core.monitoring_metrics import MonitoringMiddleware
 from yleum_api.core.redis import dispose_redis
 from yleum_api.core.release import normalize_release_sha
 from yleum_api.core.request_origin import CookieOriginMiddleware
@@ -45,6 +46,8 @@ from yleum_api.routers import max_staff_checkout as max_staff_checkout_router
 from yleum_api.routers import max_studio as max_studio_router
 from yleum_api.routers import messages as messages_router
 from yleum_api.routers import models_router
+from yleum_api.routers import monitoring as monitoring_router
+from yleum_api.routers import monitoring_ingress as monitoring_ingress_router
 from yleum_api.routers import moysklad_vendor as moysklad_vendor_router
 from yleum_api.routers import payments as payments_router
 from yleum_api.routers import product_advice as product_advice_router
@@ -56,6 +59,7 @@ from yleum_api.routers import restorations as restorations_router
 from yleum_api.routers import rollback as rollback_router
 from yleum_api.routers import runtime as runtime_router
 from yleum_api.routers import snapshots as snapshots_router
+from yleum_api.routers import studio_activity as studio_activity_router
 from yleum_api.routers import support as support_router
 from yleum_api.routers import task_board as task_board_router
 from yleum_api.routers import transcribe as transcribe_router
@@ -266,6 +270,8 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    app.add_middleware(MonitoringMiddleware)
+
     app.add_exception_handler(ApiError, api_error_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
     app.add_exception_handler(Exception, unhandled_error_handler)
@@ -275,6 +281,8 @@ def create_app() -> FastAPI:
     app.include_router(backups_router.router)
     app.include_router(billing_router.router)
     app.include_router(admin_router.router)
+    app.include_router(monitoring_router.router)
+    app.include_router(monitoring_ingress_router.router)
     app.include_router(support_router.router)
     app.include_router(account_router.router)
     app.include_router(account_credentials_router.router)
@@ -295,6 +303,7 @@ def create_app() -> FastAPI:
     app.include_router(max_integrations_router.router)
     app.include_router(max_accounts_router.router)
     app.include_router(max_studio_router.router)
+    app.include_router(studio_activity_router.router)
     app.include_router(max_management_router.router)
     app.include_router(max_staff_router.router)
     app.include_router(max_staff_checkout_router.router)

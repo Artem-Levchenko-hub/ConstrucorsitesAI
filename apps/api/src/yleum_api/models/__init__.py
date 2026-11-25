@@ -86,6 +86,7 @@ from yleum_api.models.provider_ledger import (
 from yleum_api.models.reference_image import ReferenceImage
 from yleum_api.models.restoration import Restoration
 from yleum_api.models.snapshot import Snapshot
+from yleum_api.models.studio_activity import StudioActivity
 from yleum_api.models.support import (
     SupportAudit,
     SupportEmailOutbox,
@@ -179,6 +180,7 @@ __all__ = [
     "ReferenceImage",
     "Restoration",
     "Snapshot",
+    "StudioActivity",
     "Subscription",
     "SupportAudit",
     "SupportEmailOutbox",

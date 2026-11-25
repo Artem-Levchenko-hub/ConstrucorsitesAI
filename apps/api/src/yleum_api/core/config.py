@@ -33,6 +33,8 @@ class Settings(BaseSettings):
 
     database_url: str
     database_test_url: str | None = None
+    monitoring_prometheus_url: str = ""
+    monitoring_scrape_token: SecretStr | None = None
 
     redis_url: str = Field(default="redis://localhost:6379/0")
 

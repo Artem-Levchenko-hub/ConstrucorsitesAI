@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { MaxStudio } from "@/components/max/MaxStudio";
+import { StudioActivity } from "@/components/max/StudioActivity";
+import { normalizeReleaseSha } from "@/lib/release";
 import { getMaxAccessServer, getSession } from "@/lib/auth-mock";
 
 export const metadata: Metadata = {
@@ -19,5 +21,8 @@ export default async function MaxStudioPage() {
   const access = await getMaxAccessServer();
   if (!access?.can_create_project) redirect("/max/onboarding");
 
-  return <MaxStudio email={session.email} />;
+  return <>
+    <StudioActivity release={normalizeReleaseSha(process.env.OMNIA_RELEASE_SHA)} />
+    <MaxStudio email={session.email} />
+  </>;
 }

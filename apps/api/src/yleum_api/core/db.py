@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from yleum_api.core.config import get_settings
+from yleum_api.core.monitoring_metrics import instrument_database
 
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -35,6 +36,7 @@ def get_engine() -> AsyncEngine:
             pool_recycle=1800,
             connect_args={"timeout": 5.0, "command_timeout": 10.0},
         )
+        instrument_database(_engine.sync_engine)
         _session_factory = async_sessionmaker(
             _engine,
             expire_on_commit=False,

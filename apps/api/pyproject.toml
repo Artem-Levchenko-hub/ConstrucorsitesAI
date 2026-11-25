@@ -36,6 +36,7 @@ dependencies = [
     "langdetect>=1.0.9",
     "python-multipart==0.0.32",
     "pypdf==7.1.0",
+    "prometheus-client>=0.22,<1.0",
 ]
 
 [dependency-groups]

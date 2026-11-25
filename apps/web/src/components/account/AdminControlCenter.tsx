@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useId, useRef, useState } from "react";
-import { History, UsersRound, MessageCircle, Settings } from "lucide-react";
+import { Activity, History, UsersRound, MessageCircle, Settings } from "lucide-react";
+import Link from "next/link";
 import { AdminAuditPanel } from "./AdminAuditPanel";
 import { AdminUsersPanel } from "./AdminUsersPanel";
 import { AdminSupportPanel } from "./AdminSupportPanel";
@@ -31,6 +32,9 @@ export function AdminControlCenter({ currentEmail }: { currentEmail: string }) {
   }
   function selectTab(tab: Tab) { navigate({ tab, archive: false, ticket: null }); }
   return <div className="admin-center">
+    <div className="admin-monitoring-entry">
+      <Link href="/admin/max/monitoring"><Activity aria-hidden="true" />Мониторинг</Link>
+    </div>
     <div role="tablist" aria-label="Разделы админ-центра" className="admin-tabs">
       {tabs.map(([value, label, Icon], index) => <button key={value} ref={node => { tabRefs.current[index] = node; }} type="button" role="tab" id={`${id}-${value}`} aria-selected={location.tab === value} aria-controls={`${id}-panel`} tabIndex={location.tab === value ? 0 : -1} onClick={() => selectTab(value)} onKeyDown={event => {
         const next = event.key === "ArrowRight" ? (index + 1) % tabs.length : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : null;
