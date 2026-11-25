@@ -6,11 +6,16 @@ set -euo pipefail
 role="$1"
 source_dir="$(cd "$(dirname "$0")" && pwd -P)"
 collector=/usr/local/lib/yleum/monitoring-host.py
+block_io=/usr/local/lib/yleum/monitoring-block-io.bt
 credentials=/etc/yleum/monitoring
 textfiles=/var/lib/prometheus/node-exporter
 
 install -d -m 0755 "$(dirname "$collector")" "$textfiles"
 install -m 0644 "$source_dir/monitoring-host.py" "$collector"
+install -m 0644 "$source_dir/monitoring-block-io.bt" "$block_io"
+[[ -x /usr/bin/bpftrace && -r /sys/kernel/btf/vmlinux ]] || {
+  echo "block I/O collection requires bpftrace and kernel BTF" >&2; exit 2;
+}
 if [[ "$role" = core ]]; then
   install -d -m 0700 "$credentials"
   umask 077
@@ -101,7 +106,30 @@ AccuracySec=1s
 [Install]
 WantedBy=timers.target
 EOF
-systemd-analyze verify /etc/systemd/system/yleum-monitoring-host.service /etc/systemd/system/yleum-monitoring-host.timer
+cat > /etc/systemd/system/yleum-monitoring-block-io.service <<EOF
+[Unit]
+Description=Yleum per-device read and write latency
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 $collector block-io $block_io
+Restart=on-failure
+RestartSec=10s
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=$textfiles
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemd-analyze verify \
+  /etc/systemd/system/yleum-monitoring-host.service \
+  /etc/systemd/system/yleum-monitoring-host.timer \
+  /etc/systemd/system/yleum-monitoring-block-io.service
 systemctl daemon-reload
 systemctl enable --now yleum-monitoring-host.timer
 systemctl start yleum-monitoring-host.service
+systemctl enable yleum-monitoring-block-io.service
+systemctl restart yleum-monitoring-block-io.service

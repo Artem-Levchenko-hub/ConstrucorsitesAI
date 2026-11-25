@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -8,6 +9,7 @@ from yleum_api.main import app
 from yleum_api.models.project import Project
 from yleum_api.models.studio_activity import StudioActivity
 from yleum_api.models.user import User
+from yleum_api.services import orchestrator_client
 from yleum_api.services.monitoring.catalog import METRICS
 from yleum_api.services.monitoring.database import DATABASE_METRICS
 from yleum_api.services.monitoring.prometheus import (
@@ -116,3 +118,38 @@ async def test_studio_receipts_deduplicate_and_keep_customer_scope(client, db_se
     assert weekly["points"][0]["value"] == 2
     foreign_scope = (await client.get(BASE + f"/metrics/94?project={foreign.id}")).json()
     assert foreign_scope["state"] == "no_data"
+
+
+async def test_publication_metrics_use_terminal_controller_facts(client, db_session, monkeypatch):
+    operator = User(email="monitoring-publish@example.test", password_hash="test")
+    db_session.add(operator)
+    await db_session.flush()
+    project = Project(
+        owner_id=operator.id, name="Monitor", slug="status-monitor", template="max_miniapp",
+    )
+    db_session.add(project)
+    await db_session.commit()
+    app.dependency_overrides[get_admin_user] = lambda: operator
+
+    end = datetime.now(UTC) - timedelta(minutes=5)
+    start = end - timedelta(seconds=22)
+    source = {
+        "facts": [
+            {
+                "project_id": str(project.id), "run_id": "ready", "phase": "done",
+                "started_at": start.isoformat(), "finished_at": end.isoformat(),
+            },
+            {
+                "project_id": str(project.id), "run_id": "failed", "phase": "failed",
+                "started_at": None, "finished_at": end.isoformat(),
+            },
+        ],
+        "first_success": {str(project.id): end.isoformat()},
+    }
+    load = AsyncMock(return_value=source)
+    monkeypatch.setattr(orchestrator_client, "get_monitoring_publication_history", load)
+    for metric, value in ((53, 50), (54, 22), (56, 0)):
+        result = (await client.get(BASE + f"/metrics/{metric}?project={project.id}")).json()
+        assert result["state"] == "measured", result
+        assert result["points"][0]["value"] == value
+    assert load.call_args.args[0] == [project.id]

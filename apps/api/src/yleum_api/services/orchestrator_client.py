@@ -3000,6 +3000,22 @@ async def get_deploy_history(project_id: UUID) -> list[dict[str, Any]]:
     return cast(list[dict[str, Any]], result)
 
 
+async def get_monitoring_publication_history(
+    project_ids: list[UUID], since: str, *, host: str, include_restorations: bool,
+) -> dict[str, Any]:
+    return await _request(
+        "POST",
+        "/internal/projects/monitoring/publication-history",
+        json={
+            "project_ids": [str(id_) for id_ in project_ids],
+            "since": since,
+            "include_restorations": include_restorations,
+        },
+        host=host,
+        timeout=6,
+    )
+
+
 async def destroy(project_id: UUID, slug: str) -> dict[str, Any]:
     """POST /internal/projects/<uuid>/destroy?slug=<slug> — full teardown.
 

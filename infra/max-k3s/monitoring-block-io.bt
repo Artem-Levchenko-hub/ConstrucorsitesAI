@@ -1,0 +1,28 @@
+kfunc:blk_mq_start_request
+{
+  $operation = args.rq->cmd_flags & 255;
+  if ($operation == 0 || $operation == 1) {
+    @start[args.rq] = nsecs;
+  }
+}
+
+kfunc:blk_mq_end_request
+/@start[args.rq]/
+{
+  $request = args.rq;
+  $device = $request->q->disk->disk_name;
+  $microseconds = (nsecs - @start[$request]) / 1000;
+  @latency[$device, $request->cmd_flags & 255] = hist($microseconds);
+  delete(@start[$request]);
+}
+
+interval:s:30
+{
+  print(@latency);
+}
+
+END
+{
+  clear(@latency);
+  clear(@start);
+}

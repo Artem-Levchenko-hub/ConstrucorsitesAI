@@ -17,6 +17,7 @@ from yleum_api.core.errors import ApiError
 from yleum_api.models.deploy_target import DeployTarget
 from yleum_api.models.project import Project
 from yleum_api.models.user import User
+from yleum_api.services import orchestrator_client
 from yleum_api.services.monitoring.catalog import METRICS
 from yleum_api.services.monitoring.database import DATABASE_METRICS
 from yleum_api.services.monitoring.prometheus import (
@@ -24,6 +25,11 @@ from yleum_api.services.monitoring.prometheus import (
     PROMETHEUS_METRICS,
     Sample,
     prometheus_samples,
+)
+from yleum_api.services.monitoring.publications import (
+    PUBLICATION_METRICS,
+    PUBLISH_SOURCE,
+    publication_samples,
 )
 
 router = APIRouter(prefix="/api/admin/monitoring", tags=["admin-monitoring"])
@@ -67,14 +73,18 @@ def _definition(metric_id: int) -> Definition:
     metric = METRICS[metric_id]
     database = DATABASE_METRICS.get(metric_id)
     prometheus = metric_id in PROMETHEUS_METRICS
+    source = database.source if database else "Prometheus" if prometheus else None
+    note = database.note if database else None
+    if metric_id in PUBLICATION_METRICS:
+        source, note = PUBLISH_SOURCE, PUBLICATION_METRICS[metric_id]
     return Definition(
         id=metric.id,
         group=metric.group,
         title=metric.title,
         unit=metric.unit,
         formula=metric.formula,
-        source=database.source if database else "Prometheus" if prometheus else None,
-        note=database.note if database else None,
+        source=source,
+        note=note,
     )
 
 
@@ -257,7 +267,17 @@ async def _metric_result(
         return await _vps_coverage(
             session, start=start, end=end, client=client, project=project, vps=vps,
         )
-    if metric_id in DATABASE_METRICS:
+    if metric_id in PUBLICATION_METRICS:
+        if vps in PLATFORM_VPS:
+            return Result(
+                state="not_applicable",
+                measured_at=end,
+                message="Журнал публикаций не содержит привязки к этому серверу.",
+            )
+        points = await publication_samples(
+            session, metric_id, start=start, end=end, client=client, project=project, vps=vps,
+        )
+    elif metric_id in DATABASE_METRICS:
         if vps in PLATFORM_VPS or (vps is not None and metric_id != 1):
             return Result(
                 state="not_applicable",
@@ -351,7 +371,13 @@ async def metric_data(
             project=project,
             vps=vps,
         )
-    except (SQLAlchemyError, httpx.HTTPError, ValueError):
+    except (
+        SQLAlchemyError,
+        httpx.HTTPError,
+        ValueError,
+        orchestrator_client.OrchestratorUnavailable,
+        orchestrator_client.OrchestratorBadRequest,
+    ):
         logger.warning("monitoring.source_unavailable", metric_id=metric_id, exc_info=True)
         return Result(
             state="source_unavailable",

@@ -104,7 +104,9 @@ PROMETHEUS_METRICS = {
     14: PrometheusMetric(f"({_USED} - {_PREVIOUS_USED}) / 1e9", ("vps", "mountpoint")),
     15: PrometheusMetric(
         "1000 * histogram_quantile(0.95, sum by (le, vps, device, direction) "
-        "(rate(yleum_block_io_duration_seconds_bucket{<labels>}[<period>])))",
+        "(rate(yleum_block_io_duration_seconds_bucket{<labels>}[<period>]) "
+        'and on (job, instance) (time() - node_textfile_mtime_seconds'
+        '{file=~".*/yleum_block_io[.]prom"} < 90)))',
         ("vps", "device", "direction"),
     ),
     16: PrometheusMetric(

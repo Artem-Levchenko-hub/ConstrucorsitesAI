@@ -47,6 +47,20 @@ class MonitoringHostTest(unittest.TestCase):
         self.assertIn('yleum_backup_window_results{result="missed",window="168h"} 2', rows)
         self.assertIn('yleum_backup_window_results{result="missed",window="24h"} 1', rows)
 
+    def test_histogram_outputs_stable_cumulative_buckets(self):
+        event = {"type": "hist", "data": {"@latency": {
+            "vda,0": [{"max": 1, "count": 3}, {"max": 255, "count": 8}],
+            "vda,1": [{"max": 127, "count": 6}],
+            "vda,2": [{"max": 127, "count": 42}],
+        }}}
+        rows = monitor.block_io_samples(event).decode().splitlines()
+        prefix = "yleum_block_io_duration_seconds_bucket"
+        self.assertIn(f'{prefix}{{device="vda",direction="read",le="0.000002"}} 3', rows)
+        self.assertIn(f'{prefix}{{device="vda",direction="read",le="0.000128"}} 3', rows)
+        self.assertIn(f'{prefix}{{device="vda",direction="read",le="0.000256"}} 11', rows)
+        self.assertIn(f'{prefix}{{device="vda",direction="write",le="+Inf"}} 6', rows)
+        self.assertEqual(len(rows), 70)
+
     def test_only_complete_snapshot_replaces_existing_file(self):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "snapshot.prom"

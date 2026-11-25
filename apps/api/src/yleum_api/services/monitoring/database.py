@@ -168,6 +168,28 @@ JOIN generation_provider_attempts a ON a.run_id = r.id
 WHERE r.finished_at {_WINDOW} AND r.{_FINISHED}
 GROUP BY r.id, r.status, r.finished_at, r.task_type
 """
+_PROVEN_PREVIEWS = f"""
+WITH ready AS (
+    SELECT r.created_at, r.task_type,
+           least(
+               CASE WHEN jsonb_typeof(r.agent_state->'monitoring_first_draft_preview_epoch') =
+                    'number' THEN
+                    (r.agent_state->>'monitoring_first_draft_preview_epoch')::double precision
+               END,
+               CASE WHEN s.preview_status = 'ready' AND jsonb_typeof(
+                    s.preview_manifest->0->'monitoring_ready_epoch') = 'number' THEN
+                    (s.preview_manifest->0->>'monitoring_ready_epoch')::double precision
+               END
+           ) AS ready_epoch
+    FROM ({_RUNS}) r
+    LEFT JOIN messages m ON m.id = r.assistant_message_id AND m.project_id = r.project_id
+    LEFT JOIN snapshots s ON s.id = m.snapshot_id AND s.project_id = r.project_id
+)
+SELECT task_type, to_timestamp(ready_epoch) AS preview_at,
+       ready_epoch - extract(epoch FROM created_at) AS seconds
+FROM ready
+WHERE ready_epoch BETWEEN extract(epoch FROM created_at) AND extract(epoch FROM :end)
+"""
 _INTEGRATION_FAILURES = """
 SELECT o.provider, o.kind, o.status, o.finished_at
 FROM integration_operations o
@@ -259,6 +281,7 @@ _INPUTS = {
     "Попытки провайдеров": _PROVIDER_RETRIES,
     "Журнал интеграций": _INTEGRATION_FAILURES,
     "Повторы провайдеров по задачам": _RUN_ATTEMPTS,
+    "Подтверждённые предпросмотры": _PROVEN_PREVIEWS,
     "Первый вход и генерация": _STUDIO_FIRST_SUCCESS,
     "Ошибки сеансов": _STUDIO_ERRORS,
     "Конверсия редактора": _STUDIO_DAYS,
@@ -468,6 +491,12 @@ DATABASE_METRICS = {
         _RUN_TIME,
         condition=f"{_COMPLETION} AND status = 'completed' AND task_type = 'edit'",
         note=_TASK_KIND_NOTE,
+    ),
+    50: _distribution(
+        "Подтверждённые предпросмотры",
+        "seconds",
+        condition=f"preview_at {_WINDOW} AND task_type = 'initial'",
+        note="От запуска до первой успешной проверки рабочего или версионного предпросмотра.",
     ),
     51: _distribution(
         "Финализация MAX",

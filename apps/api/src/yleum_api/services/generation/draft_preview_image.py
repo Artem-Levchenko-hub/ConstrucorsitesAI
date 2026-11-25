@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import logging
 import re
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import urljoin
 from uuid import UUID
@@ -94,8 +95,11 @@ async def save_draft_image(
             return False
         if preview_digest(run):
             return True
+        state = dict(run.agent_state)
+        if origin == "working_environment":
+            state.setdefault("monitoring_first_draft_preview_epoch", datetime.now(UTC).timestamp())
         run.agent_state = {
-            **run.agent_state, KEY: {
+            **state, KEY: {
                 "checkpoint_sha256": checkpoint_digest, "png_sha256": digest, "origin": origin,
                 "limited": limited and origin == "working_environment",
             },

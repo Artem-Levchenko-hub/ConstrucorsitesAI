@@ -15,6 +15,7 @@ import io
 import logging
 import re
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin, urlsplit
@@ -163,7 +164,7 @@ async def capture_snapshot_frontend(
                 raise ValueError("Source changed during screenshot")
             if report.issues or any(width not in report.screenshots for width in _WIDTHS):
                 raise ValueError("Primary screenshot capture incomplete")
-            manifest = []
+            manifest: list[dict[str, Any]] = []
             objects = []
             for width in _WIDTHS:
                 png = report.screenshots[width]
@@ -176,6 +177,9 @@ async def capture_snapshot_frontend(
                 objects.append((key, png))
             for key, png in objects:
                 await asyncio.to_thread(_upload, key, png)
+            captured_at = datetime.now(UTC).timestamp()
+            for item in manifest:
+                item["monitoring_ready_epoch"] = captured_at
             return await _persist(snapshot_id, project_id, commit_sha, "ready", manifest)
     except asyncio.CancelledError:
         raise

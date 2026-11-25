@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID
@@ -58,3 +59,34 @@ def test_exact_snapshot_binding_survives_durable_status_roundtrip():
     restored = DeployResponse.model_validate_json(value.model_dump_json())
     assert restored.snapshot_id == UUID(int=4)
     assert restored.commit_sha == "a" * 40
+
+
+async def test_monitoring_uses_terminal_releases(monkeypatch):
+    project_id = UUID(int=2)
+    now = datetime.now(UTC)
+    first = now - timedelta(days=2)
+    checked = []
+
+    def history(_):
+        return [
+            DeployResponse(project_id=project_id, phase="done", run_id="first",
+                           prod_url="https://example.test/", finished_at=first.isoformat()),
+            DeployResponse(project_id=project_id, phase="done", run_id="shortcut",
+                           detail="already_current", finished_at=now.isoformat()),
+            DeployResponse(project_id=project_id, phase="failed", run_id="failure",
+                           error="fixture-only message", finished_at=now.isoformat()),
+        ]
+
+    monkeypatch.setattr(routes, "verify_internal_token", checked.append)
+    monkeypatch.setattr(
+        routes, "get_cell_publication_service", lambda: SimpleNamespace(history=history),
+    )
+    body = routes.PublicationHistoryRequest(
+        project_ids={project_id}, since=now - timedelta(hours=24),
+    )
+    result = await routes.monitoring_publication_history(body, "fixture")
+    assert checked == ["fixture"]
+    assert result.first_success == {project_id: first}
+    assert [item.run_id for item in result.facts] == ["failure"]
+    assert "fixture-only" not in result.model_dump_json()
+    assert "example.test" not in result.model_dump_json()

@@ -153,7 +153,61 @@ def collect(role: str) -> None:
             raise RuntimeError("cannot collect authenticated platform API metrics") from None
 
 
+def block_io_samples(event: dict) -> bytes | None:
+    if event.get("type") != "hist":
+        return None
+    rows = event["data"]["@latency"]
+    samples = []
+    for key, values in sorted(rows.items()):
+        device, separator, kind = key.partition(",")
+        if not separator or not DEVICE_PATTERN.fullmatch(device) or kind not in {"0", "1"}:
+            continue
+        buckets = {int(bucket["max"]) + 1: int(bucket["count"]) for bucket in values}
+        direction = "read" if kind == "0" else "write"
+        labels = f'device="{device}",direction="{direction}"'
+        total = 0
+        for power in range(1, 35):
+            upper = 2**power
+            total += buckets.get(upper, 0)
+            samples.append(
+                "yleum_block_io_duration_seconds_bucket"
+                f'{{{labels},le="{upper / 1_000_000:.6f}"}} {total}'
+            )
+        samples.append(
+            f'yleum_block_io_duration_seconds_bucket{{{labels},le="+Inf"}} {sum(buckets.values())}'
+        )
+    return ("\n".join(samples) + "\n").encode()
+
+
+def collect_block_io(program: Path) -> None:
+    destination = OUTPUT / "yleum_block_io.prom"
+    destination.unlink(missing_ok=True)
+    try:
+        with subprocess.Popen(
+            ("/usr/bin/bpftrace", "-q", "-f", "json", str(program)),
+            stdout=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        ) as process:
+            assert process.stdout is not None
+            try:
+                for line in process.stdout:
+                    if line.strip():
+                        snapshot = block_io_samples(json.loads(line))
+                        if snapshot is not None:
+                            publish(destination, snapshot)
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+            raise RuntimeError(f"block I/O tracer stopped with status {process.returncode}")
+    finally:
+        destination.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or sys.argv[1] not in {"core", "runtime", "commerce"}:
-        raise SystemExit("expected a production host role")
-    collect(sys.argv[1])
+    if len(sys.argv) == 3 and sys.argv[1] == "block-io":
+        collect_block_io(Path(sys.argv[2]))
+    elif len(sys.argv) == 2 and sys.argv[1] in {"core", "runtime", "commerce"}:
+        collect(sys.argv[1])
+    else:
+        raise SystemExit("expected a production host role or block-io PROGRAM")
