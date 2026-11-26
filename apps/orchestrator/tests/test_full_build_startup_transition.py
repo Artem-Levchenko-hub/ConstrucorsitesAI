@@ -152,7 +152,7 @@ def test_real_migration_prepare_controlled_docker_restart_changes_only_process(
 @pytest.mark.parametrize(
     "mode",
     [
-        "success", "extended_final_test", "direct_node_test", "content_changed",
+        "success", "extended_final_test", "direct_node_test", "database_test", "content_changed",
         "failed", "timeout", "foreign_role",
     ],
 )
@@ -234,14 +234,15 @@ async def test_real_router_emits_only_exact_successful_full_build_restart(
         manager.machine_runtime = runtime
         state = manager.state_store.load(workspace_id)
         manifest = next_machine_manifest()
-        if mode in {"extended_final_test", "direct_node_test"}:
-            task = next(task for task in manifest.tasks if task.name == "final-test")
-            if mode == "extended_final_test":
-                task.argv = ["sh", "-lc", "pnpm test && node --test tests/product.integration.mjs"]
-            else:
-                manifest.tasks.append(task.model_copy(update={
-                    "name": "node-integration", "argv": ["node", "tests/split-contract.mjs"],
-                }))
+        task = next(task for task in manifest.tasks if task.name == "final-test")
+        if mode == "extended_final_test":
+            task.argv = ["sh", "-lc", "pnpm test && node --test tests/product.integration.mjs"]
+        elif mode == "database_test":
+            task.argv = ["env", "SHOPPING_TEST_DATABASE=1", "pnpm", "test"]
+        elif mode == "direct_node_test":
+            manifest.tasks.append(task.model_copy(update={
+                "name": "node-integration", "argv": ["node", "tests/split-contract.mjs"],
+            }))
         files = {
             ".omnia/cell.json": manifest.model_dump_json(),
             "src/app/page.tsx": 'export default function Page() { return "Fixture"; }',
@@ -275,7 +276,7 @@ async def test_real_router_emits_only_exact_successful_full_build_restart(
         compilation = body["compiled_asset_receipt"]
         transition = compilation.get("full_build_startup_transition") if compilation else None
         assert (transition is not None) is (
-            mode in {"success", "extended_final_test", "direct_node_test"}
+            mode in {"success", "extended_final_test", "direct_node_test", "database_test"}
         )
         if transition is not None:
             assert compilation["assets"] == collector_data["assets"]

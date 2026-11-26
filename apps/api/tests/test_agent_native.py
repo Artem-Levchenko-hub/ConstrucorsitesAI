@@ -63,9 +63,20 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> None:
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
 
-def test_portable_tools_describe_real_install_and_database_capabilities() -> None:
-    tools = agent_native._MAX_PORTABLE_TOOLS_CACHED
+@pytest.mark.parametrize(
+    "tools",
+    [agent_native._MAX_PORTABLE_TOOLS_CACHED, agent_native._MAX_COORDINATOR_BASH_TOOLS_CACHED],
+    ids=["portable", "coordinator"],
+)
+def test_portable_tools_describe_the_guest_and_available_file_tools(
+    tools: list[dict[str, Any]],
+) -> None:
     bash = next(tool for tool in tools if tool["name"] == "bash")
+    assert "sh -lc" in bash["description"]
+    assert "git and rg" in bash["description"]
+    file_tools = {"list_dir", "grep", "read_file", "edit_file", "write_file"}
+    assert file_tools <= {tool["name"] for tool in tools}
+    assert all(name in bash["description"] for name in file_tools)
     assert "Install required public libraries" in bash["description"]
     assert "dedicated PostgreSQL" in bash["description"]
     assert "never to the host" in bash["description"]

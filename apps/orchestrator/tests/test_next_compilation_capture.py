@@ -40,6 +40,10 @@ def setup(receipt=None):
     [
         pytest.param([["pnpm", "test"]], id="package-test"),
         pytest.param(
+            [["env", "SHOPPING_TEST_DATABASE=1", "pnpm", "test"]],
+            id="project-database-test",
+        ),
+        pytest.param(
             [[
                 "sh",
                 "-lc",
@@ -74,6 +78,8 @@ def test_capture_uses_only_exact_ro_owned_volume_and_platform_interpreter(test_c
     for argv in test_commands:
         if argv[0] in {"sh", "node"}:
             assert argv[-1] not in args[1][-1]
+        if argv[0] == "env":
+            assert argv[1] not in args[1][-1]
     assert kw["volumes"] == {"owned-volume": {"bind": "/proof", "mode": "ro"}}
     assert kw["network_mode"] == "none" and kw["read_only"] is True and kw["cap_drop"] == ["ALL"]
     assert "environment" not in kw and "privileged" in kw and not kw["privileged"]
@@ -105,6 +111,22 @@ def test_unsupported_final_test_never_starts_compilation_capture(command):
     )
     manifest.tasks[1].argv = ["sh", "-lc", command]
 
+    assert capture_next_compilation(backend, request, manifest) is None
+    assert not containers.calls
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["env", "SHOPPING_TEST_DATABASE=0", "pnpm", "test"],
+        ["env", "SHOPPING_TEST_DATABASE=1", "pnpm", "build"],
+        ["env", "PATH=1", "pnpm", "test"],
+        ["env", "SHOPPING_TEST_DATABASE=1", "-i", "pnpm", "test"],
+    ],
+)
+def test_database_test_opt_in_requires_the_package_test(argv):
+    backend, request, manifest, _helper, containers = setup()
+    manifest.tasks[1].argv = argv
     assert capture_next_compilation(backend, request, manifest) is None
     assert not containers.calls
 
@@ -174,9 +196,13 @@ def test_unknown_or_failed_capture_never_supplies_receipt(mutation):
 
 
 @pytest.mark.parametrize("version", ["next-restored-runtime-v1", "next-fixed-data-v1"])
-def test_restore_capture_has_distinct_receipt_and_allows_core_only_build(version):
+@pytest.mark.parametrize(
+    "argv", [["pnpm", "test"], ["env", "SHOPPING_TEST_DATABASE=1", "pnpm", "test"]]
+)
+def test_restore_capture_has_distinct_receipt_and_allows_core_only_build(version, argv):
     backend, request, manifest, helper, containers = setup({"collector_version": version})
     request.task_role = "restore_runtime"
+    manifest.tasks[1].argv = argv
     receipt = capture_next_compilation(backend, request, manifest)
     script = containers.calls[0][0][1][-1]
     assert "collect_next_compilation(require_product_page=False)" in script

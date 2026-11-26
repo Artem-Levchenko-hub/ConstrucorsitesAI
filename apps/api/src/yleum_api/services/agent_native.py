@@ -753,14 +753,15 @@ def _build_max_tools(
     descriptions = dict(_MAX_TOOL_DESCRIPTIONS)
     if portable:
         descriptions["bash"] = (
-            "Run a shell command inside this project's portable Linux machine. "
+            "Run project commands with sh -lc. The base image omits git and rg. "
+            "Inspect files with list_dir, grep and read_file. "
+            "Change them with edit_file or write_file. "
             "Root applies only inside this isolated guest, never to the host. "
-            "Install required public libraries and system packages using the "
-            "configured egress proxy; keep dependency manifests and lockfiles in sync. "
-            "Use the project's dedicated PostgreSQL for schemas, migrations and real "
-            "data; do not access platform or other projects' databases. "
-            "Use lightweight checks during implementation; final build and runtime "
-            "verification are managed by the finalization coordinator."
+            "Install required public libraries and system packages "
+            "through the configured egress proxy. "
+            "Keep manifests and lockfiles in sync. Use only the project's dedicated PostgreSQL. "
+            "Run lightweight checks while editing. "
+            "The coordinator handles final build and runtime verification."
         )
     if coordinator:
         descriptions["build"] = (

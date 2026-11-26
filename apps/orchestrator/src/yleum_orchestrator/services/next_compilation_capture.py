@@ -31,6 +31,12 @@ def _supported_direct_node_test(argv: list[str]) -> bool:
 
 
 def _supported_test_suffix(argv: list[str], extra_tests: list[list[str]]) -> bool:
+    if (
+        len(argv) == 4
+        and argv[0] == "env"
+        and re.fullmatch(r"[A-Z][A-Z0-9_]*_TEST_DATABASE=1", argv[1])
+    ):
+        argv = argv[2:]
     if argv == ["pnpm", "test"]:
         return all(_supported_direct_node_test(test) for test in extra_tests)
     if extra_tests or len(argv) != 3 or argv[:2] != ["sh", "-lc"]:
