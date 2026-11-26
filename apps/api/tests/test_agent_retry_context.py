@@ -7,7 +7,7 @@ and a synchronous session behind the async interface. No provider is contacted.
 import hashlib
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import JSON, Column, MetaData, Table, create_engine, delete
@@ -172,6 +172,13 @@ def history():
     yield context
     session.close()
     engine.dispose()
+
+
+def test_history_round_trips_numeric_looking_owner_id(history):
+    owner_id = UUID("12345678-9012-4345-8567-890123456789")
+    run = history.add("Fixture", user=owner_id)
+    history.session.expire(run)
+    assert run.user_id == owner_id
 
 
 @pytest.mark.parametrize(

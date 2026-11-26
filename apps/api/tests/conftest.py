@@ -7,13 +7,21 @@ from uuid import UUID
 import httpx
 import pytest
 import pytest_asyncio
+from sqlalchemy import UUID as SQLUUID
 from sqlalchemy import insert, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.compiler import compiles
 
 from yleum_api.core.config import get_settings
 from yleum_api.core.db import get_session
 from yleum_api.models.base import Base
 from yleum_api.models.billing import DEFAULT_BILLING_PLANS, BillingPlan
+
+
+@compiles(SQLUUID, "sqlite")
+def _sqlite_test_uuid(_type, _compiler, **_kwargs) -> str:
+    # SQLite gives UUID columns numeric affinity and rounds numeric-looking hex strings.
+    return "CHAR(32)"
 
 
 @pytest.fixture(autouse=True)
