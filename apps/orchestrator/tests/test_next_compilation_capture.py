@@ -35,13 +35,32 @@ def setup(receipt=None):
     return backend, request, manifest, helper, containers
 
 
-def test_capture_uses_only_exact_ro_owned_volume_and_platform_interpreter():
+@pytest.mark.parametrize(
+    "test_argv",
+    [
+        pytest.param(["pnpm", "test"], id="package-test"),
+        pytest.param(
+            [
+                "sh",
+                "-lc",
+                "pnpm test && node --test tests/server/cache.test.mjs ./tests/health.test.js"
+                " && node --test tests/legacy.test.cjs",
+            ],
+            id="explicit-node-suites",
+        ),
+    ],
+)
+def test_capture_uses_only_exact_ro_owned_volume_and_platform_interpreter(test_argv):
     backend, request, manifest, helper, containers = setup(
         {"collector_version": "next-fixed-data-v1", "assets": []}
     )
+    manifest.tasks[1].argv = test_argv
     receipt = capture_next_compilation(backend, request, manifest)
+    assert receipt is not None
     args, kw = containers.calls[0]
     assert args[0] == backend.base_image and args[1][:4] == ["python3", "-I", "-S", "-c"]
+    if test_argv[0] == "sh":
+        assert test_argv[2] not in args[1][-1]
     assert kw["volumes"] == {"owned-volume": {"bind": "/proof", "mode": "ro"}}
     assert kw["network_mode"] == "none" and kw["read_only"] is True and kw["cap_drop"] == ["ALL"]
     assert "environment" not in kw and "privileged" in kw and not kw["privileged"]
@@ -50,6 +69,31 @@ def test_capture_uses_only_exact_ro_owned_volume_and_platform_interpreter():
         and receipt["source_revision"] == request.expected_revision
     )
     assert helper.removed == [{"force": True}]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param("node --test tests/product.mjs", id="missing-package-test"),
+        pytest.param("pnpm test && node --test", id="implicit-suite-discovery"),
+        pytest.param("pnpm test || node --test tests/product.mjs", id="ignored-package-failure"),
+        pytest.param("pnpm test && node --test tests/product.mjs; true", id="shell-sequence"),
+        pytest.param("pnpm test && node --test tests/product.mjs\ntrue", id="newline"),
+        pytest.param("pnpm test && node --test tests/*.mjs", id="glob"),
+        pytest.param("pnpm test && node --test /tests/product.mjs", id="absolute-path"),
+        pytest.param("pnpm test && node --test tests/../product.mjs", id="traversal"),
+        pytest.param("pnpm test && node --test tests/product.mjs --test-only", id="flag"),
+        pytest.param("pnpm test && node --test tests/product.mjs && true", id="unknown-command"),
+    ],
+)
+def test_unsupported_final_test_never_starts_compilation_capture(command):
+    backend, request, manifest, _helper, containers = setup(
+        {"collector_version": "next-fixed-data-v1"}
+    )
+    manifest.tasks[1].argv = ["sh", "-lc", command]
+
+    assert capture_next_compilation(backend, request, manifest) is None
+    assert not containers.calls
 
 
 @pytest.mark.parametrize(

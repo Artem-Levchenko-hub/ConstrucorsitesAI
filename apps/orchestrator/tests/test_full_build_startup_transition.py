@@ -150,7 +150,8 @@ def test_real_migration_prepare_controlled_docker_restart_changes_only_process(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("count", [0, 1])
 @pytest.mark.parametrize(
-    "mode", ["success", "content_changed", "failed", "timeout", "foreign_role"]
+    "mode",
+    ["success", "extended_final_test", "content_changed", "failed", "timeout", "foreign_role"],
 )
 async def test_real_router_emits_only_exact_successful_full_build_restart(
     tmp_path,
@@ -162,11 +163,15 @@ async def test_real_router_emits_only_exact_successful_full_build_restart(
         "fcntl", reason="Real router requires POSIX controller locks; Linux CI required"
     )
     from tests.test_machine_workspace_dispatch import PortableRuntime
-    from tests.test_project_machine_manifest import payload
+    from tests.test_next_compilation_capture import setup as capture_setup
+    from tests.test_next_compilation_receipt import fixture as write_next_output
     from tests.test_workspace_router import _client, _ready_provider
     from yleum_orchestrator.core.config import get_settings
     from yleum_orchestrator.routers import workspace
     from yleum_orchestrator.services.docker_cell_resources import DockerCommandResult
+    from yleum_orchestrator.services.machine_defaults import next_machine_manifest
+    from yleum_orchestrator.services.next_compilation_capture import capture_next_compilation
+    from yleum_orchestrator.services.next_compilation_receipt import collect_next_compilation
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@127.0.0.1:5432/test")
     monkeypatch.setenv("INTERNAL_TOKEN", "test-internal-token-not-a-real-secret")
@@ -176,30 +181,27 @@ async def test_real_router_emits_only_exact_successful_full_build_restart(
     try:
         workspace_id = uuid4()
         provider, manager, docker, run_id = await _ready_provider(tmp_path, workspace_id)
+        compiler_output = tmp_path / "compiled-output"
+        write_next_output(compiler_output)
+        collector_data = collect_next_compilation(str(compiler_output))
+        capture_backend, *_ = capture_setup(collector_data)
 
         class RestartedRuntime(PortableRuntime):
             def __init__(self):
                 super().__init__()
+                vars(self.backend).update(vars(capture_backend))
                 self.environment = EnvironmentIdentity("a" * 64, "b" * 64)
                 self.backend.environment_identity = lambda: self.environment
                 self.backend.environment_digest = lambda: self.environment.digest
                 self.compilation = self.migration = None
 
             async def execute(self, state, manifest, request):
+                self.backend.workspace_id = state.workspace_id
+                self.backend.project_id = state.project_id
+                self.compilation = capture_next_compilation(self.backend, request, manifest)
                 self.environment = EnvironmentIdentity(
                     "d" * 64 if mode == "content_changed" else "a" * 64,
                     "c" * 64,
-                )
-                self.compilation = dict(
-                    collector_version="next-fixed-data-v1",
-                    assets=[],
-                    workspace_id=str(state.workspace_id),
-                    project_id=str(state.project_id),
-                    generation_run_id=str(run_id),
-                    fencing_epoch=request.fencing_epoch,
-                    operation_id=str(request.operation_id),
-                    source_revision=request.expected_revision,
-                    manifest_digest=manifest.digest(),
                 )
                 self.migration = dict(
                     contract="project-migrations-v1",
@@ -228,7 +230,14 @@ async def test_real_router_emits_only_exact_successful_full_build_restart(
         runtime = RestartedRuntime()
         manager.machine_runtime = runtime
         state = manager.state_store.load(workspace_id)
-        files = {".omnia/cell.json": json.dumps(payload()), "server.py": "print('unchanged')"}
+        manifest = next_machine_manifest()
+        if mode == "extended_final_test":
+            task = next(task for task in manifest.tasks if task.name == "final-test")
+            task.argv = ["sh", "-lc", "pnpm test && node --test tests/product.integration.mjs"]
+        files = {
+            ".omnia/cell.json": manifest.model_dump_json(),
+            "src/app/page.tsx": 'export default function Page() { return "Fixture"; }',
+        }
         await docker.write_volume_files(
             state.resource_names.workspace_volume,
             {path: source.encode() for path, source in files.items()},
@@ -250,14 +259,17 @@ async def test_real_router_emits_only_exact_successful_full_build_restart(
             )
         assert response.status_code == 200, response.text
         body = response.json()
+        assert body["ok"] is (mode not in {"failed", "timeout"})
         assert (
             body["before_identity"]["workspace_revision"]
             == body["after_identity"]["workspace_revision"]
         )
         compilation = body["compiled_asset_receipt"]
         transition = compilation.get("full_build_startup_transition") if compilation else None
-        assert (transition is not None) is (mode == "success")
+        assert (transition is not None) is (mode in {"success", "extended_final_test"})
         if transition is not None:
+            assert compilation["assets"] == collector_data["assets"]
+            assert compilation["manifest_digest"] == body["before_identity"]["cell_manifest_digest"]
             assert transition["owner_id"] == str(state.owner_id)
             assert transition["operation_id"] == str(operation_id)
             assert transition["migration_sha256"] == digest(body["project_migration_receipt"])
@@ -272,6 +284,7 @@ async def test_real_router_emits_only_exact_successful_full_build_restart(
                 body["before_identity"]["environment_digest"]
                 != body["after_identity"]["environment_digest"]
             )
-        assert "full_build_startup_transition" not in runtime.compilation
+        if runtime.compilation is not None:
+            assert "full_build_startup_transition" not in runtime.compilation
     finally:
         get_settings.cache_clear()

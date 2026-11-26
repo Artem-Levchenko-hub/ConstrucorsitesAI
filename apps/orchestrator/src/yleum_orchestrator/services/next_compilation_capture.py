@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -15,13 +16,30 @@ from yleum_orchestrator.services.next_compilation_receipt import (
 )
 from yleum_orchestrator.services.project_machine import machine_remaining_seconds
 
+_TEST_PATH = r"(?:\./)?tests/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*\.[cm]?js"
+_NODE_TEST = re.compile(rf"node[ \t]+--test(?:[ \t]+{_TEST_PATH})+")
+
+
+def _supported_final_test(argv: list[str]) -> bool:
+    if argv == ["pnpm", "test"]:
+        return True
+    if len(argv) != 3 or argv[:2] != ["sh", "-lc"]:
+        return False
+    primary, *extra = (part.strip(" \t") for part in argv[2].split("&&"))
+    return (
+        re.fullmatch(r"pnpm[ \t]+test", primary) is not None
+        and bool(extra)
+        and all(_NODE_TEST.fullmatch(command) is not None for command in extra)
+    )
+
 
 def capture_next_compilation(backend: Any, request: Any, manifest: Any) -> dict[str, Any] | None:
-    # No arbitrary build command, source path, env, project interpreter or network.
-    tasks = [t for t in manifest.tasks if t.role == "full_build"]
-    if [t.argv for t in tasks] != [["pnpm", "build"], ["pnpm", "test"]] or any(
-        t.cwd != "." for t in tasks
-    ):
+    # Validate the completed build plan before collecting the fixed compiler output.
+    tasks = [task for task in manifest.tasks if task.role == "full_build"]
+    if len(tasks) != 2 or any(task.cwd != "." for task in tasks):
+        return None
+    build, test = tasks
+    if build.argv != ["pnpm", "build"] or not _supported_final_test(test.argv):
         return None
     from yleum_orchestrator.services.docker_machine_backend import _PIN
 
