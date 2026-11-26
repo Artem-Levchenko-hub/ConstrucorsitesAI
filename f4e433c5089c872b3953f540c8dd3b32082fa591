@@ -1,0 +1,5 @@
+MAX QA a1-shopping
+Production ordinary initial build. Project: isolated QA shopping list. Requested add item, quantity and persistent purchased state.
+Observed build started 19:58:26 UTC, terminal failure 20:35:19 UTC; elapsed 36m54s. The owner read model reported continue available, no accepted snapshot and no preview to accept. Streak: 0/4.
+35 completed LLMGW calls, 35 different receipts, $1.9238 observed provider cost. Product billing waived, 0 RUB; QA account is unmetered. No manual continuation or cancellation.
+Finalization reported MAX_FINALIZATION_FAILED: command changed the frozen proof identity, after successful Next compilation. Root investigation continues.
