@@ -39,11 +39,11 @@ async def send_verification_sms(
 ) -> str:
     if not sms_delivery_configured():
         raise SmsDeliveryFailed("SMS delivery is not configured")
+    if client is None:
+        async with httpx.AsyncClient(timeout=15.0) as owned:
+            return await send_verification_sms(phone, code, client=owned)
     settings = get_settings()
     assert settings.greensms_token
-    if client is None:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as owned:
-            return await send_verification_sms(phone, code, client=owned)
     try:
         response = await client.post(
             "https://api3.greensms.ru/sms/send",
@@ -51,7 +51,7 @@ async def send_verification_sms(
                 "Accept": "application/json",
                 "Authorization": "Bearer " + settings.greensms_token.get_secret_value().strip(),
             },
-            data={
+            json={
                 "to": phone.removeprefix("+"),
                 "from": settings.greensms_sender.strip(),
                 "txt": f"Ваш код подтверждения: {code}",

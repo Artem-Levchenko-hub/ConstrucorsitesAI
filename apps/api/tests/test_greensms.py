@@ -1,7 +1,7 @@
 """Green SMS sends once, uses private headers, and classifies uncertain outcomes."""
 
+import json
 from datetime import UTC, datetime
-from urllib.parse import parse_qs
 from uuid import uuid4
 
 import httpx
@@ -15,7 +15,7 @@ def configure(monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "sms_provider", "greensms")
     monkeypatch.setattr(settings, "greensms_token", SecretStr("qa-green-token"))
-    monkeypatch.setattr(settings, "greensms_sender", "GREENSMS")
+    monkeypatch.setattr(settings, "greensms_sender", "yleum.ru")
     return settings
 
 
@@ -32,22 +32,21 @@ async def test_green_sms_posts_one_private_request_and_masks_otp_in_provider_his
         assert request.method == "POST"
         assert str(request.url) == "https://api3.greensms.ru/sms/send"
         assert request.headers["authorization"] == "Bearer qa-green-token"
-        form = parse_qs(request.content.decode())
-        assert form["to"] == ["79991234567"]
-        assert form["from"] == ["GREENSMS"]
-        assert form["hidden"] == ["123456"]
-        # Green SMS's no-monthly-fee route only accepts the confirmation template.
-        assert form["txt"] == ["Ваш код подтверждения: 123456"]
-        assert len(form["txt"][0]) <= 70
-        assert "user" not in form and "pass" not in form
+        assert request.headers["content-type"] == "application/json"
+        assert json.loads(request.content) == {
+            "to": "79991234567",
+            "from": "yleum.ru",
+            "txt": "Ваш код подтверждения: 012345",
+            "hidden": "012345",
+        }
         return httpx.Response(200, json={"request_id": receipt})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        assert await send_verification_sms("+79991234567", "123456", client=client) == receipt
+        assert await send_verification_sms("+79991234567", "012345", client=client) == receipt
     assert len(requests) == 1
 
 
-@pytest.mark.parametrize("status", [400, 401, 402, 403, 429])
+@pytest.mark.parametrize("status", [400, 401, 402, 403, 426, 429])
 async def test_green_sms_explicit_rejection_is_failed_without_provider_body_leak(
     monkeypatch, status,
 ):
