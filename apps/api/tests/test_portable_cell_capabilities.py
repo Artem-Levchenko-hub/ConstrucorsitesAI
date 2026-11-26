@@ -1,3 +1,4 @@
+import json
 from uuid import uuid4
 
 import pytest
@@ -65,8 +66,22 @@ def test_main_stack_guide_keeps_next_max_tools_and_preserves_legacy_selection():
     assert "dedicated project PostgreSQL" in guide
     assert "isolated from the managed MAX core" in guide
     assert "Do NOT call or retry probe/verify_isolation" in prompt
+    manifest, _ = json.JSONDecoder().raw_decode(guide[guide.index('{"version":'):])
+    assert [(task["role"], task["argv"]) for task in manifest["tasks"]] == [
+        ("bootstrap", ["pnpm", "install", "--frozen-lockfile"]),
+        ("fast_check", ["pnpm", "typecheck"]),
+        ("full_build", ["pnpm", "build"]),
+        ("full_build", ["pnpm", "test"]),
+    ]
+    assert manifest["services"][0]["readiness"]["path"] == "/api/omnia/health"
     delivered = " ".join(prompt.split())
     for requirement in (
+        "Database-backed application tests belong in full_build",
+        "after the controller applies project migrations",
+        "Declare custom fast_check tests only when they can run without the project database",
+        "keep pnpm build followed by pnpm test in full_build",
+        "Preserve an existing database-test opt-in flag so the database suite runs",
+        "append node --test tests/<file>.mjs after the package tests",
         "SQL integration tests remain useful storage/isolation checks",
         "cannot substitute for the client-route contract",
         "actual UI payload",
@@ -82,6 +97,85 @@ def test_main_stack_guide_keeps_next_max_tools_and_preserves_legacy_selection():
         "never truncate the database",
     ):
         assert requirement in delivered
+
+
+def _shopping_source_with_final_tests(
+    *commands: list[str], cwd: str | None = None,
+) -> dict[str, str]:
+    location = {} if cwd is None else {"cwd": cwd}
+    return {
+        ".omnia/cell.json": json.dumps({
+            "version": 1,
+            "app_config_protocol": 1,
+            "tasks": [
+                {"name": "fast-test", "role": "fast_check", "argv": ["pnpm", "test"]},
+                {"name": "build", "role": "full_build", "argv": ["pnpm", "build"], **location},
+                *(
+                    {"name": f"test-{index}", "role": "full_build", "argv": command, **location}
+                    for index, command in enumerate(commands)
+                ),
+            ],
+            "services": [{"name": "web", "argv": ["pnpm", "start"]}],
+            "routes": [{"path": "/", "service": "web", "port": 3000}],
+        }),
+        "package.json": json.dumps({
+            "scripts": {"build": "next build", "test": "node --test tests/*.test.mjs"},
+            "dependencies": {"next": "15.5.24"},
+        }),
+        "src/app/page.tsx": (
+            "export default function Home() { return <main>Список покупок</main>; }"
+        ),
+    }
+
+
+_SHOPPING_NODE_TEST = ["node", "--test", "tests/shopping.integration.mjs"]
+
+
+@pytest.mark.parametrize("commands", [
+    [["pnpm", "exec", *_SHOPPING_NODE_TEST]],
+    [_SHOPPING_NODE_TEST, ["node", "tests/persistence.mjs"]],
+])
+@pytest.mark.parametrize("cwd", [None, ".", "./", "././"])
+def test_managed_next_done_cannot_replace_the_package_suite_with_direct_node_tests(commands, cwd):
+    from yleum_api.services.max_generation_contract import max_source_completion_gap
+
+    files = _shopping_source_with_final_tests(*commands, cwd=cwd)
+    detail = max_source_completion_gap("Список покупок", files, portable=True)
+    assert detail is not None
+    assert "pnpm build followed by pnpm test in .omnia/cell.json full_build" in detail
+    assert "package.json scripts.test alongside the existing suite" in detail
+    assert "append" not in detail
+
+
+@pytest.mark.parametrize("cwd", ["", "/", "..", "subproject"])
+def test_next_package_test_gap_only_classifies_root_tasks(cwd):
+    from yleum_api.services.max_generation_contract import max_source_completion_gap
+
+    files = _shopping_source_with_final_tests(_SHOPPING_NODE_TEST, cwd=cwd)
+    assert max_source_completion_gap("Список покупок", files, portable=True) is None
+
+
+@pytest.mark.parametrize("commands", [
+    [["pnpm", "test"]],
+    [["pnpm", "test"], ["pnpm", "exec", *_SHOPPING_NODE_TEST]],
+    [["env", "SHOPPING_TEST_DATABASE=1", "pnpm", "test"], _SHOPPING_NODE_TEST],
+    [["sh", "-lc", "pnpm test && node --test tests/shopping.integration.mjs"]],
+])
+def test_managed_next_done_accepts_package_suite_with_optional_product_tests(commands):
+    from yleum_api.services.max_generation_contract import max_source_completion_gap
+
+    files = _shopping_source_with_final_tests(*commands)
+    assert max_source_completion_gap("Список покупок", files, portable=True) is None
+
+
+def test_portable_done_leaves_unmanaged_next_test_commands_to_their_own_manifest():
+    from yleum_api.services.max_generation_contract import max_source_completion_gap
+
+    files = _shopping_source_with_final_tests(_SHOPPING_NODE_TEST)
+    manifest = json.loads(files[".omnia/cell.json"])
+    manifest.pop("app_config_protocol")
+    files[".omnia/cell.json"] = json.dumps(manifest)
+    assert max_source_completion_gap("Список покупок", files, portable=True) is None
 
 
 @pytest.mark.parametrize("protocol", ["text build", "text edit", "native"])

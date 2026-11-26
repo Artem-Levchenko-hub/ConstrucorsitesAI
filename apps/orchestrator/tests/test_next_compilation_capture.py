@@ -59,6 +59,13 @@ def setup(receipt=None):
         pytest.param(
             [
                 ["pnpm", "test"],
+                ["pnpm", "exec", "node", "--test", "tests/shopping.integration.mjs"],
+            ],
+            id="package-and-project-integration",
+        ),
+        pytest.param(
+            [
+                ["pnpm", "test"],
                 ["node", "--test", "./tests/server/one.cjs", "tests/two.js"],
                 ["node", "tests/another.mjs"],
             ],
@@ -76,7 +83,7 @@ def test_capture_uses_only_exact_ro_owned_volume_and_platform_interpreter(test_c
     args, kw = containers.calls[0]
     assert args[0] == backend.base_image and args[1][:4] == ["python3", "-I", "-S", "-c"]
     for argv in test_commands:
-        if argv[0] in {"sh", "node"}:
+        if argv[0] in {"sh", "node"} or argv[:2] == ["pnpm", "exec"]:
             assert argv[-1] not in args[1][-1]
         if argv[0] == "env":
             assert argv[1] not in args[1][-1]
@@ -144,6 +151,8 @@ def test_database_test_opt_in_requires_the_package_test(argv):
         pytest.param(["node", "src/a.mjs"], id="outside-tests"),
         pytest.param(["sh", "-lc", "node --test tests/a.mjs"], id="shell-extension"),
         pytest.param(["pnpm", "test"], id="duplicate-package-test"),
+        pytest.param(["pnpm", "exec", "node", "--test", "src/a.mjs"], id="exec-outside-tests"),
+        pytest.param(["pnpm", "exec", "node", "--test"], id="exec-implicit-suite"),
     ],
 )
 def test_unsupported_direct_test_never_starts_compilation_capture(argv):
@@ -154,7 +163,7 @@ def test_unsupported_direct_test_never_starts_compilation_capture(argv):
     assert not containers.calls
 
 
-@pytest.mark.parametrize("invalid", ["order", "shell-mix", "cwd"])
+@pytest.mark.parametrize("invalid", ["order", "shell-mix", "cwd", "standalone-exec"])
 def test_direct_test_requires_root_package_test_first(invalid):
     backend, request, manifest, _helper, containers = setup()
     direct = NS(role="full_build", argv=["node", "tests/a.mjs"], cwd=".")
@@ -163,6 +172,10 @@ def test_direct_test_requires_root_package_test_first(invalid):
         manifest.tasks[1:] = reversed(manifest.tasks[1:])
     elif invalid == "shell-mix":
         manifest.tasks[1].argv = ["sh", "-lc", "pnpm test && node --test tests/primary.mjs"]
+    elif invalid == "standalone-exec":
+        manifest.tasks[1:] = [
+            NS(role="full_build", argv=["pnpm", "exec", "node", "--test", "tests/a.mjs"], cwd=".")
+        ]
     else:
         direct.cwd = "tests"
 
@@ -197,12 +210,17 @@ def test_unknown_or_failed_capture_never_supplies_receipt(mutation):
 
 @pytest.mark.parametrize("version", ["next-restored-runtime-v1", "next-fixed-data-v1"])
 @pytest.mark.parametrize(
-    "argv", [["pnpm", "test"], ["env", "SHOPPING_TEST_DATABASE=1", "pnpm", "test"]]
+    "test_commands",
+    [
+        [["pnpm", "test"]],
+        [["env", "SHOPPING_TEST_DATABASE=1", "pnpm", "test"]],
+        [["pnpm", "test"], ["pnpm", "exec", "node", "--test", "tests/shopping.integration.mjs"]],
+    ],
 )
-def test_restore_capture_has_distinct_receipt_and_allows_core_only_build(version, argv):
+def test_restore_capture_has_distinct_receipt_and_allows_core_only_build(version, test_commands):
     backend, request, manifest, helper, containers = setup({"collector_version": version})
     request.task_role = "restore_runtime"
-    manifest.tasks[1].argv = argv
+    manifest.tasks[1:] = [NS(role="full_build", argv=argv, cwd=".") for argv in test_commands]
     receipt = capture_next_compilation(backend, request, manifest)
     script = containers.calls[0][0][1][-1]
     assert "collect_next_compilation(require_product_page=False)" in script

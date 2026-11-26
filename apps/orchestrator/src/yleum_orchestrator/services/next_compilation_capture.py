@@ -21,6 +21,8 @@ _NODE_TEST = re.compile(rf"node[ \t]+--test(?:[ \t]+{_TEST_PATH})+")
 
 
 def _supported_direct_node_test(argv: list[str]) -> bool:
+    if argv[:4] == ["pnpm", "exec", "node", "--test"]:
+        argv = argv[2:]
     if argv[:2] == ["node", "--test"]:
         paths = argv[2:]
     elif len(argv) == 2 and argv[0] == "node":

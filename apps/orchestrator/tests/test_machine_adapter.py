@@ -452,6 +452,7 @@ async def test_fresh_fast_check_installs_before_ast_and_replays_receipt(install_
     value["tasks"] = [
         {"name": "install", "role": "bootstrap", "argv": ["pnpm", "install", "--frozen-lockfile"]},
         {"name": "types", "role": "fast_check", "argv": ["pnpm", "typecheck"]},
+        {"name": "unit-test", "role": "fast_check", "argv": ["pnpm", "test:unit"]},
         {"name": "build", "role": "full_build", "argv": ["pnpm", "build"]},
     ]
     manifest = MachineManifest.model_validate(value)
@@ -465,6 +466,7 @@ async def test_fresh_fast_check_installs_before_ast_and_replays_receipt(install_
         [["pnpm", "install", "--frozen-lockfile"]] if install_exit else [
             ["pnpm", "install", "--frozen-lockfile"],
             ["node", "-e", api.REACT_EFFECT_CONTRACT_JS], ["pnpm", "typecheck"],
+            ["pnpm", "test:unit"],
         ]
     )
     count = len(commands)

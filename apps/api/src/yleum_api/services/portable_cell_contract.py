@@ -2,7 +2,8 @@
 
 import json
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from pathlib import PurePosixPath
 from typing import Protocol
 
 from yleum_api.services.portable_product_source import is_product_file, reachable_product_source
@@ -81,19 +82,25 @@ you intentionally migrate them. Do not run legacy pnpm/typecheck assumptions for
 a portable project. This capability is provider-enforced, not permission to use
 host Docker, host files, devices, privileged flags or other projects' networks.
 
-Default manifest (extend only when a real helper/service is necessary):
+Default manifest for the Next stack:
 {"version":1,"tasks":[
  {"name":"install","role":"bootstrap","argv":["pnpm","install","--frozen-lockfile"],"timeout_seconds":900},
  {"name":"typecheck","role":"fast_check","argv":["pnpm","typecheck"],"timeout_seconds":180},
- {"name":"lint","role":"fast_check","argv":["pnpm","lint"],"timeout_seconds":180},
  {"name":"build","role":"full_build","argv":["pnpm","build"],"timeout_seconds":600},
  {"name":"final-test","role":"full_build","argv":["pnpm","test"],"timeout_seconds":300}],
  "services":[{"name":"web","argv":["pnpm","start"],
- "readiness":{"port":3000,"path":"/","timeout_seconds":120}}],
+ "readiness":{"port":3000,"path":"/api/omnia/health","timeout_seconds":120}}],
  "routes":[{"path":"/","service":"web","port":3000}]}
 
 argv is explicit, cwd is relative to /workspace. Use sh -lc explicitly if needed.
-Each role runs only its declared tasks; full_build requires a real final test.
+Each role runs only its declared tasks. Keep a real final test in full_build.
+For the managed Next stack, keep pnpm build followed by pnpm test in full_build.
+Preserve an existing database-test opt-in flag so the database suite runs.
+Include new product tests in package.json scripts.test alongside the existing suite,
+or append node --test tests/<file>.mjs after the package tests.
+Database-backed application tests belong in full_build, after the controller applies
+project migrations. Declare custom fast_check tests only when they can run without
+the project database.
 Final tests must preserve production build output. Never run next dev against
 .next after next build: it erases the production build. Use a separate distDir
 for a test dev server, or test next start on a separate port and terminate it.
@@ -252,6 +259,41 @@ async def machine_stack_guide_from_executor(
     )
 
 
+def _omits_next_package_tests(
+    files: Mapping[str, str], tasks: Sequence[Mapping[str, object]],
+) -> bool:
+    full_build = [task for task in tasks if task.get("role") == "full_build"]
+    if len(full_build) < 2 or any(
+        not isinstance(cwd := task.get("cwd", "."), str)
+        or not cwd
+        or str(PurePosixPath(cwd)) != "."
+        for task in full_build
+    ):
+        return False
+    build, *tests = full_build
+    # Catch the package suite being replaced by direct Node invocations. The
+    # compiler collector still validates the exact supported test commands.
+    if build.get("argv") != ["pnpm", "build"] or not all(
+        isinstance(argv := task.get("argv"), list)
+        and (argv[:1] == ["node"] or argv[:3] == ["pnpm", "exec", "node"])
+        for task in tests
+    ):
+        return False
+    try:
+        package = json.loads(files.get("package.json", ""))
+    except ValueError:
+        return False
+    if not isinstance(package, dict):
+        return False
+    dependencies = package.get("dependencies")
+    scripts = package.get("scripts")
+    return (
+        isinstance(dependencies, dict) and "next" in dependencies
+        and isinstance(scripts, dict) and scripts.get("build") == "next build"
+        and isinstance(test := scripts.get("test"), str) and bool(test.strip())
+    )
+
+
 def portable_source_gap(
     files: Mapping[str, str], capabilities: list[RequestedCapability],
     *, implemented_capabilities: Callable[[Mapping[str, str]], frozenset[str]] | None = None,
@@ -260,10 +302,9 @@ def portable_source_gap(
         manifest = json.loads(files.get(".omnia/cell.json", ""))
         if not isinstance(manifest, dict) or manifest.get("version") != 1:
             raise ValueError
-        tasks = manifest.get("tasks", [])
+        tasks = [task for task in manifest.get("tasks", []) if isinstance(task, dict)]
         if not any(
-            isinstance(task, dict)
-            and (
+            (
                 task.get("role") == "test"
                 or (
                     task.get("role") == "full_build"
@@ -291,6 +332,12 @@ def portable_source_gap(
         for path, content in files.items()
     ):
         return "Portable manifest is present but actual product implementation is missing."
+    if manifest.get("app_config_protocol") == 1 and _omits_next_package_tests(files, tasks):
+        return (
+            "Keep pnpm build followed by pnpm test in .omnia/cell.json full_build. "
+            "Include the new product test in package.json scripts.test "
+            "alongside the existing suite."
+        )
     if not capabilities:
         return None
     source = reachable_product_source(files, manifest)

@@ -9,17 +9,16 @@ def test_default_max_environment_is_next_with_extensible_dependencies_not_produc
 
     template = Path(__file__).parents[1] / "templates" / "max-miniapp-nextjs"
     files = {}
-    for path in template.rglob("*"):
-        if not path.is_file():
-            continue
-        relative = path.relative_to(template)
-        if any(part in {"node_modules", ".next"} for part in relative.parts):
-            continue
-        try:
-            content = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-        files[str(relative).replace("\\", "/")] = content
+    for directory, subdirs, filenames in template.walk():
+        subdirs[:] = [name for name in subdirs if name not in {"node_modules", ".next"}]
+        for filename in filenames:
+            path = directory / filename
+            if not path.is_file():
+                continue
+            try:
+                files[path.relative_to(template).as_posix()] = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
     seeded = next_machine_seed(files)
     manifest = MachineManifest.from_files(seeded)
     assert manifest is not None
@@ -27,14 +26,12 @@ def test_default_max_environment_is_next_with_extensible_dependencies_not_produc
     assert manifest.services[0].readiness is not None
     assert manifest.services[0].readiness.path == "/api/omnia/health"
     assert manifest.routes[0].port == 3000
-    assert [task.role for task in manifest.tasks] == [
-        "bootstrap",
-        "fast_check",
-        "fast_check",
-        "full_build",
-        "full_build",
+    assert [(task.role, task.argv) for task in manifest.tasks] == [
+        ("bootstrap", ["pnpm", "install", "--frozen-lockfile"]),
+        ("fast_check", ["pnpm", "typecheck"]),
+        ("full_build", ["pnpm", "build"]),
+        ("full_build", ["pnpm", "test"]),
     ]
-    assert manifest.tasks[0].argv == ["pnpm", "install", "--frozen-lockfile"]
     assert "experimental: { cpus: 2 }" in seeded["next.config.ts"]
     package = json.loads(seeded["package.json"])
     assert package["engines"]["node"] == ">=22"

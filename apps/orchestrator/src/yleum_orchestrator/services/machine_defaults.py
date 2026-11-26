@@ -23,12 +23,6 @@ def next_machine_manifest() -> MachineManifest:
                     "timeout_seconds": 180,
                 },
                 {
-                    "name": "targeted-test",
-                    "role": "fast_check",
-                    "argv": ["pnpm", "test"],
-                    "timeout_seconds": 300,
-                },
-                {
                     "name": "build",
                     "role": "full_build",
                     "argv": ["pnpm", "build"],
