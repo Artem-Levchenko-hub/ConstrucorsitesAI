@@ -55,5 +55,9 @@ class SnapshotWithFiles(SnapshotPublic):
     files: dict[str, str]
 
 
+class SnapshotChangesPublic(BaseModel):
+    changes: list[str]
+
+
 class RollbackRequest(BaseModel):
     snapshot_id: UUID

@@ -297,7 +297,7 @@ async def execute(path, env):
             **common,
             _att_capture=None,
             _attestation_stack="",
-            _orch_name=None,
+            _orch_name=env.get("_orch_name"),
             _max_finalization_proof=env["_max_finalization_proof"],
             _promotion_permit=env["_promotion_permit"],
             progress=GenerationProgress(
@@ -306,6 +306,25 @@ async def execute(path, env):
             runtime=env.get("runtime", GenerationRuntime()),
         )
     return captured
+
+
+async def test_version_description_error_preserves_saved_snapshot_and_single_charge(monkeypatch):
+    rows, trace = records(), []
+    session = OfflineSession(rows, trace)
+    env, git_calls, _ = context(rows, lambda: session, trace, monkeypatch,
+                                _orch_name="max-miniapp-nextjs")
+
+    def fail_to_describe(*_):
+        raise ValueError("Synthetic unreadable UI source")
+
+    monkeypatch.setattr(agent_publication, "summarize_version_changes", fail_to_describe)
+    result = await execute("agent", env)
+    owner, project, _, message, _ = session.durable[:5]
+    assert message.snapshot_id == project.current_snapshot_id == result["snapshot"].id
+    assert message.content.startswith("Приложение готово.")
+    assert "описание изменений этой версии недоступно" in message.content
+    assert "Сборка прошла." in message.content
+    assert owner.free_generations_used == 4 and len(git_calls) == 1
 
 
 @pytest.mark.parametrize("path", ["agent"])
@@ -432,11 +451,14 @@ async def test_caller_reexecution_preserves_existing_non_idempotent_semantics(pa
 
 @pytest.mark.parametrize("path", ["agent"])
 @pytest.mark.parametrize("fault", [None, "git", "upload", "flush", "commit"])
-async def test_disposable_db_caller_publication(path, fault, test_engine, monkeypatch):
+async def test_disposable_db_caller_publication(path, fault, test_engine, client, monkeypatch):
     """CI PostgreSQL only: actual transactions and FK constraints, no model calls."""
     rows, trace = records(), []
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
-    env, _calls, original = context(rows, factory, trace, monkeypatch)
+    env, _calls, original = context(rows, factory, trace, monkeypatch,
+                                    _orch_name="max-miniapp-nextjs")
+    files = {"src/app/page.tsx": "export default () => <button>Записаться</button>"}
+    env.update(files=files, **green_max_promotion(rows, files))
     owner, project, parent, message, run = rows
     # Resolve the current-snapshot cycle in the same order as application setup.
     project.current_snapshot_id = None
@@ -540,7 +562,9 @@ async def test_disposable_db_caller_publication(path, fault, test_engine, monkey
         saved = await session.get(Snapshot, result["snapshot"].id)
         assert saved.parent_id == parent.id and saved.commit_sha == result["new_sha"]
         assert (await session.get(Project, project.id)).current_snapshot_id == saved.id
-        assert (await session.get(Message, message.id)).snapshot_id == saved.id
+        saved_message = await session.get(Message, message.id)
+        assert saved_message.snapshot_id == saved.id
+        assert "Добавили кнопку «Записаться»." in saved_message.content
         saved_run = await session.get(GenerationRun, run.id)
         assert saved_run.agent_state["snapshot_id"] == str(saved.id)
         assert saved_run.agent_state["billing_accepted_candidate"] == expected_marker(saved)
@@ -564,7 +588,20 @@ async def test_disposable_db_caller_publication(path, fault, test_engine, monkey
             expected_marker(result["snapshot"]),
             expected_marker(repeated["snapshot"]),
         ]
+        saved_run.status = "completed"
+        await session.commit()
     assert repo.read_files(project.id, parent.commit_sha) == original
+
+    from yleum_api.core.deps import get_current_user
+    from yleum_api.main import app
+
+    monkeypatch.setitem(app.dependency_overrides, get_current_user, lambda: owner)
+    response = await client.get(f"/api/projects/{project.id}/messages")
+    assert response.status_code == 200
+    (report,) = response.json()
+    assert report["snapshot_id"] == str(repeated["snapshot"].id)
+    assert report["generation_status"] == "completed"
+    assert report["content"] == saved_message.content
 
 
 async def test_agent_proof_exact_tree_deletes_absent_and_preserves_empty(monkeypatch):

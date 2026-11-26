@@ -665,8 +665,11 @@ async def test_outcome_without_version_binding_is_history_when_publication_diffe
 async def test_cancelled_source_reads_keep_physical_slots_until_workers_really_finish(
     monkeypatch, owned_project,
 ):
+    from yleum_api.services import max_source_workers
+
     pool = ThreadPoolExecutor(max_workers=2)
     gate = threading.BoundedSemaphore(2)
+    history_gate = threading.BoundedSemaphore(1)
     finished = threading.Event()
     started = threading.Event()
     lock = threading.Lock()
@@ -686,10 +689,9 @@ async def test_cancelled_source_reads_keep_physical_slots_until_workers_really_f
         assert finished.wait(5)
         return []
 
-    monkeypatch.setattr(
-        diagnosis, "_SOURCE_EXECUTOR", SimpleNamespace(submit=submit), raising=False,
-    )
-    monkeypatch.setattr(diagnosis, "_SOURCE_SLOTS", gate, raising=False)
+    monkeypatch.setattr(max_source_workers, "_SOURCE_EXECUTOR", SimpleNamespace(submit=submit))
+    monkeypatch.setattr(max_source_workers, "_SOURCE_SLOTS", gate)
+    monkeypatch.setattr(max_source_workers, "_HISTORY_SLOTS", history_gate)
     monkeypatch.setattr(diagnosis, "_snapshot_controls", blocked_read)
     session = Session(owned_project)
     tasks = [asyncio.create_task(diagnosis._source_facts(
@@ -700,6 +702,11 @@ async def test_cancelled_source_reads_keep_physical_slots_until_workers_really_f
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        for historical in (False, True):
+            with pytest.raises(max_source_workers.SourceReadUnavailable):
+                await max_source_workers.run_max_source_read(lambda: None, historical=historical)
+        assert history_gate.acquire(blocking=False)
+        history_gate.release()
         for _ in range(5):
             assert await asyncio.wait_for(diagnosis._source_facts(
                 session, owned_project.id, owned_project.current_snapshot_id, "Ещё один вопрос",

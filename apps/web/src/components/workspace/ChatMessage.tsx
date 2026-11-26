@@ -35,11 +35,22 @@ import { GenerationFailureCard } from "./GenerationFailureCard";
 import { IntegrationRequestCard } from "./IntegrationRequestCard";
 import { recognizeBuiltinIntegrationRequest } from "@/lib/builtin-integration-prompts";
 import { UserMessageContent } from "./UserMessageContent";
+import { VersionChangesDisclosure } from "./VersionChangesDisclosure";
 
 // Backend status lines streamed mid-generation (messages.py): acceptance retry
 // and the freeform→catalog fallback. They arrive as `*…*` italic prose; we lift
 // them out into a live "working" card instead of plain italic text.
 const STATUS_RE = /\*+\s*(Приёмка|Свободная вёрстка)[^*\n]*/i;
+
+const LEGACY_GENERATION_SUCCESSES = new Set([
+  "Приложение готово.",
+  "Готово — приложение собрано и проверено.",
+  "Готово — правка применена и проверена.",
+  "Готово — приложение собрано.",
+  "Готово — правка применена.",
+  "Готово — приложение собрано. Запуск превью проверен.",
+  "Готово — правка применена. Сборка и запуск превью проверены.",
+]);
 
 export function ChatMessage({
   message,
@@ -77,6 +88,11 @@ export function ChatMessage({
   const studioUser = studio && isUser;
   const integrationRequest = isUser ? recognizeBuiltinIntegrationRequest(message.content) : null;
   const parts: AssistantPart[] = isUser ? [] : parseAssistantContent(message.content);
+  const { snapshot_id: snapshotId } = message;
+  const showVersionChanges = studio && !streaming && projectId === message.project_id &&
+    message.role === "assistant" && !message.chat_question &&
+    message.generation_status === "completed" && !message.generation_failure &&
+    LEGACY_GENERATION_SUCCESSES.has(message.content.trim());
 
   return (
     <motion.div
@@ -190,6 +206,10 @@ export function ChatMessage({
                 />
               ),
             )
+          )}
+
+          {showVersionChanges && snapshotId && (
+            <VersionChangesDisclosure key={`${projectId}:${snapshotId}`} projectId={projectId} snapshotId={snapshotId} />
           )}
 
           {streaming &&

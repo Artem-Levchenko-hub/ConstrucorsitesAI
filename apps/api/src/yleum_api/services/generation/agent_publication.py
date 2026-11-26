@@ -50,6 +50,7 @@ from yleum_api.services.generation.recovery_execution import (
     recovery_state,
 )
 from yleum_api.services.generation.recovery_store import _locked_owner
+from yleum_api.services.generation.version_changes import summarize_version_changes
 from yleum_api.services.generation_artifacts import create_generation_snapshot
 from yleum_api.services.generation_deployment_drain import require_generation_admission
 from yleum_api.services.max_finalization import ProofBundle
@@ -501,6 +502,16 @@ async def publish_agent_candidate(
             baseline.sha,
             exact_tree=_max_finalization_proof is not None,
         )
+        max_report_proof = _max_finalization_proof if _orch_name == "max-miniapp-nextjs" else None
+        changes: list[str] = []
+        if max_report_proof is not None:
+            try:
+                changes = await asyncio.to_thread(summarize_version_changes, baseline.files, files)
+                if not changes and baseline.sha and baseline.files == files:
+                    changes = ["Содержимое приложения совпадает с предыдущей версией."]
+            except Exception as exc:
+                # Optional narration must never undo a verified candidate or retry its billing.
+                _log.warning("MAX version summary unavailable (%s)", type(exc).__name__)
         async with factory() as session:
             if continuation is not None:
                 await _publication_owner(session, continuation)
@@ -539,14 +550,15 @@ async def publish_agent_candidate(
                     assistant_message_id=ids.assistant_message_id,
                 )
             if msg is not None:
-                if _max_finalization_proof is not None and _orch_name == "max-miniapp-nextjs":
+                if max_report_proof is not None:
                     owner_text = ""
                     if handoff and handoff.get("owner_request_quote"):
                         owner = await session.get(Message, ids.user_message_id)
                         if owner and owner.role == "user" and owner.project_id == ids.project_id:
                             owner_text = owner.content
                     accumulated = snapshot_outcome(
-                        _max_finalization_proof, accepted, handoff, owner_message=owner_text,
+                        max_report_proof, accepted, handoff, owner_message=owner_text,
+                        changes=changes,
                         saw_failed_actions=any(
                             name == "coverage" for name, _ in _att_capture or ()
                         ),

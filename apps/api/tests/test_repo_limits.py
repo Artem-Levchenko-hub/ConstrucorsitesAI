@@ -118,3 +118,27 @@ def test_exact_commit_can_remove_all_files() -> None:
     parent = repo.init_from_files(PROJECT_ID, {"old.txt": "old"}, "seed")
     sha = repo.commit_files(PROJECT_ID, {}, "empty tree", parent, exact_tree=True)
     assert repo.read_files(PROJECT_ID, sha) == {}
+
+
+def test_reads_exact_commit_and_first_parent_trees_from_one_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed = repo.init_from_files(PROJECT_ID, {"seed.txt": "seed"}, "seed")
+    before = {"src/page.tsx": "old", "removed.ts": "removed"}
+    parent = repo.commit_files(PROJECT_ID, before, "parent", seed, exact_tree=True)
+    after = {"src/page.tsx": "new", "empty.txt": ""}
+    child = repo.commit_files(PROJECT_ID, after, "child", parent, exact_tree=True)
+    repo.commit_files(PROJECT_ID, {"unrelated.ts": "later"}, "later", child, exact_tree=True)
+    downloads = []
+    download = repo._try_download
+
+    def count_download(project_id: UUID, destination: Path) -> bool:
+        downloads.append(project_id)
+        return download(project_id, destination)
+
+    monkeypatch.setattr(repo, "_try_download", count_download)
+    assert repo.read_commit_files_with_parent(
+        PROJECT_ID, child, expected_parent_sha=parent,
+    ) == (before, after)
+    assert downloads == [PROJECT_ID]
+    assert repo.read_commit_files_with_parent(PROJECT_ID, child, expected_parent_sha=seed) is None

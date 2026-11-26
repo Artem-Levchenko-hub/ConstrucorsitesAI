@@ -11,11 +11,9 @@ import json
 import posixpath
 import re
 from collections.abc import Iterator, Mapping
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
-from threading import BoundedSemaphore
 from typing import Any
 from uuid import UUID
 
@@ -34,6 +32,7 @@ from yleum_api.models.provider_call import ProviderCall
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.services import llm_client, orchestrator_client, repo
 from yleum_api.services.agent_progress import redact_sensitive_text
+from yleum_api.services.max_source_workers import run_max_source_read
 from yleum_api.services.runtime_nutrition_ai import (
     LEGACY_MEAL_PLAN_DAYS,
     MEAL_PLAN_TASK,
@@ -59,8 +58,6 @@ _STATES = {"completed": "Последняя сохранённая сборка 
            "queued_for_capacity": "Сборка ожидает свободные ресурсы.",
            "cancel_requested": "Запрошена остановка сборки.",
            "cancelled": "Последняя сборка остановлена."}
-_SOURCE_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="max-owner-source")
-_SOURCE_SLOTS = BoundedSemaphore(2)
 
 
 def _text(node: Node | None) -> str:
@@ -463,27 +460,6 @@ def _snapshot_controls(project_id: UUID, commit: str, prompt: str) -> list[dict[
     return _controls(files, prompt)
 
 
-async def _read_source_controls(
-    project_id: UUID, commit: str, prompt: str,
-) -> list[dict[str, Any]]:
-    gate = _SOURCE_SLOTS
-    if not gate.acquire(blocking=False):
-        return []
-    try:
-        future = _SOURCE_EXECUTOR.submit(_snapshot_controls, project_id, commit, prompt)
-    except Exception:
-        gate.release()
-        raise
-    # Cancelling the HTTP waiter does not finish a running object-store read.
-    # Only the physical future's completion releases its admission slot.
-    future.add_done_callback(lambda _completed: gate.release())
-    try:
-        async with asyncio.timeout(4):
-            return await asyncio.wrap_future(future)
-    except TimeoutError:
-        return []
-
-
 async def _source_facts(
     session: AsyncSession, project_id: UUID, snapshot_id: UUID, prompt: str,
     *, inspect_controls: bool = True,
@@ -496,7 +472,7 @@ async def _source_facts(
     if not inspect_controls:
         return commit, []
     try:
-        controls = await _read_source_controls(project_id, commit, prompt)
+        controls = await run_max_source_read(lambda: _snapshot_controls(project_id, commit, prompt))
     except Exception:
         return commit, []
     return commit, controls

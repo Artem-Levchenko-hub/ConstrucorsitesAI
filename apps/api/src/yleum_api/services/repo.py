@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import tarfile
 import tempfile
 from collections.abc import Callable, Iterator
@@ -284,14 +285,45 @@ def read_files(
         commit = repo.get(commit_sha)
         if not isinstance(commit, pygit2.Commit):
             raise ValueError(f"commit {commit_sha} not found")
-        out: dict[str, str] = {}
-        _walk(repo, commit.tree, "", out, include)
-        if len(out) > MAX_FILES:
-            raise ValueError(f"too many files in commit: {len(out)} > {MAX_FILES}")
-        total_bytes = sum(len(content.encode("utf-8")) for content in out.values())
-        if total_bytes > MAX_REPO_BYTES:
-            raise ValueError(f"repository text exceeds {MAX_REPO_BYTES} bytes: {total_bytes}")
-        return out
+        return _read_commit_files(repo, commit, include=include)
+
+
+def read_commit_files_with_parent(
+    project_id: UUID, commit_sha: str, *, expected_parent_sha: str | None,
+) -> tuple[dict[str, str], dict[str, str]] | None:
+    """Return (first-parent files, commit files) from one verified project archive."""
+    if re.fullmatch(r"[0-9a-f]{40}", commit_sha) is None:
+        return None
+    with _open_workdir(project_id, must_exist=True) as workdir:
+        repo = pygit2.Repository(str(workdir))
+        commit = repo.get(pygit2.Oid(hex=commit_sha))
+        if not isinstance(commit, pygit2.Commit):
+            return None
+        parent_ids = commit.parent_ids
+        first_parent_id = parent_ids[0] if parent_ids else None
+        first_parent_sha = str(first_parent_id) if first_parent_id is not None else None
+        if first_parent_sha != expected_parent_sha:
+            return None
+        if first_parent_id is None:
+            return {}, _read_commit_files(repo, commit)
+        parent = repo.get(first_parent_id)
+        if not isinstance(parent, pygit2.Commit):
+            return None
+        return _read_commit_files(repo, parent), _read_commit_files(repo, commit)
+
+
+def _read_commit_files(
+    repo: pygit2.Repository, commit: pygit2.Commit, *,
+    include: Callable[[str], bool] | None = None,
+) -> dict[str, str]:
+    out: dict[str, str] = {}
+    _walk(repo, commit.tree, "", out, include)
+    if len(out) > MAX_FILES:
+        raise ValueError(f"too many files in commit: {len(out)} > {MAX_FILES}")
+    total_bytes = sum(len(content.encode("utf-8")) for content in out.values())
+    if total_bytes > MAX_REPO_BYTES:
+        raise ValueError(f"repository text exceeds {MAX_REPO_BYTES} bytes: {total_bytes}")
+    return out
 
 
 def read_file(

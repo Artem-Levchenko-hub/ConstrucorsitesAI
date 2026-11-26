@@ -49,7 +49,9 @@ async def test_actual_publication_keeps_committed_full_count_with_any_recorder_c
 
     def factory():
         return session
-    files = {"src/app/page.tsx": "export default function Page() { return 'ready'; }"}
+    page = "src/app/page.tsx"
+    before = {page: "export default function Page(){return <main><h1>Расписание</h1></main>}"}
+    files = {page: before[page].replace("</main>", "<button>Записаться</button></main>")}
     green = green_max_promotion(rows, files)
     quota = AsyncMock()
     commit = Mock(return_value="c" * 40)
@@ -88,7 +90,7 @@ async def test_actual_publication_keeps_committed_full_count_with_any_recorder_c
         _orch_name="max-miniapp-nextjs" if cache == "fresh" else None,
         handoff={"primary_action": "Составить рацион"},
         accumulated="Ready and verified",
-        baseline=SourceBaseline(parent.id, parent.commit_sha, {}),
+        baseline=SourceBaseline(parent.id, parent.commit_sha, before),
         factory=factory,
         files=files if has_files else {},
         ids=GenerationIds(run.id, project.id, owner.id, uuid4(), message.id),
@@ -105,6 +107,7 @@ async def test_actual_publication_keeps_committed_full_count_with_any_recorder_c
     assert durable.agent_steps[-1]["actionCount"] == (202 if cache == "fresh" else 201)
     assert durable.agent_steps[-1]["historyTruncated"] is True
     if has_files and cache == "fresh":
+        assert "Что изменилось" in durable.content and "Записаться" in durable.content
         assert "Сборка прошла." in durable.content
         assert "Осталось проверить в превью действие «Составить рацион»." in durable.content
     else:
