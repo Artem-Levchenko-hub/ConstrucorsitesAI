@@ -75,6 +75,83 @@ def test_assertion_requires_real_code_and_complete_in_range_owned_location():
     assert not classify(assertion_detail()[:-4], files=files).allowed_paths
 
 
+NODE_STRIP_FAILURE = """TAP version 13
+not ok 1 - loads the route
+  ---
+  type: 'test'
+  location: '/workspace/tests/route.test.mjs:8:1'
+  failureType: 'testCodeFailure'
+  error: 'TypeScript parameter property is not supported in strip-only mode'
+  code: 'ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX'
+  name: 'SyntaxError'
+  stack: |-
+    parseTypeScript (node:internal/modules/typescript:68:40)
+    processTypeScriptCode (node:internal/modules/typescript:146:42)
+  ...
+1..1
+"""
+NODE_STRIP_FILES = {"tests/route.test.mjs": "// fixture\n" * 8}
+NODE_STRIP_MESSAGE = "TypeScript parameter property is not supported in strip-only mode"
+NODE_STRIP_CODE = "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX"
+
+
+@pytest.mark.parametrize("shape", ["full", "short", "another_syntax_error"])
+def test_owned_node_strip_failure_permits_only_the_normal_product_repair(shape):
+    from yleum_api.services.max_finalization import _repairable_build_failure
+
+    detail = NODE_STRIP_FAILURE
+    if shape == "short":
+        detail = detail.replace("  ---\n  type: 'test'\n", "")
+        detail = detail.replace("  name: 'SyntaxError'\n  stack: |-\n", "")
+        message = f"  error: '{NODE_STRIP_MESSAGE}'\n"
+        code = f"  code: '{NODE_STRIP_CODE}'\n"
+        detail = detail.replace(message + code, code + message)
+    elif shape == "another_syntax_error":
+        detail = detail.replace(
+            NODE_STRIP_MESSAGE, "TypeScript enum is not supported in strip-only mode",
+        )
+    failure = classify(detail, files=NODE_STRIP_FILES)
+    assert failure.kind == "test_assertion"
+    assert failure.importer is None and failure.allowed_paths == ()
+    assert _repairable_build_failure(failure)
+
+
+@pytest.mark.parametrize("detail", [
+    NODE_STRIP_FAILURE.replace("testCodeFailure", "subtestsFailed"),
+    NODE_STRIP_FAILURE.replace(NODE_STRIP_CODE, "ERR_OTHER"),
+    NODE_STRIP_FAILURE.replace(f"code: '{NODE_STRIP_CODE}'", f"note: '{NODE_STRIP_CODE}'"),
+    NODE_STRIP_FAILURE.replace("node:internal/modules/typescript", "/workspace/src/typescript"),
+    NODE_STRIP_FAILURE.replace("/workspace/tests/", "/tmp/tests/"),
+    NODE_STRIP_FAILURE.replace("route.test.mjs", "../src/route.test.mjs"),
+    NODE_STRIP_FAILURE.replace("route.test.mjs", "foreign.test.mjs"),
+    NODE_STRIP_FAILURE.replace(":8:1'", ":9:1'"),
+    NODE_STRIP_FAILURE.replace("  code:", "  ...\nnot ok 2 - a different test\n  code:"),
+    NODE_STRIP_FAILURE.replace("  ...\n", ""),
+    NODE_STRIP_FAILURE.replace("not ok 1", "ok 1"),
+])
+def test_node_strip_failure_needs_one_complete_owned_diagnostic(detail):
+    assert classify(detail, files=NODE_STRIP_FILES).kind == "unknown"
+
+
+@pytest.mark.parametrize("conflict", [
+    "  code: 'ERR_OTHER'", "  location: '/workspace/tests/other.test.mjs:8:1'",
+])
+def test_node_strip_failure_refuses_conflicting_fields(conflict):
+    detail = NODE_STRIP_FAILURE.replace("  stack: |-", f"{conflict}\n  stack: |-")
+    files = NODE_STRIP_FILES | {"tests/other.test.mjs": "// fixture\n" * 8}
+    assert classify(detail, files=files).kind == "unknown"
+
+
+def test_node_strip_failure_respects_frozen_terminal_source_and_infrastructure():
+    assert classify(NODE_STRIP_FAILURE, files=NODE_STRIP_FILES, finished=False).kind == "unknown"
+    assert classify(
+        NODE_STRIP_FAILURE, files=NODE_STRIP_FILES, digest="0" * 64,
+    ).kind == "unknown"
+    assert classify(
+        NODE_STRIP_FAILURE + "ECONNRESET\n", files=NODE_STRIP_FILES,
+    ).kind == "infrastructure"
+
+
 def partial_assertion_files():
     return {
         "tests/nutrition-http.mjs": "assert.ok(rendered);\n",

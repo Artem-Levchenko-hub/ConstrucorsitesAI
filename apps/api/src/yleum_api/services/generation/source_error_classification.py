@@ -80,7 +80,14 @@ _TAP_FAILED_TEST = re.compile(
     r"(?=^(?:not ok |ok |# Subtest:|1\.\.|  \.\.\.)|\Z)"
 )
 _TAP_TEST_LOCATION = re.compile(
-    rf"(?m)^  location: '/workspace/(?P<file>{_TEST_PATH}):[1-9]\d{{0,6}}:[1-9]\d{{0,6}}'\r?$"
+    rf"(?m)^  location: '/workspace/(?P<file>{_TEST_PATH})"
+    r":(?P<line>[1-9]\d{0,6}):[1-9]\d{0,6}'\r?$"
+)
+_TAP_TEST_END = re.compile(r"  \.\.\.(?:\r?\n|\Z)")
+_NODE_STRIP_CODE = "  code: 'ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX'"
+_NODE_TYPESCRIPT_FRAME = re.compile(
+    r"(?m)^    (?:at )?[A-Za-z_$][A-Za-z0-9_.$]* "
+    r"\(node:internal/modules/typescript:[1-9]\d{0,6}:[1-9]\d{0,6}\)\r?$"
 )
 _LOCATOR_TIMEOUT = re.compile(
     r"(?m)^    locator\.[A-Za-z]+: Timeout [1-9]\d{0,8}ms exceeded\.\r?\n"
@@ -154,21 +161,34 @@ def has_truncated_test_assertion(detail: str, files: Mapping[str, str]) -> bool:
     return False
 
 
-def _locator_timeout_test(detail: str, files: Mapping[str, str]) -> str | None:
-    """Bind a Playwright action timeout to its own failed Node test and source frame."""
-    if "locator." not in detail:
+def _failed_product_test(detail: str, files: Mapping[str, str]) -> SourceFailure | None:
+    """Bind a runner diagnostic to an owned failed test without granting edit paths."""
+    if "locator." not in detail and _NODE_STRIP_CODE not in detail:
         return None
     for failed in _TAP_FAILED_TEST.finditer(detail):
         body = failed["body"]
-        if ("  failureType: 'testCodeFailure'" not in body
-                or "  code: 'ERR_TEST_FAILURE'" not in body or not _LOCATOR_TIMEOUT.search(body)):
+        fields = body.splitlines()
+        if "  failureType: 'testCodeFailure'" not in fields:
             continue
         location = _TAP_TEST_LOCATION.search(body)
-        frame = _PLAYWRIGHT_TEST_FRAME.search(body)
-        if location and frame and location["file"] == frame["file"]:
-            path = _importer(frame["file"], files)
-            if path and int(frame["line"]) <= len(files[path].splitlines()):
-                return path
+        path = _importer(location["file"], files) if location else None
+        if location is None or path is None:
+            continue
+        if "  code: 'ERR_TEST_FAILURE'" in fields and _LOCATOR_TIMEOUT.search(body):
+            frame = _PLAYWRIGHT_TEST_FRAME.search(body)
+            if (frame and frame["file"] == location["file"]
+                    and int(frame["line"]) <= len(files[path].splitlines())):
+                return SourceFailure("test_assertion", importer=path)
+        if (
+            _NODE_STRIP_CODE in fields and _TAP_TEST_END.match(detail, failed.end())
+            and _NODE_TYPESCRIPT_FRAME.search(body)
+            and int(location["line"]) <= len(files[path].splitlines())
+            and sum(
+                field.startswith(("  failureType:", "  code:", "  location:")) for field in fields
+            ) == 3
+        ):
+            # The runner located the test declaration, not the imported TypeScript error.
+            return SourceFailure("test_assertion")
     return None
 
 
@@ -310,9 +330,4 @@ def classify_source_failure(
             # The exact frame is unavailable. Recognize the owned failed task
             # without guessing an importer or granting a source write path.
             return SourceFailure("test_assertion")
-    test_path = _locator_timeout_test(detail, files)
-    if test_path:
-        # Route to the product editor. A failing locator does not by itself
-        # establish which source file needs changing.
-        return SourceFailure("test_assertion", importer=test_path)
-    return SourceFailure()
+    return _failed_product_test(detail, files) or SourceFailure()
