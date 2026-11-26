@@ -146,7 +146,7 @@ it.each([
 });
 
 it.each([
-  { reason: "config_version_conflict", message: "Открытую версию настроек нельзя применить. Обновите настройки приложения и повторите применение." },
+  { reason: "config_version_conflict", message: "Открытую версию настроек нельзя применить. Заново откройте настройки приложения и повторите применение." },
   { reason: undefined, message: "Не удалось выполнить запрос для открытой версии. Обновите страницу и повторите запрос." },
 ])("points to app settings only for a confirmed configuration conflict ($reason)", async ({ reason, message }) => {
   vi.mocked(sendPrompt).mockRejectedValueOnce(refusal("source_changed", "NEVER_PUBLISH", reason ? { reason } : undefined));

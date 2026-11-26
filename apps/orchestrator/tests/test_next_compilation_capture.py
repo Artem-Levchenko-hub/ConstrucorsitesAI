@@ -36,31 +36,44 @@ def setup(receipt=None):
 
 
 @pytest.mark.parametrize(
-    "test_argv",
+    "test_commands",
     [
-        pytest.param(["pnpm", "test"], id="package-test"),
+        pytest.param([["pnpm", "test"]], id="package-test"),
         pytest.param(
-            [
+            [[
                 "sh",
                 "-lc",
                 "pnpm test && node --test tests/server/cache.test.mjs ./tests/health.test.js"
                 " && node --test tests/legacy.test.cjs",
-            ],
+            ]],
             id="explicit-node-suites",
+        ),
+        pytest.param(
+            [["pnpm", "test"], ["node", "tests/split-contract.mjs"]],
+            id="direct-node-script",
+        ),
+        pytest.param(
+            [
+                ["pnpm", "test"],
+                ["node", "--test", "./tests/server/one.cjs", "tests/two.js"],
+                ["node", "tests/another.mjs"],
+            ],
+            id="direct-node-suites",
         ),
     ],
 )
-def test_capture_uses_only_exact_ro_owned_volume_and_platform_interpreter(test_argv):
+def test_capture_uses_only_exact_ro_owned_volume_and_platform_interpreter(test_commands):
     backend, request, manifest, helper, containers = setup(
         {"collector_version": "next-fixed-data-v1", "assets": []}
     )
-    manifest.tasks[1].argv = test_argv
+    manifest.tasks[1:] = [NS(role="full_build", argv=argv, cwd=".") for argv in test_commands]
     receipt = capture_next_compilation(backend, request, manifest)
     assert receipt is not None
     args, kw = containers.calls[0]
     assert args[0] == backend.base_image and args[1][:4] == ["python3", "-I", "-S", "-c"]
-    if test_argv[0] == "sh":
-        assert test_argv[2] not in args[1][-1]
+    for argv in test_commands:
+        if argv[0] in {"sh", "node"}:
+            assert argv[-1] not in args[1][-1]
     assert kw["volumes"] == {"owned-volume": {"bind": "/proof", "mode": "ro"}}
     assert kw["network_mode"] == "none" and kw["read_only"] is True and kw["cap_drop"] == ["ALL"]
     assert "environment" not in kw and "privileged" in kw and not kw["privileged"]
@@ -91,6 +104,45 @@ def test_unsupported_final_test_never_starts_compilation_capture(command):
         {"collector_version": "next-fixed-data-v1"}
     )
     manifest.tasks[1].argv = ["sh", "-lc", command]
+
+    assert capture_next_compilation(backend, request, manifest) is None
+    assert not containers.calls
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        pytest.param(["node", "tests/one.mjs", "tests/two.mjs"], id="plain-extra-argument"),
+        pytest.param(["node", "--test"], id="implicit-suite-discovery"),
+        pytest.param(["node", "--test", "tests/a.mjs", "--test-only"], id="flag"),
+        pytest.param(["node", "--test", "tests/*.mjs"], id="glob"),
+        pytest.param(["node", "tests/sub/../a.mjs"], id="traversal"),
+        pytest.param(["node", "tests//a.mjs"], id="unnormalized-path"),
+        pytest.param(["node", "/tests/a.mjs"], id="absolute-path"),
+        pytest.param(["node", "src/a.mjs"], id="outside-tests"),
+        pytest.param(["sh", "-lc", "node --test tests/a.mjs"], id="shell-extension"),
+        pytest.param(["pnpm", "test"], id="duplicate-package-test"),
+    ],
+)
+def test_unsupported_direct_test_never_starts_compilation_capture(argv):
+    backend, request, manifest, _helper, containers = setup()
+    manifest.tasks.append(NS(role="full_build", argv=argv, cwd="."))
+
+    assert capture_next_compilation(backend, request, manifest) is None
+    assert not containers.calls
+
+
+@pytest.mark.parametrize("invalid", ["order", "shell-mix", "cwd"])
+def test_direct_test_requires_root_package_test_first(invalid):
+    backend, request, manifest, _helper, containers = setup()
+    direct = NS(role="full_build", argv=["node", "tests/a.mjs"], cwd=".")
+    manifest.tasks.append(direct)
+    if invalid == "order":
+        manifest.tasks[1:] = reversed(manifest.tasks[1:])
+    elif invalid == "shell-mix":
+        manifest.tasks[1].argv = ["sh", "-lc", "pnpm test && node --test tests/primary.mjs"]
+    else:
+        direct.cwd = "tests"
 
     assert capture_next_compilation(backend, request, manifest) is None
     assert not containers.calls

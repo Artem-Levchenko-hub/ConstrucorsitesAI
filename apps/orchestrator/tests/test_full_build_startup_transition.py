@@ -151,7 +151,10 @@ def test_real_migration_prepare_controlled_docker_restart_changes_only_process(
 @pytest.mark.parametrize("count", [0, 1])
 @pytest.mark.parametrize(
     "mode",
-    ["success", "extended_final_test", "content_changed", "failed", "timeout", "foreign_role"],
+    [
+        "success", "extended_final_test", "direct_node_test", "content_changed",
+        "failed", "timeout", "foreign_role",
+    ],
 )
 async def test_real_router_emits_only_exact_successful_full_build_restart(
     tmp_path,
@@ -231,9 +234,14 @@ async def test_real_router_emits_only_exact_successful_full_build_restart(
         manager.machine_runtime = runtime
         state = manager.state_store.load(workspace_id)
         manifest = next_machine_manifest()
-        if mode == "extended_final_test":
+        if mode in {"extended_final_test", "direct_node_test"}:
             task = next(task for task in manifest.tasks if task.name == "final-test")
-            task.argv = ["sh", "-lc", "pnpm test && node --test tests/product.integration.mjs"]
+            if mode == "extended_final_test":
+                task.argv = ["sh", "-lc", "pnpm test && node --test tests/product.integration.mjs"]
+            else:
+                manifest.tasks.append(task.model_copy(update={
+                    "name": "node-integration", "argv": ["node", "tests/split-contract.mjs"],
+                }))
         files = {
             ".omnia/cell.json": manifest.model_dump_json(),
             "src/app/page.tsx": 'export default function Page() { return "Fixture"; }',
@@ -266,7 +274,9 @@ async def test_real_router_emits_only_exact_successful_full_build_restart(
         )
         compilation = body["compiled_asset_receipt"]
         transition = compilation.get("full_build_startup_transition") if compilation else None
-        assert (transition is not None) is (mode in {"success", "extended_final_test"})
+        assert (transition is not None) is (
+            mode in {"success", "extended_final_test", "direct_node_test"}
+        )
         if transition is not None:
             assert compilation["assets"] == collector_data["assets"]
             assert compilation["manifest_digest"] == body["before_identity"]["cell_manifest_digest"]
@@ -288,3 +298,53 @@ async def test_real_router_emits_only_exact_successful_full_build_restart(
             assert "full_build_startup_transition" not in runtime.compilation
     finally:
         get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_failing_direct_test_stops_full_build_before_capture(tmp_path, monkeypatch):
+    pytest.importorskip("fcntl", reason="Real execution requires POSIX controller locks")
+    from types import SimpleNamespace as NS
+    from unittest.mock import AsyncMock
+
+    from yleum_orchestrator.core.project_machine import MachineTask
+    from yleum_orchestrator.schemas.workspace import WorkspaceAgentExecRequest
+    from yleum_orchestrator.services import next_compilation_capture
+    from yleum_orchestrator.services.machine_adapter import MachineAdapter
+    from yleum_orchestrator.services.machine_defaults import next_machine_manifest
+
+    node_test = ["node", "tests/split-contract.mjs"]
+    commands = []
+
+    async def start(argv, _cwd, mutation):
+        commands.append(argv)
+        return str(mutation.operation_id)
+
+    machine = NS(
+        ensure=AsyncMock(), request_start=AsyncMock(return_value=None),
+        request_heartbeat=AsyncMock(),
+        request_finish=AsyncMock(side_effect=lambda _, result: result),
+        exec_start=start,
+        exec_status=AsyncMock(side_effect=lambda *_: NS(
+            state="completed", exit_code=int(commands[-1] == node_test), output="test result",
+        )),
+    )
+    adapter = MachineAdapter(NS(state_store=NS(root=tmp_path)), NS())
+    adapter.parts = lambda _: (machine, object())
+    adapter._project_migrations = AsyncMock()
+    adapter._activate_runtime = AsyncMock()
+    monkeypatch.setattr(
+        next_compilation_capture, "capture_next_compilation",
+        lambda *_: pytest.fail("A failed integration suite reached capture"),
+    )
+    manifest = next_machine_manifest()
+    manifest.tasks.append(MachineTask(name="integration-test", role="full_build", argv=node_test))
+    request = WorkspaceAgentExecRequest(
+        generation_run_id=uuid4(), fencing_epoch=7, expected_revision="a" * 64,
+        cmd="omnia:full_build", task_role="full_build",
+    )
+
+    outcome = await adapter.execute(NS(workspace_id=uuid4()), manifest, request)
+
+    assert commands[-3:] == [["pnpm", "build"], ["pnpm", "test"], node_test]
+    assert outcome.exit_code == 1
+    adapter._activate_runtime.assert_not_awaited()

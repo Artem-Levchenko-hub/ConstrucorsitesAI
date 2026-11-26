@@ -55,7 +55,7 @@ def draft(history_fixture, monkeypatch):  # noqa: F811
             "project_id": project.id,
             "user_id": project.owner_id,
             "predecessor_id": previous.id,
-            "allow_quiescent_pre_effect_ensure": True,
+            "allow_current_lease_observation": True,
         }
 
     monkeypatch.setattr(sc, "load_checkpoint_object", load)

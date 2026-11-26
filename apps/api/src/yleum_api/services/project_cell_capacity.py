@@ -38,6 +38,7 @@ from yleum_api.services.project_cell_activity import ActivityKind, ActivityStart
 from yleum_api.services.project_cell_lifecycle import (
     ProjectCellOperationOutcome,
     execute_cell_operation,
+    matches_current_quiescent_observation,
     reconcile_indeterminate_cell_operation,
     replay_indeterminate_cell_operation,
 )
@@ -980,10 +981,6 @@ async def _clear_observed_terminal_lease(
         or response.state != "resources_ready"
         or proof is None
         or not proof.quiescent
-        or proof.active_generation_run_id is not None
-        or proof.workspace_id != workspace_id
-        or proof.operation_id != outcome.operation_id
-        or proof.fencing_epoch != response.fencing_epoch
     ):
         return False
     async with session_factory() as session:
@@ -1004,20 +1001,15 @@ async def _clear_observed_terminal_lease(
         operation = await session.get(ProjectCellOperation, outcome.operation_id)
         run = await session.get(GenerationRun, stale_run_id)
         if (
-            workspace.project_id != proof.project_id
-            or workspace.owner_id != proof.owner_id
-            or workspace.fencing_epoch != proof.fencing_epoch
-            or run is None
+            run is None
             or run.project_id != proof.project_id
             or run.user_id != proof.owner_id
             or run.status in ACTIVE_GENERATION_STATUSES
             or operation is None
-            or operation.status != "completed"
-            or operation.workspace_id != workspace_id
             or operation.kind != outcome.kind
-            or operation.fencing_epoch != proof.fencing_epoch
-            or operation.generation_run_id != stale_run_id
-            or operation.request_digest != proof.request_digest
+            or not matches_current_quiescent_observation(
+                workspace, operation, response, generation_run_id=stale_run_id,
+            )
         ):
             return False
         workspace.generation_run_id = None

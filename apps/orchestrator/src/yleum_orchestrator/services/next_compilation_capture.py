@@ -20,10 +20,20 @@ _TEST_PATH = r"(?:\./)?tests/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*\.[
 _NODE_TEST = re.compile(rf"node[ \t]+--test(?:[ \t]+{_TEST_PATH})+")
 
 
-def _supported_final_test(argv: list[str]) -> bool:
+def _supported_direct_node_test(argv: list[str]) -> bool:
+    if argv[:2] == ["node", "--test"]:
+        paths = argv[2:]
+    elif len(argv) == 2 and argv[0] == "node":
+        paths = argv[1:]
+    else:
+        return False
+    return bool(paths) and all(re.fullmatch(_TEST_PATH, path) is not None for path in paths)
+
+
+def _supported_test_suffix(argv: list[str], extra_tests: list[list[str]]) -> bool:
     if argv == ["pnpm", "test"]:
-        return True
-    if len(argv) != 3 or argv[:2] != ["sh", "-lc"]:
+        return all(_supported_direct_node_test(test) for test in extra_tests)
+    if extra_tests or len(argv) != 3 or argv[:2] != ["sh", "-lc"]:
         return False
     primary, *extra = (part.strip(" \t") for part in argv[2].split("&&"))
     return (
@@ -36,10 +46,12 @@ def _supported_final_test(argv: list[str]) -> bool:
 def capture_next_compilation(backend: Any, request: Any, manifest: Any) -> dict[str, Any] | None:
     # Validate the completed build plan before collecting the fixed compiler output.
     tasks = [task for task in manifest.tasks if task.role == "full_build"]
-    if len(tasks) != 2 or any(task.cwd != "." for task in tasks):
+    if len(tasks) < 2 or any(task.cwd != "." for task in tasks):
         return None
-    build, test = tasks
-    if build.argv != ["pnpm", "build"] or not _supported_final_test(test.argv):
+    build, test, *extra_tests = tasks
+    if build.argv != ["pnpm", "build"] or not _supported_test_suffix(
+        test.argv, [task.argv for task in extra_tests],
+    ):
         return None
     from yleum_orchestrator.services.docker_machine_backend import _PIN
 

@@ -11,13 +11,11 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { useOwnerChatQuota } from "@/hooks/useOwnerChatQuota";
 import { FREE_CHAT_UPGRADE_MESSAGE, isFreeChatRefusal, refreshOwnerAfterAcceptedPrompt } from "@/lib/owner-chat-quota";
 import { ApiError } from "@/lib/api/client";
-import { describeApiError } from "@/lib/api/errors";
+import { describeApiError, SETTINGS_VERSION_REFUSAL } from "@/lib/api/errors";
 import { OwnerChatQuotaNotice } from "@/components/workspace/OwnerChatQuotaNotice";
 import { sendPrompt } from "@/lib/api/messages";
 import { getMaxProjectConfig } from "@/lib/api/max-studio";
 import type { MaxProjectConfig } from "@/lib/api/types";
-
-const SETTINGS_VERSION_REFUSAL = "Открытую версию настроек нельзя применить. Закройте окно и заново откройте настройки приложения.";
 
 export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus, catalogIntegration = false }: {
   config: MaxProjectConfig;
@@ -70,14 +68,11 @@ export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus, cata
           skipClarify: true, idempotencyKey: key, maxConfigVersion: config.config_version,
         });
       } catch (error) {
-        if (error instanceof ApiError && error.status === 409 && error.code === "source_changed") {
-          const reason = error.details?.reason;
-          if (reason === "config_version_conflict" || reason === undefined) {
-            void qc.invalidateQueries({ queryKey: ["max-config", config.project_id], exact: true });
-            throw new Error(SETTINGS_VERSION_REFUSAL);
-          }
-        }
-        throw error;
+        if (!(error instanceof ApiError) || error.status !== 409 || error.code !== "source_changed") throw error;
+        const reason = error.details?.reason;
+        if (reason !== undefined && reason !== "config_version_conflict") throw error;
+        void qc.invalidateQueries({ queryKey: ["max-config", config.project_id], exact: true });
+        throw new Error(SETTINGS_VERSION_REFUSAL);
       }
     },
     onSuccess: (result) => {

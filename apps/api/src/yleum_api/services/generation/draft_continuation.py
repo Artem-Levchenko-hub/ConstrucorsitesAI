@@ -266,7 +266,7 @@ async def prepare(
             project_id=project.id,
             user_id=user_id,
             predecessor_id=previous.id,
-            allow_quiescent_pre_effect_ensure=True,
+            allow_current_lease_observation=True,
         )
     except RecoveryContractError as exc:
         raise _reject("continuation_cleanup_pending") from exc

@@ -31,7 +31,7 @@ import {
   sendPrompt,
 } from "@/lib/api/messages";
 import { ApiError } from "@/lib/api/client";
-import { describeApiError } from "@/lib/api/errors";
+import { describeApiError, SETTINGS_VERSION_REFUSAL } from "@/lib/api/errors";
 import { isFreeChatRefusal, OWNER_PROFILE_QUERY_KEY, refreshOwnerAfterAcceptedPrompt, refreshOwnerAllowances } from "@/lib/owner-chat-quota";
 import {
   isActiveGenerationForMessage,
@@ -1154,7 +1154,7 @@ export function usePromptStream(projectId: string, projectSlug: string, ownerId?
             message = "Среда пока не готова. Попробуйте продолжить сборку из сохранённого черновика чуть позже.";
             refreshChat = true;
           } else if (reason === "config_version_conflict") {
-            message = "Открытую версию настроек нельзя применить. Обновите настройки приложения и повторите применение.";
+            message = SETTINGS_VERSION_REFUSAL;
           } else if (opts?.continuation || reason === "continuation_snapshot_changed" || reason === "continuation_predecessor_changed") {
             message = "Не удалось продолжить сборку. Откройте последнюю сборку в чате.";
             refreshChat = true;

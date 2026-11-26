@@ -503,7 +503,7 @@ def compiler_witness_is_trusted(
 
 async def require_quiesced_predecessor(
     session: AsyncSession, *, project_id: UUID, user_id: UUID, predecessor_id: UUID,
-    allow_quiescent_pre_effect_ensure: bool = False,
+    allow_current_lease_observation: bool = False,
 ) -> None:
     """Serialize with resource operations before acquiring conflicting row/FK locks.
 
@@ -529,7 +529,7 @@ async def require_quiesced_predecessor(
             await _require_locked_predecessor_evidence(
                 session, project_id=project_id, user_id=user_id,
                 predecessor_id=predecessor_id, workspace_id=workspace_id,
-                allow_quiescent_pre_effect_ensure=allow_quiescent_pre_effect_ensure,
+                allow_current_lease_observation=allow_current_lease_observation,
             )
         except DBAPIError as exc:
             if getattr(exc.orig, "sqlstate", None) == "55P03":
@@ -539,11 +539,12 @@ async def require_quiesced_predecessor(
 
 async def _require_locked_predecessor_evidence(
     session: AsyncSession, *, project_id: UUID, user_id: UUID,
-    predecessor_id: UUID, workspace_id: UUID, allow_quiescent_pre_effect_ensure: bool,
+    predecessor_id: UUID, workspace_id: UUID, allow_current_lease_observation: bool,
 ) -> None:
     """Fresh evidence under owning serialization; never wait behind a row owner."""
     from yleum_api.services.generation_deployment_drain import reconciliation_settles
     from yleum_api.services.orchestrator_client import OrchestratorUnavailable
+    from yleum_api.services.project_cell_lifecycle import matches_current_quiescent_observation
     from yleum_api.services.project_cells import ProjectCellValidationError, _stored_request_payload
 
     project = await session.get(Project, project_id, populate_existing=True,
@@ -562,7 +563,7 @@ async def _require_locked_predecessor_evidence(
     _need(workspace is not None and workspace.generation_run_id is None
           and workspace.deleted_at is None and workspace.state == "ready",
           "amendment predecessor physical release is unproven")
-    assert workspace is not None and parent is not None
+    assert workspace is not None
     leases = list((await session.scalars(select(ProjectCellActivityLease).where(
         ProjectCellActivityLease.workspace_id == workspace.id,
     ).execution_options(populate_existing=True).with_for_update(nowait=True))).all())
@@ -576,221 +577,31 @@ async def _require_locked_predecessor_evidence(
     _need(not any(op.status == "indeterminate" and not any(
         reconciliation_settles(op, receipt) for receipt in operations
     ) for op in operations), "amendment predecessor resource effect remains unknown")
-    releases = [op for op in operations if op.generation_run_id == predecessor_id
-                and op.kind == "release" and op.status == "completed"
-                and op.finished_at is not None and op.fencing_epoch == workspace.fencing_epoch]
-    for release in releases:
-        try:
-            _need(_stored_request_payload(release) == {}, "release request invalid")
-            response = ProjectCellResourceResponse.from_json(dict(release.result_payload or {}))
-            if (response.workspace_id == workspace.id and response.state == "resources_ready"
-                    and response.fencing_epoch == workspace.fencing_epoch):
-                return
-        except (RecoveryContractError, ValueError, TypeError,
-                OrchestratorUnavailable, ProjectCellValidationError):
+    kinds = {"release", "status", "reconcile"} if allow_current_lease_observation else {"release"}
+    for receipt in operations:
+        if (
+            receipt.kind not in kinds or receipt.generation_run_id != predecessor_id
+            or receipt.status != "completed" or receipt.finished_at is None
+            or receipt.fencing_epoch != workspace.fencing_epoch
+        ):
             continue
-    if allow_quiescent_pre_effect_ensure and _has_quiescent_pre_effect_cleanup(
-        workspace, parent, operations, leases,
-    ):
-        return
+        try:
+            payload = dict(receipt.result_payload or {})
+            if receipt.kind == "reconcile":
+                if not any(reconciliation_settles(target, receipt) for target in operations):
+                    continue
+                payload.pop("reconciles_operation_id", None)
+            elif _stored_request_payload(receipt) != {}:
+                continue
+            response = ProjectCellResourceResponse.from_json(payload)
+            if receipt.kind == "release":
+                if (response.workspace_id == workspace.id and response.state == "resources_ready"
+                        and response.fencing_epoch == workspace.fencing_epoch):
+                    return
+            elif matches_current_quiescent_observation(
+                workspace, receipt, response, generation_run_id=predecessor_id,
+            ):
+                return
+        except (ValueError, TypeError, OrchestratorUnavailable, ProjectCellValidationError):
+            continue
     raise RecoveryContractError("amendment predecessor fenced release receipt missing")
-
-
-def _has_quiescent_pre_effect_cleanup(
-    workspace: ProjectCellWorkspace, parent: GenerationRun,
-    operations: Sequence[ProjectCellOperation], leases: Sequence[ProjectCellActivityLease],
-) -> bool:
-    """Require the current capacity no-lease proof and account for every newer fence."""
-    from yleum_api.services.orchestrator_client import OrchestratorUnavailable
-    from yleum_api.services.project_cells import (
-        ProjectCellValidationError,
-        _hashed_error,
-        _stored_request_payload,
-    )
-
-    # The lifecycle dispatcher writes this digest only after matching the
-    # typed pre-effect rejection to the dispatched operation, fence and request.
-    rejection = _hashed_error("orchestrator_rejected:409")
-
-    def rejected_before_effect(operation: ProjectCellOperation) -> bool:
-        return (
-            operation.status == "failed" and operation.error == rejection
-            and _single_dispatch_finished(operation) and operation.result_payload is None
-        )
-
-    ensures = [op for op in operations if op.generation_run_id == parent.id
-               and op.kind == "ensure"]
-    if parent.status != "failed" or parent.finished_at is None or len(ensures) != 1:
-        return False
-    ensure = ensures[0]
-    fence = ensure.fencing_epoch
-    current = workspace.fencing_epoch
-    if fence is None or not 0 < fence < current or not rejected_before_effect(ensure):
-        return False
-    if any(
-        lease.generation_run_id == parent.id or lease.fencing_epoch >= fence for lease in leases
-    ):
-        return False
-
-    history = sorted((
-        op for op in operations if op.id != ensure.id and (
-            op.generation_run_id == parent.id
-            or (op.fencing_epoch is None and op.attempt_count > 0)
-            or (op.fencing_epoch is not None and op.fencing_epoch >= fence)
-        )
-    ), key=lambda op: op.fencing_epoch or 0)
-    release_seen = False
-    observation_seen = False
-    positive_fence = None
-    pending_status: ProjectCellOperation | None = None
-    maintenance: list[ProjectCellOperation] = []
-    try:
-        ensure_request = _stored_request_payload(ensure)
-        profile = ensure_request.get("profile_version")
-        if set(ensure_request) != {"profile_version"} or type(profile) is not str or not profile:
-            return False
-        for epoch, operation in enumerate(history, start=fence + 1):
-            if operation.fencing_epoch != epoch or epoch > current:
-                return False
-            if pending_status is not None:
-                if not _settles_capacity_status(workspace, pending_status, operation):
-                    return False
-                pending_status = None
-                continue
-            if operation.generation_run_id is None:
-                if not release_seen or operation.execution_run_id is not None:
-                    return False
-                maintenance.append(operation)
-                continue
-            if operation.generation_run_id != parent.id or _stored_request_payload(operation) != {}:
-                return False
-            if (
-                operation.kind == "release" and not observation_seen and not maintenance
-                and rejected_before_effect(operation)
-            ):
-                release_seen = True
-                continue
-            if (
-                not release_seen or operation.kind != "status"
-                or operation.idempotency_key
-                != f"capacity:lease-observe:{workspace.id}:{parent.id}:{epoch - 1}"
-            ):
-                return False
-            observation_seen = True
-            if operation.status == "indeterminate":
-                if (
-                    operation.execution_run_id is not None or operation.error is None
-                    or operation.result_payload is not None
-                    or not _single_dispatch_finished(operation)
-                ):
-                    return False
-                pending_status = operation
-                continue
-            observation = _bound_capacity_observation(workspace, operation)
-            if observation is None:
-                return False
-            if observation == ("resources_ready", True):
-                positive_fence = epoch
-        return pending_status is None and positive_fence == current and (
-            not maintenance or _completed_current_checkpoint_cycle(maintenance, parent.id)
-        )
-    except (ValueError, TypeError, OrchestratorUnavailable, ProjectCellValidationError):
-        return False
-
-
-def _single_dispatch_finished(operation: ProjectCellOperation) -> bool:
-    return (
-        operation.attempt_count == 1 and operation.started_at is not None
-        and operation.finished_at is not None and operation.started_at <= operation.finished_at
-    )
-
-
-def _completed_resource_response(
-    operation: ProjectCellOperation, *, reconciles: UUID | None = None,
-) -> ProjectCellResourceResponse | None:
-    payload = operation.result_payload
-    if (
-        operation.status != "completed" or operation.error is not None
-        or not _single_dispatch_finished(operation) or type(payload) is not dict
-    ):
-        return None
-    if reconciles is not None:
-        payload = dict(payload)
-        if payload.pop("reconciles_operation_id", None) != str(reconciles):
-            return None
-    response = ProjectCellResourceResponse.from_json(payload)
-    if (
-        response.workspace_id != operation.workspace_id
-        or response.fencing_epoch != operation.fencing_epoch
-    ):
-        return None
-    return response
-
-
-def _bound_capacity_observation(
-    workspace: ProjectCellWorkspace, operation: ProjectCellOperation, *,
-    reconciles: UUID | None = None,
-) -> tuple[str, bool] | None:
-    response = _completed_resource_response(operation, reconciles=reconciles)
-    proof = response.lease_observation if response is not None else None
-    if (
-        response is None or proof is None or proof.workspace_id != workspace.id
-        or proof.project_id != workspace.project_id or proof.owner_id != workspace.owner_id
-        or proof.operation_id != operation.id or proof.fencing_epoch != operation.fencing_epoch
-        or proof.request_digest != operation.request_digest
-        or proof.active_generation_run_id is not None
-        or proof.active_generation_fencing_epoch is not None
-    ):
-        return None
-    return response.state, proof.quiescent
-
-
-def _settles_capacity_status(
-    workspace: ProjectCellWorkspace, target: ProjectCellOperation, receipt: ProjectCellOperation,
-) -> bool:
-    """Account for a lost observation using the worker's exact next reconciliation."""
-    from yleum_api.services.generation_deployment_drain import reconciliation_settles
-
-    prefix, _, requester = receipt.idempotency_key.rpartition(":")
-    if (
-        receipt.generation_run_id != target.generation_run_id
-        or receipt.execution_run_id is not None
-        or prefix != f"capacity:reconcile:{target.id}" or len(requester) != 12
-        or any(char not in "0123456789abcdef" for char in requester)
-        or not reconciliation_settles(target, receipt)
-    ):
-        return False
-    observation = _bound_capacity_observation(workspace, receipt, reconciles=target.id)
-    return observation is not None and observation[0] in {"resources_ready", "resources_paused"}
-
-
-def _completed_current_checkpoint_cycle(
-    operations: Sequence[ProjectCellOperation], predecessor_id: UUID,
-) -> bool:
-    """Verify support paused, restored that same checkpoint, and woke the workspace."""
-    from yleum_api.services.project_cells import _stored_request_payload
-
-    checkpoint = f"support-current-{predecessor_id.hex[:16]}"
-    expected = (
-        ("pause", "current-checkpoint", checkpoint, "resources_paused"),
-        ("restore", "restore-current", checkpoint, "resources_paused"),
-        ("wake", "wake-current", None, "resources_ready"),
-    )
-    if len(operations) != len(expected):
-        return False
-    for operation, (kind, key, ref, state) in zip(operations, expected, strict=True):
-        request = {"checkpoint_ref": ref} if ref is not None else {}
-        if (
-            operation.kind != kind or operation.idempotency_key != f"support:{key}:{predecessor_id}"
-            or _stored_request_payload(operation) != request
-        ):
-            return False
-        response = _completed_resource_response(operation)
-        if (
-            response is None or response.lease_observation is not None
-            or response.state != state or response.checkpoint_ref != ref
-            or not all((response.has_workspace, response.has_agent_home,
-                        response.has_postgres, response.has_redis))
-        ):
-            return False
-    return True

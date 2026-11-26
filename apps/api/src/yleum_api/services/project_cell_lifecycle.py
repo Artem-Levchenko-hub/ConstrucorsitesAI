@@ -11,7 +11,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from yleum_api.models.project_cell import ProjectCellOperation
+from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from yleum_api.services.orchestrator_client import (
     ControlProjectCellResourcesRequest,
     EnsureProjectCellResourcesRequest,
@@ -63,6 +63,35 @@ class ProjectCellOperationOutcome:
     result_payload: dict[str, object] | None
     error: str | None
     reconciles_operation_id: UUID | None
+
+
+def matches_current_quiescent_observation(
+    workspace: ProjectCellWorkspace,
+    operation: ProjectCellOperation,
+    response: ProjectCellResourceResponse,
+    *,
+    generation_run_id: UUID,
+) -> bool:
+    """Bind the controller's no-lease proof to the current owned workspace and operation."""
+    proof = response.lease_observation
+    return (
+        operation.kind in {"status", "reconcile"}
+        and operation.status == "completed"
+        and operation.finished_at is not None
+        and operation.generation_run_id == generation_run_id
+        and response.state == "resources_ready"
+        and proof is not None
+        and proof.quiescent
+        and proof.active_generation_run_id is None
+        and proof.active_generation_fencing_epoch is None
+        and response.workspace_id == proof.workspace_id == operation.workspace_id == workspace.id
+        and response.fencing_epoch == proof.fencing_epoch == operation.fencing_epoch
+        == workspace.fencing_epoch
+        and proof.project_id == workspace.project_id
+        and proof.owner_id == workspace.owner_id
+        and proof.operation_id == operation.id
+        and proof.request_digest == operation.request_digest
+    )
 
 
 @dataclass(frozen=True, slots=True)

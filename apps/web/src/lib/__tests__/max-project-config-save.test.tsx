@@ -451,7 +451,7 @@ it.each(["stale", "stale-at-admission", "legacy-stale-at-admission", "lost-respo
       expect(mocks.send).toHaveBeenCalledTimes(failure === "stale" ? 0 : 1);
       if (failure === "stale") expect(sessionStorage.getItem("omnia:max-config-apply-qa-1")).toBeNull();
       expect(document.querySelector('[role="alert"]')?.textContent).toBe(
-        "Открытую версию настроек нельзя применить. Закройте окно и заново откройте настройки приложения.",
+        "Открытую версию настроек нельзя применить. Заново откройте настройки приложения и повторите применение.",
       );
       if (failure.endsWith("-at-admission")) {
         mocks.get.mockResolvedValue({ ...record, config_version: 2 });

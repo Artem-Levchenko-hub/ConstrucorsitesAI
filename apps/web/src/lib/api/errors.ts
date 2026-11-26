@@ -22,6 +22,7 @@ const ENTITLEMENT_NAMES: Record<string, { one: string; many: string }> = {
 
 const PLAN_HINT = "Сменить тариф можно в разделе «Аккаунт → Тариф».";
 const NETWORK_ERROR_MESSAGE = "Сервис временно недоступен. Проверьте соединение и повторите попытку.";
+export const SETTINGS_VERSION_REFUSAL = "Открытую версию настроек нельзя применить. Заново откройте настройки приложения и повторите применение.";
 
 type EntitlementDetails = {
   entitlement?: unknown;
