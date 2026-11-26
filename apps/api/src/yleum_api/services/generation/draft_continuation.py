@@ -59,13 +59,21 @@ class DraftContinuation(BaseModel):
 
 
 def _reject(reason: str, *, unavailable: bool = False) -> ApiError:
+    cleanup_pending = reason == "continuation_cleanup_pending"
+    if unavailable:
+        message = "Сохранённый черновик пока недоступен. Попробуйте продолжить чуть позже."
+    elif cleanup_pending:
+        message = (
+            "Среда пока не готова. Попробуйте продолжить сборку из сохранённого черновика "
+            "чуть позже."
+        )
+    else:
+        message = "Не удалось продолжить сборку. Откройте последнюю сборку в чате."
     return ApiError(
         "unavailable" if unavailable else "source_changed",
-        "Сохранённый черновик пока недоступен. Попробуйте продолжить чуть позже."
-        if unavailable
-        else "Состояние проекта изменилось. Обновите страницу перед продолжением.",
+        message,
         503 if unavailable else 409,
-        details={"reason": reason, "retryable": unavailable},
+        details={"reason": reason, "retryable": unavailable or cleanup_pending},
     )
 
 
@@ -258,6 +266,7 @@ async def prepare(
             project_id=project.id,
             user_id=user_id,
             predecessor_id=previous.id,
+            allow_quiescent_pre_effect_ensure=True,
         )
     except RecoveryContractError as exc:
         raise _reject("continuation_cleanup_pending") from exc

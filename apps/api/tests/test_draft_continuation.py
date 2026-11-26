@@ -55,6 +55,7 @@ def draft(history_fixture, monkeypatch):  # noqa: F811
             "project_id": project.id,
             "user_id": project.owner_id,
             "predecessor_id": previous.id,
+            "allow_quiescent_pre_effect_ensure": True,
         }
 
     monkeypatch.setattr(sc, "load_checkpoint_object", load)
@@ -160,8 +161,9 @@ async def test_stale_or_foreign_predecessor_is_rejected_before_storage(draft, ch
     else:
         previous.finished_at = None
     history.session.commit()
-    with pytest.raises(ApiError):
+    with pytest.raises(ApiError) as error:
         await prepare(draft, reference)
+    assert error.value.details is not None and error.value.details["retryable"] is False
     assert calls == []
 
 
@@ -176,6 +178,11 @@ async def test_cleanup_uncertainty_stops_before_source_or_credit_work(draft, mon
     with pytest.raises(ApiError) as error:
         await prepare(draft)
     assert error.value.status_code == 409 and draft[-1] == []
+    assert error.value.code == "source_changed"
+    assert error.value.details == {"reason": "continuation_cleanup_pending", "retryable": True}
+    assert error.value.message == (
+        "Среда пока не готова. Попробуйте продолжить сборку из сохранённого черновика чуть позже."
+    )
 
 
 @pytest.mark.parametrize("unavailable", ["missing", "exception", "corrupt"])
@@ -189,6 +196,12 @@ async def test_unavailable_draft_never_becomes_a_fresh_build(draft, monkeypatch,
     with pytest.raises(ApiError) as error:
         await prepare(draft)
     assert error.value.status_code == 503
+    assert error.value.code == "unavailable"
+    reason = (
+        "continuation_storage_unavailable" if unavailable == "exception"
+        else "continuation_checkpoint_unavailable"
+    )
+    assert error.value.details == {"reason": reason, "retryable": True}
     assert draft[2].status == "failed"
 
 

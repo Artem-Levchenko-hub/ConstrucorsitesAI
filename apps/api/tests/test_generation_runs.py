@@ -1572,8 +1572,12 @@ async def test_config_application_rejects_stale_data_before_dispatch(
             },
         )
         assert rejected.status_code == 409
-        assert rejected.json()["error"]["code"] == "source_changed"
-        assert "Данные приложения изменились" in rejected.text
+        assert rejected.json()["error"] == {
+            "code": "source_changed",
+            "message": ("Открытую версию настроек нельзя применить. "
+                        "Обновите настройки приложения и повторите применение."),
+            "details": {"reason": "config_version_conflict"},
+        }
         spawn.assert_not_called()
         # The shared-session test client does not close the request session;
         # production's session context rolls this rejected reservation back.

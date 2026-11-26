@@ -54,7 +54,6 @@ const PROMPT_REFUSALS: Record<string, string> = {
   idempotency_conflict:
     "Запрос с этим ключом уже был отправлен с другим текстом. Обновите страницу и повторите.",
   restoration_active: "Идёт восстановление версии: примените или отмените его перед новым запросом.",
-  source_changed: "Данные приложения изменились. Откройте настройки и повторите запрос.",
   conflict: "Черновик изменился. Обновите страницу и повторите запрос.",
   wallet_empty: "Недостаточно средств для генерации. Пополните баланс и повторите запрос.",
   payment_required: "Для генерации требуется пополнить баланс.",
@@ -944,10 +943,16 @@ export function usePromptStream(projectId: string, projectSlug: string, ownerId?
       // are deterministic prefixes — `last assistant.tokens_out === null` makes
       // ChatPanel.isStreaming flip true immediately, so the Stop button and
       // streaming hint appear without waiting on the network.
+      const historyKey = ["messages", projectId];
+      const history = qc.getQueryData<Message[]>(historyKey);
+      // A previous refusal's refresh must not replace a new continuation's rows.
+      if (opts?.continuation && history !== undefined) {
+        void qc.cancelQueries({ queryKey: historyKey, exact: true });
+      }
       const tempUserId = `__opt_user_${Date.now()}`;
       const tempAssistantId = `__opt_asst_${Date.now()}`;
-      qc.setQueryData<Message[]>(["messages", projectId], (prev) => [
-        ...(prev ?? []),
+      qc.setQueryData<Message[]>(historyKey, [
+        ...(history ?? []),
         {
           id: tempUserId,
           project_id: projectId,
@@ -981,19 +986,24 @@ export function usePromptStream(projectId: string, projectSlug: string, ownerId?
         connect();
       }
 
-      // Helper: collapse the optimistic placeholder into an error state so
-      // the user gets an explicit message instead of a stuck "AI читает
-      // контекст" spinner. This updates only this POST's optimistic row when
-      // no acceptance receipt arrived; it does not decide the state of an
-      // earlier request. Stream silence is reconciled against durable generation
-      // state below and must never manufacture a terminal error.
-      const failPrompt = (reason: string) => {
-        updateMessage(tempAssistantId, (m) => ({
-          ...m,
-          content: `[Ошибка: ${reason}]`,
-          tokens_out: 0,
-          tokens_in: 0,
-        }));
+      const discardOptimisticRows = () => qc.setQueryData<Message[]>(
+        historyKey,
+        (prev) => (prev ?? []).filter((m) => m.id !== tempUserId && m.id !== tempAssistantId),
+      );
+      // Close this POST's optimistic reply while the earlier generation keeps
+      // its own durable state. Stream silence is reconciled separately.
+      const failPrompt = (
+        reason: string,
+        { admissionRefusal = false, refreshChat = false, title = "Продолжим подготовку" } = {},
+      ) => {
+        if (!refreshChat) {
+          updateMessage(tempAssistantId, (m) => ({
+            ...m,
+            content: admissionRefusal ? reason : `[Ошибка: ${reason}]`,
+            tokens_out: 0,
+            tokens_in: 0,
+          }));
+        }
         qc.removeQueries({
           queryKey: ["passes", projectId, tempAssistantId],
         });
@@ -1001,15 +1011,22 @@ export function usePromptStream(projectId: string, projectSlug: string, ownerId?
         activeSubmitSignatureRef.current = null;
         cancelRef.current?.();
         cancelRef.current = null;
-        const toastId = `generation-error:${projectId}:${tempAssistantId}`;
+        const noticeKey = refreshChat && opts?.continuation
+          ? `continuation:${opts.continuation.run_id}` : tempAssistantId;
+        const toastId = `generation-error:${projectId}:${noticeKey}`;
         generationErrorToastsRef.current.set(toastId, tempAssistantId);
-        toast.info("Продолжим подготовку", {
+        toast.info(title, {
           id: toastId,
           description: reason,
           duration: 10_000,
         });
         const p = pendingRef.current;
         if (p?.phase === "waiting") updatePending({ ...p, phase: "retry" });
+        if (refreshChat) {
+          discardOptimisticRows();
+          void qc.invalidateQueries({ queryKey: ["generation", projectId] });
+          void qc.invalidateQueries({ queryKey: historyKey });
+        }
       };
 
       let message_id: string;
@@ -1050,11 +1067,7 @@ export function usePromptStream(projectId: string, projectSlug: string, ownerId?
           // A starter URL/session replay after F5 resolved to an already-finished
           // durable run. Remove the optimistic "new generation" immediately and
           // hydrate canonical history instead of opening a dead stream/watchdog.
-          qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
-            (prev ?? []).filter(
-              (m) => m.id !== tempUserId && m.id !== tempAssistantId,
-            ),
-          );
+          discardOptimisticRows();
           qc.invalidateQueries({ queryKey: ["messages", projectId] });
           qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
           streamingRef.current = false;
@@ -1105,13 +1118,13 @@ export function usePromptStream(projectId: string, projectSlug: string, ownerId?
       } catch (e) {
         if (signal?.aborted) return false;
         if (e instanceof ApiError && e.status === 404 && e.code === "reference_images_expired" && opts?.referenceImages?.length) {
-          failPrompt("Срок хранения неотправленных изображений истёк. Загрузите их повторно и отправьте запрос ещё раз.");
+          failPrompt("Срок хранения неотправленных изображений истёк. Загрузите их повторно и отправьте запрос ещё раз.", { admissionRefusal: true });
           opts.onReferenceImagesExpired?.();
           return false;
         }
         if (isFreeChatRefusal(e)) {
           void qc.invalidateQueries({ queryKey: OWNER_PROFILE_QUERY_KEY });
-          failPrompt(describeApiError(e));
+          failPrompt(describeApiError(e), { admissionRefusal: true });
           return false;
         }
         if (e instanceof ApiError && e.status === 401) {
@@ -1120,7 +1133,33 @@ export function usePromptStream(projectId: string, projectSlug: string, ownerId?
           // further submit. Status takes precedence over an arbitrary error code.
           failPrompt(
             "Сессия завершилась. Войдите в аккаунт снова и отправьте запрос ещё раз.",
+            { admissionRefusal: true },
           );
+          return false;
+        }
+        const apiError = e instanceof ApiError ? e : undefined;
+        const reason = apiError?.details?.reason;
+        const draftUnavailable = apiError?.status === 503 && apiError.code === "unavailable" &&
+          (reason === "continuation_storage_unavailable" || reason === "continuation_checkpoint_unavailable");
+        if (draftUnavailable || (
+          apiError?.status === 409 &&
+          (apiError.code === "source_changed" || (apiError.code === "conflict" && opts?.continuation))
+        )) {
+          let message = "Не удалось выполнить запрос для открытой версии. Обновите страницу и повторите запрос.";
+          let refreshChat = false;
+          if (draftUnavailable) {
+            message = "Сохранённый черновик пока недоступен. Попробуйте продолжить чуть позже.";
+            refreshChat = true;
+          } else if (reason === "continuation_cleanup_pending") {
+            message = "Среда пока не готова. Попробуйте продолжить сборку из сохранённого черновика чуть позже.";
+            refreshChat = true;
+          } else if (reason === "config_version_conflict") {
+            message = "Открытую версию настроек нельзя применить. Обновите настройки приложения и повторите применение.";
+          } else if (opts?.continuation || reason === "continuation_snapshot_changed" || reason === "continuation_predecessor_changed") {
+            message = "Не удалось продолжить сборку. Откройте последнюю сборку в чате.";
+            refreshChat = true;
+          }
+          failPrompt(message, { admissionRefusal: true, refreshChat, title: "Запрос не запущен" });
           return false;
         }
         // Only `generation_active` means "a build is already running". Every other
@@ -1135,11 +1174,7 @@ export function usePromptStream(projectId: string, projectSlug: string, ownerId?
           // Another tab/remount already submitted this project. Drop only this
           // optimistic duplicate and keep the project WS attached to the
           // canonical active run instead of turning it into an error bubble.
-          qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
-            (prev ?? []).filter(
-              (m) => m.id !== tempUserId && m.id !== tempAssistantId,
-            ),
-          );
+          discardOptimisticRows();
           qc.invalidateQueries({ queryKey: ["messages", projectId] });
           let generation: GenerationRun | null | undefined;
           try {
@@ -1200,8 +1235,11 @@ export function usePromptStream(projectId: string, projectSlug: string, ownerId?
             ? "Не удалось начать адаптацию версии. Откройте историю версий и заново выберите проверенную версию."
             : e instanceof ApiError && Object.hasOwn(PROMPT_REFUSALS, e.code)
             ? PROMPT_REFUSALS[e.code]
-            : "Не удалось отправить запрос. Проверьте соединение и попробуйте ещё раз.";
-        failPrompt(errMsg);
+            : undefined;
+        failPrompt(
+          errMsg ?? "Не удалось отправить запрос. Проверьте соединение и попробуйте ещё раз.",
+          { admissionRefusal: errMsg !== undefined },
+        );
         return false;
       } finally {
         if (admissionRef.current === admission) admissionRef.current = null;

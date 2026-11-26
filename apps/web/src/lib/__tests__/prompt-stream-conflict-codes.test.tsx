@@ -97,7 +97,6 @@ it("does not pretend a build is running when the run already ended", async () =>
 
 it.each([
   ["restoration_active", "Идёт восстановление версии: примените или отмените его.", "восстановление версии"],
-  ["source_changed", "Данные приложения изменились. Откройте настройки.", "Данные приложения изменились"],
   ["idempotency_conflict", "idempotency key was already used for another prompt", "уже был отправлен"],
   ["conflict", "Черновик изменился", "Черновик изменился"],
   ["project_busy", "Проект сейчас занят другой операцией", "Проект сейчас занят другой операцией"],
@@ -117,6 +116,45 @@ it.each([
   await act(async () => { expect(await stream.submit("Ещё раз", "model")).toBe(true); });
   expect(sendPrompt).toHaveBeenCalledTimes(2);
   expect(stream.pendingPrompt).toBeNull();
+});
+
+const continuation = { run_id: "r1", assistant_message_id: "m1", expected_snapshot_id: "head" };
+
+it.each([
+  { status: 409, reason: "continuation_cleanup_pending", message: "Среда пока не готова. Попробуйте продолжить сборку из сохранённого черновика чуть позже." },
+  { status: 409, reason: "continuation_predecessor_changed", message: "Не удалось продолжить сборку. Откройте последнюю сборку в чате." },
+  { status: 409, reason: "continuation_snapshot_changed", message: "Не удалось продолжить сборку. Откройте последнюю сборку в чате." },
+  { status: 409, reason: undefined, message: "Не удалось продолжить сборку. Откройте последнюю сборку в чате." },
+  { status: 503, reason: "continuation_storage_unavailable", message: "Сохранённый черновик пока недоступен. Попробуйте продолжить чуть позже." },
+  { status: 503, reason: "continuation_checkpoint_unavailable", message: "Сохранённый черновик пока недоступен. Попробуйте продолжить чуть позже." },
+])("shows a continuation refusal without replacing the saved build ($reason)", async ({ status, reason, message }) => {
+  vi.mocked(sendPrompt).mockRejectedValueOnce(new ApiError(status, {
+    code: status === 503 ? "unavailable" : "source_changed", message: "NEVER_PUBLISH", details: reason ? { reason } : undefined,
+  }));
+  client.setQueryData(["generation", "p"], null);
+  await mount();
+  await act(async () => {
+    expect(await stream.submit("Продолжи сборку", "model", [], { continuation })).toBe(false);
+  });
+  expect(optimisticRows()).toEqual([]);
+  expect(toast.info).toHaveBeenCalledWith("Запрос не запущен", expect.objectContaining({ description: message }));
+  expect(client.getQueryState(["generation", "p"])?.isInvalidated).toBe(true);
+  expect(client.getQueryState(["messages", "p"])?.isInvalidated).toBe(true);
+  await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+  expect(sendPrompt).toHaveBeenCalledOnce();
+  expect(stream.pendingPrompt).toBeNull();
+});
+
+it.each([
+  { reason: "config_version_conflict", message: "Открытую версию настроек нельзя применить. Обновите настройки приложения и повторите применение." },
+  { reason: undefined, message: "Не удалось выполнить запрос для открытой версии. Обновите страницу и повторите запрос." },
+])("points to app settings only for a confirmed configuration conflict ($reason)", async ({ reason, message }) => {
+  vi.mocked(sendPrompt).mockRejectedValueOnce(refusal("source_changed", "NEVER_PUBLISH", reason ? { reason } : undefined));
+  await mount();
+  await act(async () => { expect(await stream.submit("Добавь поле", "model")).toBe(false); });
+  expect(optimisticRows().find((row) => row.role === "assistant")?.content).toBe(message);
+  expect(toast.info).toHaveBeenCalledWith("Запрос не запущен", expect.objectContaining({ description: message }));
+  expect(sendPrompt).toHaveBeenCalledOnce();
 });
 
 it("keeps a busy project's queued text and explicit request identity without an automatic POST", async () => {
@@ -238,15 +276,42 @@ it("holds a queued prompt after401 instead of automatically sending it with the 
   expect(sendPrompt).toHaveBeenCalledTimes(2);
 });
 
-it("keeps the generic safe network error message for non401 transport failures", async () => {
-  vi.mocked(sendPrompt).mockRejectedValueOnce(new Error("private network token=NEVER_PUBLISH"));
+it.each([
+  { name: "network failure", error: new Error("private network token=NEVER_PUBLISH"), opts: undefined },
+  { name: "unclassified 503 during continuation", error: new ApiError(503, {
+    code: "unavailable", message: "private server token=NEVER_PUBLISH",
+  }), opts: { continuation } },
+])("keeps the generic safe transport error for $name", async ({ error, opts }) => {
+  vi.mocked(sendPrompt).mockRejectedValueOnce(error);
   await mount();
-  await act(async () => { expect(await stream.submit("Добавь поле", "model")).toBe(false); });
+  await act(async () => { expect(await stream.submit("Добавь поле", "model", [], opts)).toBe(false); });
   expect(toast.info).toHaveBeenCalledWith("Продолжим подготовку", expect.objectContaining({
     description: "Не удалось отправить запрос. Проверьте соединение и попробуйте ещё раз.",
   }));
+  expect(optimisticRows().find((row) => row.role === "assistant")?.content).toContain("[Ошибка:");
   expect(getLatestGeneration).not.toHaveBeenCalled();
   expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).not.toContain("NEVER_PUBLISH");
+});
+
+it("keeps the first history read alive when an ordinary prompt is refused", async () => {
+  vi.mocked(sendPrompt).mockRejectedValueOnce(new Error("Connection interrupted"));
+  await mount();
+  let finishHistory!: (messages: Message[]) => void;
+  const historyKey = ["messages", "p"];
+  const readingHistory = client.fetchQuery({
+    queryKey: historyKey, queryFn: () => new Promise<Message[]>(resolve => { finishHistory = resolve; }),
+  });
+  void readingHistory.catch(() => undefined);
+  await act(async () => { expect(await stream.submit("Добавь поле", "model")).toBe(false); });
+  expect(client.getQueryState(historyKey)?.fetchStatus).toBe("fetching");
+
+  const savedMessage: Message = {
+    id: "saved", project_id: "p", role: "assistant", content: "Готовая сборка", model_id: null,
+    snapshot_id: null, tokens_in: 0, tokens_out: 0, created_at: "2026-09-19T00:00:00Z",
+  };
+  await act(async () => { finishHistory([savedMessage]); await readingHistory; });
+  expect(client.getQueryData(historyKey)).toEqual([savedMessage]);
+  expect(sendPrompt).toHaveBeenCalledOnce();
 });
 
 it("accepted first Free prompt refreshes owner profile to0; stable terminal replay remains server-adjudicated", async()=>{

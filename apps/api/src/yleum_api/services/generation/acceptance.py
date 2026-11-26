@@ -375,9 +375,10 @@ class PromptAcceptance:
             ):
                 raise ApiError(
                     "source_changed",
-                    "Данные приложения изменились. "
-                    "Откройте настройки и примените актуальную версию.",
+                    "Открытую версию настроек нельзя применить. "
+                    "Обновите настройки приложения и повторите применение.",
                     status.HTTP_409_CONFLICT,
+                    details={"reason": "config_version_conflict"},
                 )
 
     async def check_admission(self) -> None:

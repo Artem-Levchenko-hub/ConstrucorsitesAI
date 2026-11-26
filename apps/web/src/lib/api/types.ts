@@ -545,6 +545,7 @@ export type ApiErrorCode =
   | "wallet_empty"
   | "generation_draining"
   | "model_unavailable"
+  | "unavailable"
   | "internal_error"
   | "conflict"
   | "operation_conflict"

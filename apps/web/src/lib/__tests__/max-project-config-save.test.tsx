@@ -420,13 +420,21 @@ it("allows an explicit new attempt after terminal failure and persists it before
   } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
 });
 
-it.each(["stale", "lost-response"])("keeps failed application review open: %s", async (failure) => {
+it.each(["stale", "stale-at-admission", "legacy-stale-at-admission", "lost-response"])("keeps failed application review open: %s", async (failure) => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   mocks.get.mockResolvedValue(failure === "stale" ? { ...record, config_version: 2 } : record);
-  mocks.send.mockRejectedValueOnce(new Error("Ответ потерян"))
+  const error = failure.endsWith("-at-admission")
+    ? new ApiError(409, {
+      code: "source_changed", message: "Устаревший текст сервера",
+      details: failure === "stale-at-admission" ? { reason: "config_version_conflict" } : undefined,
+    })
+    : new Error("Ответ потерян");
+  mocks.send.mockRejectedValueOnce(error)
     .mockResolvedValue({ run_id: "original", message_id: "a", replayed: true });
   const close = vi.fn();
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 60_000 } } });
+  const configKey = ["max-config", record.project_id];
+  client.setQueryData(configKey, record);
   const container = document.createElement("div"); document.body.append(container);
   const root = createRoot(container);
   const launch = () => [...document.querySelectorAll<HTMLButtonElement>("button")]
@@ -439,10 +447,20 @@ it.each(["stale", "lost-response"])("keeps failed application review open: %s", 
     await act(async () => { await vi.waitFor(() => expect(document.querySelector('[role="alert"]')).not.toBeNull()); });
     expect(close).not.toHaveBeenCalled();
     expect(mocks.push).not.toHaveBeenCalled();
-    if (failure === "stale") {
-      expect(mocks.send).not.toHaveBeenCalled();
-      expect(sessionStorage.getItem("omnia:max-config-apply-qa-1")).toBeNull();
-      expect(document.querySelector('[role="alert"]')?.textContent).toContain("Данные приложения изменились");
+    if (failure !== "lost-response") {
+      expect(mocks.send).toHaveBeenCalledTimes(failure === "stale" ? 0 : 1);
+      if (failure === "stale") expect(sessionStorage.getItem("omnia:max-config-apply-qa-1")).toBeNull();
+      expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+        "Открытую версию настроек нельзя применить. Закройте окно и заново откройте настройки приложения.",
+      );
+      if (failure.endsWith("-at-admission")) {
+        mocks.get.mockResolvedValue({ ...record, config_version: 2 });
+        const reopened = await client.fetchQuery({
+          queryKey: configKey, queryFn: () => mocks.get(record.project_id), staleTime: 60_000,
+        });
+        expect(reopened.config_version).toBe(2);
+        expect(mocks.send).toHaveBeenCalledOnce();
+      }
     } else {
       expect(mocks.send).toHaveBeenCalledTimes(1);
       expect(mocks.send.mock.calls[0][1]).toContain("Сохрани сложившееся оформление экранов");

@@ -10,11 +10,14 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useOwnerChatQuota } from "@/hooks/useOwnerChatQuota";
 import { FREE_CHAT_UPGRADE_MESSAGE, isFreeChatRefusal, refreshOwnerAfterAcceptedPrompt } from "@/lib/owner-chat-quota";
+import { ApiError } from "@/lib/api/client";
 import { describeApiError } from "@/lib/api/errors";
 import { OwnerChatQuotaNotice } from "@/components/workspace/OwnerChatQuotaNotice";
 import { sendPrompt } from "@/lib/api/messages";
 import { getMaxProjectConfig } from "@/lib/api/max-studio";
 import type { MaxProjectConfig } from "@/lib/api/types";
+
+const SETTINGS_VERSION_REFUSAL = "Открытую версию настроек нельзя применить. Закройте окно и заново откройте настройки приложения.";
 
 export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus, catalogIntegration = false }: {
   config: MaxProjectConfig;
@@ -46,7 +49,7 @@ export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus, cata
       const latest = await getMaxProjectConfig(config.project_id);
       if (latest.config_version !== config.config_version) {
         qc.setQueryData(["max-config", config.project_id], latest);
-        throw new Error("Данные приложения изменились. Закройте это окно и откройте их заново.");
+        throw new Error(SETTINGS_VERSION_REFUSAL);
       }
       let key = attemptKey;
       if (retryTerminal) {
@@ -62,9 +65,20 @@ export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus, cata
       // when the owner profile was pending or unavailable at dispatch.
       sessionStorage.setItem(storageKey, key);
       setAttemptDispatched(true);
-      return sendPrompt(config.project_id, prompt, "topmix-v1", [], {
-        skipClarify: true, idempotencyKey: key, maxConfigVersion: config.config_version,
-      });
+      try {
+        return await sendPrompt(config.project_id, prompt, "topmix-v1", [], {
+          skipClarify: true, idempotencyKey: key, maxConfigVersion: config.config_version,
+        });
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409 && error.code === "source_changed") {
+          const reason = error.details?.reason;
+          if (reason === "config_version_conflict" || reason === undefined) {
+            void qc.invalidateQueries({ queryKey: ["max-config", config.project_id], exact: true });
+            throw new Error(SETTINGS_VERSION_REFUSAL);
+          }
+        }
+        throw error;
+      }
     },
     onSuccess: (result) => {
       refreshOwnerAfterAcceptedPrompt(qc);

@@ -2,21 +2,25 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { ChatPanel } from "@/components/workspace/ChatPanel";
-import type { GenerationContinuationReference, GenerationRun, Message } from "@/lib/api/types";
+import { ApiError } from "@/lib/api/client";
+import type { GenerationContinuationReference, GenerationRun, Message, PromptResponse } from "@/lib/api/types";
 
 const mocks = vi.hoisted(() => ({
-  submit: vi.fn(), history: vi.fn(), profile: vi.fn(), pendingPrompt: null as string | null,
+  stream: vi.fn(), submit: vi.fn(), send: vi.fn(), history: vi.fn(), profile: vi.fn(),
+  pendingPrompt: null as string | null,
 }));
-vi.mock("@/hooks/usePromptStream", () => ({ usePromptStream: () => ({
-  submit: mocks.submit, cancel: vi.fn(), cancelPending: vi.fn(), pendingPrompt: mocks.pendingPrompt,
-}) }));
-vi.mock("@/lib/api/messages", () => ({ listMessages: mocks.history, getLatestGeneration: vi.fn() }));
+vi.mock("@/hooks/usePromptStream", () => ({ usePromptStream: mocks.stream }));
+vi.mock("@/lib/api/messages", () => ({
+  listMessages: mocks.history, getLatestGeneration: vi.fn(), sendPrompt: mocks.send, cancelGeneration: vi.fn(),
+}));
+vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));
 vi.mock("@/lib/api/owner-profile", () => ({ getOwnerProfile: mocks.profile }));
 vi.mock("@/lib/api/max-studio", () => ({ getMaxProjectConfig: async () => ({ config_version: 1 }) }));
 vi.mock("@/components/workspace/AgentTranscript", () => ({ AgentTranscript: () => null }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
-vi.mock("sonner", () => ({ toast: { info: vi.fn(), success: vi.fn(), warning: vi.fn(), error: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { info: vi.fn(), success: vi.fn(), warning: vi.fn(), error: vi.fn(), dismiss: vi.fn() } }));
 
 const failure: Message = {
   id: "failed-message", project_id: "p", role: "assistant", snapshot_id: null,
@@ -40,6 +44,10 @@ beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.clearAllMocks(); sessionStorage.clear(); window.history.replaceState(null, "", "/max/p");
   mocks.pendingPrompt = null;
+  mocks.stream.mockImplementation(() => ({
+    submit: mocks.submit, cancel: vi.fn(), cancelPending: vi.fn(), pendingPrompt: mocks.pendingPrompt,
+  }));
+  mocks.send.mockReset();
   mocks.submit.mockResolvedValue(true);
   mocks.history.mockResolvedValue([failure]);
   mocks.profile.mockResolvedValue({ id: "owner", email: "qa@example.invalid", user_chat_messages_limit: 1, user_chat_messages_remaining: 1 });
@@ -115,6 +123,61 @@ it.each(["gpt-6.2-sol", "claude-sonnet", "legacy-model"])(
     expect(fetch).not.toHaveBeenCalled();
   },
 );
+
+it.each([
+  { status: 409, code: "source_changed", reason: "continuation_cleanup_pending", notice: "Среда пока не готова" },
+  { status: 503, code: "unavailable", reason: "continuation_storage_unavailable", notice: "Сохранённый черновик пока недоступен" },
+] as const)("lets the owner retry the same continuation after $reason", async ({ status, code, reason, notice }) => {
+  const { usePromptStream } = await vi.importActual<typeof import("@/hooks/usePromptStream")>("@/hooks/usePromptStream");
+  mocks.stream.mockImplementation(usePromptStream);
+  vi.stubGlobal("WebSocket", class {
+    static OPEN = 1;
+    static CONNECTING = 0;
+    readyState = 1;
+    close() { this.readyState = 3; }
+  });
+  client.setQueryData(["generation", "p"], failedRun());
+  let finishHistory!: (messages: Message[]) => void;
+  const olderHistory = new Promise<Message[]>(resolve => { finishHistory = resolve; });
+  mocks.history.mockResolvedValueOnce([failure]).mockReturnValueOnce(olderHistory);
+  let acceptRetry!: (response: PromptResponse) => void;
+  const retryResponse = new Promise<PromptResponse>(resolve => { acceptRetry = resolve; });
+  mocks.send.mockRejectedValueOnce(new ApiError(status, { code, message: "Raw response", details: { reason } }))
+    .mockReturnValueOnce(retryResponse);
+  await render();
+  const input = await draft("Мой следующий запрос");
+
+  await act(async () => button("Продолжить сборку")!.click());
+  await act(async () => {
+    await vi.waitFor(() => {
+      expect(button("Продолжить сборку")?.disabled).toBe(false);
+      expect(toast.info).toHaveBeenCalledWith("Запрос не запущен", expect.objectContaining({ description: expect.stringContaining(notice) }));
+      expect(mocks.history).toHaveBeenCalledTimes(2);
+    });
+  });
+  expect(client.getQueryData<Message[]>(["messages", "p"])).toEqual([failure]);
+  expect(input.value).toBe("Мой следующий запрос");
+  expect(mocks.send).toHaveBeenCalledOnce();
+
+  await act(async () => button("Продолжить сборку")!.click());
+  expect(mocks.send).toHaveBeenCalledTimes(2);
+  expect(mocks.send).toHaveBeenLastCalledWith("p", "Продолжи сборку", "topmix-v1", [], {
+    continuation, idempotencyKey: "continue:failed-run:failed-message:saved-draft",
+  });
+  expect(mocks.send.mock.calls[1]).toEqual(mocks.send.mock.calls[0]);
+  const stopButton = () => container.querySelector('button[aria-label="Прервать генерацию"]');
+  expect(stopButton()).not.toBeNull();
+  await act(async () => {
+    finishHistory([failure]);
+    await vi.waitFor(() => expect(client.getQueryState(["messages", "p"])?.fetchStatus).toBe("idle"));
+  });
+  expect(stopButton()).not.toBeNull();
+  expect(mocks.send).toHaveBeenCalledTimes(2);
+
+  await act(async () => acceptRetry({
+    run_id: "accepted-run", message_id: "accepted-message", snapshot_id: null, run_status: "pending", mode: "build",
+  }));
+});
 
 it("shows the reason and concrete unfinished work above the addressed continuation on reload", async () => {
   const remaining = ["Подключить отправку заявки в магазин.", "Проверить выгрузку PDF."];
