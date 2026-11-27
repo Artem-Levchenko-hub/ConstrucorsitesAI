@@ -12,6 +12,7 @@ from yleum_api.services import agent_builder as ab
 from yleum_api.services.agent_discovery_context import (
     MAX_RETAINED_CONTEXT_CHARS,
     cached_information,
+    diagnostic_read,
     new_information,
     retained_information,
 )
@@ -158,6 +159,123 @@ def test_failed_mutation_does_not_make_identical_read_new_information():
         read, turns("read_file", "same SDK", path="sdk.ts")[1]["content"], previous, ab.parse_action
     )
     assert cached_information(read, previous, ab.parse_action) == ""
+
+
+@pytest.mark.asyncio
+async def test_sol_reads_current_failure_target_through_discovery_pause_then_reuses_the_copy():
+    path = "src/lesson.ts"
+    files = {path: "old lesson"}
+    actions = [
+        *[call("bash", cmd=f"inspect-tool-{i}") for i in range(4)],
+        call("bash", cmd="pnpm test"),
+        call("bash", cmd="ls -la"),
+        call("bash", cmd=f"cat -- './{path}'"),
+        call("read_file", path=path),
+        call("bash", cmd=f"cat {path}"),
+        call("edit_file", path=path, search="old lesson", replace="working lesson"),
+        call("build"),
+        call("done"),
+    ]
+    replies = iter(actions)
+    executed, events = [], []
+
+    async def complete(*args, **kwargs):
+        return next(replies)
+
+    async def snapshot():
+        return dict(files)
+
+    async def execute(action):
+        executed.append((action.name, action.args))
+        if action.name == "bash" and action.args["cmd"] == "pnpm test":
+            return {"ok": False, "detail": f"/workspace/{path}:17: Expected 5 cards; got 0"}
+        if action.name == "edit_file":
+            files[path] = action.args["replace"]
+        return {"ok": True, "content": files.get(action.path, "ok")}
+
+    async def emit(name, data):
+        if name == "agent.step":
+            events.append(data)
+
+    result = await ab._run_agent_segment(
+        system_prompt="rules", user_prompt="Spanish cards", model="gpt-6.2-sol",
+        complete=complete, execute=execute, snapshot_files=snapshot,
+        coordinator_handoff=True, emit=emit, max_steps=len(actions), ship_green_on_abort=False,
+    )
+    assert result.done and files[path] == "working lesson"
+    assert [args["cmd"] for tool, args in executed if tool == "bash"] == [
+        *[f"inspect-tool-{i}" for i in range(4)], "pnpm test",
+    ]
+    assert [args for tool, args in executed if tool == "read_file"] == [{"path": path}]
+    reasons = [data.get("tool_diagnostic", {}).get("reason_code") for data in events]
+    assert reasons.count("discovery_pause") == 1
+    assert reasons.count("cached_result") == reasons.count("repeat_guard") == 1
+    assert any(
+        "PREVIOUS EXECUTED RESULT" in msg["content"] and "old lesson" in msg["content"]
+        for msg in result.transcript
+    )
+
+
+@pytest.mark.asyncio
+async def test_repeated_diagnostic_reads_keep_existing_repeat_abort_with_one_file_read():
+    replies = [call("bash", cmd="pnpm test")] + [call("bash", cmd="cat src/lesson.ts")] * 12
+    used, reads = [], []
+
+    async def complete(*args, **kwargs):
+        reply = replies[len(used)]
+        used.append(reply)
+        return reply
+
+    async def snapshot():
+        return {"src/lesson.ts": "unchanged"}
+
+    async def execute(tool):
+        if tool.name == "bash":
+            return {"ok": False, "detail": "src/lesson.ts:4: failed"}
+        reads.append(tool.path)
+        return {"ok": True, "content": "unchanged"}
+
+    result = await ab._run_agent_segment(
+        system_prompt="rules", user_prompt="fix the lesson", model="gpt-6.2-sol",
+        coordinator_handoff=True, execute=execute, complete=complete, snapshot_files=snapshot,
+        max_steps=len(replies), ship_green_on_abort=False,
+    )
+    assert reads == ["src/lesson.ts"]
+    assert result.stop_reason == "looping" and not result.done
+    assert len(used) == 7  # failure, first read, five repeats (last one ends the segment)
+
+
+@pytest.mark.parametrize(("cmd", "error"), [
+    ("cat src/lesson.ts", "Timed out while installing jsdom"),
+    ("cat src/lesson.ts", "src/lesson.tsx:12 failed"),
+    ("cat src/lesson.ts", "/outside/src/lesson.ts:12 failed"),
+    ("cat src/lesson.ts", "Cannot fetch https://registry.example/check?file=src/lesson.ts"),
+    ("cat ../src/lesson.ts", "../src/lesson.ts:12 failed"),
+    ("cat .env", "error loading .env"),
+    ("cat src/lesson.ts | head", "src/lesson.ts:12 failed"),
+    ("cat src/lesson.ts; pnpm test", "src/lesson.ts:12 failed"),
+])
+def test_error_read_never_admits_other_files_or_shell_commands(cmd, error):
+    history = [
+        {"role": "assistant", "content": call("bash", cmd="pnpm test")},
+        {"role": "user", "content": "[observation: bash FAILED]\n" + error},
+    ]
+    files = {"src/lesson.ts": "source", ".env": "", "../src/lesson.ts": ""}
+    assert diagnostic_read(ab.Action("bash", {"cmd": cmd}), history, ab.parse_action, files) is None
+
+
+def test_error_read_expires_after_successful_build_or_source_edit_and_supports_quoted_route():
+    path = "src/app/lesson/[id]/page.tsx"
+    files = {path: "owned"}
+    action = ab.Action("bash", {"cmd": f"cat '{path}'"})
+    failed = [
+        {"role": "assistant", "content": call("done")},
+        {"role": "user", "content": f"[observation: build FAILED]\n./{path}(8,4): error TS2304"},
+    ]
+    expected = ab.Action("read_file", {"path": path})
+    assert diagnostic_read(action, failed, ab.parse_action, files) == expected
+    for later in (turns("build", "clean"), turns("edit_file", "changed", path=path)):
+        assert diagnostic_read(action, failed + later, ab.parse_action, files) is None
 
 
 def test_memory_is_bounded_explicit_and_redacted():

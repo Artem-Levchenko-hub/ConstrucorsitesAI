@@ -368,10 +368,19 @@ _PORTABLE_QUIESCENCE_NEXT_BUILD_PLAN_SOURCES = {
     "services.next_compilation_capture": "f8c6e5d84c7d7d635ba3a62098ea56233b81479339815baf39d976601c1eedea",
     "services.next_compilation_receipt": "41f29604614e6c7bb291bdd6f9696b01a47722441e76a71b66fe0ee6c5d84bfb",
 }
+# Public npm resolution uses the same owned command and retirement records.
+# Verify the dispatch wrapper, guest environment and registry relay together.
+_PORTABLE_QUIESCENCE_PNPM_REGISTRY_SOURCES = {
+    **_PORTABLE_QUIESCENCE_NEXT_BUILD_PLAN_SOURCES,
+    "services.docker_machine_backend": "1f33023d5423f12285bf311507343651129aed6514701867658495111184270c",
+    "services.machine_egress": "3462ade65527dfe18531448af6a13bc436528aef88fa47a1f46e16a6ec5f2317",
+    "services.machine_pnpm_install": "4994bb122c39b1fb2075d5f26604ea5cf84b070e020a37af2b97e60062c561c0",
+}
 _SHELL_TIMEOUT_PRODUCERS = (
     _PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES,
     _PORTABLE_QUIESCENCE_SHELL_TIMEOUT_OBSERVER_SOURCES,
     _PORTABLE_QUIESCENCE_NEXT_BUILD_PLAN_SOURCES,
+    _PORTABLE_QUIESCENCE_PNPM_REGISTRY_SOURCES,
 )
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {

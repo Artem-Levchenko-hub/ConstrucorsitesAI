@@ -173,6 +173,7 @@ def test_missing_expected_release_never_accepts_unknown():
     "max_status,webhook_status,expected",
     [
         (200, 401, "PASS production_smoke"),
+        (404, 404, "FAIL max_health.http_404\nFAIL max_webhook.http_404"),
         (502, 401, "FAIL max_health.http_502"),
         (200, 200, "FAIL max_webhook.http_200"),
     ],

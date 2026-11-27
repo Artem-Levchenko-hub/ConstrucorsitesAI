@@ -1,4 +1,4 @@
-"""Process-local registry default for a Project Machine's frozen starter install.
+"""Process-local public registry for development Cell dependency installs.
 
 Also executed inside the guest using only its Python standard library.
 """
@@ -7,15 +7,19 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
+import shlex
 import sys
 from pathlib import Path
 
-FROZEN_INSTALL = ["pnpm", "install", "--frozen-lockfile"]
+_INSTALL_COMMAND = re.compile(r"^(\s*)pnpm(?=[ \t]+(?:add|install|i)(?:\s|$))")
 
 
-def frozen_install_command(argv: list[str], proxy_ip: object) -> list[str]:
+def pnpm_install_command(argv: list[str], proxy_ip: object) -> list[str]:
     """Only a controller-recorded Cell proxy can supply the local registry."""
-    if argv != FROZEN_INSTALL or not isinstance(proxy_ip, str):
+    shell = len(argv) == 3 and argv[:2] == ["sh", "-lc"] and _INSTALL_COMMAND.match(argv[2])
+    direct = len(argv) >= 2 and argv[0] == "pnpm" and argv[1] in {"add", "install", "i"}
+    if not (direct or shell) or not isinstance(proxy_ip, str):
         return argv
     try:
         address = ipaddress.IPv4Address(proxy_ip)
@@ -25,16 +29,31 @@ def frozen_install_command(argv: list[str], proxy_ip: object) -> list[str]:
             or address.is_reserved or address.is_unspecified):
         return argv
     script = Path(__file__).read_text(encoding="utf-8")
-    return ["python3", "-I", "-S", "-c", script, str(address)]
+    launcher = ["python3", "-I", "-S", "-c", script, str(address)]
+    if shell:
+        # Replace only the leading executable. Arguments, redirects and following
+        # commands are still interpreted exactly once by the original shell.
+        return [*argv[:2], shell[1] + shlex.join(launcher)
+                + argv[2][shell.end():]]
+    return [*launcher, *argv[1:]]
 
 
 def install_environment(proxy_ip: str, cwd: Path, env: dict[str, str]) -> dict[str, str]:
     # Explicit package manager configuration (including scoped/private registry
     # credentials) stays under pnpm's control. Do not read or transfer its contents.
-    normalized = {key.lower(): value for key, value in env.items()}
-    if {"npm_config_userconfig", "npm_config_globalconfig", "destdir", "npm_token",
-        "node_auth_token"}.intersection(normalized) or any(
-        key.startswith("npm_config_") and ("registry" in key or "auth" in key) for key in normalized
+    normalized = {key.lower().replace("-", "_"): value for key, value in env.items()}
+    proxy_keys = {"http_proxy", "https_proxy", "all_proxy"}
+    if any(value and value.rstrip("/") != f"http://{proxy_ip}:3128"
+           for key, value in env.items() if key.lower() in proxy_keys):
+        return env
+    custom = {
+        "npm_config_userconfig", "npm_config_globalconfig", "destdir", "npm_token",
+        "node_auth_token", "npm_config_lockfile_include_tarball_url", "npm_config_dir",
+        "npm_config_global", "npm_config_proxy", "npm_config_https_proxy",
+    }
+    if custom.intersection(normalized) or any(
+        key.startswith("npm_config_") and ("registry" in key or "auth" in key)
+        for key in normalized
     ):
         return env
     home = Path(env.get("HOME", "/root"))
@@ -64,5 +83,13 @@ def install_environment(proxy_ip: str, cwd: Path, env: dict[str, str]) -> dict[s
 
 
 if __name__ == "__main__":
-    environment = install_environment(sys.argv[1], Path.cwd(), dict(os.environ))
-    os.execvpe("pnpm", FROZEN_INSTALL, environment)
+    arguments = sys.argv[2:]
+    # Unknown options may choose another project's config, credentials or lockfile
+    # format. Leave such a command entirely to pnpm.
+    public_options = {"-D", "--save-dev", "-P", "--save-prod", "-O", "--save-optional",
+                      "-E", "--save-exact", "--frozen-lockfile", "--offline", "--prefer-offline",
+                      "--ignore-scripts", "--lockfile-only", "--no-frozen-lockfile"}
+    environment = dict(os.environ)
+    if all(not arg.startswith("-") or arg in public_options for arg in arguments):
+        environment = install_environment(sys.argv[1], Path.cwd(), environment)
+    os.execvpe("pnpm", ["pnpm", *arguments], environment)

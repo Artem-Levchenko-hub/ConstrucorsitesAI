@@ -19,6 +19,7 @@ import socket
 import socketserver
 import ssl
 import stat
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -96,15 +97,20 @@ NPM_HOST = "registry.npmjs.org"
 NPM_MAX_BYTES = 512 * 1024 * 1024
 NPM_MAX_SECONDS = 300
 NPM_IO_TIMEOUT = 20
+NPM_METADATA_BUFFER = 1024 * 1024
+# Package metadata can expand several-fold when parsed. If both slots are busy
+# the caller still receives the original registry document via streaming.
+_METADATA_SLOTS = threading.BoundedSemaphore(2)
 _PACKAGE = r"[a-zA-Z0-9][a-zA-Z0-9._-]*"
+_PACKAGE_PATH = re.compile(rf"(?:@{_PACKAGE}/)?{_PACKAGE}")
 _TARBALL = re.compile(
     rf"(?:(?P<scope>@{_PACKAGE})/)?(?P<name>{_PACKAGE})/-/"
     r"(?P=name)-[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?(?:\+[a-zA-Z0-9.-]+)?\.tgz"
 )
 
 
-def npm_tarball_path(target: str) -> str:
-    """Accept only npm's package/-/package-version.tgz route, including scoped packages."""
+def npm_resource_path(target: str) -> tuple[str, bool]:
+    """Return the fixed public registry path and whether it names a package document."""
     target = target.removeprefix(NPM_RELAY_PREFIX)
     if len(target) > 1024:
         raise DestinationDenied("invalid npm tarball")
@@ -112,9 +118,30 @@ def npm_tarball_path(target: str) -> str:
     # leaving any other escape (including a second encoding layer) invalid.
     target = re.sub(r"^(?:@|%40)(" + _PACKAGE + r")(?:%2[fF]|/)", r"@\1/", target)
     target = re.sub(r"%2[bB]", "+", target)
-    if not _TARBALL.fullmatch(target):
+    metadata = _PACKAGE_PATH.fullmatch(target) is not None
+    if not metadata and not _TARBALL.fullmatch(target):
         raise DestinationDenied("invalid npm tarball")
-    return "/" + target
+    return "/" + target, metadata
+
+
+def npm_metadata_body(data: bytes, package: str, registry: str) -> bytes:
+    """Rewrite only standard, integrity-protected archives pnpm omits from the lockfile."""
+    value = json.loads(data)
+    if (not isinstance(value, dict) or value.get("name") != package
+            or not isinstance(value.get("versions"), dict)):
+        raise ValueError("invalid npm registry metadata")
+    base = package.rsplit("/", 1)[-1]
+    for version, item in value["versions"].items():
+        if (not isinstance(item, dict) or item.get("name") != package
+                or item.get("version") != version):
+            continue
+        dist = item.get("dist")
+        if not isinstance(dist, dict) or not (dist.get("integrity") or dist.get("shasum")):
+            continue
+        archive = f"{package}/-/{base}-{version}.tgz"
+        if _TARBALL.fullmatch(archive) and dist.get("tarball") == f"https://{NPM_HOST}/{archive}":
+            dist["tarball"] = registry + archive
+    return json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode()
 
 
 def npm_io_budget(deadline: float) -> float:
@@ -310,6 +337,107 @@ class _Handler(socketserver.BaseRequestHandler):
             f"HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".encode()
         )
 
+    def npm_upstream_status(self, status: int) -> None:
+        self.npm_status({
+            404: "404 Not Found", 429: "429 Too Many Requests",
+            503: "503 Service Unavailable",
+        }.get(status, "502 Bad Gateway"))
+
+    def send_npm_metadata(
+        self, response: http.client.HTTPResponse, upstream: socket.socket, deadline: float,
+        path: str, buffer: bool,
+    ) -> None:
+        length = response.getheader("Content-Length")
+        transfer = response.getheader("Transfer-Encoding")
+        if (response.getheader("Content-Encoding", "identity") != "identity"
+                or transfer not in (None, "chunked") or (transfer and length)
+                or (length is not None and (not re.fullmatch(r"[0-9]{1,9}", length)
+                                             or int(length) > NPM_MAX_BYTES))):
+            raise OSError("unexpected npm metadata framing")
+        declared = int(length) if length is not None else None
+
+        def chunks() -> Iterator[bytes]:
+            total = 0
+            while True:
+                upstream.settimeout(npm_io_budget(deadline))
+                chunk = response.read1(65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > NPM_MAX_BYTES:
+                    raise OSError("oversize npm metadata")
+                yield chunk
+            if declared is not None and total != declared:
+                raise OSError("incomplete npm metadata")
+
+        stream = chunks()
+        prefix = bytearray()
+        if buffer and (declared is None or declared <= NPM_METADATA_BUFFER):
+            for chunk in stream:
+                prefix.extend(chunk)
+                if len(prefix) > NPM_METADATA_BUFFER:
+                    break
+            else:
+                ip, port = self.request.getsockname()[:2]
+                registry = f"http://{ip}:{port}{NPM_RELAY_PREFIX}"
+                data = npm_metadata_body(bytes(prefix), path[1:], registry)
+                self.request.settimeout(npm_io_budget(deadline))
+                headers = f"Content-Length: {len(data)}\r\nConnection: close\r\n\r\n".encode()
+                try:
+                    self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                                         + headers + data)
+                except OSError:
+                    # The response may already have reached the client.
+                    return
+                return
+        # Large documents preserve the original upstream archive URLs and never need
+        # to fit in the sidecar's memory. An incomplete response has no final chunk.
+        try:
+            self.request.settimeout(npm_io_budget(deadline))
+            self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                                 b"Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
+            if prefix:
+                self.request.sendall(f"{len(prefix):x}\r\n".encode() + prefix + b"\r\n")
+            for chunk in stream:
+                self.request.settimeout(npm_io_budget(deadline))
+                self.request.sendall(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
+            self.request.sendall(b"0\r\n\r\n")
+        except (OSError, http.client.HTTPException):
+            return
+
+    def npm_metadata(self, path: str, accept: str, deadline: float) -> None:
+        server = cast(_Proxy, self.server)
+        media = ("application/vnd.npm.install-v1+json"
+                 if "application/vnd.npm.install-v1+json" in accept else "application/json")
+        acquired = _METADATA_SLOTS.acquire(blocking=False)
+        try:
+            for attempt in range(2):
+                try:
+                    with pinned_https(
+                        NPM_HOST, 443, server.denied_cidrs, NPM_IO_TIMEOUT,
+                    ) as connection:
+                        upstream = connection.sock
+                        if upstream is None:
+                            raise OSError("npm connection unavailable")
+                        upstream.settimeout(npm_io_budget(deadline))
+                        connection.request(
+                            "GET", path, headers={"Accept": media, "Connection": "close"},
+                        )
+                        with connection.getresponse() as response:
+                            if response.status != 200:
+                                self.npm_upstream_status(response.status)
+                            else:
+                                self.send_npm_metadata(response, upstream, deadline, path, acquired)
+                            return
+                except DestinationDenied:
+                    raise
+                except (OSError, http.client.HTTPException, ValueError, RecursionError):
+                    if attempt:
+                        raise
+        finally:
+            if acquired:
+                _METADATA_SLOTS.release()
+
     def send_npm_archive(
         self, size: int, read: Callable[[int], bytes], deadline: float,
         upstream: socket.socket | None = None,
@@ -335,14 +463,18 @@ class _Handler(socketserver.BaseRequestHandler):
             # Closing early exposes the actual length mismatch to the installer.
             return
 
-    def npm_tarball(self, method: str, target: str, lines: list[str], body: bytes) -> None:
+    def npm_resource(self, method: str, target: str, lines: list[str], body: bytes) -> None:
         if method != "GET":
             self.npm_status("405 Method Not Allowed")
             return
         try:
-            path = npm_tarball_path(target)
+            path, metadata = npm_resource_path(target)
             # This capability never forwards a client's headers, cookies, auth or body.
             headers = self.relay_headers(lines)
+            credential_headers = {"authorization", "proxy-authorization", "cookie"}
+            if metadata and credential_headers.intersection(headers):
+                self.npm_status("403 Forbidden")
+                return
             if (body or "transfer-encoding" in headers or "expect" in headers
                     or headers.get("content-length", "0") != "0"):
                 raise DestinationDenied("invalid npm request")
@@ -353,6 +485,9 @@ class _Handler(socketserver.BaseRequestHandler):
         deadline = time.monotonic() + NPM_MAX_SECONDS
         try:
             server = cast(_Proxy, self.server)
+            if metadata:
+                self.npm_metadata(path, headers.get("accept", ""), deadline)
+                return
             if server.npm_tarball_cache:
                 cached = cached_npm_tarball(server.npm_tarball_cache, path)
                 if cached is not None:
@@ -369,11 +504,7 @@ class _Handler(socketserver.BaseRequestHandler):
                 connection.request("GET", path, headers={"Connection": "close"})
                 with connection.getresponse() as response:
                     if response.status != 200:
-                        status = {
-                            404: "404 Not Found", 429: "429 Too Many Requests",
-                            503: "503 Service Unavailable",
-                        }.get(response.status, "502 Bad Gateway")
-                        self.npm_status(status)
+                        self.npm_upstream_status(response.status)
                         return
                     length = response.getheader("Content-Length", "")
                     if (not re.fullmatch(r"[0-9]{1,9}", length)
@@ -383,7 +514,7 @@ class _Handler(socketserver.BaseRequestHandler):
                         raise OSError("unexpected npm archive framing")
 
                     self.send_npm_archive(int(length), response.read1, deadline, upstream)
-        except (OSError, http.client.HTTPException, DestinationDenied) as exc:
+        except (OSError, http.client.HTTPException, ValueError, RecursionError) as exc:
             self.npm_status("504 Gateway Timeout" if isinstance(exc, TimeoutError)
                             else "502 Bad Gateway")
 
@@ -467,7 +598,7 @@ class _Handler(socketserver.BaseRequestHandler):
                 if target.startswith(local_origin + NPM_RELAY_PREFIX):
                     target = target[len(local_origin):]
             if target.startswith(NPM_RELAY_PREFIX):
-                self.npm_tarball(method, target, lines[1:], body)
+                self.npm_resource(method, target, lines[1:], body)
                 return
             if method == "CONNECT":
                 host, port = parse_authority(target, 443)

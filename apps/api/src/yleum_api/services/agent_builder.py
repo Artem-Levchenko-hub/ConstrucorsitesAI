@@ -62,6 +62,7 @@ from yleum_api.services.agent_build_feedback import render_model_observation
 from yleum_api.services.agent_discovery_context import (
     INFORMATION_ACTIONS,
     cached_information,
+    diagnostic_read,
     new_information,
     retained_information,
 )
@@ -1109,14 +1110,17 @@ async def _run_agent_segment(
             await _step_result(action, step, observation, invocation=invocation)
         return before, observation, after
 
-    async def _skip_action(action: Action, step: int, reason: str, code: str) -> None:
+    async def _skip_action(
+        action: Action, step: int, reason: str, code: str, *, previous: str | None = None,
+    ) -> None:
         nonlocal no_write_streak
         no_write_streak += 1
         await _step_result(action, step, skipped=reason, reason_code=code)
-        previous = cached_information(
-            action, [*(discovery_history or []), *convo], parse_action,
-            source_files=completion_inventory,
-        ) if action.name in INFORMATION_ACTIONS else ""
+        if previous is None and action.name in INFORMATION_ACTIONS:
+            previous = cached_information(
+                action, [*(discovery_history or []), *convo], parse_action,
+                source_files=completion_inventory,
+            )
         feedback = _format_observation(action, {"ok": None, "skipped": True, "detail": reason})
         if previous:
             feedback += "\nPREVIOUS EXECUTED RESULT (not a new tool execution):\n" + previous
@@ -1982,6 +1986,16 @@ async def _run_agent_segment(
         # Circuit breaker: the model sometimes gets stuck re-issuing the SAME
         # action (observed live: 34x identical grep → max_steps, no progress).
         # Detect consecutive identical actions → nudge to move on → then abort.
+        diagnostic_copy = ""
+        if (coordinator_handoff and is_sol_model(active_model) and not bounded_repair
+                and source_repair.gap is None and action.name in {"bash", "read_file"}):
+            history = [*(discovery_history or []), *convo]
+            target = diagnostic_read(action, history, parse_action, completion_inventory)
+            if target is not None:
+                action = target
+                diagnostic_copy = cached_information(
+                    action, history, parse_action, source_files=completion_inventory,
+                )
         read_path = _safe_file_path(action.path) if action.name == "read_file" else None
         repair_read = _can_read_repair_source(action)
         if source_repair.gap is not None and action.name == "read_file" and not repair_read:
@@ -2167,6 +2181,13 @@ async def _run_agent_segment(
         if sig != last_sig and action.name not in _VERIFY_ACTIONS:
             sig_seen[sig] = sig_seen.get(sig, 0) + 1
         repeat_count, last_sig = next_repeat_count, sig
+        if diagnostic_copy:
+            # Count the proposal towards normal repeat limits without repeating file I/O.
+            await _skip_action(
+                action, step, "The requested source is unchanged; reuse its result.",
+                "cached_result", previous=diagnostic_copy,
+            )
+            continue
         if repair_read:
             # Consume before any awaited tool/snapshot, including failures or cancellation.
             # Repeat counters above still accrue; only this phase's first read is exempt.

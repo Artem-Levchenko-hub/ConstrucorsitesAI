@@ -44,7 +44,7 @@ from yleum_orchestrator.services.machine_network_allocation import (
     create_pool_network,
 )
 from yleum_orchestrator.services.machine_npm_seed import npm_seed_directory
-from yleum_orchestrator.services.machine_pnpm_install import FROZEN_INSTALL, frozen_install_command
+from yleum_orchestrator.services.machine_pnpm_install import pnpm_install_command
 from yleum_orchestrator.services.machine_startup import (
     EnvironmentIdentity,
     MachineInventoryUnavailable,
@@ -1292,8 +1292,8 @@ class DockerMachineBackend:
         log, pidfile = command_path + ".log", command_path + ".pid"
         # This works on existing machines too: ensure() records the current proxy
         # address on the controller, independently of the product environment.
-        if self.development_npm_bootstrap and argv == FROZEN_INSTALL:
-            argv = frozen_install_command(argv, self._metadata().get("proxy_ip"))
+        if self.development_npm_bootstrap and argv[:1] in (["pnpm"], ["sh"]):
+            argv = pnpm_install_command(argv, self._metadata().get("proxy_ip"))
         response = reader_dispatch(self.client.api.exec_create,
             machine.id,
             [

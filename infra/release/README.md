@@ -401,6 +401,38 @@ test ! "$(docker ps --format '{{.Names}}' | grep -Fx omnia-prod-generation-repor
 
 Repeat every local/public identity assertion from section 7 after recreation.
 
+### Rotating the published MAX smoke app
+
+The off-host production smoke reads the repository variable `PRODUCTION_MAX_CANARY_URL`.
+The reserved QA publication is **Рацион на месяц**, project
+`36a4fa7b-ae8e-4b4c-82bc-901f917e4987`, at
+`https://ratsion-na-mesiats-d3c27b.apps.yleum.ru`. Look up the current variable
+before retiring a QA publication or changing its public address. Move the monitor
+to a verified replacement and obtain a passing smoke before retiring its current target.
+
+1. Confirm the replacement is a platform-owned QA MAX project and match its UUID
+   and owner to the active publication and the runtime Ingress serving its public
+   hostname. Use the published HTTPS origin. Keep previews and customer projects
+   outside this monitor.
+2. From outside the cluster, check `GET /api/omnia/health` on that origin for HTTP
+   200 with JSON `status=ok` and `platform=max-miniapp`. Check an unsigned
+   `POST /api/max/webhook` with the JSON body `{}` for exactly HTTP 401. Run
+   both against the candidate before switching. These requests use no model or bot token.
+3. Update only the repository variable and read it back:
+
+   ```bash
+   gh variable set PRODUCTION_MAX_CANARY_URL --body "${VERIFIED_QA_ORIGIN:?}"
+   gh variable get PRODUCTION_MAX_CANARY_URL
+   ```
+
+4. Check the normal `production-smoke.yml` for the deployed main revision and keep
+   its run URL. The accepted artifact has `status=passed` and every expected service
+   revision. The separate paid generation canary is unnecessary for this rotation.
+
+If health and webhook both return 404, compare the configured hostname with the
+platform project and runtime Ingress before changing either the monitor or the app.
+A pair of public 404s alone does not identify which layer lost the route.
+
 ## 9. Run smoke and paid canary, then delete GitHub secrets
 
 Set the protected expected revision, run both workflows from main, and require

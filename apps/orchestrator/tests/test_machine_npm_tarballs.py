@@ -1,6 +1,7 @@
-"""The bootstrap proxy fetches only public npm tarballs and leaves SRI to pnpm."""
+"""The Cell relay fetches only public npm packages and leaves archive SRI to pnpm."""
 import hashlib
 import io
+import json
 import os
 import socket
 from contextlib import contextmanager
@@ -61,7 +62,7 @@ def request(monkeypatch, *, target=RELAY + TARBALL, method="GET", headers="", bo
             raise failure
         yield SimpleNamespace(
             sock=Mock(), request=lambda *a, **kw: calls.append((a, kw)),
-            getresponse=lambda: response,
+            getresponse=lambda: response if isinstance(response, Response) else next(response),
         )
 
     monkeypatch.setattr(egress, "pinned_https", open_https)
@@ -84,11 +85,11 @@ def request(monkeypatch, *, target=RELAY + TARBALL, method="GET", headers="", bo
     ("%40s/3D/-/3D-1.0.0.tgz", "@s/3D/-/3D-1.0.0.tgz"),
 ])
 def test_only_canonical_tarball_routes(encoded, canonical):
-    assert egress.npm_tarball_path(RELAY + encoded) == "/" + canonical
+    assert egress.npm_resource_path(RELAY + encoded) == ("/" + canonical, False)
 
 
 @pytest.mark.parametrize("invalid", [
-    "", "react", "react/-/other-1.0.0.tgz", TARBALL + "?token=private",
+    "", "react/latest", "react/-/other-1.0.0.tgz", TARBALL + "?token=private",
     TARBALL + "#part", TARBALL + "/extra", "//other.test/" + TARBALL,
     "../" + TARBALL, "scope%2f.." + TARBALL, "%2F" + TARBALL,
     "@scope%252F" + TARBALL, "react/-/react-1.0.0%0d%0a.tgz",
@@ -98,6 +99,64 @@ def test_invalid_archive_target_never_fetches(monkeypatch, invalid):
     wire, calls = request(monkeypatch, target=RELAY + invalid)
     assert wire.startswith(b"HTTP/1.1 400 ")
     assert not calls
+
+
+def test_scoped_package_metadata_uses_only_public_origin_and_portable_archives(monkeypatch):
+    name = "@scope/words"
+    source = f"https://registry.npmjs.org/{name}/-/words-1.0.0.tgz"
+    versions = {
+        ver: {"name": name, "version": ver, "dist": {"tarball": url, "integrity": "sha512-x"}}
+        for ver, url in [("1.0.0", source), ("2.0.0", source), ("3.0.0", "https://cdn.test/x")]
+    }
+    doc = json.dumps({"name": name, "versions": versions}).encode()
+    wire, calls = request(monkeypatch, target=RELAY + "@scope%2fwords",
+                          headers="Accept: application/vnd.npm.install-v1+json\r\nX-Secret: no\r\n",
+                          response=Response(doc))
+    head, body = wire.split(b"\r\n\r\n")
+    assert head.startswith(b"HTTP/1.1 200")
+    assert calls == [
+        ("registry.npmjs.org", 443, ["10.0.0.0/8"], egress.NPM_IO_TIMEOUT),
+        (("GET", "/@scope/words"),
+         {"headers": {"Accept": "application/vnd.npm.install-v1+json", "Connection": "close"}}),
+    ]
+    received = json.loads(body)["versions"]
+    assert received["1.0.0"]["dist"] == {
+        "tarball": "http://10.10.10.2:3128/__yleum/npm/@scope/words/-/words-1.0.0.tgz",
+        "integrity": "sha512-x",
+    }
+    assert received["2.0.0"] == versions["2.0.0"]
+    assert received["3.0.0"] == versions["3.0.0"]
+
+
+@pytest.mark.parametrize("bad", [
+    lambda: Response(b'{"name":', headers={"Content-Length": "100"}),
+    lambda: Response(b"{truncated"), lambda: Response(b'{"name":"other","versions":{}}'),
+])
+def test_incomplete_metadata_restarts_entire_get_or_returns_gateway_error(monkeypatch, bad):
+    good = Response(b'{"name":"jsdom","versions":{}}')
+    wire, calls = request(monkeypatch, target=RELAY + "jsdom", response=iter([bad(), good]))
+    assert wire.startswith(b"HTTP/1.1 200")
+    assert json.loads(wire.split(b"\r\n\r\n")[1])["name"] == "jsdom"
+    assert len(calls) == 4
+    wire, calls = request(monkeypatch, target=RELAY + "jsdom", response=iter([bad(), bad()]))
+    assert wire.startswith(b"HTTP/1.1 502") and wire.count(b"HTTP/1.1") == 1 and len(calls) == 4
+
+
+def test_large_metadata_streams_unchanged_and_never_finishes_an_incomplete_document(monkeypatch):
+    monkeypatch.setattr(egress, "NPM_METADATA_BUFFER", 6)
+    data = b'{"name":"large","versions":{}}'
+    wire, calls = request(monkeypatch, target=RELAY + "large", response=Response(data))
+    assert len(calls) == 2 and wire.endswith(data + b"\r\n0\r\n\r\n")
+    wire, calls = request(monkeypatch, target=RELAY + "large",
+                          response=Response(data, headers={"Content-Length": str(len(data) + 5)}))
+    assert len(calls) == 2 and wire.endswith(data + b"\r\n") and wire.count(b"HTTP/1.1") == 1
+
+
+@pytest.mark.parametrize("header", ["Authorization", "Cookie", "Proxy-Authorization"])
+def test_authenticated_packument_requests_never_leave_the_cell(monkeypatch, header):
+    wire, calls = request(monkeypatch, target=RELAY + "@scope%2fpkg",
+                          headers=f"{header}: private\r\n")
+    assert wire.startswith(b"HTTP/1.1 403") and not calls
 
 
 @pytest.mark.parametrize("target", [RELAY + TARBALL, "http://10.10.10.2:3128" + RELAY + TARBALL])

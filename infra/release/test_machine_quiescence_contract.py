@@ -505,6 +505,16 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             *sorted(added),
         ))
 
+    def test_public_registry_requires_matching_dispatch_guest_and_relay(self):
+        before = self.checker._PORTABLE_QUIESCENCE_NEXT_BUILD_PLAN_SOURCES
+        after = self.checker._PORTABLE_QUIESCENCE_PNPM_REGISTRY_SOURCES
+        self.assertEqual(before.keys(), after.keys())
+        self.assertIn(after, self.checker._SHELL_TIMEOUT_PRODUCERS)
+        self.assert_command_cohorts(before, after, (
+            "services.docker_machine_backend", "services.machine_egress",
+            "services.machine_pnpm_install",
+        ))
+
     def test_disk_temp_successor_changes_only_the_reviewed_backend_and_keeps_predecessor(self):
         previous = self.checker._PORTABLE_QUIESCENCE_REDACTED_COMMAND_OUTPUT_SOURCES
         current = self.checker._PORTABLE_QUIESCENCE_DISK_TEMP_SOURCES

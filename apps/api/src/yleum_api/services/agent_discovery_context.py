@@ -10,8 +10,11 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import replace
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
+
+from yleum_api.services.secret_safety import is_secret_file
 
 if TYPE_CHECKING:
     from yleum_api.services.agent_builder import Action
@@ -21,6 +24,27 @@ MAX_RETAINED_CONTEXT_CHARS = 64_000
 _SOURCE_ACTIONS = frozenset({"read_file", "grep", "list_dir"})
 _READ_SCOPE = re.compile(r"^\[read_file lines \d+-\d+ of \d+\]\n")
 _SOURCE_HASH = re.compile(r"^\[source sha256: ([a-f0-9]{64})\]$", re.MULTILINE)
+_SIMPLE_CAT = re.compile(
+    r"""cat[ \t]+(?:--[ \t]+)?(?:'([^'\r\n]+)'|"([^"\\$`\r\n]+)"|([\w@./-]+))"""
+)
+_DIAGNOSTIC_ACTIONS = frozenset(
+    {"bash", "build", "runtime_check", "write_file", "edit_file", "delete_file"}
+)
+
+
+def _literal_read(action: Action) -> Action | None:
+    if action.name == "read_file":
+        return action
+    if action.name != "bash" or set(action.args) != {"cmd"}:
+        return None
+    cmd = action.args["cmd"]
+    match = _SIMPLE_CAT.fullmatch(cmd.strip()) if isinstance(cmd, str) else None
+    if not match:
+        return None
+    path = next(part for part in match.groups() if part is not None).removeprefix("./")
+    if path.startswith("-"):
+        return None
+    return replace(action, name="read_file", args={"path": path})
 
 
 def _path(action: Action) -> str | None:
@@ -66,7 +90,43 @@ def _executed_observations(
         head = content.partition("\n")[0]
         if not head.startswith("[observation: ") or head.endswith("SKIPPED]"):
             continue
+        # Keep the original model message. The receipt records a literal shell
+        # read executed by the ordinary file tool, including across cold resume.
+        if action.name == "bash" and head.startswith("[observation: read_file "):
+            read = _literal_read(action)
+            if read is not None and head in (f"[observation: read_file {read.path} OK]",
+                                              f"[observation: read_file {read.path} FAILED]"):
+                action = read
         yield index, action, content
+
+
+def diagnostic_read(
+    action: Action,
+    messages: Sequence[Mapping[str, Any]],
+    parse: Callable[[str], Action | None],
+    source_files: Mapping[str, str] | None,
+) -> Action | None:
+    """A concrete failure can lead straight to its current workspace file."""
+    read = _literal_read(action)
+    if read is None or source_files is None or read.path not in source_files:
+        return None
+    path = read.path
+    if (_path(read) != path or is_secret_file(path)
+            or any(p.startswith(".") or p == "node_modules" for p in PurePosixPath(path).parts)):
+        return None
+    failure = ""
+    for _, previous, observation in _executed_observations(messages, parse):
+        head, _, body = observation.partition("\n")
+        # A submitted done can run the platform build on the model's behalf.
+        if previous.name in _DIAGNOSTIC_ACTIONS or head.startswith("[observation: build "):
+            failure = body if head.endswith(" FAILED]") else ""
+            if head.endswith(" FAILED]") and previous.name == "edit_file":
+                failure += "\n" + previous.path
+    named = re.search(
+        rf"""(?:^|[\s('"`])(?:\./|(?:file://)?/workspace/)?{re.escape(path)}(?=$|[\s:'"`(),])""",
+        failure,
+    )
+    return read if named else None
 
 
 def _matches_source(action: Action, text: str, source_files: Mapping[str, str] | None) -> bool:
