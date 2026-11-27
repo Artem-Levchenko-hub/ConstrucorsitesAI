@@ -1,4 +1,4 @@
-"""Release-only continuation for a successful legacy build; never another prompt."""
+"""Release-only continuation after the generation result is saved."""
 from __future__ import annotations
 
 import json
@@ -68,6 +68,10 @@ async def retain_completion_release(
     """Commit this intent with the reserved outbox, only for a proven finished body."""
     from yleum_api.services.generation.recovery_contract import RecoveryStateV2
     from yleum_api.services.generation.recovery_execution import recovery_state
+    from yleum_api.services.generation_billing import (
+        ACCEPTED_CANDIDATE_KEY,
+        matches_accepted_candidate,
+    )
     from yleum_api.services.generation_runs import _generation_completion_error
 
     if isinstance(recovery_state(run), RecoveryStateV2):
@@ -91,10 +95,15 @@ async def retain_completion_release(
         return False
     snapshot = await session.get(Snapshot, message.snapshot_id, populate_existing=True)
     if (snapshot is None or snapshot.project_id != run.project_id
-            or snapshot.preview_status != "ready"
             or workspace.project_id != run.project_id or workspace.owner_id != run.user_id
             or workspace.generation_run_id != run.id or operation.kind != "release"
             or operation.workspace_id != workspace.id or operation.generation_run_id != run.id):
+        return False
+    if project.template == "max_miniapp" and ACCEPTED_CANDIDATE_KEY in (run.agent_state or {}):
+        # Publication commits the accepted candidate before historical PNG capture.
+        if not matches_accepted_candidate(run, snapshot):
+            return False
+    elif snapshot.preview_status != "ready":
         return False
     marker = CompletionRelease(
         run_id=run.id, project_id=run.project_id, owner_id=run.user_id,

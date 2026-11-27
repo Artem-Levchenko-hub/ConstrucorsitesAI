@@ -43,6 +43,10 @@ from yleum_api.services.project_cells import (
     complete_cell_operation,
     reserve_cell_operation,
 )
+from yleum_api.services.promotion_permit import (
+    MAX_FULL_BUILD_CONTRACT_VERSION,
+    MAX_RELEASE_PROOF_CONTRACT_VERSION,
+)
 from yleum_api.workers import generation as generation_worker
 
 pytestmark = pytest.mark.asyncio
@@ -150,7 +154,7 @@ def release_store(monkeypatch):
         execution_started_at=datetime.now(UTC), prompt_hash="e" * 64,
     )
     project = SimpleNamespace(
-        id=project_id, owner_id=owner_id, current_snapshot_id=snapshot_id,
+        id=project_id, owner_id=owner_id, current_snapshot_id=snapshot_id, template="max_miniapp",
     )
     message = SimpleNamespace(
         id=message_id, project_id=project_id, role="assistant", tokens_out=25,
@@ -373,10 +377,32 @@ def _tracker_io(monkeypatch, store):
     monkeypatch.setattr(supervisor, "clear_generation_cancel", AsyncMock())
 
 
+def _accepted_candidate_state(snapshot):
+    return {
+        "snapshot_id": str(snapshot.id),
+        "commit_sha": snapshot.commit_sha,
+        "billing_accepted_candidate": {
+            "snapshot_id": str(snapshot.id),
+            "commit_sha": snapshot.commit_sha,
+            "permit_digest": "c" * 64,
+            "proof_key": "d" * 64,
+            "artifact_digest": "e" * 64,
+            "build_contract": MAX_FULL_BUILD_CONTRACT_VERSION,
+            "release_contract": MAX_RELEASE_PROOF_CONTRACT_VERSION,
+        },
+    }
+
+
+@pytest.mark.parametrize("preview_status", ["ready", "pending", "failed"])
 async def test_real_cleanup_tracker_and_same_release_finish_the_saved_build(
-    monkeypatch, release_store,
+    monkeypatch, release_store, preview_status,
 ):
     store = release_store
+    store.snapshot.preview_status = preview_status
+    if preview_status == "ready":
+        store.project.template = "code"
+    else:
+        store.run.agent_state = _accepted_candidate_state(store.snapshot)
     _tracker_io(monkeypatch, store)
     runtime = GenerationRuntime(handle=SimpleNamespace(
         release=AsyncMock(), release_for_completion=store.release,
@@ -415,6 +441,42 @@ async def test_real_cleanup_tracker_and_same_release_finish_the_saved_build(
     assert not await completion_release.resume_completion_release(store.factory, store.run.id)
     assert store.client.control.await_count == 2
     store.billing.assert_awaited_once()
+
+
+@pytest.mark.parametrize(("template", "accepted"), [("max_miniapp", False), ("code", True)])
+async def test_unproven_snapshot_still_requires_a_ready_png(release_store, template, accepted):
+    store = release_store
+    store.project.template = template
+    store.snapshot.preview_status = "failed"
+    if accepted:
+        store.run.agent_state = _accepted_candidate_state(store.snapshot)
+
+    assert not await completion_release.retain_completion_release(
+        store.factory(), run=store.run, workspace=store.workspace, operation=store.operation,
+        profile_version="fixture-profile",
+    )
+    assert not completion_release.has_completion_release(store.run)
+
+
+@pytest.mark.parametrize("preview_status", ["ready", "pending"])
+@pytest.mark.parametrize("mismatch", ["snapshot_id", "commit_sha", "permit_digest", "run_snapshot"])
+async def test_conflicting_max_marker_never_owns_release(release_store, preview_status, mismatch):
+    store = release_store
+    store.snapshot.preview_status = preview_status
+    store.run.agent_state = _accepted_candidate_state(store.snapshot)
+    marker = store.run.agent_state["billing_accepted_candidate"]
+    if mismatch == "run_snapshot":
+        store.run.agent_state["snapshot_id"] = str(uuid4())
+    else:
+        marker[mismatch] = {
+            "snapshot_id": str(uuid4()), "commit_sha": "f" * 40, "permit_digest": "invalid",
+        }[mismatch]
+
+    assert not await completion_release.retain_completion_release(
+        store.factory(), run=store.run, workspace=store.workspace, operation=store.operation,
+        profile_version="fixture-profile",
+    )
+    assert not completion_release.has_completion_release(store.run)
 
 
 async def test_confirmed_release_survives_crash_after_sql_clear_before_finalize(release_store):
@@ -662,9 +724,15 @@ async def test_interrupted_release_requires_previous_executor_ownership(
         assert store.workspace.generation_run_id == store.run.id
 
 
-@pytest.mark.parametrize("interrupted", ["none", "running", "before_replay"])
+@pytest.mark.parametrize(("interrupted", "preview_status"), [
+    ("none", "ready"),
+    ("running", "ready"),
+    ("before_replay", "ready"),
+    ("running", "pending"),
+    ("before_replay", "failed"),
+])
 async def test_sql_release_handoff_replays_the_same_outbox_and_seals_once(
-    db_session, test_engine, monkeypatch, interrupted,
+    db_session, test_engine, monkeypatch, interrupted, preview_status,
 ):
     """Real SQL reservation/claim/persistence/CAS/finalization; no model or Docker.
 
@@ -694,7 +762,7 @@ async def test_sql_release_handoff_replays_the_same_outbox_and_seals_once(
     )
     db_session.add(project)
     await db_session.flush()
-    snapshot = Snapshot(project_id=project.id, commit_sha="a" * 40, preview_status="ready")
+    snapshot = Snapshot(project_id=project.id, commit_sha="a" * 40, preview_status=preview_status)
     db_session.add(snapshot)
     await db_session.flush()
     project.current_snapshot_id = snapshot.id
@@ -709,6 +777,7 @@ async def test_sql_release_handoff_replays_the_same_outbox_and_seals_once(
         idempotency_key=f"completion-release-{uuid4().hex}", prompt_hash="e" * 64,
         status="running", response_mode="build", execution_backend="worker",
         execution_started_at=datetime.now(UTC),
+        agent_state=_accepted_candidate_state(snapshot) if preview_status != "ready" else {},
     )
     db_session.add(run)
     await db_session.flush()

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any, cast
 from uuid import UUID
 
@@ -25,12 +24,8 @@ from yleum_api.schemas.message import (
 )
 from yleum_api.services.generation.recovery_contract import RecoveryStateV2
 from yleum_api.services.generation.recovery_execution import recovery_state
-from yleum_api.services.generation_billing import POLICY_VERSION
+from yleum_api.services.generation_billing import POLICY_VERSION, matches_accepted_candidate
 from yleum_api.services.generation_failure import NO_TERMINAL_EVENTS, public_generation_failure
-from yleum_api.services.promotion_permit import (
-    MAX_FULL_BUILD_CONTRACT_VERSION,
-    MAX_RELEASE_PROOF_CONTRACT_VERSION,
-)
 
 
 class _LoadedRows:
@@ -68,10 +63,9 @@ def _legacy_accepted(
     unit_intent: GenerationBillingIntent | None = None,
 ) -> bool:
     """Confirm a permit-backed build or edit, independently of its billing outcome."""
-    state = run.agent_state if isinstance(run.agent_state, dict) else {}
-    marker = state.get("billing_accepted_candidate")
     return bool(
-        run.response_mode in {"build", "edit"}
+        snapshot is not None
+        and matches_accepted_candidate(run, snapshot)
         and policy is not None
         and policy.run_id == run.id
         and (policy.version == POLICY_VERSION or (
@@ -83,38 +77,15 @@ def _legacy_accepted(
             and unit_intent.user_id == run.user_id
             and unit_hold.billing_account_id == unit_intent.billing_account_id
             and unit_hold.state == "consumed" and unit_hold.settled_at is not None
-            and snapshot is not None and unit_hold.accepted_snapshot_id == snapshot.id
+            and unit_hold.accepted_snapshot_id == snapshot.id
             and unit_intent.accepted_snapshot_id == snapshot.id
             and unit_intent.outcome == "waived" and unit_intent.amount_rub == 0
             and unit_intent.receipt == {"policy": "accepted-units-v2", "units": "consumed"}
         ))
-        and isinstance(marker, dict)
-        and set(marker)
-        == {
-            "snapshot_id",
-            "commit_sha",
-            "permit_digest",
-            "proof_key",
-            "artifact_digest",
-            "build_contract",
-            "release_contract",
-        }
-        and snapshot is not None
         and snapshot.project_id == project.id
         and project.current_snapshot_id == snapshot.id
         and message is not None
         and message.snapshot_id == snapshot.id
-        and marker["snapshot_id"] == str(snapshot.id)
-        and marker["commit_sha"] == snapshot.commit_sha
-        and re.fullmatch(r"[a-f0-9]{40}", snapshot.commit_sha)
-        and state.get("snapshot_id") == str(snapshot.id)
-        and state.get("commit_sha") == snapshot.commit_sha
-        and marker["build_contract"] == MAX_FULL_BUILD_CONTRACT_VERSION
-        and marker["release_contract"] == MAX_RELEASE_PROOF_CONTRACT_VERSION
-        and all(
-            isinstance(marker[k], str) and re.fullmatch(r"[a-f0-9]{64}", marker[k])
-            for k in ("permit_digest", "proof_key", "artifact_digest")
-        )
     )
 
 

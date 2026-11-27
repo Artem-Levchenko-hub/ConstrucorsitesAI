@@ -29,6 +29,7 @@ from yleum_api.models.wallet_charge import WalletCharge
 from yleum_api.services.billing_accounts import resolve_billing_account
 
 POLICY_VERSION = "accepted-build-v1"
+ACCEPTED_CANDIDATE_KEY = "billing_accepted_candidate"
 
 
 async def admit_policy(
@@ -82,7 +83,7 @@ async def record_accepted_candidate(
         raise ValueError("Accepted billing candidate binding changed")
     run.agent_state = {
         **(run.agent_state or {}),
-        "billing_accepted_candidate": {
+        ACCEPTED_CANDIDATE_KEY: {
             "snapshot_id": str(snapshot.id),
             "commit_sha": snapshot.commit_sha,
             "permit_digest": permit.permit_digest,
@@ -92,6 +93,37 @@ async def record_accepted_candidate(
             "release_contract": permit.proof_contract_version,
         },
     }
+
+
+def matches_accepted_candidate(run: GenerationRun, snapshot: Snapshot) -> bool:
+    """Validate committed permit evidence independently of billing settlement."""
+    from yleum_api.services.promotion_permit import (
+        MAX_FULL_BUILD_CONTRACT_VERSION,
+        MAX_RELEASE_PROOF_CONTRACT_VERSION,
+    )
+
+    state = run.agent_state if isinstance(run.agent_state, dict) else {}
+    marker = state.get(ACCEPTED_CANDIDATE_KEY)
+    return bool(
+        run.response_mode in {"build", "edit"}
+        and snapshot.project_id == run.project_id
+        and isinstance(marker, dict)
+        and set(marker) == {
+            "snapshot_id", "commit_sha", "permit_digest", "proof_key", "artifact_digest",
+            "build_contract", "release_contract",
+        }
+        and marker["snapshot_id"] == str(snapshot.id)
+        and marker["commit_sha"] == snapshot.commit_sha
+        and re.fullmatch(r"[a-f0-9]{40}", snapshot.commit_sha)
+        and state.get("snapshot_id") == str(snapshot.id)
+        and state.get("commit_sha") == snapshot.commit_sha
+        and marker["build_contract"] == MAX_FULL_BUILD_CONTRACT_VERSION
+        and marker["release_contract"] == MAX_RELEASE_PROOF_CONTRACT_VERSION
+        and all(
+            isinstance(marker[key], str) and re.fullmatch(r"[a-f0-9]{64}", marker[key])
+            for key in ("permit_digest", "proof_key", "artifact_digest")
+        )
+    )
 
 
 async def _validate_billable_intent(
