@@ -198,7 +198,7 @@ it("does not contradict an explicit request for empty lists with mandatory demo 
 
   expect(prompt).toContain(idea);
   expect(prompt).not.toContain("реальные русские тексты и демонстрационные данные");
-  expect(prompt).toContain("Начальные данные добавляй только по явному запросу пользователя");
+  expect(prompt).not.toContain("иначе оставь списки пустыми");
 });
 
 it("preserves an explicit seed-data request instead of banning initial data", () => {
@@ -206,7 +206,17 @@ it("preserves an explicit seed-data request instead of banning initial data", ()
   const prompt = buildMaxProjectPrompt({ ...longBrief, idea });
 
   expect(prompt).toContain(idea);
-  expect(prompt).toContain("Начальные данные добавляй только по явному запросу пользователя");
+  expect(prompt).not.toContain("Начальные данные добавляй только по явному запросу пользователя");
+});
+
+it("does not add an empty-list rule to a ready-to-use first action", () => {
+  const idea = "Тренажёр, в котором посетитель сразу проходит первое задание.";
+  const primaryAction = "Пройти задание";
+  const prompt = buildMaxProjectPrompt({ ...longBrief, idea, primaryAction });
+
+  expect(prompt).toContain(idea);
+  expect(prompt).toContain(`Главное действие пользователя: ${primaryAction}.`);
+  expect(prompt).not.toContain("иначе оставь списки пустыми");
 });
 
 it("carries every chosen scenario with a loyalty primary and the reviewed catalog contract", () => {

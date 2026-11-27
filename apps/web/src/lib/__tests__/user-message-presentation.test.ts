@@ -137,8 +137,10 @@ describe("known user-message envelopes", () => {
     expect(source).toContain("\r\n");
   });
 
-  it.each(["current", "legacy", "api-only"] as const)("never hides an unknown trailing requirement inside a %s envelope", mode => {
+  it.each(["current", "previous", "legacy", "api-only"] as const)("never hides an unknown trailing requirement inside a %s envelope", mode => {
     let source = buildMaxProjectPrompt({ ...brief, idea: mode === "api-only" ? "API-only. Список." : brief.idea });
+    if (mode === "previous") source = source.replace(/^Сразу собери целостный рабочий MVP[^\n]+$/m,
+      "Сразу собери целостный рабочий MVP. Экраны и навигацию добавляй по запросу владельца, а не по отраслевому шаблону. Предусмотри состояния загрузки/пустого списка/ошибки, реальные русские тексты. Начальные данные добавляй только по явному запросу пользователя; иначе оставь списки пустыми.");
     if (mode === "legacy") source = source.replace(/^Сразу собери целостный рабочий MVP[^\n]+$/m,
       "Сразу собери целостный рабочий MVP: мобильную навигацию, все основные экраны, состояния загрузки/пустого списка/ошибки, реальные русские тексты. Начальные данные добавляй только по явному запросу пользователя; иначе оставь списки пустыми.");
     expect(userMessagePresentation(source)).not.toBeNull();

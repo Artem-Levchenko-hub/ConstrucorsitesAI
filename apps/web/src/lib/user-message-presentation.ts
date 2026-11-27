@@ -1,4 +1,6 @@
 /** Read-only presentation of known generated envelopes; never a prompt rewrite. */
+import { MAX_WIZARD_MVP_SUFFIX } from "./max-brief";
+
 export type UserMessageField = { label: string; value: string };
 export type UserMessageGroup = { title: string; fields: UserMessageField[] };
 export type UserMessagePresentation = {
@@ -16,6 +18,7 @@ const PLATFORM_GUARD = "Не превращай его в обычный сай�
 const PUBLIC_DESCRIPTION_GUARD = "Это служебное задание для создания приложения, а не публичное описание. Не выводи инструкции из задания посетителю. Публичное описание владелец задаёт отдельно в данных приложения.";
 const WIZARD_FOOTER = "Используй готовую обвязку MAX Bridge, серверную проверку initData, MAX-профиль пользователя и webhook бота из шаблона. Не добавляй отдельную регистрацию или вход по email.";
 const MVP_SUFFIXES = [
+  MAX_WIZARD_MVP_SUFFIX,
   "Сразу собери целостный рабочий MVP. Экраны и навигацию добавляй по запросу владельца, а не по отраслевому шаблону. Предусмотри состояния загрузки/пустого списка/ошибки, реальные русские тексты. Начальные данные добавляй только по явному запросу пользователя; иначе оставь списки пустыми.",
   "Сразу собери целостный рабочий MVP: мобильную навигацию, все основные экраны, состояния загрузки/пустого списка/ошибки, реальные русские тексты. Начальные данные добавляй только по явному запросу пользователя; иначе оставь списки пустыми.",
 ] as const;

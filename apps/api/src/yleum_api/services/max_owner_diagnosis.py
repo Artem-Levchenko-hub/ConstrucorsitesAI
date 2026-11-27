@@ -94,7 +94,7 @@ _OWNER_UI_LINE = re.compile(
     r"^(?:[^\W\d_][\w -]{0,47}:\s+\S|"
     r"(?:в|на|для|сначала|затем|после|пример|например|введ\w*|включ\w*|"
     r"выбер\w*|добав\w*|заполн\w*|нажм\w*|откро\w*|отмет\w*|перейд\w*|созда\w*|"
-    r"сохран\w*|укаж\w*|установ\w*|add|choose|click|enter|example|in|open|save|select|set)\b)",
+    r"сделай(?:те)?|сохран\w*|укаж\w*|установ\w*|add|choose|click|enter|example|in|open|save|select|set)\b)",
     re.IGNORECASE,
 )
 _PUBLISHED_GUIDE_SCOPE = re.compile(

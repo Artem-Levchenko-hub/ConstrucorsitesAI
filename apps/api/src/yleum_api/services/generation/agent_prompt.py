@@ -20,6 +20,7 @@ from yleum_api.services.generation.contracts import (
     ProjectGenerationFacts,
     StackPrompt,
 )
+from yleum_api.services.max_generation_contract import is_api_only_request
 from yleum_api.services.portable_cell_contract import MAX_COORDINATOR_HANDOFF
 
 _log = logging.getLogger("yleum_api.routers.messages")
@@ -49,6 +50,7 @@ async def prepare_agent_prompt(
             _seed_block, await runtime.handle.snapshot_files(),
         )
     coordinator_handoff = MAX_COORDINATOR_HANDOFF in stack.system
+    api_only = is_api_only_request(prompt_text)
     if _is_continue:
         continuation_context = (
             "Продолжи MAX Mini App с сохранённых исходников. Найди фактическую точку "
@@ -130,10 +132,7 @@ async def prepare_agent_prompt(
             # in the same pass. Keep a floor without opening extra segments.
             _agent_steps = min(40, max(30, int(get_settings().agent_builder_max_steps)))
     else:
-        from yleum_api.services.max_generation_contract import (
-            build_max_product_contract,
-            is_api_only_request,
-        )
+        from yleum_api.services.max_generation_contract import build_max_product_contract
 
         _portable_capable = (
             runtime.handle is not None
@@ -154,7 +153,7 @@ async def prepare_agent_prompt(
             "управляемые Studio-файлы. Не зашивай секреты пользователя в код.\n\n"
             f"{_max_product_contract}"
         )
-        if is_api_only_request(prompt_text):
+        if api_only:
             _agent_user = (
                 f"Implement the API requested by the owner:\n\n{prompt_text}\n\n"
                 f"{_seed_block}\n\n{_max_product_contract}"
@@ -173,6 +172,30 @@ async def prepare_agent_prompt(
         _agent_steps = min(30, get_settings().agent_builder_max_steps)
     if project_info.template == "max_miniapp":
         _agent_user += max_request_checklist(max_request_build_plan(prompt_text))
+        first_use_guidance = "" if api_only else (
+            "For a new interactive product or an edit to its first-use flow, make the promised "
+            "first action usable from the real entry with the shipped configuration. Include "
+            "genuine starter material when the action intrinsically needs it. Keep fresh "
+            "personal data empty and preserve existing records. Apply the older creation "
+            "wizard's generic empty-lists instruction to owner-managed and personal records. "
+            "Respect explicitly empty or owner-supplied content. Read real stock, prices and "
+            "availability from the authorized owner source and offer currently available actions.\n"
+            "For that first-use flow, use the existing product test to enter with the shipped "
+            "configuration as an isolated fresh user. For a flow meant to work at first visit, "
+            "complete the action without injecting test-only product content. When the brief or "
+            "existing action contract requires actual owner-managed prerequisites, test the "
+            "visitor's honest empty state, "
+            "configure isolated prerequisites through the owner interface or authorized "
+            "application handler, then test the visitor action. For writes in either flow, verify "
+            "the real saved result and read it back after reload as the same user. Use direct "
+            "database fixtures for separate storage or edge tests. For required no-code setup, "
+            "write OWNER_GUIDE.md in the owner's language. Name the feature in the heading and "
+            "use short numbered steps with actual screens, fields and one example the owner "
+            "can enter.\n"
+            "Let an authenticated MAX owner preview (`mode === 'preview'`) use personal "
+            "actions in that first-use flow when the existing server contract permits them. "
+            "Keep MAX-only access, CRM and payment restrictions and existing side-effect guards.\n"
+        )
         _agent_user += (
             "\n\n<product_delivery>\n"
             "Complete the requested product or edit before handing it off; do not stop "
@@ -250,16 +273,7 @@ async def prepare_agent_prompt(
             "success. Test the actual UI payload through the route and its response "
             "mapping, then write -> read/reload and matching history values. SQL-only "
             "persistence checks cannot replace this client-route contract check.\n"
-            "For a requested interactive visitor transaction that depends on owner-managed "
-            "data in a new build or related edit, make the main flow work from empty business "
-            "storage. Reuse an existing setting or already connected source that supplies the "
-            "required data and offer visitors only currently available actions. When no-code setup "
-            "by the authorized owner is needed, write OWNER_GUIDE.md in the owner's language. "
-            "Name the feature in the heading, then give short numbered steps with the actual "
-            "screen and field names and one example the owner can enter. For that flow, "
-            "use the existing product test with isolated empty business data. Set up prerequisites "
-            "through the owner interface or its authorized application handler before the visitor "
-            "action. Use direct database fixtures only for separate storage or edge tests. "
+            f"{first_use_guidance}"
             "Keep read-only, API-only and deliberately empty requests within their stated "
             "scope, without added setup UI or prerequisite writes. For confirmed slot bookings, "
             "use real availability and reserve the slot on the server. If the brief allows "

@@ -5,6 +5,7 @@ export const MAX_BRIEF_LENGTH = 20_000;
 export const MAX_PROMPT_LENGTH = 30_000;
 export const MAX_DEFAULT_SUMMARY = "Мини-приложение для пользователей MAX";
 export const MAX_BRIEF_FIELD_LIMITS = { name: 100, audience: 400, primaryAction: 200, brandColors: 200 } as const;
+export const MAX_WIZARD_MVP_SUFFIX = "Сразу собери целостный рабочий MVP. Экраны и навигацию добавляй по запросу владельца, а не по отраслевому шаблону. Предусмотри состояния загрузки/пустого списка/ошибки, реальные русские тексты.";
 
 export function maxBriefFieldError(field: keyof typeof MAX_BRIEF_FIELD_LIMITS, value: string): string | null {
   const labels = { name: "Название", audience: "Аудитория", primaryAction: "Главное действие", brandColors: "Цвета бренда" };
@@ -278,9 +279,7 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
     ...(apiOnly ? ["Режим только API не требует продуктового интерфейса. Явные функциональные пожелания выше сохраняются; пожелания к оформлению применимы только если интерфейс запрошен отдельно."] : []),
     `Управление в Yleum: ${moduleLabels(managementModules) || "не уточнено — используй возможности по задаче"}. Это явные пожелания, а не закрытый список функций. Перечень .omnia/management.json описывает доступные SDK-возможности, а не обязательные экраны или функции.${optedOut.length ? ` Явно исключено владельцем: ${moduleLabels(optedOut)}.` : ""} Личные данные пользователей не превращай в общий реестр владельца.`,
     "",
-    ...(apiOnly ? [] : [
-      "Сразу собери целостный рабочий MVP. Экраны и навигацию добавляй по запросу владельца, а не по отраслевому шаблону. Предусмотри состояния загрузки/пустого списка/ошибки, реальные русские тексты. Начальные данные добавляй только по явному запросу пользователя; иначе оставь списки пустыми.",
-    ]),
+    ...(apiOnly ? [] : [MAX_WIZARD_MVP_SUFFIX]),
     ...(brief.catalogItemCount === undefined || !availableManagementModules(optedOut).includes("catalog") ? [] : [
       brief.catalogItemCount === 0
         ? "Владелец подтвердил пустой начальный каталог. Не добавляй позиции из описания или примеров. Покажи честное пустое состояние и читай каталог через штатный SDK Yleum."

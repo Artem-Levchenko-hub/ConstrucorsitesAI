@@ -32,6 +32,17 @@ async def test_max_build_edit_and_resume_receive_readability_and_completion_cont
     stack_name = "max-miniapp-nextjs"
     legacy = agent_builder.load_stack_system_prompt(stack_name)
     guide = await build_max_agent_guide(legacy, handle, coordinator_handoff=portable)
+    owner_request = (
+        "Сделай читаемый профиль клуба. Сохрани заявки и историю."
+        if is_edit or is_continue else (
+            "Создай готовое мини-приложение именно для мессенджера MAX.\n"
+            "Что должно делать приложение: Первое задание доступно сразу. Сохрани результат.\n"
+            "Сразу собери целостный рабочий MVP. Экраны и навигацию добавляй по запросу "
+            "владельца, а не по отраслевому шаблону. Предусмотри состояния загрузки/"
+            "пустого списка/ошибки, реальные русские тексты. Начальные данные добавляй "
+            "только по явному запросу пользователя; иначе оставь списки пустыми."
+        )
+    )
     plan, _ = await prepare_agent_prompt(
         stack=StackPrompt(
             "seed", stack_name, guide, None,
@@ -42,7 +53,7 @@ async def test_max_build_edit_and_resume_receive_readability_and_completion_cont
         project_info=ProjectGenerationFacts(
             "max_miniapp", "qa", "QA", None, None, False, "ru", False, "", "",
         ),
-        prompt_text="Сделай читаемый профиль клуба. Сохрани заявки и историю.",
+        prompt_text=owner_request,
         runtime=GenerationRuntime(handle=handle),
         orchestrate=False,
         selected_elements=None,
@@ -50,12 +61,28 @@ async def test_max_build_edit_and_resume_receive_readability_and_completion_cont
         _is_continue=is_continue,
         force_model="~anthropic/claude-sonnet-latest",
     )
+    assert owner_request in plan.user
     block = plan.user.split("<product_delivery>")[1].split("</product_delivery>")[0]
     delivery = " ".join(block.split())
-    assert "interactive visitor transaction that depends on owner-managed data" in delivery
+    assert "a new interactive product or an edit to its first-use flow" in delivery
+    assert "genuine starter material" in delivery and "promised first action" in delivery
+    assert "Keep fresh personal data empty" in delivery
+    assert (
+        "wizard's generic empty-lists instruction to owner-managed and personal records"
+        in delivery
+    )
+    assert "Respect explicitly empty or owner-supplied content" in delivery
+    assert "real stock, prices and availability" in delivery
+    assert "For that first-use flow, use the existing product test" in delivery
+    assert "shipped configuration" in delivery
+    assert "without injecting test-only product content" in delivery
+    assert "after reload as the same user" in delivery
+    assert "actual owner-managed prerequisites" in delivery and "honest empty state" in delivery
     assert "no-code setup" in delivery and "authorized application handler" in delivery
     assert "OWNER_GUIDE.md" in delivery and "one example" in delivery
-    assert "existing product test" in delivery and "isolated empty business data" in delivery
+    assert "authenticated MAX owner preview (`mode === 'preview'`)" in delivery
+    assert "actions in that first-use flow when the existing server contract permits" in delivery
+    assert "MAX-only access, CRM and payment restrictions" in delivery
     assert "reserve the slot" in delivery and "awaits confirmation" in delivery
     if not portable:
         assert "For confirmed slot reservations, prevent double booking" in plan.system
@@ -113,6 +140,13 @@ async def test_max_design_advice_preserves_scope_with_separate_optional_preparat
     assert "no separate design stage, visual acceptance gate or paid critique loop" in plan.user
     assert "existing style, working features and existing business records" in plan.user
     assert "Honor API-only and read-only requests" in plan.user
+    if owner_request.startswith("API-only:"):
+        assert "leave product UI outside this scope" in plan.user
+        assert "promised first action" not in plan.user
+        assert "mode === 'preview'" not in plan.user
+    else:
+        assert "promised first action" in plan.user
+        assert "shipped configuration" in plan.user
     assert "accepted design context" in plan.user
     if brief:
         assert brief in plan.user

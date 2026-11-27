@@ -296,6 +296,19 @@ def test_owner_excerpt_keeps_navigation_and_calendar_examples():
     assert "2040-01-15" in excerpt[1] and "16:30" in excerpt[1]
 
 
+def test_owner_guide_keeps_the_final_catalog_activation_step():
+    guide = (
+        "# Колода испанских карточек\n"
+        "1. В разделе **Каталог** добавьте карточку.\n"
+        "2. В поле **Название** введите `mañana`.\n"
+        "3. Сделайте позицию активной и сохраните данные.\n\n"
+        "Примеры выше не добавлены в приложение."
+    )
+    excerpt = diagnosis._owner_guide_excerpt("OWNER_GUIDE.md", guide, wanted={"испан"})
+    assert excerpt is not None
+    assert excerpt[1].endswith("3. Сделайте позицию активной и сохраните данные.")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("connected", [True, False])
 async def test_explicit_aitunnel_status_remains_available(owned_project, owner_guides, connected):
