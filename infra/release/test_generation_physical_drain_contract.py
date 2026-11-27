@@ -5,11 +5,13 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from uuid import UUID, uuid5
 
 AVAILABLE = importlib.util.find_spec("yleum_orchestrator") is not None
 WORKSPACE = "11111111-1111-4111-8111-111111111111"
@@ -396,6 +398,153 @@ class PhysicalContractTests(unittest.TestCase):
                         groups,
                         create=True,
                     ),
+                ):
+                    self.module.require_physical_writers_drained(state, client)
+
+    def old_shell_timeouts(self, root):
+        path = root / "project-machines" / WORKSPACE / "machine.json"
+        output = "\nshell timed out; command process terminated"
+        operations = {}
+        children = []
+        for index, exec_id in enumerate(("e" * 64, "f" * 64)):
+            parent = str(uuid5(UUID(OPERATION), str(index)))
+            child = str(uuid5(UUID(parent), "shell"))
+            children.append(child)
+            minute = f"{20 + index:02d}"
+            response = self.terminal("command-operations")["response"]
+            response.update(
+                ok=False, exit_code=124, detail=output, timed_out=True, operation_id=parent,
+            )
+            if index == 0:
+                response["before_identity"] = {
+                    **response["before_identity"], "environment_digest": "d" * 64,
+                }
+                response["environment_mutated"] = True
+            operations[parent] = {
+                "kind": "request", "digest": "1" * 64, "state": "timed_out", "epoch": 2,
+                "phase": "shell", "startup_role": "shell",
+                "started_at": f"2026-11-27T02:{minute}:10+00:00",
+                "deadline_at": f"2026-11-27T02:{minute}:20+00:00",
+                "heartbeat_at": f"2026-11-27T02:{minute}:20.002+00:00",
+                "log_bytes": len(output.encode()), "transport_response": response,
+                "result": {"operation_id": parent, "state": "completed", "exit_code": 124,
+                           "output": output, "timed_out": True},
+            }
+            operations[child] = {
+                "kind": "command", "digest": "2" * 64, "state": "running", "epoch": 2,
+                "started_at": f"2026-11-27T02:{minute}:11+00:00",
+                "heartbeat_at": f"2026-11-27T02:{minute}:20.001+00:00",
+                "log_bytes": 0, "exec_id": exec_id,
+            }
+        return path, {"workspace_id": WORKSPACE, "operations": operations}, children
+
+    def test_old_shell_timeouts_with_forgotten_execs_preserve_the_original_records(self):
+        for present in (True, False):
+            with self.subTest(development_present=present), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                state, proc, groups, client, development, _ = self.kernel_fixture(
+                    root, service=False, group="docker-" + "a" * 64 + ".scope",
+                )
+                development.attrs["Created"] = "2026-11-27T03:11:45.898166001Z"
+                if not present:
+                    client.containers.list = lambda **_: []
+                    host_proc = root / "host-proc"
+                    shutil.copytree(proc / "1", host_proc / "1")
+                    shutil.copytree(proc / "sys", host_proc / "sys")
+                    proc, groups = host_proc, root / "host-groups"
+                    groups.mkdir()
+                for name in ("cgroup.procs", "cgroup.threads"):
+                    (groups / name).write_text("")
+                path, machine, _ = self.old_shell_timeouts(state)
+                path.write_text(json.dumps(machine))
+                original = path.read_bytes()
+                with (
+                    patch.object(self.module, "_PROC_ROOT", proc),
+                    patch.object(self.module, "_CGROUP_ROOT", groups),
+                    patch.object(self.module, "_portable_quiescence_sources", return_value=(
+                        self.module._PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES
+                    )),
+                    patch.object(self.module, "_require_no_orphan_docker_processes",
+                                 wraps=self.module._require_no_orphan_docker_processes) as scan,
+                ):
+                    self.module.require_physical_writers_drained(state, client)
+                self.assertEqual(scan.call_count, 2)
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_old_shell_timeout_requires_exact_parent_and_current_physical_absence(self):
+        from docker.errors import NotFound
+
+        for damage in (
+            "child_uuid", "epoch", "role", "result_id", "body", "response_missing",
+            "response_id", "revision", "termination", "producer", "running_exec",
+            "untyped_not_found", "exec_reappeared", "old_container", "absent_with_orphan", "orphan_task",
+        ):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as tmp:
+                state, proc, groups, client, development, _ = self.kernel_fixture(
+                    Path(tmp), service=False, group="docker-" + "a" * 64 + ".scope",
+                )
+                development.attrs["Created"] = "2026-11-27T03:11:45Z"
+                for name in ("cgroup.procs", "cgroup.threads"):
+                    (groups / name).write_text("")
+                path, machine, (child, _) = self.old_shell_timeouts(state)
+                operations = machine["operations"]
+                parent = operations[next(iter(operations))]
+                sources = self.module._PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES
+                if damage == "child_uuid":
+                    operations[OPERATION] = operations.pop(child)
+                elif damage == "epoch":
+                    operations[child]["epoch"] += 1
+                elif damage == "role":
+                    parent["startup_role"] = "fast_check"
+                elif damage == "result_id":
+                    parent["result"]["operation_id"] = child
+                elif damage == "body":
+                    parent["result"]["output"] = "user output" + parent["result"]["output"]
+                elif damage == "response_missing":
+                    del parent["transport_response"]
+                elif damage == "response_id":
+                    parent["transport_response"]["operation_id"] = child
+                elif damage == "revision":
+                    parent["transport_response"]["workspace_revision"] = "0" * 64
+                elif damage == "termination":
+                    parent["result"]["timed_out"] = False
+                elif damage == "producer":
+                    sources = {**sources, "services.machine_adapter": "0" * 64}
+                elif damage == "running_exec":
+                    client.api.exec_inspect = lambda _, container_id=development.id: {
+                        "ContainerID": container_id, "Running": True, "ExitCode": None,
+                    }
+                elif damage == "untyped_not_found":
+                    def inspect(_):
+                        raise NotFound("fixture without an HTTP response")
+
+                    client.api.exec_inspect = inspect
+                elif damage == "exec_reappeared":
+                    inspect_before = client.api.exec_inspect
+                    observed = set()
+
+                    def inspect(
+                        exec_id, *, observed=observed, inspect_before=inspect_before,
+                        container_id=development.id,
+                    ):
+                        if exec_id in observed:
+                            return {"ContainerID": container_id, "Running": True, "ExitCode": None}
+                        observed.add(exec_id)
+                        return inspect_before(exec_id)
+
+                    client.api.exec_inspect = inspect
+                elif damage == "old_container":
+                    development.attrs["Created"] = "2026-11-27T02:00:00Z"
+                elif damage == "absent_with_orphan":
+                    client.containers.list = lambda **_: []
+                else:
+                    (proc / "1/task/1/cgroup").write_text("0::/docker-" + "d" * 64 + ".scope\n")
+                path.write_text(json.dumps(machine))
+                with (
+                    patch.object(self.module, "_PROC_ROOT", proc),
+                    patch.object(self.module, "_CGROUP_ROOT", groups),
+                    patch.object(self.module, "_portable_quiescence_sources", return_value=sources),
+                    self.assertRaises(self.module.PhysicalDrainError),
                 ):
                     self.module.require_physical_writers_drained(state, client)
 

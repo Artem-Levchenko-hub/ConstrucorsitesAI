@@ -482,6 +482,22 @@ workspace locks, deadlines and physical retirement checks use the same protocols
 The complete dispatch-deadline predecessor remains supported. Mixing source
 files from these bundles denies quiescence.
 
+### Historical shell timeout after Docker forgets its exec
+
+With admission closed, the physical gate can verify current writer absence for
+the exact shell-dispatch evidence bundle. A retained `command/running` child
+must match the parent UUID-derived `shell` step and dispatch epoch. The parent
+must contain the typed timeout result with exit code 124, the producer's exact
+termination message and its matching saved transport response.
+
+The gate requires two exact Docker 404 observations. If a development
+container is present, its Docker `Created` timestamp must follow the parent
+timeout and the repeated process inventory must prove only the idle process
+and declared services. With or without a development container, two complete
+host cgroup and task inventories must show no orphan Docker membership. The
+gate rechecks the daemon, container roster and journal. Keep both original
+records. The proof applies only to current quiescence.
+
 ### Recovering a stopped fast check after source verification failed
 
 The source-guard recovery bundle changes only the startup checker. A receipt

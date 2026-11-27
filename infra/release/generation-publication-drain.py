@@ -1407,6 +1407,7 @@ def _command_absence_sample(client, state_parent, container):
     )
     common = {
         "id": container.id,
+        "created": attrs.get("Created"),
         "state": state,
         "exec_ids": attrs.get("ExecIDs"),
         "config": hashlib.sha256(
@@ -1547,7 +1548,8 @@ def _command_absence_sample(client, state_parent, container):
 
 
 def _require_current_command_absence(
-    state_parent: Path, client: object, containers: list
+    state_parent: Path, client: object, containers: list, *,
+    created_after: datetime | None = None,
 ) -> None:
     """Current sampled absence only, never evidence of an old exec outcome.
 
@@ -1561,6 +1563,12 @@ def _require_current_command_absence(
             first = [_command_absence_sample(client, state_parent, c) for c in containers]
             second = [_command_absence_sample(client, state_parent, c) for c in containers]
             _kernel_need(first == second, "current command absence sample changed")
+            if created_after is not None:
+                _kernel_need(
+                    len(first) == 1
+                    and datetime.fromisoformat(first[0]["created"]) > created_after,
+                    "shell timeout container retirement is unconfirmed",
+                )
             return
         except ProcessDisappeared:
             if attempt == 4:
@@ -1692,6 +1700,83 @@ def _command_terminal(record: dict, operation_id: str) -> str:
         ) from exc
 
 
+_SHELL_TIMEOUT_OUTPUT = "\nshell timed out; command process terminated"
+
+
+def _shell_timeout_children(operations: dict) -> dict[str, tuple[str, datetime]]:
+    """Find acknowledged children whose exact parent recorded a shell termination."""
+    from yleum_orchestrator.schemas.workspace import WorkspaceAgentExecResponse
+    from yleum_orchestrator.services.project_machine import MachineOperationResult
+
+    children = {}
+    for parent_id, parent in operations.items():
+        if (
+            not isinstance(parent, dict)
+            or parent.get("kind") != "request"
+            or parent.get("state") != "timed_out"
+            or parent.get("phase") != "shell"
+            or parent.get("startup_role") != "shell"
+        ):
+            continue
+        try:
+            parent_uuid = UUID(parent_id)
+            child_id = str(uuid5(parent_uuid, "shell"))
+            child = operations.get(child_id)
+            if (
+                str(parent_uuid) != parent_id or not isinstance(child, dict)
+                or child.get("kind") != "command" or child.get("state") != "running"
+                or set(parent) != {
+                    "kind", "digest", "state", "epoch", "phase", "startup_role", "started_at",
+                    "deadline_at", "heartbeat_at", "log_bytes", "result", "transport_response",
+                }
+                or set(child) != {
+                    "digest", "state", "epoch", "kind", "started_at", "heartbeat_at",
+                    "log_bytes", "exec_id",
+                }
+                or type(parent["epoch"]) is not int or parent["epoch"] <= 0
+                or type(child["epoch"]) is not int or child["epoch"] != parent["epoch"]
+                or type(parent["log_bytes"]) is not int
+                or parent["log_bytes"] != len(_SHELL_TIMEOUT_OUTPUT.encode())
+                or type(child["log_bytes"]) is not int or child["log_bytes"] < 0
+                or not all(re.fullmatch(r"[0-9a-f]{64}", value) for value in (
+                    parent["digest"], child["digest"], child["exec_id"],
+                ))
+            ):
+                continue
+            result = MachineOperationResult.model_validate_json(
+                json.dumps(parent["result"]), strict=True,
+            )
+            response = WorkspaceAgentExecResponse.model_validate_json(
+                json.dumps(parent["transport_response"]), strict=True,
+            )
+            if (
+                result.model_dump(mode="json") != parent["result"]
+                or result.operation_id != parent_id or result.state != "completed"
+                or result.exit_code != 124 or not result.timed_out
+                or result.output != _SHELL_TIMEOUT_OUTPUT
+                or response.model_dump(mode="json") != parent["transport_response"]
+                or response.operation_id != parent_uuid or response.ok
+                or response.exit_code != result.exit_code or not response.timed_out
+                or response.detail != result.output
+                or response.workspace_revision != response.after_identity.workspace_revision
+                or response.environment_mutated != (response.before_identity != response.after_identity)
+                or response.project_migration_receipt is not None
+                or response.compiled_asset_receipt is not None
+            ):
+                continue
+            started, child_started, deadline, child_seen, finished = (
+                datetime.fromisoformat(value) for value in (
+                    parent["started_at"], child["started_at"], parent["deadline_at"],
+                    child["heartbeat_at"], parent["heartbeat_at"],
+                )
+            )
+            if started < child_started < deadline < child_seen < finished and finished.utcoffset() is not None:
+                children[child_id] = child["exec_id"], finished
+        except (TypeError, ValueError, OverflowError):
+            continue
+    return children
+
+
 def _machine_command_exec_ids(value, path, state_parent, client):
     """Classify journal authority separately from physical exec inspection."""
     operations = value.get("operations")
@@ -1699,6 +1784,7 @@ def _machine_command_exec_ids(value, path, state_parent, client):
         raise PhysicalDrainError("physical command journal is unknown")
     quiesced = None
     commands = []
+    shell_timeouts = _shell_timeout_children(operations)
     for operation_id, record in operations.items():
         terminal = (
             isinstance(record, dict)
@@ -1707,6 +1793,8 @@ def _machine_command_exec_ids(value, path, state_parent, client):
             and record.get("state") in {"completed", "failed", "timed_out"}
         )
         if not terminal:
+            if operation_id in shell_timeouts:
+                continue  # Pending until the caller completes independent physical checks.
             if quiesced is None:
                 try:
                     quiesced = machine_quiescence(
@@ -1723,7 +1811,34 @@ def _machine_command_exec_ids(value, path, state_parent, client):
             continue
         if record["kind"] == "command":
             commands.append(_command_terminal(record, operation_id))
-    return commands
+    return commands, tuple(shell_timeouts.values())
+
+
+def _require_shell_timeout_no_orphans(client, containers) -> None:
+    """Confirm the full host roster has no orphan Docker membership, twice."""
+    known_ids = {container.id for container in containers}
+    _kernel_need(
+        len(known_ids) == len(containers)
+        and all(re.fullmatch(r"[0-9a-f]{64}", value) for value in known_ids),
+        "shell timeout Docker inventory is unknown",
+    )
+    for attempt in range(5):
+        try:
+            daemon = _daemon_identity(client)
+            first = _require_no_orphan_docker_processes(known_ids)
+            second = _require_no_orphan_docker_processes(known_ids)
+            _kernel_need(
+                first == second and daemon == _daemon_identity(client),
+                "shell timeout host identity changed",
+            )
+            return
+        except ProcessDisappeared:
+            if attempt == 4:
+                raise
+        except PhysicalDrainError:
+            raise
+        except Exception as exc:
+            raise PhysicalDrainError("shell timeout physical absence is unknown") from exc
 
 
 def _startup_file_identity(info):
@@ -1958,6 +2073,8 @@ def require_physical_writers_drained(
     journals = 0
     missing_exec_workspaces = set()
     missing_exec_ids = set()
+    shell_timeout_finishes: dict[str, datetime] = {}
+    shell_timeout_journals: dict[Path, str] = {}
     for family, filename in (
         ("project-machines", "machine.json"),
         ("source-write-operations", "*.json"),
@@ -1995,9 +2112,28 @@ def require_physical_writers_drained(
                                 "source helper receipt binding changed"
                             )
             else:
-                for exec_id in _machine_command_exec_ids(
+                commands, shell_timeouts = _machine_command_exec_ids(
                     value, path, state_parent, client
-                ):
+                )
+                if shell_timeouts:
+                    if not shell_timeout_journals:
+                        _kernel_need(
+                            _portable_quiescence_sources()
+                            == _PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES,
+                            "shell timeout producer is unknown",
+                        )
+                    shell_timeout_finishes[path.parent.name] = max(
+                        finished for _exec_id, finished in shell_timeouts
+                    )
+                    shell_timeout_journals[path] = _digest(value)
+                    for exec_id, _finished in shell_timeouts:
+                        _kernel_need(
+                            inspect(exec_id) is None,
+                            "shell timeout exec absence is unconfirmed",
+                        )
+                        missing_exec_workspaces.add(path.parent.name)
+                        missing_exec_ids.add(exec_id)
+                for exec_id in commands:
                     execution = inspect(exec_id)
                     if execution is None:
                         missing_exec_workspaces.add(path.parent.name)
@@ -2015,6 +2151,8 @@ def require_physical_writers_drained(
                                 "command physical owner or outcome is unknown"
                             )
             journals += 1
+    if shell_timeout_journals:
+        _require_shell_timeout_no_orphans(client, containers)
     # One complete repeated sample per workspace, not per historical command.
     for workspace_id in sorted(missing_exec_workspaces):
         development = [
@@ -2025,7 +2163,10 @@ def require_physical_writers_drained(
             and by_id[container.id][1].get("omnia.resource_kind") == "development"
         ]
         if development:
-            _require_current_command_absence(state_parent, client, development)
+            _require_current_command_absence(
+                state_parent, client, development,
+                created_after=shell_timeout_finishes.get(workspace_id),
+            )
     for exec_id in missing_exec_ids:
         inspected.pop(exec_id, None)
         if inspect(exec_id) is not None:
@@ -2042,6 +2183,10 @@ def require_physical_writers_drained(
         )
     if _idle_checkpoint_preview_locks(state_parent) != checkpoint_locks:
         raise PhysicalDrainError("checkpoint preview lock inventory changed")
+    _kernel_need(
+        all(_digest(_journal(path)) == digest for path, digest in shell_timeout_journals.items()),
+        "shell timeout journal changed during inspection",
+    )
     return {"affected_containers": len(by_name), "physical_journals": journals}
 
 
