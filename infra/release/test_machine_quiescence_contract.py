@@ -1713,6 +1713,37 @@ class MachineQuiescenceTests(unittest.TestCase):
                         self.record()
                 self.assertFalse(list(self.receipts.glob("*/*.json")))
 
+    def test_list_404_repeats_both_kernel_scans_before_recording_or_checking(self):
+        from docker.errors import NotFound
+        from requests import Response
+
+        missing = Response()
+        missing.status_code = 404
+        cycle = [[], NotFound("private container identity", response=missing), [], []]
+        original = self.machine_path.read_bytes()
+        with (
+            patch.object(
+                self.client.containers, "list", side_effect=cycle + [[], *cycle, []]
+            ),
+            patch.object(
+                self.checker, "_require_no_orphan_docker_processes",
+                wraps=self.checker._require_no_orphan_docker_processes,
+            ) as scans,
+            patch.object(os, "link", wraps=os.link) as publish,
+        ):
+            self.assertEqual(set(self.record()), {COMMAND})
+            self.assertEqual(scans.call_count, 4)
+            receipt = next(self.receipts.glob("*/*.json"))
+            saved = receipt.read_bytes()
+            self.assertEqual(
+                self.checker.require_physical_writers_drained(self.state, self.client),
+                {"affected_containers": 0, "physical_journals": 1},
+            )
+            self.assertEqual(scans.call_count, 8)
+            self.assertEqual(publish.call_count, 1)
+        self.assertEqual(self.machine_path.read_bytes(), original)
+        self.assertEqual(receipt.read_bytes(), saved)
+
     def test_orphan_scope_and_nested_task_membership_are_denied(self):
         scope = "system.slice/docker-" + "f" * 64 + ".scope"
         self.group(scope + "/nested")

@@ -1415,6 +1415,113 @@ class PhysicalContractTests(unittest.TestCase):
             ):
                 self.module.require_physical_writers_drained(root, client)
 
+    @staticmethod
+    def missing_container(error_type, status=404):
+        from requests import Response
+
+        response = Response()
+        response.status_code = status
+        return error_type("private container identity", response=response)
+
+    def test_disappearing_container_on_final_list_repeats_full_drain(self):
+        from docker.errors import NotFound
+        from docker.models.containers import ContainerCollection
+
+        development = self.container("development", "a" * 64)
+        development.attrs["Name"] = "/development"
+        present = {"Id": development.id}
+        vanished = {"Id": "b" * 64}
+        rosters = iter([[present], [present, vanished], [present], [present]])
+        executions = []
+
+        def inspect_container(container_id):
+            if container_id == vanished["Id"]:
+                raise self.missing_container(NotFound)
+            self.assertEqual(container_id, development.id)
+            return copy.deepcopy(development.attrs)
+
+        def inspect_exec(exec_id):
+            executions.append(exec_id)
+            return {"ContainerID": development.id, "Running": False, "ExitCode": 0}
+
+        client = SimpleNamespace(
+            api=SimpleNamespace(
+                containers=lambda **_: next(rosters),
+                inspect_container=inspect_container,
+                exec_inspect=inspect_exec,
+            ),
+        )
+        client.containers = ContainerCollection(client=client)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.machine(root)
+            self.assertEqual(
+                self.module.require_physical_writers_drained(root, client),
+                {"affected_containers": 1, "physical_journals": 1},
+            )
+        self.assertEqual(executions, ["e" * 64, "e" * 64])
+
+    def test_restarted_list_sample_detects_a_new_live_helper(self):
+        from docker.errors import NotFound
+
+        client = SimpleNamespace(containers=SimpleNamespace(list=lambda **_: []))
+        active = self.container("archive", "a" * 64)
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(
+                client.containers, "list",
+                side_effect=[[], self.missing_container(NotFound), [active]],
+            ),
+            self.assertRaisesRegex(self.module.PhysicalDrainError, "helper is active"),
+        ):
+            self.module.require_physical_writers_drained(Path(tmp), client)
+
+    def test_persistent_list_404_is_bounded_and_other_list_errors_are_not_retried(self):
+        from docker.errors import APIError, NotFound
+
+        class OtherNotFound(NotFound):
+            pass
+
+        client = SimpleNamespace(containers=SimpleNamespace(list=lambda **_: []))
+        for error, expected, attempts in (
+            (self.missing_container(NotFound), self.module.PhysicalDrainError, 5),
+            (self.missing_container(NotFound, 500), NotFound, 1),
+            (self.missing_container(APIError), APIError, 1),
+            (self.missing_container(OtherNotFound), OtherNotFound, 1),
+            (TimeoutError(), TimeoutError, 1),
+        ):
+            with (
+                self.subTest(error=type(error), attempts=attempts),
+                tempfile.TemporaryDirectory() as tmp,
+                patch.object(client.containers, "list", side_effect=error) as roster,
+            ):
+                with self.assertRaises(expected):
+                    self.module.require_physical_writers_drained(Path(tmp), client)
+                self.assertEqual(roster.call_count, attempts)
+
+    def test_exec_404_in_a_listed_container_is_not_a_list_race(self):
+        from docker.errors import NotFound
+
+        development = self.container("development", "a" * 64)
+        development.attrs["ExecIDs"] = ["f" * 64]
+
+        def inspect_exec(_):
+            raise self.missing_container(NotFound)
+
+        client = SimpleNamespace(
+            containers=SimpleNamespace(list=lambda **_: [development]),
+            api=SimpleNamespace(exec_inspect=inspect_exec),
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(client.containers, "list", wraps=client.containers.list) as roster,
+            self.assertRaisesRegex(
+                self.module.PhysicalDrainError, "exec is active or unknown"
+            ),
+        ):
+            self.module.require_physical_writers_drained(Path(tmp), client)
+        self.assertEqual(roster.call_count, 1)
+
 
 @unittest.skipUnless(os.name == "posix", "requires native flock")
 class CheckpointPreviewDrainTests(unittest.TestCase):

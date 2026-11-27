@@ -28,6 +28,10 @@ class ProcessDisappeared(PhysicalDrainError):
     """An incomplete sample, only after the exact proc directory is absent."""
 
 
+class ContainerDisappeared(PhysicalDrainError):
+    """An incomplete sample after an exact Docker 404 during listing."""
+
+
 _MACHINE_HELPERS = frozenset(
     {
         "project-postgres-prepare",
@@ -976,8 +980,20 @@ def _process_start(directory: Path) -> int:
     return int(fields[19])
 
 
+def _physical_container_list(client):
+    try:
+        return client.containers.list(all=True)
+    except Exception as exc:
+        # The Docker SDK inspects every list row and can race its removal.
+        # The SDK is already loaded for real clients and optional for fixtures.
+        not_found = getattr(sys.modules.get("docker.errors"), "NotFound", None)
+        if type(exc) is not_found and exc.status_code == 404:
+            raise ContainerDisappeared("physical container listing returned Docker 404") from exc
+        raise
+
+
 def _quiescent_roster(client, binding, cell) -> dict:
-    containers = client.containers.list(all=True)
+    containers = _physical_container_list(client)
     roster = {}
     auxiliary = (
         {
@@ -1057,7 +1073,7 @@ def _quiescence_physical(state_parent, workspace_id, uid, client, binding, cell)
             return _quiescence_physical_attempt(
                 state_parent, workspace_id, uid, client, binding, cell
             )
-        except ProcessDisappeared:
+        except (ProcessDisappeared, ContainerDisappeared):
             if attempt == 4:
                 raise
     raise AssertionError("unreachable")
@@ -1988,8 +2004,20 @@ def require_physical_writers_drained(
     state_parent: Path, client: object
 ) -> dict[str, int]:
     """Read actual helper/exec state in addition to historical terminal SQL proof."""
+    # A closing list can race too. Discard that attempt's journals, locks and
+    # physical observations before starting the next read-only proof.
+    for attempt in range(5):
+        try:
+            return _physical_writers_sample(state_parent, client)
+        except ContainerDisappeared:
+            if attempt == 4:
+                raise
+    raise AssertionError("unreachable")
+
+
+def _physical_writers_sample(state_parent: Path, client: object) -> dict[str, int]:
     checkpoint_locks = _idle_checkpoint_preview_locks(state_parent)
-    containers = client.containers.list(all=True)
+    containers = _physical_container_list(client)
     startup_prepares = _startup_prepare_journals(state_parent)
     by_name = {}
     by_id = {}
@@ -2183,7 +2211,7 @@ def require_physical_writers_drained(
             raise PhysicalDrainError("missing command inspection changed")
     # A helper appearing after enumeration invalidates the sample; there is no
     # expiry-as-termination inference and no mutation of foreign resources.
-    if {c.id for c in client.containers.list(all=True)} != {c.id for c in containers}:
+    if {c.id for c in _physical_container_list(client)} != {c.id for c in containers}:
         raise PhysicalDrainError(
             "physical container inventory changed during inspection"
         )
