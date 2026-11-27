@@ -8,6 +8,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -439,8 +440,8 @@ class PhysicalContractTests(unittest.TestCase):
         return path, {"workspace_id": WORKSPACE, "operations": operations}, children
 
     def test_old_shell_timeouts_with_forgotten_execs_preserve_the_original_records(self):
-        for present in (True, False):
-            with self.subTest(development_present=present), tempfile.TemporaryDirectory() as tmp:
+        for (bundle, sources), present in product(enumerate(self.module._SHELL_TIMEOUT_PRODUCERS), (True, False)):
+            with self.subTest(bundle=bundle, development_present=present), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 state, proc, groups, client, development, _ = self.kernel_fixture(
                     root, service=False, group="docker-" + "a" * 64 + ".scope",
@@ -461,9 +462,7 @@ class PhysicalContractTests(unittest.TestCase):
                 with (
                     patch.object(self.module, "_PROC_ROOT", proc),
                     patch.object(self.module, "_CGROUP_ROOT", groups),
-                    patch.object(self.module, "_portable_quiescence_sources", return_value=(
-                        self.module._PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES
-                    )),
+                    patch.object(self.module, "_portable_quiescence_sources", return_value=sources),
                     patch.object(self.module, "_require_no_orphan_docker_processes",
                                  wraps=self.module._require_no_orphan_docker_processes) as scan,
                 ):

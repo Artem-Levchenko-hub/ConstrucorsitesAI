@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 from collections.abc import Callable, Iterator
@@ -18,18 +19,22 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from pydantic import BaseModel
 
 from yleum_orchestrator.core.cell_resources import (
     CellFenceRejected,
     CellIndeterminateOperation,
+    CellResourceError,
     LifecycleMutation,
 )
 from yleum_orchestrator.core.project_machine import MachineCommand, MachineManifest
 from yleum_orchestrator.services.cell_state import _ensure_secure_dir, _read_plain_json_file
-from yleum_orchestrator.services.generation_reader_inventory import ShellStartDeadlineExceeded
+from yleum_orchestrator.services.generation_reader_inventory import (
+    ReaderInventoryUnavailable,
+    ShellStartDeadlineExceeded,
+)
 from yleum_orchestrator.services.machine_startup import PrepareBinding
 
 
@@ -54,6 +59,8 @@ class MachineRequestStatus(BaseModel):
 
 
 _deadline: ContextVar[float | None] = ContextVar("machine_operation_deadline", default=None)
+_TERMINATED_CHILD_OBSERVATION_SECONDS = 1.0
+_TERMINATED_CHILD_POLL_SECONDS = 0.2
 
 
 @contextmanager
@@ -418,7 +425,58 @@ class ProjectMachine:
             result=result.model_dump(),
         )
         self._save(state)
+        if result.timed_out:
+            await self._observe_timed_out_child(state, mutation, record.get("phase"))
         return result
+
+    async def _observe_timed_out_child(
+        self, state: dict[str, Any], mutation: LifecycleMutation, phase: object,
+    ) -> None:
+        if not isinstance(phase, str):
+            return
+        child_id = str(uuid5(mutation.operation_id, phase))
+        child = state["operations"].get(child_id)
+        if (
+            not isinstance(child, dict) or child.get("kind") != "command"
+            or child.get("state") != "running" or child.get("epoch") != mutation.fencing_epoch
+            or child.get("result") is not None
+        ):
+            return
+        exec_id = child.get("exec_id")
+        if not isinstance(exec_id, str) or re.fullmatch(r"[0-9a-f]{64}", exec_id) is None:
+            return
+
+        # The parent is already terminal. A cancelled optional Docker read must
+        # leave its result available without another start or termination.
+        # inspect_exec_outcome is read-only, so dropping its late reply is safe.
+        try:
+            with machine_budget(_TERMINATED_CHILD_OBSERVATION_SECONDS):
+                async with asyncio.timeout(machine_remaining_seconds(
+                    _TERMINATED_CHILD_OBSERVATION_SECONDS,
+                )):
+                    while True:
+                        running, exit_code = await asyncio.to_thread(
+                            self.backend.inspect_exec_outcome, exec_id,
+                        )
+                        machine_remaining_seconds(1)
+                        if running is False and type(exit_code) is int:
+                            result = MachineOperationResult(
+                                operation_id=child_id, state="completed", exit_code=exit_code,
+                            )
+                            child.update(
+                                state="completed", heartbeat_at=datetime.now(UTC).isoformat(),
+                                result=result.model_dump(),
+                            )
+                            self._save(state)
+                            return
+                        if running is not True:
+                            return
+                        await asyncio.sleep(machine_remaining_seconds(
+                            _TERMINATED_CHILD_POLL_SECONDS,
+                        ))
+        except (CellResourceError, ReaderInventoryUnavailable, OSError):
+            # Missing or unreadable Docker evidence cannot settle the child.
+            return
 
     async def store_transport_response(
         self,

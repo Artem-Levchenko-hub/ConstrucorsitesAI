@@ -201,6 +201,94 @@ async def test_request_journal_persists_heartbeat_and_terminal_replay(tmp_path):
     assert status.result == terminal
 
 
+@pytest.mark.parametrize("observation", [
+    "terminal", "running", "missing", "no_exit", "expired", "cancelled",
+])
+async def test_timed_out_request_records_only_the_observed_child_exit(
+    tmp_path, monkeypatch, observation,
+):
+    import asyncio
+    from threading import Event
+    from unittest.mock import Mock
+    from uuid import uuid5
+
+    from yleum_orchestrator.core.cell_resources import CellResourceError
+
+    api = module()
+    machine, backend, _lease, parent = fixture(tmp_path)
+    await machine.ensure(MachineManifest.model_validate(payload()), parent)
+    await machine.request_start(parent, phase="shell", deadline_at=datetime.now(UTC))
+    mutation = LifecycleMutation(
+        uuid5(parent.operation_id, "shell"), parent.fencing_epoch, parent.request_digest,
+    )
+    exec_id = "e" * 64
+    monkeypatch.setattr(backend, "exec_start", Mock(return_value=exec_id))
+    monkeypatch.setattr(backend, "terminate_exec", Mock(), raising=False)
+    child = await machine.exec_start(["true"], ".", mutation)
+    await machine.exec_terminate(child, mutation, grace_seconds=20)
+    assert machine.state()["operations"][child]["state"] == "running"
+
+    terminal = api.MachineOperationResult(
+        operation_id=str(parent.operation_id), state="completed", exit_code=124, timed_out=True,
+    )
+    attempts = []
+    observation_began = asyncio.Event()
+    finish_read = Event()
+    loop = asyncio.get_running_loop()
+
+    def inspect(identifier):
+        assert identifier == exec_id
+        assert machine.state()["operations"][str(parent.operation_id)]["state"] == "timed_out"
+        attempts.append(identifier)
+        if observation == "missing":
+            raise CellResourceError("exec was garbage-collected")
+        if observation == "cancelled":
+            loop.call_soon_threadsafe(observation_began.set)
+            assert finish_read.wait(timeout=2)
+        if observation == "running" or (observation == "terminal" and len(attempts) == 1):
+            return True, None
+        return False, None if observation == "no_exit" else 143
+
+    monkeypatch.setattr(backend, "inspect_exec_outcome", inspect, raising=False)
+    monkeypatch.setattr(api, "_TERMINATED_CHILD_OBSERVATION_SECONDS", 0.2, raising=False)
+    monkeypatch.setattr(api, "_TERMINATED_CHILD_POLL_SECONDS", 0.01, raising=False)
+
+    if observation == "cancelled":
+        finish = asyncio.create_task(machine.request_finish(parent, terminal))
+        try:
+            await asyncio.wait_for(observation_began.wait(), timeout=1)
+            finish.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await finish
+        finally:
+            finish_read.set()
+    else:
+        with api.machine_budget(0 if observation == "expired" else None):
+            assert await machine.request_finish(parent, terminal) == terminal
+
+    records = machine.state()["operations"]
+    record = records[child]
+    assert records[str(parent.operation_id)]["result"] == terminal.model_dump()
+    if observation == "terminal":
+        assert record["state"] == "completed"
+        assert record["result"]["exit_code"] == 143
+        assert record["result"]["timed_out"] is False
+        assert len(attempts) == 2
+    else:
+        assert record["state"] == "running"
+        assert "result" not in record
+        if observation == "expired":
+            assert attempts == []
+        else:
+            assert attempts
+
+    before_replay = list(attempts)
+    assert await machine.request_finish(parent, terminal) == terminal
+    assert attempts == before_replay
+    backend.exec_start.assert_called_once()
+    backend.terminate_exec.assert_called_once_with(exec_id, 20)
+
+
 async def test_request_operation_id_with_different_digest_is_rejected(tmp_path):
     machine, _backend, _lease, mutation = fixture(tmp_path)
     await machine.ensure(MachineManifest.model_validate(payload()), mutation)

@@ -913,6 +913,43 @@ def test_completed_service_exec_is_not_mistaken_for_lost_ownership(tmp_path):
     assert runtime._metadata()["services"] == saved["services"]
 
 
+@pytest.mark.parametrize("observation", ["exited", "running", "no_exit", "foreign", "lost"])
+def test_command_outcome_inspection_checks_ownership_without_exec(tmp_path, observation):
+    from docker.errors import NotFound
+
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict, CellResourceError
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    runtime = backend(tmp_path)
+    exec_id, container_id = "e" * 64, "c" * 64
+    write_controller_json(runtime.metadata_path, {"exec_logs": {exec_id: "known-log"}})
+    runtime._container = lambda: SimpleNamespace(id=container_id)
+    runtime._read_log = lambda _: pytest.fail("status-only inspection must not start a log reader")
+
+    def inspect(identifier):
+        assert identifier == exec_id
+        if observation == "lost":
+            raise NotFound("exec was garbage-collected")
+        return {
+            "ID": exec_id,
+            "ContainerID": "x" * 64 if observation == "foreign" else container_id,
+            "Running": observation == "running",
+            "ExitCode": None if observation == "no_exit" else 143,
+        }
+
+    runtime.client = SimpleNamespace(api=SimpleNamespace(exec_inspect=inspect))
+    if observation == "foreign":
+        with pytest.raises(CellIdentityConflict):
+            runtime.inspect_exec_outcome(exec_id)
+    elif observation == "lost":
+        with pytest.raises(CellResourceError, match="observation unavailable"):
+            runtime.inspect_exec_outcome(exec_id)
+    else:
+        assert runtime.inspect_exec_outcome(exec_id) == (
+            observation == "running", 143 if observation == "exited" else None,
+        )
+
+
 def test_missing_exec_with_embedded_data_store_requires_explicit_recovery(tmp_path):
     from yleum_orchestrator.core.cell_resources import CellResourceError
     from yleum_orchestrator.services.project_machine import write_controller_json

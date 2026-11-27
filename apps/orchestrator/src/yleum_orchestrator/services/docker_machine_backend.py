@@ -1341,19 +1341,38 @@ class DockerMachineBackend:
             return "command log is unavailable (bounded read failed)"
         return bytes(result.output)[-_LOG_LIMIT:].decode("utf-8", "replace")
 
-    def exec_status(self, exec_id: str) -> dict[str, Any]:
+    def _inspect_owned_exec(self, exec_id: str) -> tuple[dict[str, Any], str]:
         metadata = self._metadata()
         if exec_id not in metadata["exec_logs"]:
             raise CellIdentityConflict("unknown machine command")
         status = self.client.api.exec_inspect(exec_id)
         machine = self._container()
-        if machine is None or status.get("ContainerID") != machine.id:
+        if (
+            not isinstance(status, dict) or machine is None
+            or status.get("ContainerID") != machine.id
+        ):
             raise CellIdentityConflict("command container identity changed")
+        return status, metadata["exec_logs"][exec_id]
+
+    def exec_status(self, exec_id: str) -> dict[str, Any]:
+        status, log = self._inspect_owned_exec(exec_id)
         return {
             "running": bool(status["Running"]),
             "exit_code": status.get("ExitCode"),
-            "output": self._read_log(metadata["exec_logs"][exec_id]),
+            "output": self._read_log(log),
         }
+
+    def inspect_exec_outcome(self, exec_id: str) -> tuple[bool, int | None]:
+        """Read Docker's owned command status without starting a log reader."""
+        try:
+            status, _log = self._inspect_owned_exec(exec_id)
+        except (docker.errors.DockerException, OSError) as exc:
+            raise CellResourceError("command exec observation unavailable") from exc
+        running = status.get("Running")
+        if status.get("ID") != exec_id or type(running) is not bool:
+            raise CellIdentityConflict("command exec observation identity is invalid")
+        exit_code = status.get("ExitCode")
+        return running, exit_code if not running and type(exit_code) is int else None
 
     def terminate_exec(self, exec_id: str, grace_seconds: int) -> None:
         """Send SIGTERM, then SIGKILL only if this command remains alive."""

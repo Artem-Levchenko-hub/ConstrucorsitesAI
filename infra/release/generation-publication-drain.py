@@ -344,6 +344,17 @@ _PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES = {
     "services.docker_py_cell_backend": "5cc742b1529bfc9489627a481cdac66d85af9d768319b17aaf4cf70d5ddb9c23",
     "services.machine_adapter": "35012589071ba3d0d3c7660b9370d1f013a4da9259fe6567568f5ee3029a0ffb",
 }
+# The successor observes the owned Docker exec after persisting the timeout.
+# Both versions can still carry historical children without a terminal result.
+_PORTABLE_QUIESCENCE_SHELL_TIMEOUT_OBSERVER_SOURCES = {
+    **_PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES,
+    "services.docker_machine_backend": "6cf1433ffe5dd1411c561c5fe3f12dfeb19eb6746512f22ef8861d2bd28458ba",
+    "services.project_machine": "ac921568520a3cbfc65bacc1ab192741b59c4a783e806c6ad1713def9465ce54",
+}
+_SHELL_TIMEOUT_PRODUCERS = (
+    _PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES,
+    _PORTABLE_QUIESCENCE_SHELL_TIMEOUT_OBSERVER_SOURCES,
+)
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
         **_PORTABLE_QUIESCENCE_SOURCES,
@@ -376,7 +387,7 @@ _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     _PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES,
     _PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES,
     _PORTABLE_QUIESCENCE_COMMAND_DISPATCH_DEADLINE_SOURCES,
-    _PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES,
+    *_SHELL_TIMEOUT_PRODUCERS,
 )
 # Only these reviewed producers may attest a pending fast_check wrapper.
 _PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES = (
@@ -394,7 +405,7 @@ _PORTABLE_QUIESCENCE_FAST_CHECK_SOURCES = (
     _PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES,
     _PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES,
     _PORTABLE_QUIESCENCE_COMMAND_DISPATCH_DEADLINE_SOURCES,
-    _PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES,
+    *_SHELL_TIMEOUT_PRODUCERS,
 )
 # These modules already exist in old releases, but their new startup/bootstrap contracts
 # are authority only for a complete successor producer bundle.
@@ -2118,8 +2129,7 @@ def require_physical_writers_drained(
                 if shell_timeouts:
                     if not shell_timeout_journals:
                         _kernel_need(
-                            _portable_quiescence_sources()
-                            == _PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES,
+                            _portable_quiescence_sources() in _SHELL_TIMEOUT_PRODUCERS,
                             "shell timeout producer is unknown",
                         )
                     shell_timeout_finishes[path.parent.name] = max(

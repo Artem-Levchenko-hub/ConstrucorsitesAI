@@ -485,7 +485,11 @@ files from these bundles denies quiescence.
 ### Historical shell timeout after Docker forgets its exec
 
 With admission closed, the physical gate can verify current writer absence for
-the exact shell-dispatch evidence bundle. A retained `command/running` child
+the exact shell-dispatch evidence bundle and its reviewed timeout-observer
+successor. The successor saves the parent timeout first, then uses its remaining
+budget to observe the original Docker exec. A confirmed exit is saved on the
+child. When Docker cannot confirm an exit, the child stays unresolved.
+A retained `command/running` child
 must match the parent UUID-derived `shell` step and dispatch epoch. The parent
 must contain the typed timeout result with exit code 124, the producer's exact
 termination message and its matching saved transport response.
