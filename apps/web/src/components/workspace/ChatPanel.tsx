@@ -48,6 +48,7 @@ import { OwnerChatQuotaNotice } from "./OwnerChatQuotaNotice";
 import { useChatScroll } from "@/hooks/useChatScroll";
 import { Button } from "@/components/ui/button";
 import { bindMessageGeneration, generationContinuationForMessage, isGenerationActive } from "@/lib/generation-lifecycle";
+import { isGenerationResultConfirmed } from "@/lib/generation-recovery";
 import { isChatMessageStreaming, lastPromptMessage } from "@/lib/chat-message-status";
 import { readMaxLaunch } from "@/lib/max-launch-runner";
 import type { MaxAdaptationAttachment } from "@/lib/use-max-adaptation";
@@ -378,7 +379,22 @@ export function ChatPanel({
 
   // Durable server status wins; interrupted runs may never receive usage totals.
   const last = lastPromptMessage(messages);
-  const generationActive = latest.data?.project_id === projectId && isGenerationActive(latest.data);
+  const savedLast = lastPromptMessage(history);
+  const projectRun = latest.data?.project_id === projectId ? latest.data : null;
+  const resultRun = projectRun?.assistant_message_id === savedLast?.id ? projectRun : null;
+  const savedStatus = savedLast?.generation_status;
+  const reportStatus = savedStatus === "cancelled" || savedStatus === "failed"
+    ? savedStatus : resultRun?.status ?? savedStatus;
+  // The saved finish time is independent of both llm.done and whether this
+  // snapshot still has the current acceptance receipt after a restoration.
+  const completedHistory = savedStatus === "completed" && savedLast?.generation_finished_at != null;
+  const acceptedResult = isGenerationResultConfirmed(resultRun) &&
+    Boolean(savedLast?.snapshot_id && resultRun?.acceptance?.snapshot_id === savedLast.snapshot_id);
+  const pendingReport = resultRun?.response_mode !== "clarify" && !completedHistory && !acceptedResult &&
+    (reportStatus === "completed" || (reportStatus != null && isGenerationActive({ status: reportStatus })));
+  const generationReportStatus = reportStatus === "cancelled" || reportStatus === "failed"
+    ? reportStatus : pendingReport ? "pending" : undefined;
+  const generationActive = isGenerationActive(projectRun);
   const isStreaming = isChatMessageStreaming(last) ||
     (questionOnlyHistory && generationActive && Boolean(latest.data?.assistant_message_id));
   const streamingId = isStreaming ? last?.id : null;
@@ -557,6 +573,7 @@ export function ChatPanel({
               key={m.id}
               message={m}
               streaming={m.id === streamingId}
+              generationReportStatus={m.id === last?.id ? generationReportStatus : undefined}
               projectId={projectId}
               onFix={quota.exhausted || m.chat_question ? undefined : handleFix}
               onRetry={retryAvailable && m.id === last?.id ? retryLatestRequest : undefined}

@@ -42,7 +42,7 @@ import { VersionChangesDisclosure } from "./VersionChangesDisclosure";
 // them out into a live "working" card instead of plain italic text.
 const STATUS_RE = /\*+\s*(Приёмка|Свободная вёрстка)[^*\n]*/i;
 
-const LEGACY_GENERATION_SUCCESSES = new Set([
+const GENERATION_SUCCESS_HEADINGS = new Set([
   "Приложение готово.",
   "Готово — приложение собрано и проверено.",
   "Готово — правка применена и проверена.",
@@ -52,9 +52,24 @@ const LEGACY_GENERATION_SUCCESSES = new Set([
   "Готово — правка применена. Сборка и запуск превью проверены.",
 ]);
 
+const UNCONFIRMED_GENERATION_HEADINGS = {
+  pending: "Подтверждаем готовую версию.",
+  cancelled: "Работа остановлена.",
+  failed: "Подготовка на паузе.",
+};
+type GenerationReportStatus = keyof typeof UNCONFIRMED_GENERATION_HEADINGS;
+
+function unconfirmedGenerationContent({ content, snapshot_id }: Message, status: GenerationReportStatus): string {
+  const heading = content.split("\n", 1)[0];
+  if (!GENERATION_SUCCESS_HEADINGS.has(heading.trim())) return content;
+  const provisional = snapshot_id ? "Версия сохранена." : UNCONFIRMED_GENERATION_HEADINGS[status];
+  return provisional + content.slice(heading.length);
+}
+
 export function ChatMessage({
   message,
   streaming,
+  generationReportStatus,
   projectId,
   onFix,
   onSuggest,
@@ -65,6 +80,7 @@ export function ChatMessage({
 }: {
   message: Message;
   streaming?: boolean;
+  generationReportStatus?: GenerationReportStatus;
   /**
    * Required for the B.3 multipass progress bar — it subscribes to
    * `["passes", projectId, message.id]` in React Query cache. Optional
@@ -87,12 +103,14 @@ export function ChatMessage({
   const studio = presentation === "studio";
   const studioUser = studio && isUser;
   const integrationRequest = isUser ? recognizeBuiltinIntegrationRequest(message.content) : null;
-  const parts: AssistantPart[] = isUser ? [] : parseAssistantContent(message.content);
+  const content = studio && message.role === "assistant" && !message.chat_question && generationReportStatus
+    ? unconfirmedGenerationContent(message, generationReportStatus) : message.content;
+  const parts: AssistantPart[] = isUser ? [] : parseAssistantContent(content);
   const { snapshot_id: snapshotId } = message;
   const showVersionChanges = studio && !streaming && projectId === message.project_id &&
     message.role === "assistant" && !message.chat_question &&
     message.generation_status === "completed" && !message.generation_failure &&
-    LEGACY_GENERATION_SUCCESSES.has(message.content.trim());
+    GENERATION_SUCCESS_HEADINGS.has(content.trim());
 
   return (
     <motion.div
