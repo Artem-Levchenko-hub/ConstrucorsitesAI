@@ -103,7 +103,7 @@ it.each(["original", "edited", "cleared"])("creates once with the %s support con
     await create();
     expect(mocks.create).toHaveBeenCalledOnce();
     expect(mocks.create.mock.calls[0][0].max_config.support.email).toBe(expected || null);
-    expect(sessionStorage.getItem("omnia:max:starter:support-test")).toContain("используй страницу /support");
+    expect(sessionStorage.getItem("omnia:max:starter:support-test")).toContain("Поддержка: /support");
     expect(mocks.save).not.toHaveBeenCalled();
   } finally { await page.dispose(); }
 });
@@ -187,8 +187,8 @@ it.each(["Хочу магазин с покупкой и оплатой", "То�
     expect(payload.staff_settings).toMatchObject({ leads_enabled: false, orders_mode: null });
     const prompt = sessionStorage.getItem("omnia:max:starter:text-orders")!;
     expect(prompt).toContain(idea);
-    expect(prompt).toContain("Управление в Yleum: не уточнено — используй возможности по задаче.");
-    expect(prompt).not.toContain("Владелец подтвердил пустой начальный каталог");
+    expect(prompt).not.toContain("Управление в Yleum:");
+    expect(prompt).not.toContain("владелец подтвердил пустой каталог");
     expect(prompt).not.toContain("бизнес-модули не выбраны");
   } finally { await page.dispose(); }
 });
@@ -203,7 +203,7 @@ it.each(["Хочу магазин с покупкой и оплатой", "Ме�
     const payload = mocks.create.mock.calls[0][0];
     expect(payload.management_module_opt_outs).toEqual(["catalog"]);
     expect(payload.max_config.content).toEqual([]);
-    expect(sessionStorage.getItem("omnia:max:starter:excluded")).not.toContain("Владелец подтвердил пустой начальный каталог");
+    expect(sessionStorage.getItem("omnia:max:starter:excluded")).not.toContain("владелец подтвердил пустой каталог");
     expect(payload.max_config.management_modules).toEqual(["leads"]);
     expect(payload.staff_settings).toMatchObject({ leads_enabled: false, orders_mode: null });
     expect(sessionStorage.getItem("omnia:max:starter:excluded")).toContain("Явно исключено владельцем: Каталог.");
@@ -220,8 +220,8 @@ it("an explicit lead selection enables its staff queue without requiring other a
     expect(payload.staff_settings).toMatchObject({ leads_enabled: true, orders_mode: null });
     const prompt = sessionStorage.getItem("omnia:max:starter:leads")!;
     expect(prompt).toContain("Управление в Yleum: Заявки.");
-    expect(prompt).toContain("а не обязательные экраны или функции");
-    expect(prompt).not.toContain("Владелец подтвердил пустой начальный каталог");
+    expect(prompt).not.toContain(".omnia/management.json");
+    expect(prompt).not.toContain("владелец подтвердил пустой каталог");
   } finally { await page.dispose(); }
 });
 
@@ -378,7 +378,7 @@ it.each([false, true])("reviews and saves explicit menu prices without requiring
     expect(payload.max_config.features).toEqual([]);
     const prompt = sessionStorage.getItem("omnia:max:starter:priced-menu")!;
     expect(prompt).toContain("2 позиций уже сохранены в Yleum");
-    expect(prompt).toContain("Управление в Yleum: не уточнено — используй возможности по задаче.");
+    expect(prompt).not.toContain("Управление в Yleum:");
   } finally { await page.dispose(); }
 });
 
@@ -396,8 +396,8 @@ it("retains an explicitly cleared parsed catalog after reload without selecting 
     await create();
     expect(mocks.create.mock.calls[0][0].max_config.content).toEqual([]);
     const prompt = sessionStorage.getItem("omnia:max:starter:cleared-menu")!;
-    expect(prompt).toContain("Владелец подтвердил пустой начальный каталог");
-    expect(prompt).toContain("Управление в Yleum: не уточнено — используй возможности по задаче.");
+    expect(prompt).toContain("владелец подтвердил пустой каталог");
+    expect(prompt).not.toContain("Управление в Yleum:");
   } finally { await page.dispose(); }
 });
 
@@ -412,6 +412,6 @@ it("requires an explicit resolution of an overflowing parsed menu without a cata
     await click("Начать с пустого каталога"); expect(button("Создать проект").disabled).toBe(false);
     await create();
     expect(mocks.create.mock.calls[0][0].max_config.content).toEqual([]);
-    expect(sessionStorage.getItem("omnia:max:starter:overflow-menu")).toContain("Владелец подтвердил пустой начальный каталог");
+    expect(sessionStorage.getItem("omnia:max:starter:overflow-menu")).toContain("владелец подтвердил пустой каталог");
   } finally { await page.dispose(); }
 });

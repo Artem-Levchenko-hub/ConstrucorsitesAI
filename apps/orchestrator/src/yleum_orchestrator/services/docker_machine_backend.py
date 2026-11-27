@@ -26,7 +26,11 @@ from uuid import UUID, uuid4
 
 import docker  # type: ignore[import-untyped]
 
-from yleum_orchestrator.core.cell_resources import CellIdentityConflict, CellResourceError
+from yleum_orchestrator.core.cell_resources import (
+    PINNED_MACHINE_IMAGE,
+    CellIdentityConflict,
+    CellResourceError,
+)
 from yleum_orchestrator.core.project_machine import MachineManifest, MachineService
 from yleum_orchestrator.services.generation_reader_inventory import (
     dispatch_command_start,
@@ -57,7 +61,7 @@ from yleum_orchestrator.services.project_machine import (
 )
 from yleum_orchestrator.services.studio_origins import platform_api_url
 
-_PIN = re.compile(r"^(?:sha256:|[^\s@]+@sha256:)[0-9a-f]{64}$")
+_PIN = PINNED_MACHINE_IMAGE
 _PROJECT_POSTGRES_HOST = "127.0.0.1"
 _PROJECT_POSTGRES_PORT = 5432
 _PROJECT_POSTGRES_DB = "postgres"

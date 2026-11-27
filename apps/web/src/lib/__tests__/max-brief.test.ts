@@ -39,15 +39,15 @@ describe("buildMaxProjectPrompt", () => {
       brandColors: "фиолетовый и молочный",
     });
 
-    expect(prompt).toContain("именно для мессенджера MAX");
-    expect(prompt).toContain("Не превращай его в обычный сайт");
+    expect(prompt.split("\n")[0]).toBe("Задание MAX");
+    expect(prompt).toContain("Карта лояльности с заказом напитка");
     expect(prompt).toContain("Сценарий: Лояльность");
     expect(prompt).toContain("Баллы и награды");
-    expect(prompt).toContain("MAX Bridge");
-    expect(prompt).toContain("Не добавляй отдельную регистрацию");
+    expect(prompt).not.toContain("MAX Bridge");
+    expect(prompt).not.toContain("отдельную регистрацию");
   });
 
-  it("adds useful defaults when optional fields are omitted", () => {
+  it("omits optional fields the owner did not supply", () => {
     const prompt = buildMaxProjectPrompt({
       name: "Помощник",
       idea: "Сервис быстрых консультаций",
@@ -59,9 +59,9 @@ describe("buildMaxProjectPrompt", () => {
       brandColors: "",
     });
 
-    expect(prompt).toContain("определи по описанию продукта");
-    expect(prompt).toContain("определи главное действие пользователя");
-    expect(prompt).toContain("подбери уместную палитру");
+    expect(prompt).not.toContain("Целевая аудитория:");
+    expect(prompt).not.toContain("Главное действие пользователя:");
+    expect(prompt).not.toContain("Цвета бренда:");
   });
 
   it.each([
@@ -76,10 +76,10 @@ describe("buildMaxProjectPrompt", () => {
     expect(prompt).toContain(idea);
     expect(prompt).toContain("Шрифт Lora.");
     expect(prompt).toContain("Цвета бренда: #7c3aed");
-    expect(prompt).toContain("Экраны и навигацию добавляй по запросу владельца");
+    expect(prompt).not.toContain("Сразу собери целостный рабочий MVP");
     expect(prompt).not.toContain("мобильную навигацию, все основные экраны");
-    expect(prompt).toContain(".omnia/management.json описывает доступные SDK-возможности, а не обязательные экраны или функции");
-    expect(prompt).toContain("серверную проверку initData");
+    expect(prompt).not.toContain(".omnia/management.json");
+    expect(prompt).not.toContain("initData");
   });
 
   it.each([undefined, "brand", "clean", "bright"] as const)("uses free design wishes instead of the legacy style value: %s", style => {
@@ -107,8 +107,8 @@ it("preserves the complete long brief including its final requirement", () => {
 it("includes explicit owner modules without exposing private diary data", () => {
   const prompt = buildMaxProjectPrompt({ ...longBrief, managementModules: ["catalog", "orders"] });
   expect(prompt).toContain("Управление в Yleum: Каталог, Заказы.");
-  expect(buildMaxProjectPrompt({ ...longBrief, managementModules: [] })).toContain("Управление в Yleum: не уточнено — используй возможности по задаче.");
-  expect(prompt).toContain("Личные данные пользователей не превращай в общий реестр владельца");
+  expect(buildMaxProjectPrompt({ ...longBrief, managementModules: [] })).not.toContain("Управление в Yleum:");
+  expect(prompt).not.toContain("Личные данные пользователей");
 });
 it.each(["event", "education", "custom"] as const)("preserves an explicit empty module choice for %s", appType => {
   expect(defaultManagementModules(appType)).toEqual(["catalog", "leads"]);
@@ -154,10 +154,10 @@ it("keeps SDK availability independent of vocabulary and explicit UI choices", (
   expect(maxBrief.availableManagementModules()).toEqual(["catalog", "orders", "leads", "bookings"]);
   const prompt = buildMaxProjectPrompt(brief);
   expect(prompt).toContain(brief.idea);
-  expect(prompt).toContain("Управление в Yleum: не уточнено — используй возможности по задаче.");
-  expect(prompt).toContain(".omnia/management.json описывает доступные SDK-возможности, а не обязательные экраны или функции");
+  expect(prompt).not.toContain("Управление в Yleum:");
+  expect(prompt).not.toContain(".omnia/management.json");
   expect(prompt).not.toContain("Используй только модули");
-  expect(prompt).not.toContain("Владелец подтвердил пустой начальный каталог");
+  expect(prompt).not.toContain("владелец подтвердил пустой каталог");
   expect(newProjectManagementModules("custom", [])).toEqual([]);
 });
 it("limits availability only through actual exclusions, including catalog dependencies", () => {
@@ -175,7 +175,7 @@ it("API-only changes presentation scope, not explicit functional data capabiliti
   expect(maxBrief.isExplicitApiOnlyBrief(brief.idea)).toBe(true);
   expect(maxBrief.briefManagementModuleOptOuts(brief.idea)).toEqual([]);
   const prompt = buildMaxProjectPrompt(brief);
-  expect(prompt).toContain("Управление в Yleum: не уточнено — используй возможности по задаче.");
+  expect(prompt).not.toContain("Управление в Yleum:");
   expect(maxBrief.availableManagementModules(maxBrief.briefManagementModuleOptOuts(brief.idea))).toContain("orders");
   expect(prompt).toContain(brief.primaryAction); expect(prompt).toContain("Уведомления бота"); expect(prompt).toContain("Цвета бренда: Красный");
   expect(prompt).not.toContain("Сразу собери целостный рабочий MVP");
@@ -226,17 +226,17 @@ it("carries every chosen scenario with a loyalty primary and the reviewed catalo
   expect(prompt).toContain("Сценарии: Лояльность, Каталог, Запись.");
   expect(prompt).toContain("Управление в Yleum: Каталог, Заказы, Заявки, Запросы на запись");
   expect(prompt).toContain("2 позиций уже сохранены в Yleum");
-  expect(prompt).toContain("не вшивай позиции в код");
+  expect(prompt).toContain("Начальный каталог: 2 позиций уже сохранены в Yleum.");
   expect(appTypes).toEqual(["loyalty", "catalog", "booking"]);
 });
 
 it("describes selected scenarios when the owner leaves optional details empty", () => {
   const brief = { ...longBrief, appType: "booking", appTypes: ["booking", "catalog"], idea: "  " } satisfies maxBrief.MaxProjectBrief;
   expect(buildMaxProjectPrompt(brief)).toContain(
-    "Сценарии: Запись, Каталог.\nЧто должно делать приложение: Расписание, специалисты и бронь. Товары, услуги, карточки и заказ.",
+    "Расписание, специалисты и бронь. Товары, услуги, карточки и заказ",
   );
   expect(buildMaxProjectPrompt({ ...brief, idea: "Запись по субботам" })).toContain(
-    "Что должно делать приложение: Запись по субботам.",
+    "Запись по субботам",
   );
 });
 
@@ -270,11 +270,11 @@ it("rejects an empty or unknown multi-selection instead of silently falling back
 it.each([0, 2])("keeps the reviewed data decision separate from selected catalog UI: %s", catalogItemCount => {
   const brief = { ...longBrief, managementModules: [], catalogItemCount };
   const prompt = buildMaxProjectPrompt(brief);
-  expect(prompt).toContain("Управление в Yleum: не уточнено — используй возможности по задаче.");
-  expect(prompt).toContain(catalogItemCount ? "2 позиций уже сохранены в Yleum" : "Владелец подтвердил пустой начальный каталог");
+  expect(prompt).not.toContain("Управление в Yleum:");
+  expect(prompt).toContain(catalogItemCount ? "2 позиций уже сохранены в Yleum" : "владелец подтвердил пустой каталог");
   const excluded = buildMaxProjectPrompt({ ...brief, managementModuleOptOuts: ["catalog"] });
-  expect(excluded).not.toContain("Владелец подтвердил начальный каталог");
-  expect(excluded).not.toContain("Владелец подтвердил пустой начальный каталог");
+  expect(excluded).not.toContain("Начальный каталог:");
+  expect(excluded).not.toContain("владелец подтвердил пустой каталог");
 });
 
 

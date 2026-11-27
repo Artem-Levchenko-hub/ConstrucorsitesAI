@@ -9,6 +9,13 @@ to continuation.
 
 ## Inputs and output
 
+The MAX wizard sends the owner's description once, followed by the selected
+scenarios and supplied form values. A management module enables owner tools.
+The product checklist derives visitor actions from the description, selected
+scenarios, requested features and primary action. The coding agent receives
+platform instructions separately. Previously stored wizard messages and
+prepared plans retain their original content.
+
 The service receives one owner's description (at most 6,000 characters, with
 head/tail retained for longer descriptions) and bounded explicit color, tone,
 theme and font preferences. Fenced code in that description is omitted. No
@@ -72,13 +79,10 @@ is introduced.
 ## Expense and limits
 
 The `prompt_prepare` model role defaults to the existing primary model and can
-be configured through `ROLE_MODELS`. The technical output ceiling is 8,192 tokens,
-with a 120-second overall wall-clock limit. There is no response-refinement call.
-The ceiling leaves headroom for completing the prompt; it is not a target output
-length. This replaces the 900-token ceiling that the complex A1 control exhausted.
-The cache accepts up to 64,000 characters instead of the previous 4,800-character
-note. Truncated responses still fall back safely; raising these bounds does not
-weaken the shared completion validation or retry a paid call.
+be configured through `ROLE_MODELS`. The call uses the provider's default output
+limit and the configured generation deadline. The cache accepts a complete
+response of up to 64,000 characters. An interrupted or truncated response falls
+back to the original request. Reusing a saved plan incurs no additional call.
 
 This optional service is included in generation pricing: it does not debit
 another generation unit or separately debit the customer's wallet. The client

@@ -10,9 +10,11 @@ import pytest
 
 from yleum_api.core.config import get_settings
 from yleum_api.services import agent_builder, agent_native
+from yleum_api.services.agent_output_budget import SOL_MODEL
 from yleum_api.services.generation.agent_runtime import checked_fast_check
 from yleum_api.services.generation.source_error_classification import SourceFailure
 
+from .test_agent_builder import _repair_action
 from .test_agent_native_truncation import turn
 
 ENTRY = "src/app/page.tsx"
@@ -144,7 +146,7 @@ async def test_unowned_stale_unknown_or_infrastructure_receipt_never_reads_sourc
     }
 
 
-@pytest.mark.parametrize("route", ["legacy", "native_explicit", "native_early"])
+@pytest.mark.parametrize("route", ["legacy", "sol_auto", "native_explicit", "native_early"])
 async def test_all_routes_deliver_feedback_after_caps_to_next_provider(monkeypatch, route):
     monkeypatch.setenv("USE_MAX_FINALIZATION_COORDINATOR", "true")
     get_settings.cache_clear()
@@ -178,6 +180,11 @@ async def test_all_routes_deliver_feedback_after_caps_to_next_provider(monkeypat
 
     async def legacy_provider(messages, _model, **kwargs):
         calls.append(deepcopy(messages))
+        if route == "sol_auto":
+            if len(calls) == 1:
+                source = current[ENTRY] + "\n// new source"
+                return _repair_action("write_file", path=ENTRY, content=source)
+            return _repair_action("done", summary="fixture", remaining_work="")
         name = "build" if len(calls) == 1 else "done"
         return f'<omnia:action name="{name}">{{"summary":"fixture"}}</omnia:action>'
 
@@ -189,11 +196,14 @@ async def test_all_routes_deliver_feedback_after_caps_to_next_provider(monkeypat
         return turn(("done", {"summary": "fixture"}))
 
     try:
-        if route == "legacy":
+        if route in {"legacy", "sol_auto"}:
             await agent_builder.run_agent_build(
-                system_prompt="fixture", user_prompt="fixture", model="fixture",
-                execute=execute, complete=legacy_provider, max_steps=2, max_segments=1,
+                system_prompt="fixture", user_prompt="fixture",
+                model=SOL_MODEL if route == "sol_auto" else "fixture",
+                execute=execute, complete=legacy_provider,
+                max_steps=3 if route == "sol_auto" else 2, max_segments=1,
                 ship_green_on_abort=False, emit=emit,
+                snapshot_files=snapshot, coordinator_handoff=route == "sol_auto",
             )
         else:
             monkeypatch.setattr(agent_native, "_call_messages", native_provider)
@@ -203,7 +213,7 @@ async def test_all_routes_deliver_feedback_after_caps_to_next_provider(monkeypat
                 max_steps=2, emit=emit,
             )
         assert len(calls) >= 2
-        assert_repair_context(str(calls[1]))
+        assert_repair_context(str(calls[2 if route == "sol_auto" else 1]))
         assert "export type YleumAppProfile" not in str(events)
         if route == "native_early":
             assert "EARLY SOURCE CHECK:" in str(calls[1])

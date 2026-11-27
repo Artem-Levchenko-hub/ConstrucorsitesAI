@@ -4,7 +4,11 @@ from uuid import uuid4
 
 import pytest
 
-from yleum_orchestrator.services.next_compilation_capture import capture_next_compilation
+from yleum_orchestrator.core.project_machine import MachineManifest
+from yleum_orchestrator.services.next_compilation_capture import (
+    capture_next_compilation,
+    full_build_tasks,
+)
 
 
 def setup(receipt=None):
@@ -33,6 +37,140 @@ def setup(receipt=None):
         digest=lambda: "c" * 64,
     )
     return backend, request, manifest, helper, containers
+
+
+def managed_manifest(
+    commands, *, cwd=".", protocol=True, test_script="node --test tests/*.mjs", files=(),
+):
+    from tests.test_project_machine_manifest import payload
+
+    value = payload()
+    if protocol:
+        value["app_config_protocol"] = 1
+    value["tasks"] = [
+        {"name": f"run-{index}", "role": "full_build", "argv": argv, "cwd": cwd}
+        for index, argv in enumerate(commands)
+    ]
+    manifest = MachineManifest.from_files({
+        ".omnia/cell.json": json.dumps(value),
+        "package.json": json.dumps({"dependencies": {"next": "15.5.24"}, "scripts": {
+            "build": "next build", "test": test_script,
+        }}),
+        **dict.fromkeys(files, "// product test"),
+    })
+    assert manifest is not None
+    return manifest
+
+
+@pytest.mark.parametrize("mode", ["omitted", "direct", "opt_in", "duplicate", "empty"])
+def test_physical_plan_supplies_missing_next_suite_and_binds_receipt(mode):
+    build, package = ["pnpm", "build"], ["pnpm", "test"]
+    opt_in = ["env", "SHOPPING_TEST_DATABASE=1", *package]
+    product = ["node", "--test", "tests/shopping.integration.mjs"]
+    commands, expected = {
+        "omitted": ([build], [build, package]),
+        "empty": ([], [build, package]),
+        "direct": ([build, product], [build, package, product]),
+        "opt_in": ([build, package, opt_in, product], [build, package, opt_in, product]),
+        "duplicate": ([build, build, package, product, ["pnpm", "exec", *product]],
+                      [build, package, product]),
+    }[mode]
+    manifest = managed_manifest(commands)
+    backend, request, _, _, _ = setup({"collector_version": "next-fixed-data-v1"})
+    assert [task.argv for task in full_build_tasks(manifest)] == expected
+    assert capture_next_compilation(backend, request, manifest)["manifest_digest"] == (
+        manifest.digest()
+    )
+    # Derived package evidence is neither writable in cell.json nor part of its canonical hash.
+    assert MachineManifest.model_validate_json(manifest.canonical_json()).digest() == (
+        manifest.digest()
+    )
+
+
+@pytest.mark.parametrize("kwargs,commands", [
+    ({"cwd": "app"}, [["pnpm", "build"]]),
+    ({"protocol": False}, [["pnpm", "build"]]),
+    ({}, [["sh", "-lc", "pnpm build && pnpm custom-suite"]]),
+])
+def test_custom_release_preserves_exact_commands(kwargs, commands):
+    manifest = managed_manifest(commands, **kwargs)
+    assert [task.argv for task in full_build_tasks(manifest)] == commands
+
+
+@pytest.mark.parametrize("package,expect_extra", [
+    (["pnpm", "test"], False),
+    (["env", "SHOPPING_TEST_DATABASE=1", "pnpm", "test"], True),
+])
+def test_literal_product_command_runs_once_per_explicit_database_mode(package, expect_extra):
+    product = ["node", "--test", "tests/shopping.integration.mjs"]
+    manifest = managed_manifest(
+        [["pnpm", "build"], package, ["pnpm", "exec", *product]], test_script=" ".join(product),
+    )
+    plan = [task.argv for task in full_build_tasks(manifest)]
+    expected = [["pnpm", "build"], package]
+    if expect_extra:
+        expected.append(["pnpm", "exec", *product])
+    assert plan == expected
+
+
+@pytest.mark.parametrize("reverse", [True, False])
+def test_explicit_package_database_modes_keep_original_order(reverse):
+    modes = [
+        ["pnpm", "test"], ["env", "A_TEST_DATABASE=1", "pnpm", "test"],
+        ["env", "B_TEST_DATABASE=1", "pnpm", "test"],
+    ]
+    if reverse:
+        modes.reverse()
+    manifest = managed_manifest([*modes, modes[0]])
+    assert [t.argv for t in full_build_tasks(manifest)] == [["pnpm", "build"], *modes]
+    backend, request, _, _, _ = setup({"collector_version": "next-fixed-data-v1"})
+    assert capture_next_compilation(backend, request, manifest) is not None
+
+
+@pytest.mark.parametrize("extra_product", [False, True])
+def test_legacy_managed_build_uses_the_package_and_preserves_its_explicit_test(extra_product):
+    product = ["node", "tests/legacy.mjs"]
+    commands = [["pnpm", "build"], product] if extra_product else [["pnpm", "build"]]
+    manifest = managed_manifest(commands)
+    manifest.tasks[0].role = "build"
+    if extra_product:
+        manifest.tasks[1].role = "test"
+        manifest.tasks[1].timeout_seconds = 270
+        manifest.tasks.reverse()
+    plan = full_build_tasks(manifest)
+    assert [task.argv for task in plan] == [["pnpm", "build"], ["pnpm", "test"]] + (
+        [product] if extra_product else []
+    )
+    assert all(task.role == "full_build" for task in plan)
+    if extra_product:
+        assert plan[-1].timeout_seconds == 270 and plan[-1].name == "run-1"
+
+
+@pytest.mark.parametrize("package,retained", [
+    (["pnpm", "test"], False), (["env", "SHOPPING_TEST_DATABASE=1", "pnpm", "test"], True),
+])
+def test_standard_glob_only_subsumes_an_existing_immediate_file_in_the_same_mode(package, retained):
+    command = ["node", "--test", "tests/product.test.mjs"]
+    missing = ["node", "--test", "tests/missing.test.mjs"]
+    nested = ["node", "--test", "tests/server/other.test.mjs"]
+    plain_node = ["node", "tests/product.test.mjs"]
+    sources = ["tests/product.test.mjs", "tests/server/other.test.mjs"]
+    manifest = managed_manifest(
+        [package, command, missing, nested, plain_node], test_script="node --test tests/*.test.mjs",
+        files=sources,
+    )
+    expected = [["pnpm", "build"], package] + ([command] if retained else [])
+    assert [t.argv for t in full_build_tasks(manifest)] == [*expected, missing, nested, plain_node]
+
+
+def test_managed_compound_suite_receipt_and_additional_distinct_product_test():
+    shell = ["sh", "-lc", "pnpm test && node --test tests/shopping.integration.mjs"]
+    repeated = ["node", "--test", "tests/shopping.integration.mjs"]
+    extra = ["node", "--test", "tests/persistence.mjs"]
+    manifest = managed_manifest([shell, repeated, extra])
+    assert [t.argv for t in full_build_tasks(manifest)] == [["pnpm", "build"], shell, extra]
+    backend, request, _, _, _ = setup({"collector_version": "next-fixed-data-v1"})
+    assert capture_next_compilation(backend, request, manifest) is not None
 
 
 @pytest.mark.parametrize(

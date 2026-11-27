@@ -2,7 +2,7 @@
 
 import json
 import re
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import PurePosixPath
 from typing import Protocol
 
@@ -31,8 +31,8 @@ MAX_COORDINATOR_HANDOFF = (
     "COORDINATOR HANDOFF: Finish the requested source changes and applicable local tests. "
     "For requested UI work, connect the planned screens, navigation and real data/actions; "
     "file presence or a green build alone does not complete that interface. "
-    "Use build to run FAST_CHECK after the last source change and fix concrete errors. "
-    "With complete source and a fresh green FAST_CHECK, call done to hand off the candidate. "
+    "Handoff requires a clean FAST_CHECK on the latest source. Use build for diagnostics "
+    "or when your coding protocol requires an explicit build. Once source is complete, call done. "
     "The server coordinator launches the candidate and owns full build, signed runtime proof "
     "and release checks. Leave those steps to the coordinator. Report the source changes "
     "and checks actually performed."
@@ -83,7 +83,7 @@ a portable project. This capability is provider-enforced, not permission to use
 host Docker, host files, devices, privileged flags or other projects' networks.
 
 Default manifest for the Next stack:
-{"version":1,"tasks":[
+{"version":1,"app_config_protocol":1,"tasks":[
  {"name":"install","role":"bootstrap","argv":["pnpm","install","--frozen-lockfile"],"timeout_seconds":900},
  {"name":"typecheck","role":"fast_check","argv":["pnpm","typecheck"],"timeout_seconds":180},
  {"name":"build","role":"full_build","argv":["pnpm","build"],"timeout_seconds":600},
@@ -93,8 +93,9 @@ Default manifest for the Next stack:
  "routes":[{"path":"/","service":"web","port":3000}]}
 
 argv is explicit, cwd is relative to /workspace. Use sh -lc explicitly if needed.
-Each role runs only its declared tasks. Keep a real final test in full_build.
-For the managed Next stack, keep pnpm build followed by pnpm test in full_build.
+The controller runs pnpm build followed by pnpm test for the managed root Next stack.
+Leave the standard pipeline in place and implement the requested product tests.
+Custom stacks declare their own release tasks.
 Preserve an existing database-test opt-in flag so the database suite runs.
 Include new product tests in package.json scripts.test alongside the existing suite,
 or append node --test tests/<file>.mjs after the package tests.
@@ -259,26 +260,7 @@ async def machine_stack_guide_from_executor(
     )
 
 
-def _omits_next_package_tests(
-    files: Mapping[str, str], tasks: Sequence[Mapping[str, object]],
-) -> bool:
-    full_build = [task for task in tasks if task.get("role") == "full_build"]
-    if len(full_build) < 2 or any(
-        not isinstance(cwd := task.get("cwd", "."), str)
-        or not cwd
-        or str(PurePosixPath(cwd)) != "."
-        for task in full_build
-    ):
-        return False
-    build, *tests = full_build
-    # Catch the package suite being replaced by direct Node invocations. The
-    # compiler collector still validates the exact supported test commands.
-    if build.get("argv") != ["pnpm", "build"] or not all(
-        isinstance(argv := task.get("argv"), list)
-        and (argv[:1] == ["node"] or argv[:3] == ["pnpm", "exec", "node"])
-        for task in tests
-    ):
-        return False
+def _root_next_suite(files: Mapping[str, str]) -> bool:
     try:
         package = json.loads(files.get("package.json", ""))
     except ValueError:
@@ -294,6 +276,18 @@ def _omits_next_package_tests(
     )
 
 
+def _declares_test(task: dict[str, object]) -> bool:
+    argv = task.get("argv")
+    if not isinstance(argv, list) or not argv:
+        return False
+    return task.get("role") == "test" or (
+        task.get("role") == "full_build" and (
+            "test" in str(task.get("name", "")).lower() or argv == ["pnpm", "test"]
+            or argv[:2] == ["node", "--test"] or argv[:4] == ["pnpm", "exec", "node", "--test"]
+        )
+    )
+
+
 def portable_source_gap(
     files: Mapping[str, str], capabilities: list[RequestedCapability],
     *, implemented_capabilities: Callable[[Mapping[str, str]], frozenset[str]] | None = None,
@@ -303,17 +297,19 @@ def portable_source_gap(
         if not isinstance(manifest, dict) or manifest.get("version") != 1:
             raise ValueError
         tasks = [task for task in manifest.get("tasks", []) if isinstance(task, dict)]
-        if not any(
-            (
-                task.get("role") == "test"
-                or (
-                    task.get("role") == "full_build"
-                    and "test" in str(task.get("name", "")).lower()
-                )
+        full_build = [task for task in tasks if task.get("role") == "full_build"]
+        release_tasks = full_build or [
+            task for task in tasks if task.get("role") in ("build", "test")
+        ]
+        package_supplies_test = (
+            manifest.get("app_config_protocol") == 1 and _root_next_suite(files)
+            and all(
+                isinstance(cwd := task.get("cwd", "."), str) and cwd
+                and PurePosixPath(cwd).as_posix() == "." and task.get("argv") == ["pnpm", "build"]
+                for task in release_tasks
             )
-            and task.get("argv")
-            for task in tasks
-        ):
+        )
+        if not package_supplies_test and not any(_declares_test(task) for task in tasks):
             return "Portable product requires a declared test task that checks its behavior."
         if not manifest.get("services") or not any(
             route.get("path") == "/" for route in manifest.get("routes", [])
@@ -332,12 +328,6 @@ def portable_source_gap(
         for path, content in files.items()
     ):
         return "Portable manifest is present but actual product implementation is missing."
-    if manifest.get("app_config_protocol") == 1 and _omits_next_package_tests(files, tasks):
-        return (
-            "Keep pnpm build followed by pnpm test in .omnia/cell.json full_build. "
-            "Include the new product test in package.json scripts.test "
-            "alongside the existing suite."
-        )
     if not capabilities:
         return None
     source = reachable_product_source(files, manifest)

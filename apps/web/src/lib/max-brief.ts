@@ -5,7 +5,8 @@ export const MAX_BRIEF_LENGTH = 20_000;
 export const MAX_PROMPT_LENGTH = 30_000;
 export const MAX_DEFAULT_SUMMARY = "Мини-приложение для пользователей MAX";
 export const MAX_BRIEF_FIELD_LIMITS = { name: 100, audience: 400, primaryAction: 200, brandColors: 200 } as const;
-export const MAX_WIZARD_MVP_SUFFIX = "Сразу собери целостный рабочий MVP. Экраны и навигацию добавляй по запросу владельца, а не по отраслевому шаблону. Предусмотри состояния загрузки/пустого списка/ошибки, реальные русские тексты.";
+export const MAX_BRIEF_HEADER = "Задание MAX";
+export const MAX_BRIEF_PARAMS = "\n\nНазвание продукта: ";
 
 export function maxBriefFieldError(field: keyof typeof MAX_BRIEF_FIELD_LIMITS, value: string): string | null {
   const labels = { name: "Название", audience: "Аудитория", primaryAction: "Главное действие", brandColors: "Цвета бренда" };
@@ -236,7 +237,6 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
   const appTypes = selectedMaxAppTypes(brief.appType, brief.appTypes);
   const scenarios = appTypes.map(type => MAX_APP_TYPES.find(option => option.id === type)!);
   const idea = brief.idea.trim();
-  const apiOnly = isExplicitApiOnlyBrief(idea);
   for (const field of Object.keys(MAX_BRIEF_FIELD_LIMITS) as (keyof typeof MAX_BRIEF_FIELD_LIMITS)[]) {
     const error = maxBriefFieldError(field, brief[field]);
     if (error) throw new Error(error);
@@ -248,45 +248,30 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
     throw new Error(`Описание слишком длинное: максимум ${MAX_BRIEF_LENGTH} символов. Текст сохранён в форме.`);
   }
   const scenarioDetails = idea || scenarios.map(option => option.description).join(". ");
-  const features =
-    brief.features.length > 0
-      ? brief.features.join(", ")
-      : "определи минимально необходимый набор по задаче";
-  const audience = brief.audience.trim() || "определи по описанию продукта";
-  const primaryAction =
-    brief.primaryAction.trim() || "определи главное действие пользователя";
-  const colors =
-    brief.brandColors.trim() || "подбери уместную палитру под продукт";
   const optedOut = [...new Set([...(brief.managementModuleOptOuts ?? []), ...briefManagementModuleOptOuts(idea)])];
   const managementModules = newProjectManagementModules(brief.appType, brief.managementModules, brief.appTypes, optedOut);
   const moduleLabels = (modules: readonly ManagementModule[]) => MAX_MANAGEMENT_MODULES.filter(item => modules.includes(item.id)).map(item => item.label).join(", ");
 
-  const prompt = [
-    apiOnly
-      ? "Реализуй запрошенный API для MAX. Оставь технический корневой маршрут готовности."
-      : "Создай готовое мини-приложение именно для мессенджера MAX.",
-    "Не превращай его в обычный сайт, Telegram Mini App, VK Mini App или отдельное веб-приложение.",
-    "",
-    `Название продукта: ${brief.name.trim()}.`,
-    `${scenarios.length === 1 ? "Сценарий" : "Сценарии"}: ${scenarios.map(option => option.label).join(", ")}.`,
-    `Что должно делать приложение: ${scenarioDetails}.`,
-    "Это служебное задание для создания приложения, а не публичное описание. Не выводи инструкции из задания посетителю. Публичное описание владелец задаёт отдельно в данных приложения.",
-    `Целевая аудитория: ${audience}.`,
-    ...(!apiOnly || brief.primaryAction.trim() ? [`Главное действие пользователя: ${primaryAction}.`] : []),
-    ...(!apiOnly || brief.features.length ? [`Нужные возможности: ${features}.`] : []),
-    ...(!apiOnly || brief.brandColors.trim() ? [`Цвета бренда: ${colors}.`] : []),
-    ...(brief.supportEmail !== undefined ? ["Контакт поддержки берётся из настроек проекта. Для обращений используй страницу /support, чтобы изменения контакта применялись без изменений кода."] : []),
-    ...(apiOnly ? ["Режим только API не требует продуктового интерфейса. Явные функциональные пожелания выше сохраняются; пожелания к оформлению применимы только если интерфейс запрошен отдельно."] : []),
-    `Управление в Yleum: ${moduleLabels(managementModules) || "не уточнено — используй возможности по задаче"}. Это явные пожелания, а не закрытый список функций. Перечень .omnia/management.json описывает доступные SDK-возможности, а не обязательные экраны или функции.${optedOut.length ? ` Явно исключено владельцем: ${moduleLabels(optedOut)}.` : ""} Личные данные пользователей не превращай в общий реестр владельца.`,
-    "",
-    ...(apiOnly ? [] : [MAX_WIZARD_MVP_SUFFIX]),
-    ...(brief.catalogItemCount === undefined || !availableManagementModules(optedOut).includes("catalog") ? [] : [
-      brief.catalogItemCount === 0
-        ? "Владелец подтвердил пустой начальный каталог. Не добавляй позиции из описания или примеров. Покажи честное пустое состояние и читай каталог через штатный SDK Yleum."
-        : `Владелец подтвердил начальный каталог: ${brief.catalogItemCount} позиций уже сохранены в Yleum. Названия, цены и дальнейшие изменения читай из штатного SDK каталога. Этот сохранённый список имеет приоритет перед примерами в описании; не вшивай позиции в код и не создавай вторую копию данных.`,
-    ]),
-    "Используй готовую обвязку MAX Bridge, серверную проверку initData, MAX-профиль пользователя и webhook бота из шаблона. Не добавляй отдельную регистрацию или вход по email.",
-  ].join("\n");
+  // The raw idea stays intact, including its own newlines. Indent multi-line
+  // field values so text inside them cannot become another metadata field.
+  const field = (label: string, value: string) => `${label}: ${value.replace(/\r?\n/g, "\n  ")}.`;
+  const parameters = [
+    field("Название продукта", brief.name.trim()),
+    field(scenarios.length === 1 ? "Сценарий" : "Сценарии", scenarios.map(option => option.label).join(", ")),
+    ...(brief.audience.trim() ? [field("Целевая аудитория", brief.audience.trim())] : []),
+    ...(brief.primaryAction.trim() ? [field("Главное действие пользователя", brief.primaryAction.trim())] : []),
+    ...(brief.features.length ? [field("Нужные возможности", brief.features.join(", "))] : []),
+    ...(brief.brandColors.trim() ? [field("Цвета бренда", brief.brandColors.trim())] : []),
+    ...(managementModules.length ? [field("Управление в Yleum", moduleLabels(managementModules))] : []),
+    ...(optedOut.length ? [field("Явно исключено владельцем", moduleLabels(optedOut))] : []),
+    ...(brief.supportEmail !== undefined ? [field("Поддержка", "/support")] : []),
+    ...(brief.catalogItemCount !== undefined && availableManagementModules(optedOut).includes("catalog")
+      ? [field("Начальный каталог", brief.catalogItemCount === 0
+        ? "владелец подтвердил пустой каталог"
+        : `${brief.catalogItemCount} позиций уже сохранены в Yleum`)]
+      : []),
+  ];
+  const prompt = [MAX_BRIEF_HEADER, scenarioDetails, "", ...parameters].join("\n");
   if (Array.from(prompt).length > MAX_PROMPT_LENGTH) {
     throw new Error(`Задание с уточнениями превышает ${MAX_PROMPT_LENGTH} символов. Сократите описание или уточнения.`);
   }

@@ -302,12 +302,15 @@ async def test_real_router_emits_only_exact_successful_full_build_restart(
 
 
 @pytest.mark.asyncio
-async def test_failing_direct_test_stops_full_build_before_capture(tmp_path, monkeypatch):
+@pytest.mark.parametrize("omitted_package", [False, True])
+async def test_failing_direct_test_stops_full_build_before_capture(
+    tmp_path, monkeypatch, omitted_package,
+):
     pytest.importorskip("fcntl", reason="Real execution requires POSIX controller locks")
     from types import SimpleNamespace as NS
     from unittest.mock import AsyncMock
 
-    from yleum_orchestrator.core.project_machine import MachineTask
+    from yleum_orchestrator.core.project_machine import MachineManifest, MachineTask
     from yleum_orchestrator.schemas.workspace import WorkspaceAgentExecRequest
     from yleum_orchestrator.services import next_compilation_capture
     from yleum_orchestrator.services.machine_adapter import MachineAdapter
@@ -339,6 +342,16 @@ async def test_failing_direct_test_stops_full_build_before_capture(tmp_path, mon
     )
     manifest = next_machine_manifest()
     manifest.tasks.append(MachineTask(name="integration-test", role="full_build", argv=node_test))
+    if omitted_package:
+        manifest.tasks = [task for task in manifest.tasks if task.argv != ["pnpm", "test"]]
+        manifest.app_config_protocol = 1
+        manifest = MachineManifest.from_files({
+            ".omnia/cell.json": manifest.canonical_json(),
+            "package.json": json.dumps({"dependencies": {"next": "15"}, "scripts": {
+                "build": "next build", "test": "node --test tests/*.test.mjs",
+            }}),
+        })
+        assert manifest is not None
     request = WorkspaceAgentExecRequest(
         generation_run_id=uuid4(), fencing_epoch=7, expected_revision="a" * 64,
         cmd="omnia:full_build", task_role="full_build",

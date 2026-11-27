@@ -1,5 +1,5 @@
 /** Read-only presentation of known generated envelopes; never a prompt rewrite. */
-import { MAX_WIZARD_MVP_SUFFIX } from "./max-brief";
+import { MAX_BRIEF_HEADER, MAX_BRIEF_PARAMS } from "./max-brief";
 
 export type UserMessageField = { label: string; value: string };
 export type UserMessageGroup = { title: string; fields: UserMessageField[] };
@@ -18,7 +18,7 @@ const PLATFORM_GUARD = "Не превращай его в обычный сай�
 const PUBLIC_DESCRIPTION_GUARD = "Это служебное задание для создания приложения, а не публичное описание. Не выводи инструкции из задания посетителю. Публичное описание владелец задаёт отдельно в данных приложения.";
 const WIZARD_FOOTER = "Используй готовую обвязку MAX Bridge, серверную проверку initData, MAX-профиль пользователя и webhook бота из шаблона. Не добавляй отдельную регистрацию или вход по email.";
 const MVP_SUFFIXES = [
-  MAX_WIZARD_MVP_SUFFIX,
+  "Сразу собери целостный рабочий MVP. Экраны и навигацию добавляй по запросу владельца, а не по отраслевому шаблону. Предусмотри состояния загрузки/пустого списка/ошибки, реальные русские тексты.",
   "Сразу собери целостный рабочий MVP. Экраны и навигацию добавляй по запросу владельца, а не по отраслевому шаблону. Предусмотри состояния загрузки/пустого списка/ошибки, реальные русские тексты. Начальные данные добавляй только по явному запросу пользователя; иначе оставь списки пустыми.",
   "Сразу собери целостный рабочий MVP: мобильную навигацию, все основные экраны, состояния загрузки/пустого списка/ошибки, реальные русские тексты. Начальные данные добавляй только по явному запросу пользователя; иначе оставь списки пустыми.",
 ] as const;
@@ -85,6 +85,46 @@ function wizardParameters(lines: string[], apiOnly: boolean): WizardParameters |
   return { fields, design, management, legacyOrder };
 }
 
+/** Current briefs carry only the task and owner-supplied project fields. */
+function parseCompactWizard(source: string): UserMessagePresentation | null {
+  if (!source.startsWith(MAX_BRIEF_HEADER + "\n")) return null;
+  const split = source.lastIndexOf(MAX_BRIEF_PARAMS);
+  if (split < 0) return null;
+  const task = source.slice(MAX_BRIEF_HEADER.length + 1, split);
+  const rows = source.slice(split + 2).split(/\n(?!  )/);
+  const title = field(rows.shift(), "Название продукта: ");
+  const scenario = field(rows[0], "Сценарий: ") ?? field(rows[0], "Сценарии: ");
+  if (!task || !title || !scenario) return null;
+  const unpack = (value: string) => value.replace(/\n  /g, "\n");
+  const fields = [{ label: "Сценарий", value: unpack(scenario) }];
+  const design: UserMessageField[] = [];
+  const management: UserMessageField[] = [];
+  const optional: [string, string, UserMessageField[]][] = [
+    ["Целевая аудитория", "Аудитория", fields],
+    ["Главное действие пользователя", "Главное действие", fields],
+    ["Нужные возможности", "Возможности", fields],
+    ["Цвета бренда", "Цвета", design],
+    ["Управление в Yleum", "Данные приложения", management],
+    ["Явно исключено владельцем", "Исключения", management],
+    ["Поддержка", "Поддержка", management],
+    ["Начальный каталог", "Начальный каталог", management],
+  ];
+  let next = 1;
+  for (const [key, label, target] of optional) {
+    const value = field(rows[next], key + ": ");
+    if (value !== null) {
+      target.push({ label, value: unpack(value) });
+      next++;
+    }
+  }
+  if (next !== rows.length) return null;
+  return { kind: "wizard", title: unpack(title), task, groups: [
+    { title: "Сценарий и функции", fields },
+    ...(design.length ? [{ title: "Оформление", fields: design }] : []),
+    ...(management.length ? [{ title: "Управление", fields: management }] : []),
+  ] };
+}
+
 function parseWizard(source: string): UserMessagePresentation | null {
   const lines = source.split("\n");
   if (!WIZARD_HEADERS.some(header => header === lines[0]) || lines[1] !== PLATFORM_GUARD
@@ -142,7 +182,7 @@ function parseQuiz(source: string): UserMessagePresentation | null {
 
 export function userMessagePresentation(source: string): UserMessagePresentation | null {
   const normalized = source.replace(/\r\n/g, "\n");
-  return parseWizard(normalized) ?? parseQuiz(normalized);
+  return parseCompactWizard(normalized) ?? parseWizard(normalized) ?? parseQuiz(normalized);
 }
 
 /** Peel complete known layers only; the original source is always shown separately. */

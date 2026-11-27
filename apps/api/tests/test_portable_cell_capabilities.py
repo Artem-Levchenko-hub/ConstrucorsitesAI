@@ -79,7 +79,7 @@ def test_main_stack_guide_keeps_next_max_tools_and_preserves_legacy_selection():
         "Database-backed application tests belong in full_build",
         "after the controller applies project migrations",
         "Declare custom fast_check tests only when they can run without the project database",
-        "keep pnpm build followed by pnpm test in full_build",
+        "controller runs pnpm build followed by pnpm test for the managed root Next stack",
         "Preserve an existing database-test opt-in flag so the database suite runs",
         "append node --test tests/<file>.mjs after the package tests",
         "SQL integration tests remain useful storage/isolation checks",
@@ -136,15 +136,36 @@ _SHOPPING_NODE_TEST = ["node", "--test", "tests/shopping.integration.mjs"]
     [_SHOPPING_NODE_TEST, ["node", "tests/persistence.mjs"]],
 ])
 @pytest.mark.parametrize("cwd", [None, ".", "./", "././"])
-def test_managed_next_done_cannot_replace_the_package_suite_with_direct_node_tests(commands, cwd):
+def test_managed_next_done_hands_product_suites_to_the_controller(commands, cwd):
     from yleum_api.services.max_generation_contract import max_source_completion_gap
 
     files = _shopping_source_with_final_tests(*commands, cwd=cwd)
-    detail = max_source_completion_gap("Список покупок", files, portable=True)
-    assert detail is not None
-    assert "pnpm build followed by pnpm test in .omnia/cell.json full_build" in detail
-    assert "package.json scripts.test alongside the existing suite" in detail
-    assert "append" not in detail
+    assert max_source_completion_gap("Список покупок", files, portable=True) is None
+
+
+def test_managed_root_next_package_is_a_declared_suite_without_manifest_boilerplate():
+    from yleum_api.services.max_generation_contract import max_source_completion_gap
+
+    files = _shopping_source_with_final_tests(cwd="./")
+    assert max_source_completion_gap("Список покупок", files, portable=True) is None
+    package = json.loads(files["package.json"])
+    del package["scripts"]["test"]
+    files["package.json"] = json.dumps(package)
+    assert "declared test task" in max_source_completion_gap("Список покупок", files, portable=True)
+
+
+@pytest.mark.parametrize("command,accepted", [
+    (["pnpm", "build"], True), (["pnpm", "custom-build"], False),
+])
+def test_legacy_build_only_requires_a_test_unless_the_controller_supplies_it(command, accepted):
+    from yleum_api.services.max_generation_contract import max_source_completion_gap
+
+    files = _shopping_source_with_final_tests()
+    manifest = json.loads(files[".omnia/cell.json"])
+    manifest["tasks"] = [{"name": "compile", "role": "build", "argv": command}]
+    files[".omnia/cell.json"] = json.dumps(manifest)
+    gap = max_source_completion_gap("Список покупок", files, portable=True)
+    assert (gap is None) is accepted
 
 
 @pytest.mark.parametrize("cwd", ["", "/", "..", "subproject"])

@@ -63,12 +63,10 @@ async def test_reported_gap_requires_source_repair_and_fresh_build(report):
         report,
         premature,
         _repair_action("edit_file", path=PAGE, search=WATER, replace=repaired),
-        premature,
-        _repair_action("build"),
         _repair_action("done", summary="Доработан сохранённый исходник.", remaining_work=""),
     ])
 
-    assert len(calls) == 8
+    assert len(calls) == 6
     feedback = "\n".join(message["content"] for message in calls[3] if message["role"] == "user")
     assert "двухдневный план" in feedback and "покупки" in feedback
     assert all("двухдневный план" not in message["content"]

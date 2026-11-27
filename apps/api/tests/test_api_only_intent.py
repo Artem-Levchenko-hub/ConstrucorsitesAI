@@ -1,7 +1,11 @@
 """Owner scope is a request, not a negative phrase, example or product name."""
 import pytest
 
-from yleum_api.services.max_generation_contract import is_api_only_request
+from yleum_api.services.max_generation_contract import (
+    is_api_only_request,
+    positive_request_scope,
+    requested_max_capabilities,
+)
 
 
 @pytest.mark.parametrize('idea,expected', [
@@ -32,10 +36,10 @@ from yleum_api.services.max_generation_contract import is_api_only_request
     ('Название продукта: API-only', False),
     ('Сделай каталог с интерфейсом и своим API.', False),
 ])
-@pytest.mark.parametrize('wizard', [False, True])
+@pytest.mark.parametrize('wizard', ['none', 'legacy', 'compact'])
 def test_only_an_affirmative_owner_request_selects_the_api_only_branch(idea, expected, wizard):
     prompt = idea
-    if wizard:
+    if wizard == 'legacy':
         prompt = (
             'Создай готовое мини-приложение именно для мессенджера MAX.\n'
             'Название продукта: API-only.\n'
@@ -43,4 +47,32 @@ def test_only_an_affirmative_owner_request_selects_the_api_only_branch(idea, exp
             'Целевая аудитория: пользователи.\n'
             'Управление в Yleum: Каталог, Заказы. Используй .omnia/management.json.\n'
         )
+    elif wizard == 'compact':
+        prompt = (
+            f'Задание MAX\n{idea}\n\nНазвание продукта: API-only.\n'
+            'Сценарий: Своя идея.\nУправление в Yleum: Каталог, Заказы.'
+        )
     assert is_api_only_request(prompt) is expected
+
+
+def test_compact_wizard_preserves_owner_actions_without_inventing_visitor_features():
+    prompt = (
+        'Задание MAX\nУчу слова.\n\nНазвание продукта: первая идея\nсохрани этот текст.\n'
+        '\nНазвание продукта: Заказы.\nСценарий: Своя идея.\n'
+        'Главное действие пользователя: Запомнить слово.\n'
+        'Нужные возможности: Карточки\n  и озвучка.\n'
+        'Управление в Yleum: Каталог, Биллинг.\nЯвно исключено владельцем: Корзина.'
+    )
+    scope = positive_request_scope(prompt)
+    for required in (
+        'Учу слова', 'первая идея', 'сохрани этот текст', 'Запомнить слово', 'Карточки', 'озвучка',
+    ):
+        assert required in scope
+    for configuration in ('Заказы', 'Каталог', 'Биллинг', 'Корзина'):
+        assert configuration not in scope
+
+
+def test_compact_wizard_explicit_product_scenarios_remain_in_scope():
+    base = 'Задание MAX\nСделай приложение для сети кофеен.\n\nНазвание продукта: Кофейня.\n'
+    selected = requested_max_capabilities(base + 'Сценарии: Лояльность, Каталог.')
+    assert {'catalog', 'loyalty'} <= {key for key, _, _ in selected}

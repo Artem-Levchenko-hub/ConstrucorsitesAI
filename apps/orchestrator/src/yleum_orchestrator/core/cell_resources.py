@@ -8,6 +8,7 @@ from typing import Literal, Protocol
 from uuid import UUID
 
 _IMAGE_DIGEST_RE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+PINNED_MACHINE_IMAGE = re.compile(r"^(?:sha256:|[^\s@]+@sha256:)[0-9a-f]{64}$")
 _REQUEST_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _CHECKPOINT_REF_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}$")
 

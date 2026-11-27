@@ -17,6 +17,7 @@ from urllib.parse import quote
 from uuid import UUID, uuid4, uuid5
 
 import docker  # type: ignore[import-untyped]
+import structlog
 
 from yleum_orchestrator.core.cell_resources import (
     CellFenceRejected,
@@ -74,6 +75,7 @@ from yleum_orchestrator.services.machine_startup import (
     require_startup_admission,
     require_startup_history_clear,
 )
+from yleum_orchestrator.services.next_compilation_capture import full_build_tasks
 from yleum_orchestrator.services.next_type_preparation import (
     NEXT_TYPE_PREPARATION_PHASE,
     NEXT_TYPE_PREPARATION_PY,
@@ -503,6 +505,8 @@ class MachineAdapter:
                         "restore_runtime",
                     }:
                         active_names.update(name for name, *_ in _node_preflight_commands(manifest))
+                    if request.task_role in {"full_build", "restore_runtime"}:
+                        active_names.update(task.name for task in full_build_tasks(manifest))
                     if status.phase in active_names:
                         operation_id = uuid5(request.operation_id, status.phase)
                         try:
@@ -740,6 +744,13 @@ class MachineAdapter:
 
     @staticmethod
     def _request_digest(manifest: MachineManifest, request: Any) -> str:
+        release_plan: dict[str, Any] = {}
+        if request.task_role in {"full_build", "restore_runtime"}:
+            effective = full_build_tasks(manifest)
+            if effective != [task for task in manifest.tasks if task.role == "full_build"]:
+                release_plan["effective_next_full_build_v1"] = [
+                    task.model_dump(mode="json") for task in effective
+                ]
         return hashlib.sha256(
             json.dumps(
                 {
@@ -748,6 +759,7 @@ class MachineAdapter:
                     "revision": request.expected_revision,
                     "manifest": manifest.digest(),
                     "timeout_seconds": request.timeout_seconds,
+                    **release_plan,
                     **(
                         {"migration_contract": "project-migrations-v1"}
                         if request.task_role in {"full_build", "restore_runtime"}
@@ -799,7 +811,9 @@ class MachineAdapter:
             commands = [
                 (task.name, task.argv, task.cwd, task.timeout_seconds)
                 for current_role in roles
-                for task in manifest.tasks
+                for task in (
+                    full_build_tasks(manifest) if current_role == "full_build" else manifest.tasks
+                )
                 if task.role == current_role
             ]
             if not commands:
@@ -824,6 +838,9 @@ class MachineAdapter:
                 timed_out=replayed.timed_out,
             )
 
+        command_starts = 0
+        status_polls = 0
+
         async def finish(
             *,
             exit_code: int,
@@ -839,6 +856,12 @@ class MachineAdapter:
                 timed_out=timed_out,
             )
             stored = await machine.request_finish(mutation, terminal)
+            structlog.get_logger(__name__).info(
+                "machine.command.completed", operation_id=str(request.operation_id),
+                generation_run_id=str(request.generation_run_id), role=role,
+                command_starts=command_starts, status_polls=status_polls,
+                exit_code=stored.exit_code,
+            )
             return DockerCommandResult(
                 exit_code=stored.exit_code or 0,
                 output=stored.output,
@@ -905,11 +928,13 @@ class MachineAdapter:
             try:
                 with limit_reader_dispatch_wait(deadline):
                     operation = await machine.exec_start(argv, cwd, operation_mutation)
+                command_starts += 1
             except ShellStartDeadlineExceeded as exc:
                 return await finish(
                     exit_code=124, output=str(exc), timed_out=True, start_timed_out=role is None,
                 )
             while True:
+                status_polls += 1
                 result = await machine.exec_status(operation, operation_mutation)
                 await machine.request_heartbeat(
                     mutation,

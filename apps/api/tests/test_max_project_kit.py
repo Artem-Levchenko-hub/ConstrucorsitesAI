@@ -363,6 +363,7 @@ def test_every_max_starter_overlay_keeps_portable_machine_tasks_executable(
     assert manifest.services[0].argv == ["pnpm", "start"]
     assert "start" in scripts
     assert "tests/starter.test.mjs" in final_files
+    assert final_files["scripts/first-use.mjs"] == template_files["scripts/first-use.mjs"]
     # All six MAX app types share this one physical starter. Execute the final
     # materialized test task once; the parametrized checks above still prove
     # that every variant resolves the same machine contract.

@@ -410,6 +410,20 @@ async def reconcile_activity(
     return status
 
 
+async def _read_terminal_journal(
+    poll_status: Callable[[UUID], Awaitable[Any]], operation_id: UUID,
+) -> Any:
+    """A terminal lease already owns its outcome. Retry only its read after a transport failure."""
+    for attempt in range(_FINAL_POLL_ATTEMPTS - 1):
+        try:
+            return await poll_status(operation_id)
+        except (OrchestratorUnavailable, TimeoutError) as exc:
+            if terminal_cell_error(exc, operation_id=operation_id):
+                raise
+            await asyncio.sleep(0.1 * (attempt + 1))
+    return await poll_status(operation_id)
+
+
 async def run_with_activity_lease[T](
     *,
     session_factory: async_sessionmaker[AsyncSession],
@@ -480,7 +494,7 @@ async def run_with_activity_lease[T](
             raise asyncio.CancelledError
         if replay_terminal is not None:
             try:
-                status = await poll_status(lease.operation_id)
+                status = await _read_terminal_journal(poll_status, lease.operation_id)
             except Exception as exc:
                 terminal = terminal_cell_error(exc, operation_id=lease.operation_id)
                 raise terminal or ProjectCellInfrastructureError(

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import legacyBrief from "./fixtures/max-wizard-legacy.json";
 import { buildMaxProjectPrompt, type MaxProjectBrief } from "@/lib/max-brief";
 import { userMessageLayers, userMessagePresentation } from "@/lib/user-message-presentation";
 
@@ -9,6 +10,13 @@ const brief: MaxProjectBrief = {
 };
 
 describe("known user-message envelopes", () => {
+  it("keeps blank lines and label-like text within a multi-line wizard choice", () => {
+    const audience = "Посетители встречи.\n\nГлавное действие пользователя: это цитата.";
+    const view = userMessagePresentation(buildMaxProjectPrompt({ ...brief, audience }))!;
+    expect(view.groups.flatMap(group => group.fields)).toContainEqual({ label: "Аудитория", value: audience });
+    expect(view.task).toBe(brief.idea);
+  });
+
   it("presents the generated wizard title and entire multiline task without rewriting its source", () => {
     const source = buildMaxProjectPrompt(brief);
     const view = userMessagePresentation(source)!;
@@ -47,7 +55,7 @@ describe("known user-message envelopes", () => {
   });
 
   it("retains the historical API envelope without optional parameters or the later scope guard", () => {
-    const source = buildMaxProjectPrompt({ ...brief, idea: "API-only. Только чтение списка.", primaryAction: "", features: [], brandColors: "" })
+    const source = legacyBrief.api.replace(/^(?:Главное действие пользователя|Нужные возможности|Цвета бренда): [^\n]+\n/gm, "")
       .replace(/^Режим только API[^\n]+\n/m, "");
     const view = userMessagePresentation(source)!;
     expect(view.task).toBe("API-only. Только чтение списка.");
@@ -56,7 +64,7 @@ describe("known user-message envelopes", () => {
   });
 
   it.each(["unknown-field", "unknown-scope", "missing-scope", "malformed-field", "reordered-fields"] as const)("keeps an unrecognized or incomplete API parameter block intact: %s", mode => {
-    let source = buildMaxProjectPrompt({ ...brief, idea: "API-only. Только чтение списка." });
+    let source = legacyBrief.api;
     if (mode === "unknown-field") source = source.replace("Нужные возможности:", "Другое пожелание:");
     if (mode === "unknown-scope") source = source.replace("Режим только API не требует", "НЕ ТЕРЯТЬ: режим только API требует");
     if (mode === "missing-scope") source = source.replace(/^Режим только API[^\n]+\n/m, "");
@@ -77,7 +85,7 @@ describe("known user-message envelopes", () => {
   });
 
   it("retains historical style parameters and a legacy task without the later public-description guard", () => {
-    const legacy = buildMaxProjectPrompt(brief)
+    const legacy = legacyBrief.ui
       .replace(/^Это служебное задание[^\n]+\n/m, "")
       .replace("Цвета бренда:", "Визуальное направление: В стиле бренда.\nЦвета бренда:");
     const view = userMessagePresentation(legacy)!;
@@ -95,7 +103,7 @@ describe("known user-message envelopes", () => {
   });
 
   it("peels the older management-first, unterminated-name envelope inside a later wizard", () => {
-    const current = buildMaxProjectPrompt(brief);
+    const current = legacyBrief.ui;
     const management = current.split("\n").find(line => line.startsWith("Управление в Yleum: "))!;
     const legacy = current.replace("Название продукта: Кофе рядом..", "Название продукта: Кофе рядом")
       .replace(management + "\n", "")
@@ -124,7 +132,7 @@ describe("known user-message envelopes", () => {
     "Пример — Бриф из опроса —\n• Тон: Спокойный",
     "Задача\n— Бриф из опроса —\n• Тон: Спокойный\nНе потерять эту строку",
     "Задача\n— Бриф из опроса —\n• Тон: Первая строка\n  Продолжение ответа",
-    buildMaxProjectPrompt(brief).replace("Не превращай его", "Изменённая обёртка: не превращай его"),
+    legacyBrief.ui.replace("Не превращай его", "Изменённая обёртка: не превращай его"),
     buildMaxProjectPrompt(brief) + "\nДополнительное пожелание после обёртки.",
     buildMaxProjectPrompt(brief).replace("Нужные возможности:", "Незнакомый параметр:"),
   ])("leaves unknown or incomplete freeform text intact: %s", source => {
@@ -138,7 +146,7 @@ describe("known user-message envelopes", () => {
   });
 
   it.each(["current", "previous", "legacy", "api-only"] as const)("never hides an unknown trailing requirement inside a %s envelope", mode => {
-    let source = buildMaxProjectPrompt({ ...brief, idea: mode === "api-only" ? "API-only. Список." : brief.idea });
+    let source = mode === "current" ? buildMaxProjectPrompt(brief) : mode === "api-only" ? legacyBrief.api : legacyBrief.ui;
     if (mode === "previous") source = source.replace(/^Сразу собери целостный рабочий MVP[^\n]+$/m,
       "Сразу собери целостный рабочий MVP. Экраны и навигацию добавляй по запросу владельца, а не по отраслевому шаблону. Предусмотри состояния загрузки/пустого списка/ошибки, реальные русские тексты. Начальные данные добавляй только по явному запросу пользователя; иначе оставь списки пустыми.");
     if (mode === "legacy") source = source.replace(/^Сразу собери целостный рабочий MVP[^\n]+$/m,

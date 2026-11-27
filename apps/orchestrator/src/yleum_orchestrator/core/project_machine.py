@@ -11,6 +11,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     SerializerFunctionWrapHandler,
     field_validator,
     model_serializer,
@@ -173,6 +174,18 @@ class MachineManifest(_StrictModel):
     services: list[MachineService] = Field(min_length=1)
     routes: list[MachineRoute] = Field(min_length=1)
     data_stores: list[MachineDataStore] = Field(default_factory=list)
+    # Derived from the revision's package, never trusted from the manifest or
+    # serialized into an existing checkpoint/environment identity.
+    _root_next_test_script: str | None = PrivateAttr(default=None)
+    _root_next_test_files: frozenset[str] = PrivateAttr(default_factory=frozenset)
+
+    @property
+    def root_next_test_script(self) -> str | None:
+        return self._root_next_test_script
+
+    @property
+    def root_next_test_files(self) -> frozenset[str]:
+        return self._root_next_test_files
 
     @model_serializer(mode="wrap")
     def serialize_manifest(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
@@ -263,4 +276,22 @@ class MachineManifest(_StrictModel):
             return None
         if len(value.encode()) > MAX_MANIFEST_BYTES:
             raise ValueError("machine manifest exceeds transport budget")
-        return cls.model_validate_json(value)
+        manifest = cls.model_validate_json(value)
+        if manifest.app_config_protocol == 1:
+            try:
+                package = json.loads(files.get("package.json", "{}"))
+            except ValueError:
+                package = None
+            if isinstance(package, dict):
+                dependencies = package.get("dependencies")
+                scripts = package.get("scripts")
+                if (
+                    isinstance(dependencies, dict) and "next" in dependencies
+                    and isinstance(scripts, dict) and scripts.get("build") == "next build"
+                    and isinstance(scripts.get("test"), str) and bool(scripts["test"].strip())
+                ):
+                    manifest._root_next_test_script = scripts["test"]
+                    manifest._root_next_test_files = frozenset(
+                        path for path in files if path.startswith("tests/")
+                    )
+        return manifest

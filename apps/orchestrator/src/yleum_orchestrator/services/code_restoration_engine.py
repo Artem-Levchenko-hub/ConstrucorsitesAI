@@ -38,6 +38,7 @@ from yleum_orchestrator.schemas.code_restoration import (
 from yleum_orchestrator.services.cell_admission import CellAdmissionGate
 from yleum_orchestrator.services.cell_state import legacy_release_serving_epoch
 from yleum_orchestrator.services.machine_environment import MachineEnvironmentRef
+from yleum_orchestrator.services.next_compilation_capture import full_build_tasks
 from yleum_orchestrator.services.project_machine import (
     machine_budget,
     machine_effect,
@@ -718,7 +719,7 @@ def validate_supported_runtime(files: dict[str, str]) -> MachineManifest:
         raise PreparationNeedsChanges(
             "Команду запуска нужно отделить от миграций и фоновых действий."
         )
-    if not any(task.role in {"full_build", "build"} for task in manifest.tasks):
+    if not full_build_tasks(manifest) and not any(task.role == "build" for task in manifest.tasks):
         raise PreparationNeedsChanges("Не найдена проверяемая команда сборки выбранной версии.")
     return manifest
 
@@ -1956,7 +1957,7 @@ class CodeRestorationEngine:
                     )
                 if cancelled():
                     return cancelled_result()
-                tasks = [task for task in manifest.tasks if task.role == "full_build"]
+                tasks = full_build_tasks(manifest)
                 if not tasks:
                     tasks = [task for task in manifest.tasks if task.role == "build"]
                 for index, task in enumerate(tasks):

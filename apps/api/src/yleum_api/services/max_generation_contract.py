@@ -373,6 +373,18 @@ _KEEP_UNCHANGED = re.compile(
 
 
 def _product_request_text(prompt: str) -> str:
+    if prompt.startswith("Задание MAX\n"):
+        idea, separator, parameters = prompt.removeprefix("Задание MAX\n").rpartition(
+            "\n\nНазвание продукта: "
+        )
+        if separator and re.search(r"(?m)^Сценари(?:й|и): ", parameters):
+            # Module availability, exclusions, the app name and support address are
+            # configuration. Only explicit product choices can add required actions.
+            requests = re.findall(
+                r"(?m)^(?:Сценари(?:й|и)|Главное действие пользователя|Нужные возможности): "
+                r"([^\n]*(?:\n  [^\n]*)*)", parameters,
+            )
+            return "\n".join([idea, *(item.replace("\n  ", "\n") for item in requests)])
     return _WIZARD_OWNER_MANAGEMENT_RE.sub("", prompt.replace(_WIZARD_INFRASTRUCTURE, ""))
 
 

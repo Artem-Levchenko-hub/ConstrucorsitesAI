@@ -291,6 +291,34 @@ async def test_exact_failed_activity_replays_original_code_without_work(
     assert calls == ["work"]
 
 
+@pytest.mark.parametrize("outcome", ["transient", "exhausted", "guard_denied", "bad_request"])
+async def test_terminal_journal_retries_only_same_operation_transport_reads(outcome):
+    from unittest.mock import AsyncMock, call
+
+    from yleum_api.services.orchestrator_client import (
+        OrchestratorBadRequest,
+        OrchestratorReaderInventoryUnavailable,
+        OrchestratorUnavailable,
+    )
+    from yleum_api.services.project_cell_activity import _read_terminal_journal
+
+    operation = uuid.uuid4()
+    transient = OrchestratorUnavailable("HTTP 503")
+    steps = {
+        "transient": [transient, TimeoutError(), "retained response"],
+        "exhausted": [transient] * 3,
+        "guard_denied": [OrchestratorReaderInventoryUnavailable("reader")],
+        "bad_request": [OrchestratorBadRequest("bad identity")],
+    }[outcome]
+    read = AsyncMock(side_effect=steps)
+    if outcome == "transient":
+        assert await _read_terminal_journal(read, operation) == "retained response"
+    else:
+        with pytest.raises(type(steps[-1])):
+            await _read_terminal_journal(read, operation)
+    assert read.await_args_list == [call(operation)] * len(steps)
+
+
 @pytest.mark.parametrize(
     "state,saved_response",
     [

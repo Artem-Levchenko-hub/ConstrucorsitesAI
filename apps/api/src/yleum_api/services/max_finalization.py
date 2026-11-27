@@ -2909,7 +2909,10 @@ class MaxFinalizationCoordinator:
                     await continuation.wait()
                 raise
 
+        replayed = False
+
         async def replay_command(status: object) -> ProjectCellCommandObservation:
+            nonlocal replayed
             from yleum_api.services.orchestrator_client import ProjectCellAgentOperationStatus
 
             replay = self.executor.replay_role_response
@@ -2921,6 +2924,7 @@ class MaxFinalizationCoordinator:
             observation = await replay(role, response, identity)
             if observation.before != identity:
                 raise MaxFinalizationConflict("command replay proof identity mismatch")
+            replayed = True
             return observation
 
         observation = await run_with_activity_lease(
@@ -2950,13 +2954,7 @@ class MaxFinalizationCoordinator:
                 else ActivityState.FAILED
             ),
         )
-        await self._counter(
-            "bootstrap"
-            if dimension is ProofDimension.BOOTSTRAP
-            else "full_build"
-            if dimension is ProofDimension.FULL_BUILD
-            else "fast_check"
-        )
+        await self._counter("command_replay" if replayed else dimension.value)
         await self._phase_finished(phase)
         return observation
 

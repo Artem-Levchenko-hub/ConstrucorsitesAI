@@ -12,7 +12,9 @@ from yleum_api.models.generation_run import GenerationRun
 log = structlog.get_logger(__name__)
 
 _STATE_KEY = "max_finalization"
-_COUNTER_NAMES = frozenset({"bootstrap", "fast_check", "full_build", "runtime_probe", "proof_hit"})
+_COUNTER_NAMES = frozenset({
+    "bootstrap", "fast_check", "full_build", "runtime_probe", "proof_hit", "command_replay",
+})
 
 
 class GenerationPhase(StrEnum):

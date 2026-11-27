@@ -10,6 +10,8 @@ from typing import Any
 
 import docker  # type: ignore[import-untyped]
 
+from yleum_orchestrator.core.cell_resources import PINNED_MACHINE_IMAGE
+from yleum_orchestrator.core.project_machine import MachineManifest, MachineTask
 from yleum_orchestrator.services.next_compilation_receipt import (
     COLLECTOR_VERSION,
     RESTORED_COLLECTOR_VERSION,
@@ -39,8 +41,10 @@ def _supported_test_suffix(argv: list[str], extra_tests: list[list[str]]) -> boo
         and re.fullmatch(r"[A-Z][A-Z0-9_]*_TEST_DATABASE=1", argv[1])
     ):
         argv = argv[2:]
+    if not all(_supported_direct_node_test(test) for test in extra_tests):
+        return False
     if argv == ["pnpm", "test"]:
-        return all(_supported_direct_node_test(test) for test in extra_tests)
+        return True
     if extra_tests or len(argv) != 3 or argv[:2] != ["sh", "-lc"]:
         return False
     primary, *extra = (part.strip(" \t") for part in argv[2].split("&&"))
@@ -51,20 +55,89 @@ def _supported_test_suffix(argv: list[str], extra_tests: list[list[str]]) -> boo
     )
 
 
+def _direct_node_key(argv: list[str]) -> tuple[str, ...]:
+    return tuple(argv[2:] if argv[:2] == ["pnpm", "exec"] else argv)
+
+
+def full_build_tasks(manifest: MachineManifest) -> list[MachineTask]:
+    """Execute the standard root Next pipeline even if an author omits its boilerplate."""
+    declared = [task for task in manifest.tasks if task.role == "full_build"]
+    package_script = getattr(manifest, "root_next_test_script", None)
+    if not package_script:
+        return declared
+    if not declared:
+        # Early portable manifests declared these roles separately. The release executor
+        # runs their original commands in build/test order with the same cwd and timeout.
+        declared = [
+            task.model_copy(update={"role": "full_build"})
+            for role in ("build", "test") for task in manifest.tasks if task.role == role
+        ]
+    if any(task.cwd != "." for task in declared):
+        return declared
+    builds: list[MachineTask] = []
+    packages: dict[tuple[str, ...], MachineTask] = {}
+    extra: dict[tuple[str, ...], MachineTask] = {}
+    for task in declared:
+        if task.argv == ["pnpm", "build"]:
+            builds.append(task)
+        elif _supported_test_suffix(task.argv, []):
+            packages.setdefault(tuple(task.argv), task)
+        elif _supported_direct_node_test(task.argv):
+            extra.setdefault(_direct_node_key(task.argv), task)
+        else:
+            # Preserve opaque commands, arbitrary shells, and custom pipelines verbatim.
+            return declared
+
+    used = {task.name for task in manifest.tasks}
+
+    def default_task(script: str, seconds: int) -> MachineTask:
+        name = f"controller-next-{script}"
+        index = 0
+        while name in used:
+            index += 1
+            name = f"controller-next-{script}-{index}"
+        return MachineTask(
+            name=name, role="full_build", argv=["pnpm", script], timeout_seconds=seconds,
+        )
+
+    build = builds[0] if builds else default_task("build", 600)
+    suites = list(packages.values()) or [default_task("test", 300)]
+    # Only fold tests that already ran in the same directory, mode and environment.
+    for task in suites:
+        if task.argv[:2] == ["sh", "-lc"]:
+            for command in task.argv[2].split("&&")[1:]:
+                extra.pop(tuple(command.split()), None)
+    package_command = re.split(r"[ \t]+", package_script.strip(" \t"))
+    if any(task.argv[0] != "env" for task in suites):
+        if _supported_direct_node_test(package_command):
+            extra.pop(_direct_node_key(package_command), None)
+        elif package_command == ["node", "--test", "tests/*.test.mjs"]:
+            for path in manifest.root_next_test_files:
+                if re.fullmatch(r"tests/[A-Za-z0-9_-][A-Za-z0-9_.-]*\.test\.mjs", path):
+                    extra.pop(("node", "--test", path), None)
+                    extra.pop(("node", "--test", "./" + path), None)
+    return [build, *suites, *extra.values()]
+
+
 def capture_next_compilation(backend: Any, request: Any, manifest: Any) -> dict[str, Any] | None:
     # Validate the completed build plan before collecting the fixed compiler output.
-    tasks = [task for task in manifest.tasks if task.role == "full_build"]
+    tasks = full_build_tasks(manifest)
     if len(tasks) < 2 or any(task.cwd != "." for task in tasks):
         return None
     build, test, *extra_tests = tasks
-    if build.argv != ["pnpm", "build"] or not _supported_test_suffix(
-        test.argv, [task.argv for task in extra_tests],
-    ):
+    if build.argv != ["pnpm", "build"]:
         return None
-    from yleum_orchestrator.services.docker_machine_backend import _PIN
-
+    if getattr(manifest, "root_next_test_script", None):
+        # The managed plan groups all explicit package environments ahead of direct tests.
+        if not _supported_test_suffix(test.argv, []) or any(
+            not (_supported_test_suffix(task.argv, []) or _supported_direct_node_test(task.argv))
+            for task in extra_tests
+        ):
+            return None
+    elif not _supported_test_suffix(test.argv, [task.argv for task in extra_tests]):
+        return None
     image = getattr(backend, "base_image", None)
-    if type(image) is not str or not _PIN.fullmatch(image):
+    if type(image) is not str or not PINNED_MACHINE_IMAGE.fullmatch(image):
         return None
     source = Path(__file__).with_name("next_compilation_receipt.py").read_text()
     restoring = getattr(request, "task_role", None) == "restore_runtime"
