@@ -786,7 +786,7 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             (Path(__file__).parent / "fixtures/source-guard-lease-quiescence-sources.json")
             .read_text()
         )
-        current = self.checker._PORTABLE_QUIESCENCE_SHELL_TIMEOUT_OBSERVER_SOURCES
+        current = self.checker._PORTABLE_QUIESCENCE_SOURCE_BUNDLES[-1]
         self.checker._require_reviewed_portable_sources(previous)
         self.checker._require_reviewed_portable_sources(previous_lease)
         baseline = json.loads(

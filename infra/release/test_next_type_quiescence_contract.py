@@ -183,7 +183,8 @@ class NextTypeSourceClosureTests(unittest.TestCase):
 
     def test_current_committed_source_closure_matches_linux_git_bytes(self):
         root = self.directory.parents[1] / "apps/orchestrator/src/yleum_orchestrator"
-        for name, expected in self.checker._PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES.items():
+        current = self.checker._PORTABLE_QUIESCENCE_SOURCE_BUNDLES[-1]
+        for name, expected in current.items():
             path = root / (name.replace(".", "/") + ".py")
             with self.subTest(module=name):
                 # Windows checkout line endings are not live Linux source bytes.
