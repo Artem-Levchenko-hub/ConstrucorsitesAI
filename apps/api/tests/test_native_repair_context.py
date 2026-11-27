@@ -1,9 +1,12 @@
 """A managed repair receives exact current source without buying more exploration."""
 
 import json
+import shutil
+import subprocess
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -731,6 +734,164 @@ async def test_assertion_repair_can_fix_product_instead_of_only_weakening_test(
     assert executed == [ENTRY]
     assert result.files == {ENTRY: "fixed product"}
     assert baseline["tests/http.mjs"] == "assert(actual === expected);"
+
+
+def _workspace_tap(stdout: str, workspace: Path) -> str:
+    # Node reports the local test path; the production runner publishes from /workspace.
+    return stdout.replace(workspace.as_uri(), "file:///workspace").replace(
+        str(workspace).replace("\\", "\\\\"), "/workspace",
+    ).replace("\\\\", "/")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="the Node test runner is required")
+def test_first_use_tap_keeps_both_nested_results_separate_in_a_noisy_report(tmp_path):
+    from yleum_api.services.generation.source_error_classification import first_use_tap_evidence
+    from yleum_api.services.project_cell_proofs import failure_detail_excerpt
+
+    fixture = "tests/meal.test.mjs"
+    helper = "scripts/first-use.mjs"
+    template = Path(__file__).parents[2] / "orchestrator/templates/max-miniapp-nextjs"
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "tests").mkdir()
+    shutil.copyfile(template / helper, tmp_path / helper)
+    (tmp_path / fixture).write_text("""import test from 'node:test';
+import assert from 'node:assert/strict';
+import {exerciseFirstUse} from '../scripts/first-use.mjs';
+test('meal', () => exerciseFirstUse({
+  name:'show meal', openVisitor:()=>({close(){}}),
+  perform:()=>({items:[{meal:'pasta',token:'example-private-value'}]}),
+  expectResult:(_,actual)=>assert.deepStrictEqual(actual,{items:[{meal:'soup',token:'hidden'}]}),
+  persists:false,
+}));
+for (let i=0; i<24; i++) test('neighbor '+i, () => assert.deepEqual({x:'foreign'}, {x:'other'}));
+""", encoding="utf-8")
+    cmd = subprocess.run(["node", "--test", "--test-reporter=tap", fixture], cwd=tmp_path,
+                         capture_output=True, text=True, encoding="utf-8", timeout=20)
+    assert cmd.returncode == 1
+    raw = _workspace_tap(cmd.stdout, tmp_path)
+    assert len(raw.encode()) > 8192
+    noisy = ("ok 1 - preceding test\n" * 100) + raw
+    proof = failure_detail_excerpt(noisy)
+    assert len(proof.encode()) <= 4096
+    evidence = first_use_tap_evidence(proof)
+    assert evidence and evidence[:3] == (fixture, 4, "first action")
+    expected, actual = evidence[3].split("  expected:\n")[1].split("  actual:\n")
+    assert "meal: 'soup'" in expected and "meal: 'pasta'" in actual
+    assert all("items:\n      0:" in side and "token: '[REDACTED]'" in side
+               for side in (expected, actual))
+    assert "foreign" not in evidence[3] and "example-private-value" not in proof
+    # An adjacent subtest must not supply a missing field for the first-use assertion.
+    assert first_use_tap_evidence(raw.replace("  actual:\n", "  missing:\n", 1)) is None
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="the Node test runner is required")
+async def test_shipped_first_use_tap_reaches_repair_and_rechecks_the_same_handler(
+    monkeypatch, isolated_repair, tmp_path,
+):
+    from functools import partial
+
+    from yleum_api.services import agent_builder
+    from yleum_api.services.agent_output_budget import SOL_MODEL
+    from yleum_api.services.generation.source_error_classification import classify_source_failure
+    from yleum_api.services.max_finalization import _repairable_build_failure
+    from yleum_api.services.project_cell_proofs import failure_detail_excerpt
+    from yleum_api.services.promotion_permit import workspace_revision_digest
+
+    from .test_agent_builder import _repair_action
+
+    fixture = "tests/first-lesson.test.mjs"
+    helper = "scripts/first-use.mjs"
+    handler = "src/app/api/spanish/route.ts"
+    template = Path(__file__).parents[2] / "orchestrator/templates/max-miniapp-nextjs"
+    script = """import test from 'node:test';
+import assert from 'node:assert/strict';
+import {exerciseFirstUse} from '../scripts/first-use.mjs';
+import {GET} from '../src/app/api/spanish/route.ts';
+test('first lesson', () => exerciseFirstUse({
+  name:'start lesson', openVisitor:()=>({close(){}}), perform:()=>GET(),
+  expectResult:(_,result)=>assert.equal(result.status,200), persists:false,
+}));
+"""
+    files = {
+        "package.json": '{"type":"module"}', fixture: script,
+        helper: (template / helper).read_text(encoding="utf-8"),
+        ENTRY: "export const lesson = () => fetch('/api/spanish');",
+        handler: "export const GET=()=>new Response(null,{status:409});",
+    }
+    for name, value in files.items():
+        dest = tmp_path / name
+        dest.parent.mkdir(exist_ok=True, parents=True)
+        dest.write_text(value, encoding="utf-8")
+
+    def test_product():
+        return subprocess.run(["node", "--experimental-strip-types", "--test",
+                               "--test-reporter=tap", fixture], cwd=tmp_path,
+                              capture_output=True, text=True, encoding="utf-8", timeout=20)
+
+    red = test_product()
+    assert red.returncode == 1
+    raw = _workspace_tap(red.stdout, tmp_path)
+    full = ("ok 1 - preceding product case\n" * 230) + raw + ("ok 2 - another case\n" * 230)
+    detail = failure_detail_excerpt(full)
+    digest = workspace_revision_digest(files)
+    def classify(output, *, finished=True, revision=digest):
+        return classify_source_failure(output, files=files, command_finished=finished,
+                                       frozen_source_sha256=revision)
+
+    failure = classify(detail)
+    assert failure.first_use_stage == "first action" and failure.importer == fixture
+    assert failure.allowed_paths == () and _repairable_build_failure(failure)
+    assert "expected: 200" in detail and "actual: 409" in detail
+    assert not _repairable_build_failure(classify(detail, finished=False))
+    assert not _repairable_build_failure(classify(detail, revision="a" * 64))
+    assert not _repairable_build_failure(classify(detail + "\nECONNRESET"))
+    assert not _repairable_build_failure(classify(failure_detail_excerpt(
+        full.replace(raw, raw + "\nECONNRESET\n"),
+    )))
+    assert not _repairable_build_failure(classify(raw.replace(fixture, "tests/unknown.mjs")))
+
+    tree = files.copy()
+    calls = []
+    writes = []
+    async def execute(action):
+        if action.name == "build":
+            return {"ok": test_product().returncode == 0}
+        assert (action.name, action.path) == ("edit_file", handler)
+        original = tree[handler]
+        assert action.args["search"] in original
+        tree[handler] = original.replace(action.args["search"], action.args["replace"])
+        (tmp_path / handler).write_text(tree[handler], encoding="utf-8")
+        writes.append(handler)
+        return {"ok": True, "content": tree[handler]}
+
+    async def complete(messages, *_args, **_kwargs):
+        calls.append(True)
+        if len(calls) == 1:
+            task = messages[1]["content"]
+            quoted = task.split("CURRENT_EDITABLE_SOURCE_JSON\n")[1]
+            record, _ = json.JSONDecoder().raw_decode(quoted)
+            assert record["path"] == ENTRY and record["related_route"]["path"] == handler
+            assert record["related_route"]["content"] == files[handler]
+            return _repair_action("edit_file", path=handler, search="status:409",
+                                  replace="status:200")
+        if len(calls) == 2:
+            return _repair_action("build")
+        assert len(calls) == 3
+        return _repair_action("done", summary="Lesson available", remaining_work="")
+
+    # Only the paid completion is replaced. Run the real source-repair dispatcher and Sol loop.
+    monkeypatch.setattr(agent_builder, "run_agent_build",
+                        partial(agent_builder.run_agent_build, complete=complete))
+    args = repair_arguments(files, execute=execute)
+    args["plan"].model, args["plan"].system = SOL_MODEL, "repair"
+    args["runtime"].handle = SimpleNamespace(snapshot_files=AsyncMock(side_effect=tree.copy))
+    result = await agent_finalization.run_native_source_repair(
+        **args, source_failure=failure, feedback=detail,
+    )
+    assert result.files == {handler: tree[handler]} and writes == [handler]
+    green = test_product()
+    assert green.returncode == 0, green.stdout + green.stderr
+    assert (tmp_path / fixture).read_text(encoding="utf-8") == script
 
 
 def test_context_limit_counts_complete_utf8_document_including_metadata(monkeypatch):

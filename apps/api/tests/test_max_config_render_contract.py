@@ -480,6 +480,12 @@ def _reviewed_render_signature(files, *, portable=False):
             )
         )
     )
+    # This test tool was added after the historical render fixture.
+    # Verify its exact released bytes before comparing the older files.
+    helper = "scripts/first-use.mjs"
+    assert hashlib.sha256(original_dependencies.pop(helper).encode()).hexdigest() == (
+        overrides[helper]["sha256"]
+    )
     for path, frozen_hash in _LEGACY_DEPENDENCY_HASHES.items():
         reviewed_hash = (
             _PORTABLE_PACKAGE_HASH

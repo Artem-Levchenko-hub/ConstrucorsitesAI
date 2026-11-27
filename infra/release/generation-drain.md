@@ -482,12 +482,19 @@ workspace locks, deadlines and physical retirement checks use the same protocols
 The complete dispatch-deadline predecessor remains supported. Mixing source
 files from these bundles denies quiescence.
 
+For the Next.js build-plan release, the drain checks the exact manifest parser,
+command adapter, image-pin validation, restoration engine and compilation
+collector sources together. Build and restore use the same effective test stages.
+Each stage runs through the existing command journal or restoration producer.
+The previous timeout-observer release remains valid for draining the old cohort.
+
 ### Historical shell timeout after Docker forgets its exec
 
 With admission closed, the physical gate can verify current writer absence for
-the exact shell-dispatch evidence bundle and its reviewed timeout-observer
-successor. The successor saves the parent timeout first, then uses its remaining
-budget to observe the original Docker exec. A confirmed exit is saved on the
+the exact shell-dispatch evidence bundle and the reviewed timeout-observer and
+Next.js build-plan successors. The timeout observer saves the parent timeout
+first, then uses its remaining budget to observe the original Docker exec.
+A confirmed exit is saved on the
 child. When Docker cannot confirm an exit, the child stays unresolved.
 A retained `command/running` child
 must match the parent UUID-derived `shell` step and dispatch epoch. The parent

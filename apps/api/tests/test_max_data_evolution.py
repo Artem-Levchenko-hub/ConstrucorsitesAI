@@ -501,6 +501,9 @@ async def test_agent_policy_survives_provider_replacement_and_all_prompt_protoco
     }
     prompt = builders[mode](guide)
     normalized_prompt = " ".join(prompt.split())
+    assert "Read the confirmed catalog via the managed catalog API" in normalized_prompt
+    assert "including an explicitly empty catalog" in normalized_prompt
+    assert "Do not hardcode catalog entries from examples in the brief" in normalized_prompt
     assert prompt.count(POLICY_HEADER) == 1
     assert prompt.count("MAX MANAGED SDK CONTRACT") == 1
     for required in (

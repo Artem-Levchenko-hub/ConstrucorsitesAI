@@ -355,9 +355,23 @@ _PORTABLE_QUIESCENCE_SHELL_TIMEOUT_OBSERVER_SOURCES = {
     "services.docker_machine_backend": "6cf1433ffe5dd1411c561c5fe3f12dfeb19eb6746512f22ef8861d2bd28458ba",
     "services.project_machine": "ac921568520a3cbfc65bacc1ab192741b59c4a783e806c6ad1713def9465ce54",
 }
+# Full builds and restorations derive their test stages from the same package
+# inventory. The effective plan enters the request digest. Commands retain
+# the existing writer fence, per-phase child identity and terminal receipts.
+_PORTABLE_QUIESCENCE_NEXT_BUILD_PLAN_SOURCES = {
+    **_PORTABLE_QUIESCENCE_SHELL_TIMEOUT_OBSERVER_SOURCES,
+    "core.cell_resources": "7d30d59cbb5c727f207cf1b0bf0229938179efd210453d519f6bd6d7a8005218",
+    "core.project_machine": "027bdb5702e570eeb9d3d0fe90709f9d0a3156948bc6ff9dd7b727f1ace5763f",
+    "services.code_restoration_engine": "debe254bacac223d22db682241f22ee7f575c4e5fc69277b516d4baa1b1f006a",
+    "services.docker_machine_backend": "a15b93d60a1606faad2cd640f6d4279d2c9528448cc6b966f4fc198993ed3627",
+    "services.machine_adapter": "2fb19e0785b8fda231fff8b28928ff058d74639fcba378c954736b28faf69c53",
+    "services.next_compilation_capture": "f8c6e5d84c7d7d635ba3a62098ea56233b81479339815baf39d976601c1eedea",
+    "services.next_compilation_receipt": "41f29604614e6c7bb291bdd6f9696b01a47722441e76a71b66fe0ee6c5d84bfb",
+}
 _SHELL_TIMEOUT_PRODUCERS = (
     _PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES,
     _PORTABLE_QUIESCENCE_SHELL_TIMEOUT_OBSERVER_SOURCES,
+    _PORTABLE_QUIESCENCE_NEXT_BUILD_PLAN_SOURCES,
 )
 _PORTABLE_QUIESCENCE_SOURCE_BUNDLES = tuple(
     {
@@ -417,6 +431,7 @@ _PORTABLE_QUIESCENCE_CONDITIONAL_SOURCE_NAMES = frozenset(
     {
         "schemas.workspace",
         "core.cell_resources",
+        "core.project_machine",
         "core.workspace_provider",
         "services.source_write_journal",
         "services.command_receipts",
@@ -425,6 +440,9 @@ _PORTABLE_QUIESCENCE_CONDITIONAL_SOURCE_NAMES = frozenset(
         "services.project_migrations",
         "services.checkpoint_preview",
         "services.checkpoint_preview_runtime",
+        "services.code_restoration_engine",
+        "services.next_compilation_capture",
+        "services.next_compilation_receipt",
         "services.hibernate",
         "main",
     }

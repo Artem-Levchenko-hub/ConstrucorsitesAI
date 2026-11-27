@@ -1,7 +1,7 @@
 """A classified reader guard denial is fatal to this run, never permission to replay."""
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 from uuid import uuid4
 
 import pytest
@@ -124,7 +124,8 @@ async def test_generic_503_keeps_existing_failure_and_journal_reconciliation(act
     with pytest.raises(ProjectCellInfrastructureError, match="activity_replay_unavailable"):
         await run_with_activity_lease(**kwargs)
     work.assert_awaited_once()
-    poll.assert_awaited_once_with(activity.lease.operation_id)
+    assert poll.await_args_list == [call(activity.lease.operation_id)] * 3
+    kwargs["replay_terminal"].assert_not_awaited()
 
 
 @pytest.mark.parametrize("field", ["workspace_id", "generation_run_id", "fencing_epoch",

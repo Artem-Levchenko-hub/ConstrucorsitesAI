@@ -225,8 +225,7 @@ it("carries every chosen scenario with a loyalty primary and the reviewed catalo
   const prompt = buildMaxProjectPrompt(brief);
   expect(prompt).toContain("Сценарии: Лояльность, Каталог, Запись.");
   expect(prompt).toContain("Управление в Yleum: Каталог, Заказы, Заявки, Запросы на запись");
-  expect(prompt).toContain("2 позиций уже сохранены в Yleum");
-  expect(prompt).toContain("Начальный каталог: 2 позиций уже сохранены в Yleum.");
+  expect(prompt).toContain("Начальный каталог: число сохранённых позиций в Yleum — 2.");
   expect(appTypes).toEqual(["loyalty", "catalog", "booking"]);
 });
 
@@ -271,7 +270,7 @@ it.each([0, 2])("keeps the reviewed data decision separate from selected catalog
   const brief = { ...longBrief, managementModules: [], catalogItemCount };
   const prompt = buildMaxProjectPrompt(brief);
   expect(prompt).not.toContain("Управление в Yleum:");
-  expect(prompt).toContain(catalogItemCount ? "2 позиций уже сохранены в Yleum" : "владелец подтвердил пустой каталог");
+  expect(prompt).toContain(catalogItemCount ? "число сохранённых позиций в Yleum — 2" : "владелец подтвердил пустой каталог");
   const excluded = buildMaxProjectPrompt({ ...brief, managementModuleOptOuts: ["catalog"] });
   expect(excluded).not.toContain("Начальный каталог:");
   expect(excluded).not.toContain("владелец подтвердил пустой каталог");

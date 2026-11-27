@@ -377,7 +377,7 @@ it.each([false, true])("reviews and saves explicit menu prices without requiring
     expect(payload.management_module_opt_outs).toEqual([]);
     expect(payload.max_config.features).toEqual([]);
     const prompt = sessionStorage.getItem("omnia:max:starter:priced-menu")!;
-    expect(prompt).toContain("2 позиций уже сохранены в Yleum");
+    expect(prompt).toContain("число сохранённых позиций в Yleum — 2");
     expect(prompt).not.toContain("Управление в Yleum:");
   } finally { await page.dispose(); }
 });

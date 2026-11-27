@@ -25,6 +25,7 @@ _EXPORT_OMISSIONS = {
 # Only reviewed dependency/build files may replace the historical MAX golden.
 # Separate reviewed action overrides pin the changed managed SDK/route bytes.
 _DEPENDENCY_OVERRIDE_PATHS = {
+    "scripts/first-use.mjs",
     "Dockerfile.dev",
     "package.json",
     "pnpm-lock.yaml",

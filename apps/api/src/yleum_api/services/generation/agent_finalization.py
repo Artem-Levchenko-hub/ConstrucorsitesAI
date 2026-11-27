@@ -291,6 +291,9 @@ async def run_native_source_repair(
     catalog_runtime: bool = False,
 ) -> agent_builder.AgentResult:
     """Reuse the guarded editor's progress windows without accepting proof."""
+    first_use_test = (
+        source_failure.importer if source_failure and source_failure.first_use_stage else None
+    )
     if source_failure is not None and source_failure.kind == "test_assertion":
         # An owned test is diagnostic evidence, not a reason to permit changes
         # only to that test. The normal product editor must be able to repair
@@ -310,6 +313,17 @@ async def run_native_source_repair(
     model_baseline = baseline
     kimi_repair = False
     autonomous_repair = uses_autonomous_max_source_repair(runtime)
+
+    def task_with_source() -> str:
+        if first_use_test:
+            # Only an endpoint in the frozen failing test may designate a companion screen.
+            # The existing source-context limits still protect and bound both complete files.
+            endpoints = agent_builder._called_endpoints(baseline.get(first_use_test, ""))
+            context, _ = agent_builder._repair_source_context(
+                "src/app/page.tsx", baseline, gap=" ".join(sorted(endpoints)) or "First use",
+            )
+            return task + "\n\n" + context
+        return with_managed_source_context(task, baseline)
 
     single_repair = (
         not autonomous_repair and continuation is None and uses_single_max_source_repair(runtime)
@@ -335,7 +349,7 @@ async def run_native_source_repair(
             and str(ids.project_id) in get_settings().max_kimi_repair_project_ids.split(",")
         )
         if not use_kimi and pending_source_repair(continuation) is None:
-            task = with_managed_source_context(task, baseline)
+            task = task_with_source()
         entry = await prepare_source_repair(
             continuation, task=task, baseline=dict(baseline), edit_deadline=edit_deadline,
             targeted=source_failure is not None,
@@ -370,7 +384,7 @@ async def run_native_source_repair(
     else:
         if single_repair and getattr(runtime, "source_repair_started", False):
             raise RuntimeError("MAX source repair already used")
-        task = with_managed_source_context(task, baseline)
+        task = task_with_source()
     if single_repair:
         runtime.source_repair_started = True
         _log.info("max_automatic_source_repair_started", extra={"run_id": str(ids.run_id)})

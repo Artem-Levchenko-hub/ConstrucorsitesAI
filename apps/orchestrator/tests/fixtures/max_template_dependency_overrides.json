@@ -11,6 +11,10 @@
     "sha256": "e7a2deb624ecbd7f77827591f444cd2e3c41394ba3d29617ce1aaa67279ef5bb",
     "mode": "100644"
   },
+  "scripts/first-use.mjs": {
+    "sha256": "11e82dd59c9b1595c9841e63ec6f5cd692bd7864bc7e0dc98682e352aa1b8352",
+    "mode": "100644"
+  },
   "tests/dependency-install.test.mjs": {
     "sha256": "233a0f3e9f84a48d86eb2ae9b8799630fbafb369516993064086a2e049b05318",
     "mode": "100644"

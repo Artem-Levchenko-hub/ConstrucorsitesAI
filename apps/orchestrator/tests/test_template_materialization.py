@@ -155,6 +155,7 @@ assert set(README_OVERRIDES) == {
     "max-miniapp-nextjs/src/lib/omnia/integration-client.ts",
 }
 assert set(DEPENDENCY_OVERRIDES) == {
+    "scripts/first-use.mjs",
     "Dockerfile.dev",
     "package.json",
     "pnpm-lock.yaml",

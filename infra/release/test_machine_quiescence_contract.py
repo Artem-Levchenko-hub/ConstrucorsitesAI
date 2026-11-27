@@ -185,8 +185,7 @@ class PendingFastCheckTests(unittest.TestCase):
             self.checker._PORTABLE_QUIESCENCE_NPM_BOOTSTRAP_SOURCES,
             self.checker._PORTABLE_QUIESCENCE_COMMAND_READER_WAIT_SOURCES,
             self.checker._PORTABLE_QUIESCENCE_COMMAND_DISPATCH_DEADLINE_SOURCES,
-            self.checker._PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES,
-            self.checker._PORTABLE_QUIESCENCE_SHELL_TIMEOUT_OBSERVER_SOURCES,
+            *self.checker._SHELL_TIMEOUT_PRODUCERS,
         ):
             self.assertEqual(
                 self.checker._pending_portable_commands(self.machine, sources=sources),
@@ -483,11 +482,27 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
         ))
 
     def test_child_timeout_observer_pins_both_sides_of_docker_inspection(self):
-        before, after = self.checker._SHELL_TIMEOUT_PRODUCERS
-        self.assertEqual(before, self.checker._PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES)
-        self.assertEqual(after, self.checker._PORTABLE_QUIESCENCE_SHELL_TIMEOUT_OBSERVER_SOURCES)
+        before = self.checker._PORTABLE_QUIESCENCE_SHELL_DISPATCH_EVIDENCE_SOURCES
+        after = self.checker._PORTABLE_QUIESCENCE_SHELL_TIMEOUT_OBSERVER_SOURCES
+        self.assertIn(before, self.checker._SHELL_TIMEOUT_PRODUCERS)
+        self.assertIn(after, self.checker._SHELL_TIMEOUT_PRODUCERS)
         self.assert_command_cohorts(before, after, (
             "services.docker_machine_backend", "services.project_machine",
+        ))
+
+    def test_next_build_plan_requires_its_complete_manifest_commands_and_capture(self):
+        before = self.checker._PORTABLE_QUIESCENCE_SHELL_TIMEOUT_OBSERVER_SOURCES
+        after = self.checker._PORTABLE_QUIESCENCE_NEXT_BUILD_PLAN_SOURCES
+        added = {
+            "core.project_machine", "services.code_restoration_engine",
+            "services.next_compilation_capture", "services.next_compilation_receipt",
+        }
+        self.assertEqual(after.keys() - before.keys(), added)
+        self.assertTrue(added <= self.checker._PORTABLE_QUIESCENCE_CONDITIONAL_SOURCE_NAMES)
+        self.assertIn(after, self.checker._SHELL_TIMEOUT_PRODUCERS)
+        self.assert_command_cohorts(before, after, (
+            "core.cell_resources", "services.docker_machine_backend", "services.machine_adapter",
+            *sorted(added),
         ))
 
     def test_disk_temp_successor_changes_only_the_reviewed_backend_and_keeps_predecessor(self):

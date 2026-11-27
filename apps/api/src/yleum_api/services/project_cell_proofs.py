@@ -108,6 +108,19 @@ def failure_detail_excerpt(detail: str, *, max_bytes: int = _MAX_DETAIL_BYTES) -
         elif continuation or (in_failed_test and re.match(r"^\s*error:", line)):
             context.append(line.encode("utf-8")[:512].decode("utf-8", errors="ignore"))
     if diagnostics:
+        from yleum_api.services.generation.source_error_classification import (
+            first_use_tap_evidence,
+            infrastructure_diagnostic_hint,
+        )
+
+        if first_use := first_use_tap_evidence(safe):
+            # Preserve the bounded, single failing subtest with its own stage and values.
+            # Separate successful subtests must not erase or supply its expected/actual.
+            infra_hint = infrastructure_diagnostic_hint(safe)
+            if infra_hint:
+                diagnostics.insert(0, infra_hint)
+            else:
+                diagnostics.insert(0, first_use[3])
         # These original tool section labels are required to interpret the
         # diagnostics; do not invent a source-check label for arbitrary output.
         headings = [line for line in safe.splitlines()

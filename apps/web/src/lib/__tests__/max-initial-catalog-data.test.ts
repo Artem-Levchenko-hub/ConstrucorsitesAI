@@ -31,8 +31,8 @@ describe("reviewed initial catalog contract", () => {
     expect(initialCatalogError([item], true)).not.toBeNull();
   });
   it("tells generation to use the stored catalog, including an explicit empty decision", () => {
-    expect(buildMaxProjectPrompt({ ...brief, catalogItemCount: 2 })).toContain("2 позиций уже сохранены в Yleum");
-    expect(buildMaxProjectPrompt({ ...brief, catalogItemCount: 0 })).toContain("Не добавляй позиции из описания или примеров");
+    expect(buildMaxProjectPrompt({ ...brief, catalogItemCount: 2 })).toContain("число сохранённых позиций в Yleum — 2");
+    expect(buildMaxProjectPrompt({ ...brief, catalogItemCount: 0 })).toContain("Начальный каталог: владелец подтвердил пустой каталог.");
     expect(() => buildMaxProjectPrompt({ ...brief, catalogItemCount: 101 })).toThrow();
   });
 });

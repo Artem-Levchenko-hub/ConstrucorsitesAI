@@ -20,6 +20,7 @@ class SourceFailure:
     ] = "unknown"
     importer: str | None = None
     allowed_paths: tuple[str, ...] = ()
+    first_use_stage: str | None = None
 
 
 def source_check_is_repairable(
@@ -49,10 +50,15 @@ _INFRA = re.compile(
 
 
 def source_diagnostic_has_infrastructure_error(detail: str) -> bool:
+    return infrastructure_diagnostic_hint(detail) is not None
+
+
+def infrastructure_diagnostic_hint(detail: str) -> str | None:
     # Error messages can quote a source-level string such as "connection refused".
     # Only mask literals inside compiler diagnostics; an independent worker error wins.
     text = _TYPE.sub(lambda match: _QUOTED_LITERAL.sub("", match[0]), detail)
-    return _INFRA.search(text) is not None
+    match = _INFRA.search(text)
+    return match[0] if match else None
 
 
 _IMPORT = re.compile(
@@ -84,6 +90,14 @@ _TAP_TEST_LOCATION = re.compile(
     r":(?P<line>[1-9]\d{0,6}):[1-9]\d{0,6}'\r?$"
 )
 _TAP_TEST_END = re.compile(r"  \.\.\.(?:\r?\n|\Z)")
+_FIRST_USE_STAGE = re.compile(
+    r"^    First use: [^\r\n]{1,180} / "
+    r"(?P<stage>before owner setup|owner setup|first action|reopen)$"
+)
+_FIRST_USE_FRAME = re.compile(
+    r"^    (?:at )?(?:async )?(?:visit|verifyResult|exerciseFirstUse) "
+    r"\(file:///workspace/scripts/first-use\.mjs:[1-9]\d{0,6}:[1-9]\d{0,6}\)$"
+)
 _NODE_STRIP_CODE = "  code: 'ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX'"
 _NODE_TYPESCRIPT_FRAME = re.compile(
     r"(?m)^    (?:at )?[A-Za-z_$][A-Za-z0-9_.$]* "
@@ -159,6 +173,55 @@ def has_truncated_test_assertion(detail: str, files: Mapping[str, str]) -> bool:
         ):
             return True
     return False
+
+
+def _tap_assertion_values(fields: list[str]) -> list[str]:
+    """Node prints scalar values inline and object/array values as indented YAML."""
+    values: dict[str, str] = {}
+    for index, field in enumerate(fields):
+        if not field.startswith(("  expected:", "  actual:")):
+            continue
+        label = field.partition(":")[0]
+        if label in values:
+            return []
+        lines = [field]
+        if field.endswith(":"):
+            for offset in range(index + 1, len(fields)):
+                child = fields[offset]
+                if not child.startswith("    "):
+                    break
+                lines.append(child)
+        # Equal budgets for both sides, so a large expected object cannot hide the actual one.
+        values[label] = "\n".join(lines).encode()[:512].decode(errors="ignore")
+    return list(values.values()) if len(values) == 2 else []
+
+
+def first_use_tap_evidence(detail: str) -> tuple[str, int, str, str] | None:
+    """Keep original reporter fields together, including when the enclosing build log is clipped."""
+    if "First use: " not in detail or "ERR_ASSERTION" not in detail:
+        return None
+    for failed in _TAP_FAILED_TEST.finditer(detail):
+        fields = failed["body"].splitlines()
+        location = _TAP_TEST_LOCATION.search(failed["body"])
+        stage = next((m for line in fields if (m := _FIRST_USE_STAGE.fullmatch(line))), None)
+        frame = next((line for line in fields if _FIRST_USE_FRAME.fullmatch(line)), None)
+        if not (location and stage and frame and _TAP_TEST_END.match(detail, failed.end())):
+            continue
+        required = ("  code: 'ERR_ASSERTION'", "  name: 'AssertionError'",
+                    "  failureType: 'testCodeFailure'")
+        if (any(fields.count(s) != 1 for s in required)
+                or sum(line.startswith("  location:") for line in fields) != 1):
+            continue
+        values = _tap_assertion_values(fields)
+        if not values:
+            continue
+        identity = [line for line in fields if line.startswith(
+            ("  location:", "  failureType:", "  code:", "  name:"),
+        )]
+        lines = [failed[0].splitlines()[0], *identity, stage[0], frame, *values, "  ..."]
+        excerpt = "\n".join(line.encode()[:512].decode(errors="ignore") for line in lines)
+        return location["file"], int(location["line"]), stage["stage"], excerpt
+    return None
 
 
 def _failed_product_test(detail: str, files: Mapping[str, str]) -> SourceFailure | None:
@@ -303,6 +366,11 @@ def classify_source_failure(
         return SourceFailure()
     if source_diagnostic_has_infrastructure_error(detail):
         return SourceFailure("infrastructure")
+    if evidence := first_use_tap_evidence(detail):
+        raw, line, stage, _ = evidence
+        path = _importer(raw, files)
+        if (path and line <= len(files[path].splitlines()) and "scripts/first-use.mjs" in files):
+            return SourceFailure("test_assertion", importer=path, first_use_stage=stage)
     for pattern in (_IMPORT, _TS_MISSING, _NEXT_MISSING):
         for match in pattern.finditer(detail):
             importer = _importer(match["file"], files)

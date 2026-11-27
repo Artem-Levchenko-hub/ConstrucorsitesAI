@@ -372,8 +372,7 @@ it("reviews prompt products, preserves manual edits through Back and creates the
   expect(content[0]).toMatchObject({ title: "латте", price: "350 ₽", active: true, availability: "in_stock" });
   expect(content[0].id).toMatch(/^item-/);
   expect(mocks.save).not.toHaveBeenCalled();
-  expect(sessionStorage.getItem("omnia:max:starter:coffee")).toContain("1 позиций уже сохранены");
-  expect(sessionStorage.getItem("omnia:max:starter:coffee")).toContain("не вшивай позиции в код");
+  expect(sessionStorage.getItem("omnia:max:starter:coffee")).toContain("Начальный каталог: число сохранённых позиций в Yleum — 1.");
 });
 
 it("honors the owner's explicit empty catalog even when the brief contains priced products", async () => {
@@ -389,7 +388,7 @@ it("honors the owner's explicit empty catalog even when the brief contains price
   await click("Создать проект");
   await settle(() => expect(mocks.create).toHaveBeenCalledTimes(1));
   expect(mocks.create.mock.calls[0][0].max_config.content).toEqual([]);
-  expect(sessionStorage.getItem("omnia:max:starter:coffee")).toContain("Владелец подтвердил пустой начальный каталог");
+  expect(sessionStorage.getItem("omnia:max:starter:coffee")).toContain("Начальный каталог: владелец подтвердил пустой каталог.");
 });
 
 it("retains the reviewed empty-catalog decision after securely connecting a provider credential", async () => {
@@ -413,7 +412,7 @@ it("retains the reviewed empty-catalog decision after securely connecting a prov
   expect(mocks.create.mock.calls[0][0].max_config.content).toEqual([]);
   expect(JSON.stringify(mocks.create.mock.calls[0][0])).not.toContain(token);
   const prompt = sessionStorage.getItem("omnia:max:starter:coffee")!;
-  expect(prompt).toContain("Владелец подтвердил пустой начальный каталог");
+  expect(prompt).toContain("Начальный каталог: владелец подтвердил пустой каталог.");
   expect(prompt).toContain("Интеграция AITUNNEL уже проверена");
   expect(prompt).not.toContain(token);
 });

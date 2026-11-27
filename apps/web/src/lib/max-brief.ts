@@ -268,7 +268,7 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
     ...(brief.catalogItemCount !== undefined && availableManagementModules(optedOut).includes("catalog")
       ? [field("Начальный каталог", brief.catalogItemCount === 0
         ? "владелец подтвердил пустой каталог"
-        : `${brief.catalogItemCount} позиций уже сохранены в Yleum`)]
+        : `число сохранённых позиций в Yleum — ${brief.catalogItemCount}`)]
       : []),
   ];
   const prompt = [MAX_BRIEF_HEADER, scenarioDetails, "", ...parameters].join("\n");

@@ -465,7 +465,9 @@ MAX_MODEL_LOCKED_FILES = frozenset(
 MAX_UI_GUIDANCE = """
 Wizard management modules describe available owner tools. Build visitor features
 from the owner's request and choices. Respect explicit exclusions, confirmed
-catalog contents and the configured support route. Keep private setup details out of public screens.
+catalog contents and the configured support route. Read the confirmed catalog via
+the managed catalog API, including an explicitly empty catalog. Do not hardcode
+catalog entries from examples in the brief. Keep private setup details out of public screens.
 MAX UI 0.2.0: Typography is a namespace, not a JSX component.
 Never render <Typography>. Inspect the installed public exports/types for the
 concrete text components and their props. Do not assume Typography.Caption exists
