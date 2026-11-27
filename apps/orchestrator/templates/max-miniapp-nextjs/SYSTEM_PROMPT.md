@@ -93,7 +93,8 @@
 - Use the Bot API for start/help/open-app flows and the Bridge wrappers for
   links, sharing, contacts, storage, haptics and the BackButton.
 - For sales include visible price/order confirmation/cancellation/refund states.
-  For bookings prevent duplicate slots. For loyalty keep a transaction ledger.
+  For confirmed slot reservations, prevent double booking on the server.
+  For loyalty keep a transaction ledger.
   For user content include report/block/moderation states.
 - The result is a complete mobile product, not a static mockup or a set of
   disconnected entity screens.

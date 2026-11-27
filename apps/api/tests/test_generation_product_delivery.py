@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
-from unittest.mock import Mock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import httpx
@@ -17,25 +18,46 @@ from yleum_api.services.generation.contracts import (
 
 
 @pytest.mark.parametrize("is_edit,is_continue", [(False, False), (True, False), (False, True)])
+@pytest.mark.parametrize("portable", [True, False])
 async def test_max_build_edit_and_resume_receive_readability_and_completion_contract(
-    is_edit, is_continue,
+    is_edit, is_continue, portable,
 ):
+    from yleum_api.services.max_data_evolution import build_max_agent_guide
+
+    handle = SimpleNamespace(
+        capabilities={"portable_machine": True},
+        snapshot_files=AsyncMock(return_value={".omnia/cell.json": "{}"}),
+        is_portable=lambda: True,
+    ) if portable else None
+    stack_name = "max-miniapp-nextjs"
+    legacy = agent_builder.load_stack_system_prompt(stack_name)
+    guide = await build_max_agent_guide(legacy, handle, coordinator_handoff=portable)
     plan, _ = await prepare_agent_prompt(
-        stack=StackPrompt("stack", "guide", None, None, "seed", False),
+        stack=StackPrompt(
+            "seed", stack_name, guide, None,
+            agent_builder.build_system_prompt(guide, coordinator_handoff=portable), False,
+        ),
         factory=None,
         ids=GenerationIds(*(uuid4() for _ in range(5))),
         project_info=ProjectGenerationFacts(
             "max_miniapp", "qa", "QA", None, None, False, "ru", False, "", "",
         ),
         prompt_text="Сделай читаемый профиль клуба. Сохрани заявки и историю.",
-        runtime=GenerationRuntime(),
+        runtime=GenerationRuntime(handle=handle),
         orchestrate=False,
         selected_elements=None,
         _is_edit=is_edit,
         _is_continue=is_continue,
         force_model="~anthropic/claude-sonnet-latest",
     )
-    assert "<product_delivery>" in plan.user
+    block = plan.user.split("<product_delivery>")[1].split("</product_delivery>")[0]
+    delivery = " ".join(block.split())
+    assert "interactive visitor transaction that depends on owner-managed data" in delivery
+    assert "no-code setup" in delivery and "authorized application handler" in delivery
+    assert "existing product test" in delivery and "isolated empty business data" in delivery
+    assert "reserve the slot" in delivery and "awaits confirmation" in delivery
+    if not portable:
+        assert "For confirmed slot reservations, prevent double booking" in plan.system
     assert "foreground/background pairs" in plan.user
     assert "4.5:1" in plan.user
     assert "existing business records" in plan.user
