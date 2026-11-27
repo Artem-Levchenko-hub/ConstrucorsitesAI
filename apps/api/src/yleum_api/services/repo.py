@@ -279,13 +279,15 @@ def commit_files(
 
 def read_files(
     project_id: UUID, commit_sha: str, *, include: Callable[[str], bool] | None = None,
+    max_file_bytes: int | None = None,
 ) -> dict[str, str]:
+    """Read text files from one archive, skipping blobs above an optional byte limit."""
     with _open_workdir(project_id, must_exist=True) as workdir:
         repo = pygit2.Repository(str(workdir))
         commit = repo.get(commit_sha)
         if not isinstance(commit, pygit2.Commit):
             raise ValueError(f"commit {commit_sha} not found")
-        return _read_commit_files(repo, commit, include=include)
+        return _read_commit_files(repo, commit, include=include, max_file_bytes=max_file_bytes)
 
 
 def read_commit_files_with_parent(
@@ -315,9 +317,10 @@ def read_commit_files_with_parent(
 def _read_commit_files(
     repo: pygit2.Repository, commit: pygit2.Commit, *,
     include: Callable[[str], bool] | None = None,
+    max_file_bytes: int | None = None,
 ) -> dict[str, str]:
     out: dict[str, str] = {}
-    _walk(repo, commit.tree, "", out, include)
+    _walk(repo, commit.tree, "", out, include, max_file_bytes=max_file_bytes)
     if len(out) > MAX_FILES:
         raise ValueError(f"too many files in commit: {len(out)} > {MAX_FILES}")
     total_bytes = sum(len(content.encode("utf-8")) for content in out.values())
@@ -377,7 +380,7 @@ def checkout(project_id: UUID, target_commit_sha: str) -> str:
 
 def _walk(
     repo: pygit2.Repository, tree: pygit2.Tree, prefix: str, out: dict[str, str],
-    include: Callable[[str], bool] | None,
+    include: Callable[[str], bool] | None, *, max_file_bytes: int | None = None,
 ) -> None:
     for entry in tree:
         if entry.name is None:
@@ -386,7 +389,7 @@ def _walk(
         if entry.type_str == "tree":
             child = repo[entry.id]
             if isinstance(child, pygit2.Tree):
-                _walk(repo, child, f"{path}/", out, include)
+                _walk(repo, child, f"{path}/", out, include, max_file_bytes=max_file_bytes)
             continue
         if entry.type_str != "blob":
             continue
@@ -396,6 +399,8 @@ def _walk(
             continue
         blob = repo[entry.id]
         if not isinstance(blob, pygit2.Blob):
+            continue
+        if max_file_bytes is not None and blob.size > max_file_bytes:
             continue
         if include is not None and blob.size > MAX_FILE_BYTES:
             raise ValueError("snapshot file exceeds size budget")

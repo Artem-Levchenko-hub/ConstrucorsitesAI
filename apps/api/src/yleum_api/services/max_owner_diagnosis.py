@@ -1,7 +1,7 @@
-"""Read-only MAX diagnosis from bounded structural facts, never customer records.
+"""Read-only MAX help from saved owner guides and bounded structural facts.
 
-The model selects existing facts and one permitted next step. It cannot supply
-an invented cause, a command, a link or executable instructions in the answer.
+Setup replies are deterministic. For diagnosis, the model can select existing
+facts and one permitted next step.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import posixpath
 import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Any
 from uuid import UUID
@@ -32,6 +32,7 @@ from yleum_api.models.provider_call import ProviderCall
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.services import llm_client, orchestrator_client, repo
 from yleum_api.services.agent_progress import redact_sensitive_text
+from yleum_api.services.generation.source_intent import _MISSING_OUTCOME
 from yleum_api.services.max_source_workers import run_max_source_read
 from yleum_api.services.runtime_nutrition_ai import (
     LEGACY_MEAL_PLAN_DAYS,
@@ -48,6 +49,7 @@ _SDK_CALLS = {
 }
 _SOURCE_ROOTS = ("src/app/", "src/components/", "src/lib/", "src/hooks/", "src/utils/",
                  "app/", "components/", "lib/", "pages/")
+_SENSITIVE_PATH_NAME = re.compile(r"secret|credential|token|password", re.IGNORECASE)
 _STOP_WORDS = frozenset({"почему", "кнопк", "работ", "ничег", "делае", "прило", "нажим",
                          "нажат", "после", "такое", "такой", "чтобы", "можно", "doesn",
                          "does", "work", "button", "click", "when", "this", "what"})
@@ -58,6 +60,50 @@ _STATES = {"completed": "Последняя сохранённая сборка 
            "queued_for_capacity": "Сборка ожидает свободные ресурсы.",
            "cancel_requested": "Запрошена остановка сборки.",
            "cancelled": "Последняя сборка остановлена."}
+_OWNER_GUIDE_EXCLUDED = frozenset({
+    "agents", "build", "changelog", "contributing", "deploy", "deployment", "design",
+    "development", "license", "migrations", "operations", "readme", "runbook", "security",
+    "system_prompt",
+})
+_CANONICAL_OWNER_GUIDE = "OWNER_GUIDE.md"
+_MAX_OWNER_GUIDE_BYTES = 12_000
+_GENERIC_SETUP_TERMS = frozenset({
+    "confi", "omnia", "owner", "setti", "where", "yleum", "верси", "добав", "владе", "настр",
+    "покаж", "откро", "поля", "полях", "приме", "указа", "напис", "сохра",
+})
+_OWNER_GUIDE_UNSAFE = re.compile(
+    r"\b(?:bash|chmod|cmd|curl|docker|eval|git|kubectl|node|npm|npx|pnpm|powershell|psql|"
+    r"python\d*|rm|sh|ssh|sudo|wget|yarn|промпт\w*|игнорир\w*|ignore|"
+    r"secret|token|password|токен\w*|парол\w*)\b"
+    r"|\b(?:команд[аы]\s+проекта|(?:запуст|выполн)и(?:те)?|терминал\w*|"
+    r"terminal|execute|system\s+message)\b"
+    r"|(?:^|\brun\s+)(?:cat|cp|id|ls|mv|pwd|touch)\b"
+    r"|\b(?:insert\s+into|select\s+.+\s+from|(?:alter|drop|truncate)\s+table|"
+    r"delete\s+from|update\s+\w+\s+set)\b"
+    r"|\b(?:фио|фамилия|телефон|почта|адрес|паспорт|снилс|имя\s+клиента|"
+    r"api[_ -]?key|email|phone)\s*:\s*\S"
+    r"|\b(?:(?:код|ключ)\s+(?:доступа|входа|подтверждения)|"
+    r"(?:access|verification)\s+code)\b"
+    r"|\b(?:pin|пин)(?:[ –—-]?(?:code|код))?\s*:?\s*[«„“\"']?\d{2,6}\b"
+    r"|\b[0-9]{7,}\b|\b\d{1,3}(?:\.\d{1,3}){3}\b|\b[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}\b"
+    r"|\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b"
+    r"|://|--[A-Za-z]",
+    re.IGNORECASE,
+)
+_OWNER_UI_LINE = re.compile(
+    r"^(?:[^\W\d_][\w -]{0,47}:\s+\S|"
+    r"(?:в|на|для|сначала|затем|после|пример|например|введ\w*|включ\w*|"
+    r"выбер\w*|добав\w*|заполн\w*|нажм\w*|откро\w*|отмет\w*|перейд\w*|созда\w*|"
+    r"сохран\w*|укаж\w*|установ\w*|add|choose|click|enter|example|in|open|save|select|set)\b)",
+    re.IGNORECASE,
+)
+_PUBLISHED_GUIDE_SCOPE = re.compile(
+    r"\b(?:опубликова\w*|публичн\w*|published)\b|\bв\s+MAX\b", re.IGNORECASE,
+)
+_EDITOR_GUIDE_SCOPE = re.compile(
+    r"\b(?:чернов\w*|превью|в редактор\w*|preview|draft)\b", re.IGNORECASE,
+)
+_OPTIONAL_SETUP_STEP = "Следующий шаг, если эту настройку ещё нужно выполнить."
 
 
 def _text(node: Node | None) -> str:
@@ -82,7 +128,7 @@ def _source_path(path: str) -> bool:
                              "tests", "__tests__"} for part in parts)
         and not path.startswith(("src/lib/max/", "src/lib/omnia/", "src/lib/db/",
                                  "src/app/api/max/", "src/app/api/omnia/"))
-        and not re.search(r"(?:secret|credential|token|password)", path, re.IGNORECASE)
+        and not _SENSITIVE_PATH_NAME.search(path)
     )
 
 
@@ -551,15 +597,25 @@ async def _aggregate_facts(session: AsyncSession, project_id: UUID) -> dict[str,
 def _intent(prompt: str) -> str:
     text = prompt.casefold()
     catalog = bool(re.search(r"услуг|товар|позици|каталог|catalog|service|product", text))
-    symptom = bool(re.search(
-        r"не\s+(?:могу|получа\w*|работ\w*|добав\w*|сохра\w*)|ошиб|ничего|невозмож|"
-        r"cannot|can't|fail", text,
-    ))
-    if catalog and symptom:
+    how_to = bool(re.search(r"\b(?:где|куда|как|where|how)\b", text))
+    symptom = _MISSING_OUTCOME.search(text) is not None or (
+        catalog and re.search(
+            r"не\s+(?:могу|получа\w*|работ\w*|добав\w*|сохра\w*)|ошиб|ничего|невозмож|"
+            r"cannot|can't|fail", text,
+        ) is not None
+    )
+    if not symptom and re.search(
+        r"\b(?:(?:провер\w*|статус)\s+подключени\w*|подключ[её]н[ао]?\s+ли)"
+        r"\s+(?:к\s+)?aitunnel\b|\bis\s+aitunnel\s+connected\b", text.partition("?")[0],
+    ):
+        return "aitunnel_status"
+    if catalog and symptom and re.search(
+        r"\b(?:добав|сохра|загруз|созда|add|sav|upload|creat)\w*\b", text,
+    ):
         return "catalog_issue"
     if re.search(r"статус|status", text) and re.search(r"заказ|заявк|брон|записи|order", text):
         return "record_status"
-    if catalog and re.search(r"\b(?:где|куда|как|where|how)\b", text):
+    if catalog and how_to and not symptom:
         return "catalog"
     if re.search(r"сколько|долго|ждать|врем|этап|статус|прогресс|как.*ид[её]т|как там|"
                  r"how long|wait|status", text) and re.search(
@@ -570,15 +626,211 @@ def _intent(prompt: str) -> str:
         r"что(?:\s+делать)?\s+дальше|что теперь|следующий шаг|дальше делать|what.*next", text,
     ):
         return "next"
+    if how_to and not symptom and re.search(
+        r"\b(?:настро\w*|наполни\w*|добав\w*|указ\w*|внес\w*|"
+        r"add|configure|populate|set\s+up)\b"
+        r"|\bвладел\w*[^.!?]{0,100}\bоткры\w*\s+(?:ещ[её]|нов\w*)\b", text,
+    ):
+        return "setup"
     return "diagnose"
 
 
-def _safe_question(prompt: str) -> str:
+def _safe_question(prompt: str, *, keep_calendar_dates: bool = False) -> str:
+    def mask_contact(match: re.Match[str]) -> str:
+        value = match[0]
+        if keep_calendar_dates and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            try:
+                date.fromisoformat(value)
+            except ValueError:
+                pass
+            else:
+                return value
+        return "[скрыто]"
+
     safe = redact_sensitive_text(redact_provider_secrets(prompt[:4000]))
     safe = re.sub(
-        r"(?:https?://|www\.)\S+|[\w.+-]+@[\w.-]+|\b\d[\d ()+-]{8,}\d\b", "[скрыто]", safe,
+        r"(?:https?://|www\.)\S+|[\w.+-]+@[\w.-]+|\b\d[\d ()+-]{8,}\d\b", mask_contact, safe,
     )
     return safe[:1500]
+
+
+def _owner_guide_path(path: str) -> bool:
+    return (
+        bool(re.fullmatch(r"[\w-]{1,64}\.md", path, re.IGNORECASE))
+        and path[:-3].casefold() not in _OWNER_GUIDE_EXCLUDED
+        and not is_secret_file(path)
+        and not _SENSITIVE_PATH_NAME.search(path)
+        and not re.search(r"private|internal", path, re.I)
+        and _safe_question(path) == path
+    )
+
+
+def _owner_guide_line(line: str, *, limit: int = 280) -> str:
+    # Expose only plain owner instructions, never links, code blocks or raw Markdown.
+    value = re.sub(r"\*\*([^*]+)\*\*|`([\w:+.-]{1,48})`", lambda m: m[1] or m[2], line)
+    value = " ".join(value.split())
+    return value if (
+        len(value) <= limit
+        and re.fullmatch(r"[\w .,:!?…«»„“”\"'()+%/₽–—-]+", value)
+        and not _OWNER_GUIDE_UNSAFE.search(value)
+        and _safe_question(value, keep_calendar_dates=True) == value
+    ) else ""
+
+
+def _owner_guide_excerpt(
+    path: str, source: str, *, wanted: set[str] | None = None,
+) -> tuple[str, str] | None:
+    if not 1 <= len(source.encode()) <= _MAX_OWNER_GUIDE_BYTES:
+        return None
+    title, _, body = source.lstrip("\ufeff\r\n").partition("\n")
+    heading = re.fullmatch(r"#{1,3}\s+(.+)", title.strip())
+    if heading is None or not (topic := _owner_guide_line(heading[1], limit=120)):
+        return None
+    owner_heading = re.search(r"\b(?:владел\w*|owner)\b", topic, re.I)
+    if path.casefold() != _CANONICAL_OWNER_GUIDE.casefold() and owner_heading is None:
+        return None
+    if wanted and wanted.isdisjoint(_terms(topic)):
+        return None
+    summary: list[str] = []
+    steps: list[str] = []
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        step = re.fullmatch(r"(?:\d{1,2}[.)]|[-*])\s+(.+)", line)
+        if steps and step is None:
+            break
+        plain = _owner_guide_line(step[1] if step else line)
+        if not _OWNER_UI_LINE.match(plain):
+            return None
+        (steps if step else summary).append(plain)
+        if len(steps) > 6 or sum(map(len, summary)) > 360:
+            return None
+    if not steps:
+        return None
+    numbered = "\n".join(f"{number}. {step}" for number, step in enumerate(steps, 1))
+    excerpt = "\n\n".join(filter(None, (" ".join(summary), numbered)))
+    return (topic, excerpt) if len(excerpt) <= 1200 else None
+
+
+def _find_owner_guide(
+    project_id: UUID, commit: str, prompt: str | None,
+) -> tuple[str, str] | None:
+    topic_text = _EDITOR_GUIDE_SCOPE.sub(" ", _PUBLISHED_GUIDE_SCOPE.sub(" ", prompt or ""))
+    wanted = _terms(topic_text) - _GENERIC_SETUP_TERMS
+    remaining = 24
+
+    def include(path: str) -> bool:
+        nonlocal remaining
+        if path == _CANONICAL_OWNER_GUIDE:
+            return True
+        if not _owner_guide_path(path):
+            return False
+        remaining -= 1
+        return remaining >= 0
+
+    files = repo.read_files(
+        project_id, commit, include=include, max_file_bytes=_MAX_OWNER_GUIDE_BYTES,
+    )
+    canonical = _owner_guide_excerpt(
+        _CANONICAL_OWNER_GUIDE, files.pop(_CANONICAL_OWNER_GUIDE, ""), wanted=wanted,
+    )
+    if canonical is not None:
+        return _CANONICAL_OWNER_GUIDE, canonical[1]
+    if remaining < 0:
+        return None
+    matches = []
+    for path, source in files.items():
+        excerpt = _owner_guide_excerpt(path, source, wanted=wanted)
+        if excerpt is None:
+            continue
+        topic, content = excerpt
+        score = 2 * len(wanted & _terms(topic)) + len(wanted & _terms(content)) if wanted else 1
+        matches.append((score, path, content))
+    matches.sort(reverse=True)
+    if not matches or (len(matches) > 1 and matches[0][0] == matches[1][0]):
+        return None
+    _, path, content = matches[0]
+    return path, content
+
+
+async def _owner_guide_answer(
+    project_id: UUID, commit: str, prompt: str | None, *, published: bool,
+) -> str | None:
+    try:
+        guide = await run_max_source_read(lambda: _find_owner_guide(project_id, commit, prompt))
+    except Exception:
+        return None
+    if guide is None:
+        return None
+    path, content = guide
+    version = "опубликованной версии" if published else "сохранённой версии в редакторе"
+    return f"{content}\n\nИсточник — `{path}` из {version} приложения."
+
+
+def _guide_scope(prompt: str) -> tuple[bool, bool]:
+    question = prompt.partition("?")[0]
+    if not (_PUBLISHED_GUIDE_SCOPE.search(question) or _EDITOR_GUIDE_SCOPE.search(question)):
+        question = prompt
+    return bool(_PUBLISHED_GUIDE_SCOPE.search(question)), bool(_EDITOR_GUIDE_SCOPE.search(question))
+
+
+async def _setup_guide_answer(
+    session: AsyncSession, project_id: UUID, snapshot_id: UUID | None, prompt: str | None,
+    *, public: bool,
+) -> str | None:
+    expected_commit: str | None = None
+    if public:
+        published = await _published_snapshot(project_id)
+        snapshot_id, expected_commit = published or (None, None)
+    commit = None
+    if snapshot_id is not None:
+        commit, _ = await _source_facts(
+            session, project_id, snapshot_id, prompt or "", inspect_controls=False,
+        )
+    if public and (commit is None or commit != expected_commit):
+        return (
+            "Не удалось подтвердить инструкцию для опубликованной версии. "
+            "Можешь спросить о настройке сохранённой версии в редакторе."
+        )
+    if commit is not None:
+        answer = await _owner_guide_answer(project_id, commit, prompt, published=public)
+        if answer is not None:
+            return f"{_OPTIONAL_SETUP_STEP}\n\n{answer}" if prompt is None else answer
+    if public:
+        if prompt is None:
+            return "Открой опубликованное приложение в MAX и проверь его основное действие."
+        return "В опубликованной версии не нашёл подходящей инструкции по этой настройке."
+    return None
+
+
+def _catalog_setup_answer(prompt: str) -> str | None:
+    if re.search(r"\b(?:загруз\w*|добав\w*|замен\w*)\s+(?:фото|изображ\w*)\b", prompt, re.I):
+        return (
+            "Открой «Каталог» и выбери нужную позицию. "
+            "В блоке «Фото позиции» нажми «Загрузить фото». "
+            "Для уже добавленного снимка там есть «Заменить фото»."
+        )
+    if re.search(
+        r"\b(?:добав\w*|созда\w*|add)\s+(?:(?:нов\w*|a|an)\s+)?"
+        r"(?:услуг\w*|товар\w*|позици\w*|services?|products?)\b", prompt, re.I,
+    ):
+        return (
+            "Товары и услуги добавляются в разделе «Каталог» этого приложения. "
+            "Там есть название, фото, цена и наличие."
+            "\n\nСледующий шаг — открой «Каталог» и нажми «Добавить позицию»."
+        )
+    if re.search(r"\b(?:измен|поменя|редактир|обнов|указ)\w*\b", prompt, re.I):
+        for pattern, field in (
+            (r"\b(?:цен[ауые]|стоимост\w*|подпис\w*)\b", "Цена или подпись"),
+            (r"\bналичи\w*\b", "Наличие"),
+        ):
+            if re.search(pattern, prompt, re.I):
+                return (
+                    "Открой «Каталог» и нажми «Изменить» у нужной позиции. "
+                    f"Укажи нужное значение в поле «{field}» и нажми «Сохранить позицию»."
+                )
+    return None
 
 
 def _selection(
@@ -764,12 +1016,32 @@ async def answer_owner_question(
     settings = dict(settings_row)
     prompt = _safe_question(prompt)
     intent = _intent(prompt)
-    if intent == "catalog":
+    current_id = settings["current_snapshot_id"]
+    if intent == "aitunnel_status":
         return (
-            "Товары и услуги добавляются в разделе «Каталог» этого приложения. "
-            "Там есть название, фото, цена и наличие."
-            "\n\nСледующий шаг — открой «Каталог» и нажми «Добавить позицию»."
+            "AITunnel подключён." if settings["aitunnel_connected"] is True
+            else "AITunnel не подключён."
         )
+    if intent in {"catalog", "setup", "next"}:
+        public, editor = _guide_scope(prompt)
+        if public and editor:
+            return (
+                "Уточни, для какой версии нужна настройка — опубликованной в MAX или в редакторе."
+            )
+        if public or intent != "next":
+            guide = await _setup_guide_answer(
+                session, project.id, current_id, None if intent == "next" else prompt,
+                public=public,
+            )
+            if guide is not None:
+                return guide
+        if intent == "catalog" and (catalog_answer := _catalog_setup_answer(prompt)):
+            return catalog_answer
+        if intent != "next":
+            return (
+                "В сохранённой версии приложения не нашёл подходящей инструкции по этой настройке. "
+                "Уточни, какие данные нужно добавить и что уже видно в панели владельца."
+            )
     if intent == "catalog_issue":
         return (
             "Товары и услуги редактируются в разделе «Каталог». "
@@ -789,14 +1061,10 @@ async def answer_owner_question(
             + " Точного оставшегося времени у этой сборки нет."
             + "\n\nСледующий шаг — проверь последние шаги сборки в этом чате."
         )
-    current_id = settings["current_snapshot_id"]
     current_commit, controls = await _source_facts(
         session, project.id, current_id, prompt, inspect_controls=intent == "diagnose",
     ) if current_id else (None, [])
-    connected = settings["aitunnel_connected"] is True
-    facts = {"connection_aitunnel": "AITunnel " + ("подключён." if connected else "не подключён.")}
-    action_facts, steps = _action_facts(controls, settings, prompt)
-    facts.update(action_facts)
+    facts, steps = _action_facts(controls, settings, prompt)
     published = await _published_snapshot(project.id)
     if published is not None:
         published_id, published_commit = published
@@ -804,7 +1072,7 @@ async def answer_owner_question(
             facts["publication"] = "В MAX опубликована эта же версия приложения."
         else:
             verified_commit, published_controls = await _source_facts(
-                session, project.id, published_id, prompt,
+                session, project.id, published_id, prompt, inspect_controls=intent == "diagnose",
             )
             if verified_commit == published_commit:
                 public_facts, public_steps = _action_facts(
@@ -832,9 +1100,17 @@ async def answer_owner_question(
         elif current_commit is None:
             step = "Опиши в чате, что должно делать приложение."
         else:
+            same_publication = published == (current_id, current_commit)
+            if guide := await _owner_guide_answer(
+                project.id, current_commit, None, published=same_publication,
+            ):
+                return (
+                    status + " " + facts["publication"]
+                    + f"\n\n{_OPTIONAL_SETUP_STEP}\n\n{guide}"
+                )
             step = (
                 "Открой приложение в MAX и проверь его основное действие."
-                if published == (current_id, current_commit)
+                if same_publication
                 else "Открой «Публикация» и проверь готовность текущей версии к запуску."
             )
         return status + " " + facts["publication"] + "\n\nСледующий шаг — " + step
@@ -851,8 +1127,6 @@ async def answer_owner_question(
     default_facts = [key for key in (*priority, "ai_permission", "ai_route",
                                     "runtime_outcome", "publication")
                      if key in facts]
-    if "ai_permission" not in facts:
-        default_facts.append("connection_aitunnel")
     chosen, next_step = default_facts, next(iter(steps))
     known_obstacle = bool(set(steps) & {
         "connect_aitunnel", "enable_aitunnel", "enable_ai",

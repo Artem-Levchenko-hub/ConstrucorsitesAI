@@ -54,6 +54,7 @@ async def test_max_build_edit_and_resume_receive_readability_and_completion_cont
     delivery = " ".join(block.split())
     assert "interactive visitor transaction that depends on owner-managed data" in delivery
     assert "no-code setup" in delivery and "authorized application handler" in delivery
+    assert "OWNER_GUIDE.md" in delivery and "one example" in delivery
     assert "existing product test" in delivery and "isolated empty business data" in delivery
     assert "reserve the slot" in delivery and "awaits confirmation" in delivery
     if not portable:

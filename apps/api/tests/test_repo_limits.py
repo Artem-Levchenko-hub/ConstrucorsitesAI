@@ -53,6 +53,21 @@ def test_commit_rejects_paths_outside_project_workspace() -> None:
     assert repo.read_files(PROJECT_ID, sha) == {"src/page.tsx": "safe"}
 
 
+def test_filtered_read_skips_large_files_with_an_explicit_byte_limit() -> None:
+    files = {"OWNER_GUIDE.md": "ёё", "docs/large.md": "больше", "src/app.ts": "ok"}
+    sha = repo.init_from_files(PROJECT_ID, files, "seed")
+
+    def markdown(path: str) -> bool:
+        return path.endswith(".md")
+
+    assert repo.read_files(PROJECT_ID, sha, include=markdown, max_file_bytes=4) == {
+        "OWNER_GUIDE.md": "ёё",
+    }
+    assert repo.read_files(PROJECT_ID, sha, include=markdown) == {
+        path: body for path, body in files.items() if markdown(path)
+    }
+
+
 def test_incremental_commit_enforces_project_wide_file_quota(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

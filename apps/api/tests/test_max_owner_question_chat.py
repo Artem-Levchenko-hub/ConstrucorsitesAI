@@ -13,14 +13,15 @@ from yleum_api.core.security import create_access_token
 from yleum_api.main import app
 from yleum_api.models.account import AuthSession
 from yleum_api.models.billing import PRO_PLAN_ID, Subscription
-from yleum_api.models.generation_billing import GenerationBillingPolicy
+from yleum_api.models.generation_billing import GenerationBillingIntent, GenerationBillingPolicy
 from yleum_api.models.generation_credits import GenerationCreditReservation
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.project import Project
+from yleum_api.models.snapshot import Snapshot
 from yleum_api.models.user import User
 from yleum_api.schemas.message import PromptResponse
-from yleum_api.services import max_owner_diagnosis
+from yleum_api.services import max_owner_diagnosis, repo
 from yleum_api.services.accounts import create_account
 from yleum_api.services.discovery import ASK, DiscoveryResult
 from yleum_api.services.generation import acceptance
@@ -122,6 +123,37 @@ async def test_legacy_prompt_refuses_new_question_before_creating_run(workspace,
     assert response.json()["error"]["code"] == "project_question_required"
     assert await db_session.scalar(select(func.count()).select_from(GenerationRun)) == 0
     assert await db_session.scalar(select(func.count()).select_from(Message)) == 0
+
+
+async def test_owner_can_read_saved_setup_from_chat_without_a_paid_edit(workspace, db_session):
+    client, project, _owner = workspace
+    guide = (
+        "# Настройка расписания владельцем\n\n"
+        "1. Откройте Каталог и нажмите «Добавить позицию».\n"
+        "2. Выберите раздел «Расписание» и укажите дату в названии.\n"
+        "3. Например, 2040-01-15T14:30+03:00.\n"
+    )
+    commit = repo.init_from_files(project.id, {"WORKSHOP.md": guide}, "Workshop setup")
+    snapshot = Snapshot(project_id=project.id, commit_sha=commit)
+    db_session.add(snapshot)
+    await db_session.flush()
+    project.current_snapshot_id = snapshot.id
+    await db_session.commit()
+
+    response = await client.post(f"/api/projects/{project.id}/chat/question", json={
+        "prompt": "Как мне как владельцу открыть ещё одно свободное время в расписании?",
+        "idempotency_key": "workshop-owner-setup",
+    })
+
+    assert response.status_code == 200, response.text
+    answer = response.json()
+    assert answer["answered"] and "2040-01-15T14:30+03:00" in answer["answer"]
+    assert "Расписание" in answer["answer"] and "AITunnel" not in answer["answer"]
+    assert await db_session.scalar(select(func.count()).select_from(GenerationRun)) == 0
+    assert await db_session.scalar(select(func.count()).select_from(
+        GenerationCreditReservation,
+    )) == 0
+    assert await db_session.scalar(select(func.count()).select_from(GenerationBillingIntent)) == 0
 
 
 async def test_exact_question_replay_keeps_messages_and_conflicts_with_edits(
