@@ -31,6 +31,61 @@ describe("extractInitialCatalog", () => {
     ]);
   });
 
+  it("extracts the promised rental stock with its daily prices", () => {
+    const brief = "В демо-каталоге два инструмента по одному экземпляру: перфоратор за 650 ₽ в сутки и строительный пылесос за 500 ₽ в сутки. Бронь должна сохраняться после перезагрузки.";
+    expect(extractInitialCatalog(brief).items).toEqual([
+      { title: "перфоратор", price: "650 ₽ в сутки" },
+      { title: "строительный пылесос", price: "500 ₽ в сутки" },
+    ]);
+    expect(extractInitialCatalog("Демо-каталог:\n1. Шлифмашина — 720 руб./сут.\n2. Плиткорез — 430 ₽ в сутки.").items).toEqual([
+      { title: "Шлифмашина", price: "720 ₽ в сутки" },
+      { title: "Плиткорез", price: "430 ₽ в сутки" },
+    ]);
+  });
+
+  it("neither drops an unsupported rate's unit nor folds a separate price into a rental item name", () => {
+    expect(extractInitialCatalog("Демо-каталог: Дрель 650 руб./час; Плиткорез 430 ₽ в сутки").items).toEqual([
+      { title: "Плиткорез", price: "430 ₽ в сутки" },
+    ]);
+    expect(extractInitialCatalog("Демо-каталог: Перфоратор 650 р. Плиткорез 430 ₽ в сутки").items).toEqual([]);
+  });
+
+  it("keeps literal item names and opens the catalog after a separate budget", () => {
+    expect(extractInitialCatalog("Бюджет:\n15 000 ₽\nДемо-каталог:\n- Пылесос без мешка: 500 ₽ в сутки\n- Перфоратор: 650 ₽ в сутки").items).toEqual([
+      { title: "Пылесос без мешка", price: "500 ₽ в сутки" },
+      { title: "Перфоратор", price: "650 ₽ в сутки" },
+    ]);
+    expect(extractInitialCatalog("Бюджет:\n15 000 ₽\nПокажи два напитка: Латте 300 ₽ и капучино 250 ₽").items).toEqual([
+      { title: "Латте", price: "300 ₽" },
+      { title: "капучино", price: "250 ₽" },
+    ]);
+  });
+
+  it("keeps consecutive catalog lines and ends the section at unrelated instructions", () => {
+    const stock = "Демо-каталог:\nШлифмашина 720 ₽ в сутки.\nПлиткорез 430 ₽ в сутки";
+    const items = [{ title: "Шлифмашина", price: "720 ₽ в сутки" }, { title: "Плиткорез", price: "430 ₽ в сутки" }];
+    expect(extractInitialCatalog(stock).items).toEqual(items);
+    expect(extractInitialCatalog(stock + "\nХарактеристики тестовой комнаты:\nГенератор 900 ₽ в сутки").items).toEqual(items);
+    expect(extractInitialCatalog(stock + "\nПредупреждение. Например, генератор 900 ₽ в сутки").items).toEqual(items);
+    expect(extractInitialCatalog(stock + ".\nДля примера генератор 900 ₽ в сутки").items).toEqual(items);
+  });
+
+  it("does not turn rental prices in an example or restriction into supplied stock", () => {
+    for (const prefix of ["Например,", "Не заполняй это: ", "Бюджет:"]) {
+      const brief = `${prefix} в демо-каталоге два инструмента: шлифмашина 720 ₽ в сутки и плиткорез 430 ₽ в сутки`;
+      expect(extractInitialCatalog(brief).items).toEqual([]);
+    }
+    const stock = "Демо-каталог: Шлифмашина — 720 ₽ в сутки";
+    for (const example of ["; например, Плиткорез 430 ₽ в сутки", "\nПример:\nПлиткорез 430 ₽ в сутки", "; Не добавляй дрель 650 ₽ в сутки и плиткорез 430 ₽ в сутки"]) {
+      expect(extractInitialCatalog(stock + example).items).toEqual([{ title: "Шлифмашина", price: "720 ₽ в сутки" }]);
+    }
+    expect(extractInitialCatalog("Например:\nДемо-каталог:\n- Шлифмашина 720 ₽ в сутки").items).toEqual([]);
+    expect(extractInitialCatalog("Бюджет на аренду:\n  Демо-каталог:\n    - Шлифмашина 720 ₽ в сутки").items).toEqual([]);
+    expect(extractInitialCatalog("Например:\n- Товар 450 ₽/сутки\n\nДемо-каталог: Шлифмашина 720 ₽ в сутки").items).toEqual([
+      { title: "Шлифмашина", price: "720 ₽ в сутки" },
+    ]);
+  });
+
   it.each(["Латте за 300 ₽; капучино за 200 ₽", "Латте 300 ₽ и капучино 200 ₽"])("allows each explicitly priced member of a list: %s", brief => {
     expect(extractInitialCatalog(brief).items).toEqual([
       { title: "Латте", price: "300 ₽" }, { title: "капучино", price: "200 ₽" },

@@ -36,7 +36,7 @@ from yleum_api.services.orchestrator_client import (
     ProjectCellAgentOperationStatus,
     ProjectCellWorkspaceIdentity,
 )
-from yleum_api.services.project_cell_proofs import ProofDimension
+from yleum_api.services.project_cell_proofs import ProofDimension, failure_detail_excerpt
 from yleum_api.services.promotion_permit import workspace_revision_digest
 
 FILES = {
@@ -59,6 +59,35 @@ FILES = {
 DETAIL = "src/app/page.tsx(1,1): error TS2322: Type 'string' is not assignable to type 'number'."
 ASSERTION = "AssertionError [ERR_ASSERTION]: wrong rendered page\n    at file:///workspace/tests/page-smoke.mjs:2:3"
 PARTIAL_ASSERTION = "[final-test] \nAssertionError [ERR_ASSERTION]: wrong rendered page\n    at file:///workspace/tests/page-sm"
+TAP_ASSERTION = """not ok 10 - confirms a rental return
+  ---
+  type: 'test'
+  location: '/workspace/tests/page-smoke.mjs:1:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+
+    false !== true
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///workspace/tests/page-smoke.mjs:2:3)
+    Test.run (node:internal/test_runner/test:1118:25)
+  ...
+"""
+CLIPPED_TAP_ASSERTION = (
+    "[final-test] \nnot ok 10 - confirms a rental return\n  ---\n"
+    "  location: '/workspace/tests/page-sm\n…середина пропущена…\n"
+    + TAP_ASSERTION
+)
+NOISY_TAP_ASSERTION = (
+    "building route with server runtime\n" * 80
+    + CLIPPED_TAP_ASSERTION
+    + "".join(f"ok {index} - adjacent product case\n" for index in range(11, 141))
+)
 LOCATOR_TIMEOUT = """not ok 1 - opens a saved entry
   ---
   location: '/workspace/tests/page-smoke.mjs:1:1'
@@ -92,9 +121,9 @@ def test_navigation_transport_and_unowned_test_timeouts_do_not_request_a_ui_repa
     assert not max_finalization._repairable_build_failure(failure)
 
 
-def identities():
+def identities(files=FILES):
     before, after, _compilation, _migration, project, owner, operation = evidence()
-    revision = workspace_revision_digest(FILES)
+    revision = workspace_revision_digest(files)
     return (
         replace(before, workspace_revision=revision),
         replace(after, workspace_revision=revision),
@@ -200,11 +229,11 @@ def test_failed_rebind_cannot_certify_success_or_unknown_command(change):
     assert transition(before, replace(after, toolchain_digest="e" * 64), operation) is None
 
 
-def coordinator(before, after, operation, *, detail=DETAIL, witnessed=True):
+def coordinator(before, after, operation, *, detail=DETAIL, witnessed=True, files=FILES):
     c = object.__new__(max_finalization.MaxFinalizationCoordinator)
     c.generation_run_id = before.generation_run_id
     c._proof = AsyncMock(side_effect=c._transient_proof)
-    c._verified_workspace_files = AsyncMock(return_value=FILES)
+    c._verified_workspace_files = AsyncMock(return_value=files)
     c._record = AsyncMock(
         side_effect=lambda **kw: SimpleNamespace(
             id=uuid4(),
@@ -273,6 +302,107 @@ async def test_owned_smoke_failure_can_request_repair_but_never_success():
     )
     assert outcome.status is max_finalization.MaxFinalizationStatus.NEEDS_EDIT
     assert identity == after and result.outcome == "red" and result.artifact_ref is None
+
+
+@pytest.mark.parametrize(
+    "detail", [
+        TAP_ASSERTION,
+        CLIPPED_TAP_ASSERTION,
+        TAP_ASSERTION.replace("TestContext.<anonymous>", "async TestContext.<anonymous>"),
+    ], ids=["complete", "clipped-prefix", "async-frame"],
+)
+async def test_node_tap_assertion_confirms_only_repair_for_failed_environment_transition(detail):
+    before, after, _project, _owner, operation = identities()
+    c = coordinator(before, after, operation, detail=detail)
+    result, identity, proof = await c._run_full_build_result(await c._proof(before), before)
+    assert identity == after and proof.proof_key == after.proof_key
+    assert result.outcome == "red" and result.artifact_ref is None
+    assert "[source-repair:confirmed]" in result.redacted_detail
+    assert "[failed-full-build-environment-transition:v1]" in result.redacted_detail
+    failure = await c._full_build_source_failure(
+        result.redacted_detail, after, FILES, operation_id=operation,
+    )
+    assert failure.kind == "test_assertion" and failure.importer == "tests/page-smoke.mjs"
+    assert failure.allowed_paths == ()
+
+
+@pytest.mark.parametrize("detail", [
+    TAP_ASSERTION.replace("not ok 10", "ok 10"),
+    TAP_ASSERTION.replace("  ---\n", ""),
+    TAP_ASSERTION.replace("  ...\n", ""),
+    TAP_ASSERTION.replace("testCodeFailure", "subtestsFailed"),
+    TAP_ASSERTION.replace("ERR_ASSERTION", "ERR_OTHER"),
+    TAP_ASSERTION.replace("name: 'AssertionError'", "name: 'Error'"),
+    TAP_ASSERTION.replace("  stack:", "  note:"),
+    TAP_ASSERTION.replace("  stack:", "  code: 'ERR_OTHER'\n  stack:"),
+    TAP_ASSERTION.replace("  stack:", "[output omitted]\n  stack:"),
+    TAP_ASSERTION.replace("  stack:", "  ...\nnot ok 11 - another test\n  stack:"),
+    TAP_ASSERTION.replace("TestContext.<anonymous>", "productHelper"),
+    TAP_ASSERTION.replace("page-smoke.mjs:1:1'", "page-smoke.mjs:3:1'"),
+    TAP_ASSERTION.replace("page-smoke.mjs:2:3", "page-smoke.mjs:3:3"),
+    TAP_ASSERTION.replace("page-smoke.mjs:2:3", "other.mjs:2:3"),
+])
+def test_node_tap_assertion_needs_a_complete_diagnostic_and_matching_owned_stack(detail):
+    files = FILES | {"tests/other.mjs": "// fixture\n" * 2}
+    failure = max_finalization.classify_source_failure(
+        detail, files=files, command_finished=True,
+        frozen_source_sha256=workspace_revision_digest(files),
+    )
+    assert failure.kind == "unknown"
+
+
+def test_node_tap_excerpt_preserves_infrastructure_priority():
+    detail = NOISY_TAP_ASSERTION.replace("ok 11 - ", "ECONNRESET\nok 11 - ", 1)
+    result = max_finalization.classify_source_failure(
+        failure_detail_excerpt(detail), files=FILES, command_finished=True,
+        frozen_source_sha256=workspace_revision_digest(FILES),
+    )
+    assert result.kind == "infrastructure"
+
+
+def test_verified_tap_redacts_values_before_applying_the_byte_limit():
+    detail = NOISY_TAP_ASSERTION.replace(
+        "  expected: true", "  expected:\n    text: '" + "x" * 435 + "'\n"
+        "    token: '" + "private-sentinel" * 40 + "'",
+    )
+    failure = max_finalization.classify_source_failure(
+        detail, files=FILES, command_finished=True,
+        frozen_source_sha256=workspace_revision_digest(FILES),
+    )
+    assert failure.tap_evidence is not None
+    saved = failure_detail_excerpt(detail, verified_tap=failure.tap_evidence)
+    assert "private-sentinel" not in saved
+    assert "token: '[REDACTED]'" in saved
+
+
+@pytest.mark.parametrize("variant", ["untracked", "out-of-range", "long-path-and-values"])
+async def test_node_tap_excerpt_keeps_the_verified_failure(variant):
+    path = "tests/page-smoke.mjs"
+    files = FILES
+    if variant == "long-path-and-values":
+        long_path = "tests/" + "/".join("nested" * 41 for _ in range(4)) + "/page-smoke.mjs"
+        files = FILES | {long_path: FILES[path]}
+        detail = NOISY_TAP_ASSERTION.replace(path, long_path)
+        detail = detail.replace("confirms a rental return", "lengthy test title " * 40)
+        detail = detail.replace("expected: true", "expected: '" + "x" * 650 + "'")
+        detail = detail.replace("actual: false", "actual: '" + "y" * 650 + "'")
+        path = long_path
+    else:
+        if variant == "untracked":
+            decoy = TAP_ASSERTION.replace(path, "tests/untracked.mjs")
+        else:
+            decoy = TAP_ASSERTION.replace(":2:3)", ":99:3)")
+        detail = decoy + NOISY_TAP_ASSERTION
+    before, after, _project, _owner, operation = identities(files)
+    c = coordinator(before, after, operation, detail=detail, files=files)
+    result, identity, _ = await c._run_full_build_result(await c._proof(before), before)
+    assert identity == after and result.outcome == "red"
+    saved = failure_detail_excerpt(result.redacted_detail)
+    assert len(saved.encode()) <= 4096 < len(detail.encode())
+    assert "[source-repair:confirmed]" in saved
+    failure = await c._full_build_source_failure(saved, after, files, operation_id=operation)
+    assert failure.kind == "test_assertion" and failure.importer == path
+    assert failure.allowed_paths == ()
 
 
 async def test_partial_frame_reconciles_terminal_task_without_granting_file_paths():
@@ -425,8 +555,8 @@ async def test_typed_transition_does_not_override_non_environment_identity_guard
 
 
 @pytest.fixture(
-    params=[DETAIL, ASSERTION, PARTIAL_ASSERTION, LOCATOR_TIMEOUT],
-    ids=["typescript", "smoke-assertion", "partial-assertion", "locator-timeout"],
+    params=[DETAIL, ASSERTION, PARTIAL_ASSERTION, LOCATOR_TIMEOUT, NOISY_TAP_ASSERTION],
+    ids=["typescript", "smoke-assertion", "partial-assertion", "locator-timeout", "noisy-node-tap"],
 )
 async def witness_case(monkeypatch, request):
     """Real ORM rows/queries; only owning physical reads are synthetic."""
@@ -475,6 +605,10 @@ async def witness_case(monkeypatch, request):
     c = coordinator(before, after, operation, detail=request.param)
     result, actual, _ = await c._run_full_build_result(await c._proof(before), before)
     assert actual == after
+    stored_detail = failure_detail_excerpt(result.redacted_detail)
+    if request.param == NOISY_TAP_ASSERTION:
+        assert len(stored_detail.encode()) <= 4096 < len(request.param.encode())
+        assert "[source-repair:confirmed]" in stored_detail
     proof = ProjectCellProof(
         id=uuid4(),
         **{key: getattr(after, key) for key in after.__dataclass_fields__},
@@ -489,8 +623,8 @@ async def witness_case(monkeypatch, request):
         outcome="red",
         operation_id=operation,
         artifact_ref=None,
-        redacted_detail=result.redacted_detail,
-        detail_digest=hashlib.sha256(result.redacted_detail.encode()).hexdigest(),
+        redacted_detail=stored_detail,
+        detail_digest=hashlib.sha256(stored_detail.encode()).hexdigest(),
     )
     now = datetime.now(UTC)
     lease = ProjectCellActivityLease(
@@ -589,7 +723,7 @@ async def test_owned_after_red_witness_and_cold_source_failure_keep_before_lease
         assert failure is not None
         if c.response.detail == PARTIAL_ASSERTION:
             assert failure.kind == "test_assertion" and failure.allowed_paths == ()
-        elif c.response.detail == LOCATOR_TIMEOUT:
+        elif c.response.detail in (LOCATOR_TIMEOUT, NOISY_TAP_ASSERTION):
             assert failure.kind == "test_assertion" and failure.importer == "tests/page-smoke.mjs"
             assert failure.allowed_paths == ()
         else:

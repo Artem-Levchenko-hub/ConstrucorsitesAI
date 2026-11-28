@@ -73,6 +73,8 @@ async def test_max_build_edit_and_resume_receive_readability_and_completion_cont
     )
     assert "Respect explicitly empty or owner-supplied content" in delivery
     assert "real stock, prices and availability" in delivery
+    assert "choose an available item by its real catalog ID" in delivery
+    assert "Verify promised starter entries separately" in delivery
     assert "For that first-use flow, use the existing product test" in delivery
     assert "shipped configuration" in delivery
     assert "without injecting test-only product content" in delivery

@@ -122,6 +122,7 @@ from yleum_api.services.project_cell_proofs import (
     ProofIdentity,
     ProofOutcome,
     create_proof_identity,
+    failure_detail_excerpt,
     find_proof_result,
     record_proof_result,
 )
@@ -2710,7 +2711,7 @@ class MaxFinalizationCoordinator:
             and transition.operation_id == observation.operation_id
         )
         failed_transition = getattr(observation, "failed_full_build_environment_transition", None)
-        failed_source_repair = False
+        source_failure = None
         if (
             allow_full_build_startup and dimension is ProofDimension.FULL_BUILD
             and observation.role is ProjectCellCommandRole.FULL_BUILD
@@ -2726,10 +2727,13 @@ class MaxFinalizationCoordinator:
             ) == failed_transition
         ):
             files = await self._verified_workspace_files(observation.after)
-            failed_source_repair = _repairable_build_failure(await self._full_build_source_failure(
+            source_failure = await self._full_build_source_failure(
                 observation.redacted_detail, observation.after, files,
                 operation_id=observation.operation_id, observation=observation,
-            ))
+            )
+        failed_source_repair = source_failure is not None and _repairable_build_failure(
+            source_failure,
+        )
         accepted_change = authorized_restart or failed_source_repair
         if (observation.before != identity
                 or (observation.after != identity and not accepted_change)):
@@ -2767,14 +2771,17 @@ class MaxFinalizationCoordinator:
                 not observation.ok and not observation.timed_out
                 and observation.before == identity and observation.after == identity
             ):
-                source_repair = _repairable_build_failure(await self._full_build_source_failure(
+                source_failure = await self._full_build_source_failure(
                     observation.redacted_detail, identity,
                     await self._verified_workspace_files(identity),
                     operation_id=observation.operation_id, observation=observation,
-                ))
+                )
+                source_repair = _repairable_build_failure(source_failure)
             detail = _versioned_build_detail(
                 detail, source_repair=source_repair,
             )
+            if source_failure is not None and source_failure.tap_evidence is not None:
+                detail = failure_detail_excerpt(detail, verified_tap=source_failure.tap_evidence)
         async def store() -> ProjectCellProofResult:
             result = await self._record(
                 proof=proof, dimension=dimension, outcome=outcome,

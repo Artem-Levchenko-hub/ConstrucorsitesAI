@@ -5,7 +5,7 @@ import json
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import cast
+from typing import TYPE_CHECKING, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -14,6 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from yleum_api.models.project_cell import ProjectCellProof, ProjectCellProofResult
 from yleum_api.services.agent_progress import bounded_redacted_text, redact_sensitive_text
+
+if TYPE_CHECKING:
+    from yleum_api.services.generation.source_error_classification import TapAssertionEvidence
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_DETAIL_BYTES = 4096
@@ -68,7 +71,10 @@ _FAILURE_HEAD_BYTES = 800
 _CUT_MARKER = "\n…середина пропущена…\n"
 
 
-def failure_detail_excerpt(detail: str, *, max_bytes: int = _MAX_DETAIL_BYTES) -> str:
+def failure_detail_excerpt(
+    detail: str, *, max_bytes: int = _MAX_DETAIL_BYTES,
+    verified_tap: TapAssertionEvidence | None = None,
+) -> str:
     """Keep compiler/TAP failure diagnostics even among later successful checks."""
     if max_bytes <= 0:
         raise ValueError("diagnostic byte limit must be positive")
@@ -113,24 +119,26 @@ def failure_detail_excerpt(detail: str, *, max_bytes: int = _MAX_DETAIL_BYTES) -
             infrastructure_diagnostic_hint,
         )
 
-        if first_use := first_use_tap_evidence(safe):
-            # Preserve the bounded, single failing subtest with its own stage and values.
-            # Separate successful subtests must not erase or supply its expected/actual.
-            infra_hint = infrastructure_diagnostic_hint(safe)
-            if infra_hint:
-                diagnostics.insert(0, infra_hint)
-            else:
-                diagnostics.insert(0, first_use[3])
+        head_bytes = min(_FAILURE_HEAD_BYTES, max_bytes // 5)
+        available = max_bytes - head_bytes - 2 * len(marker)
+        diagnostic_budget = max(0, available - min(512, max_bytes // 5))
+        priority = infrastructure_diagnostic_hint(safe)
+        if priority is None:
+            if verified_tap is not None:
+                priority = verified_tap.excerpt(max_bytes=diagnostic_budget)
+            elif first_use := first_use_tap_evidence(safe):
+                priority = first_use[3]
         # These original tool section labels are required to interpret the
         # diagnostics; do not invent a source-check label for arbitrary output.
         headings = [line for line in safe.splitlines()
                     if line.strip() in {"[typecheck]", "[targeted-test]"}]
         # Mandatory failure fields precede optional multiline values so a
         # large expected/actual assertion cannot displace its code/location.
-        diagnostic = "\n".join([*headings, *diagnostics, *context]).encode("utf-8")
-        head_bytes = min(_FAILURE_HEAD_BYTES, max_bytes // 5)
-        available = max_bytes - head_bytes - 2 * len(marker)
-        diagnostic_bytes = min(len(diagnostic), max(0, available - min(512, max_bytes // 5)))
+        lines = [*headings, *diagnostics, *context]
+        if priority:
+            lines.insert(0, priority)
+        diagnostic = "\n".join(lines).encode("utf-8")
+        diagnostic_bytes = min(len(diagnostic), diagnostic_budget)
         if diagnostic_bytes > 0:
             tail_bytes = max(0, available - diagnostic_bytes)
             return (

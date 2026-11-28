@@ -4,12 +4,29 @@ from __future__ import annotations
 import json
 import posixpath
 import re
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Literal
 
+from yleum_api.services.agent_progress import redact_sensitive_text
 from yleum_api.services.promotion_permit import workspace_revision_digest
+
+
+@dataclass(frozen=True, slots=True)
+class TapAssertionEvidence:
+    header: str
+    values: str
+    stack: str
+
+    def excerpt(self, *, max_bytes: int) -> str | None:
+        required = f"{self.header}\n{self.stack}"
+        required_bytes = len(required.encode())
+        if required_bytes > max_bytes:
+            return None
+        if self.values and required_bytes + len(self.values.encode()) + 1 <= max_bytes:
+            return f"{self.header}\n{self.values}\n{self.stack}"
+        return required
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +38,7 @@ class SourceFailure:
     importer: str | None = None
     allowed_paths: tuple[str, ...] = ()
     first_use_stage: str | None = None
+    tap_evidence: TapAssertionEvidence | None = field(default=None, repr=False, compare=False)
 
 
 def source_check_is_repairable(
@@ -90,6 +108,10 @@ _TAP_TEST_LOCATION = re.compile(
     r":(?P<line>[1-9]\d{0,6}):[1-9]\d{0,6}'\r?$"
 )
 _TAP_TEST_END = re.compile(r"  \.\.\.(?:\r?\n|\Z)")
+_TAP_TEST_STACK = re.compile(r"(?m)^  stack: \|-\r?\n(?P<frames>(?:    [^\r\n]*\r?\n)+)")
+_TAP_TEST_CODE_FAILURE = "  failureType: 'testCodeFailure'"
+_TAP_ASSERTION_CODE = "  code: 'ERR_ASSERTION'"
+_TAP_ASSERTION_NAME = "  name: 'AssertionError'"
 _FIRST_USE_STAGE = re.compile(
     r"^    First use: [^\r\n]{1,180} / "
     r"(?P<stage>before owner setup|owner setup|first action|reopen)$"
@@ -107,8 +129,9 @@ _LOCATOR_TIMEOUT = re.compile(
     r"(?m)^    locator\.[A-Za-z]+: Timeout [1-9]\d{0,8}ms exceeded\.\r?\n"
     r"    Call log:\r?\n      - waiting for [^\r\n]+"
 )
-_PLAYWRIGHT_TEST_FRAME = re.compile(
-    rf"(?m)^    (?:at )?TestContext\.<anonymous> \((?:file://)?/workspace/(?P<file>{_TEST_PATH})"
+_TEST_CONTEXT_FRAME = re.compile(
+    r"(?m)^    (?:at )?(?:async )?TestContext\.<anonymous> "
+    rf"\((?:file://)?/workspace/(?P<file>{_TEST_PATH})"
     r":(?P<line>[1-9]\d{0,6}):[1-9]\d{0,6}\)\r?$"
 )
 _TRUNCATED_ASSERTION_LOCATION = re.compile(
@@ -178,14 +201,14 @@ def has_truncated_test_assertion(detail: str, files: Mapping[str, str]) -> bool:
 def _tap_assertion_values(fields: list[str]) -> list[str]:
     """Node prints scalar values inline and object/array values as indented YAML."""
     values: dict[str, str] = {}
-    for index, field in enumerate(fields):
-        if not field.startswith(("  expected:", "  actual:")):
+    for index, line in enumerate(fields):
+        if not line.startswith(("  expected:", "  actual:")):
             continue
-        label = field.partition(":")[0]
+        label = line.partition(":")[0]
         if label in values:
             return []
-        lines = [field]
-        if field.endswith(":"):
+        lines = [line]
+        if line.endswith(":"):
             for offset in range(index + 1, len(fields)):
                 child = fields[offset]
                 if not child.startswith("    "):
@@ -196,19 +219,28 @@ def _tap_assertion_values(fields: list[str]) -> list[str]:
     return list(values.values()) if len(values) == 2 else []
 
 
+def _tap_test_code_failures(
+    detail: str,
+) -> Iterator[tuple[re.Match[str], re.Match[str], list[str]]]:
+    for failed in _TAP_FAILED_TEST.finditer(detail):
+        body = failed["body"]
+        location = _TAP_TEST_LOCATION.search(body)
+        if location:
+            fields = body.splitlines()
+            if _TAP_TEST_CODE_FAILURE in fields:
+                yield failed, location, fields
+
+
 def first_use_tap_evidence(detail: str) -> tuple[str, int, str, str] | None:
     """Keep original reporter fields together, including when the enclosing build log is clipped."""
     if "First use: " not in detail or "ERR_ASSERTION" not in detail:
         return None
-    for failed in _TAP_FAILED_TEST.finditer(detail):
-        fields = failed["body"].splitlines()
-        location = _TAP_TEST_LOCATION.search(failed["body"])
+    for failed, location, fields in _tap_test_code_failures(detail):
         stage = next((m for line in fields if (m := _FIRST_USE_STAGE.fullmatch(line))), None)
         frame = next((line for line in fields if _FIRST_USE_FRAME.fullmatch(line)), None)
-        if not (location and stage and frame and _TAP_TEST_END.match(detail, failed.end())):
+        if not (stage and frame and _TAP_TEST_END.match(detail, failed.end())):
             continue
-        required = ("  code: 'ERR_ASSERTION'", "  name: 'AssertionError'",
-                    "  failureType: 'testCodeFailure'")
+        required = (_TAP_ASSERTION_CODE, _TAP_ASSERTION_NAME, _TAP_TEST_CODE_FAILURE)
         if (any(fields.count(s) != 1 for s in required)
                 or sum(line.startswith("  location:") for line in fields) != 1):
             continue
@@ -224,28 +256,65 @@ def first_use_tap_evidence(detail: str) -> tuple[str, int, str, str] | None:
     return None
 
 
+def _tap_assertion_frame(
+    detail: str, failed: re.Match[str], location: re.Match[str], fields: list[str],
+) -> re.Match[str] | None:
+    keys = ("  failureType:", "  code:", "  location:", "  name:", "  stack:")
+    if (
+        _TAP_ASSERTION_CODE not in fields or _TAP_ASSERTION_NAME not in fields
+        or fields[0] != "  ---" or not _TAP_TEST_END.match(detail, failed.end())
+        or any(field and not field.startswith("  ") for field in fields)
+        or sum(field.startswith(keys) for field in fields) != len(keys)
+    ):
+        return None
+    # The Node TAP reporter omits "at " from its stack frames.
+    stack = _TAP_TEST_STACK.search(failed["body"])
+    frame = _TEST_CONTEXT_FRAME.search(stack["frames"]) if stack else None
+    return frame if frame and frame["file"] == location["file"] else None
+
+
+def _tap_assertion_evidence(
+    failed: re.Match[str], location: re.Match[str], frame: re.Match[str],
+) -> TapAssertionEvidence:
+    headline = redact_sensitive_text(failed[0].partition("\n")[0].removesuffix("\r"))
+    safe_fields = redact_sensitive_text(failed["body"]).splitlines()
+    return TapAssertionEvidence(
+        header=redact_sensitive_text("\n".join((
+            headline.encode()[:256].decode(errors="ignore"), "  ---",
+            location[0].removesuffix("\r"), _TAP_TEST_CODE_FAILURE,
+            _TAP_ASSERTION_CODE, _TAP_ASSERTION_NAME,
+        ))),
+        values="\n".join(_tap_assertion_values(safe_fields)),
+        stack="\n".join((
+            "  stack: |-", redact_sensitive_text(frame[0].removesuffix("\r")), "  ...",
+        )),
+    )
+
+
 def _failed_product_test(detail: str, files: Mapping[str, str]) -> SourceFailure | None:
     """Bind a runner diagnostic to an owned failed test without granting edit paths."""
-    if "locator." not in detail and _NODE_STRIP_CODE not in detail:
+    if not any(hint in detail for hint in ("locator.", _NODE_STRIP_CODE, _TAP_ASSERTION_CODE)):
         return None
-    for failed in _TAP_FAILED_TEST.finditer(detail):
+    for failed, location, fields in _tap_test_code_failures(detail):
         body = failed["body"]
-        fields = body.splitlines()
-        if "  failureType: 'testCodeFailure'" not in fields:
+        path = _importer(location["file"], files)
+        if path is None:
             continue
-        location = _TAP_TEST_LOCATION.search(body)
-        path = _importer(location["file"], files) if location else None
-        if location is None or path is None:
-            continue
+        lines = len(files[path].splitlines())
         if "  code: 'ERR_TEST_FAILURE'" in fields and _LOCATOR_TIMEOUT.search(body):
-            frame = _PLAYWRIGHT_TEST_FRAME.search(body)
-            if (frame and frame["file"] == location["file"]
-                    and int(frame["line"]) <= len(files[path].splitlines())):
+            frame = _TEST_CONTEXT_FRAME.search(body)
+            if frame and frame["file"] == location["file"] and int(frame["line"]) <= lines:
                 return SourceFailure("test_assertion", importer=path)
+        elif int(location["line"]) <= lines:
+            frame = _tap_assertion_frame(detail, failed, location, fields)
+            if frame and int(frame["line"]) <= lines:
+                return SourceFailure(
+                    "test_assertion", importer=path,
+                    tap_evidence=_tap_assertion_evidence(failed, location, frame),
+                )
         if (
             _NODE_STRIP_CODE in fields and _TAP_TEST_END.match(detail, failed.end())
-            and _NODE_TYPESCRIPT_FRAME.search(body)
-            and int(location["line"]) <= len(files[path].splitlines())
+            and _NODE_TYPESCRIPT_FRAME.search(body) and int(location["line"]) <= lines
             and sum(
                 field.startswith(("  failureType:", "  code:", "  location:")) for field in fields
             ) == 3
